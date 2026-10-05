@@ -255,6 +255,52 @@ test('a refused stop and a failed start both report why', async () => {
   assert.deepEqual(await missingProxy.run(), { ok: false, reason: 'proxy binary missing (run setup)' });
 });
 
+test('setup judges the supervisor stop by whether its PID is gone, not by the kill exit code (GH-371)', () => {
+  // Runs in an isolated home because the real stop path reads PID records and reaps orphans.
+  const script = `
+    const { spawnSync } = require('node:child_process');
+    const supervision = require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))});
+    const { startAll } = require(${JSON.stringify(require.resolve('../lib/commands.js'))});
+    async function setupAgainst(supervisorPid, killResult) {
+      const spawned = [];
+      const result = await startAll({
+        quiet: true,
+        lifecycleOperation: 'setup',
+        proxyExists: () => true,
+        ensureState: () => {},
+        recordLifecycle: () => {},
+        probeShim: async () => ({ state: 'running-ours', pid: supervisorPid, version: '0.0.1', owner: { state: 'same-install', pid: supervisorPid }, health: { ok: true, proxyRecovery: true, supervisorVersion: '0.0.1' } }),
+        reapOrphans: () => {},
+        stopSupervisor: (options) => supervision.stopRunningSupervisor({
+          ...options,
+          resolveOwner: async () => ({ state: 'same-install', pid: supervisorPid, installRoot: supervision.gatewayInstallRoot() }),
+          kill: async () => killResult,
+        }),
+        spawnSupervisor: () => { spawned.push(supervisorPid); return 1; },
+        supervisorAlive: () => false,
+        awaitReadiness: async () => ({ ok: true }),
+        refreshCatalog: async () => {},
+        report: () => {},
+      });
+      return { ok: result.ok, reason: result.reason || null, spawned: spawned.length };
+    }
+    (async () => {
+      const exitedPid = spawnSync(process.execPath, ['-e', '']).pid;
+      const killFailedButGone = await setupAgainst(exitedPid, false);
+      const killSucceededButAlive = await setupAgainst(process.pid, true);
+      process.stdout.write(JSON.stringify({ killFailedButGone, killSucceededButAlive, alivePid: process.pid }));
+    })();
+  `;
+  const result = spawnGatewayProcessSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const { killFailedButGone, killSucceededButAlive, alivePid } = JSON.parse(result.stdout);
+
+  assert.deepEqual(killFailedButGone, { ok: true, reason: null, spawned: 1 }, 'a non-zero taskkill with the supervisor gone still starts the replacement');
+  assert.equal(killSucceededButAlive.ok, false);
+  assert.equal(killSucceededButAlive.spawned, 0);
+  assert.equal(killSucceededButAlive.reason, `could not stop the shim supervisor on :0 (PID ${alivePid}); it is still running after the stop request`);
+});
+
 function timedOutStartHarness(states, { supervisorAlive, readiness = { ok: false, timedOut: true } }) {
   const finished = [];
   const harness = startHarness(states, {

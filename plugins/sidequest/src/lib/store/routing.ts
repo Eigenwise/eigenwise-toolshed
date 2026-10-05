@@ -605,14 +605,15 @@ function getCategoryRoutePairs() {
   const pairs: any[] = [];
   const seen = new Set();
   const add = (category?: any) => {
-    if (!category) return;
+    if (!category?.enabled) return;
     const route = normalizeRoute(category.route);
     const fallback = category.fallback == null ? null : normalizeRoute(category.fallback);
     if (!route) return;
-    const key = JSON.stringify({ route, fallback });
+    const readonly = category.readonly === true;
+    const key = JSON.stringify({ route, fallback, readonly });
     if (seen.has(key)) return;
     seen.add(key);
-    pairs.push({ route, fallback });
+    pairs.push({ route, fallback, readonly });
   };
 
   for (const row of database().prepare('SELECT data FROM routing_profile_entries ORDER BY profile_id, position, category_id').all()) {

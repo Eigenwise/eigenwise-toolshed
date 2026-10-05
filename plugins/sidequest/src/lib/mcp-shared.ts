@@ -54,23 +54,38 @@ function serverVersion() {
  *  Project resolution (a non-exiting mirror of the CLI's resolveProject)
  * ------------------------------------------------------------------ */
 
+function registeredBoard(registration: any) {
+  if (!registration.ok) throw new Error(registration.reason);
+  return registration;
+}
+
+function namedBoard(arg: string) {
+  const res = store.findProject(arg);
+  if (res.ok) return { slug: res.slug, meta: res.meta };
+  if (res.reason === 'ambiguous') {
+    throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
+  }
+  if (path.isAbsolute(arg)) return registeredBoard(store.registerProject(store.explicitProjectRoot(arg)));
+  throw unknownBoardError(arg, res.known);
+}
+
+function unknownBoardError(arg: string, knownNames?: string[]) {
+  const known = Array.from(new Set(knownNames || []));
+  return new Error(`project "${arg}" does not match any registered board.${known.length ? ' Known: ' + known.join(', ') : ''}`);
+}
+
+// Without a project argument the session cwd decides, and that cwd may be a scratch
+// or temp dir that must not become a board, so the refusal names the boards to pick from.
+function sessionBoard() {
+  const registration = store.registerProject(store.sessionProjectRoot(), undefined, { implicit: true });
+  if (registration.ok) return registration;
+  const known = store.listProjects().map((project: any) => project.name);
+  throw new Error(`${registration.reason} Pass project to name a registered board${known.length ? ': ' + known.join(', ') : ''}.`);
+}
+
 function resolveProject(projectArg?: any) {
   const arg = projectArg == null ? '' : String(projectArg).trim();
-  if (arg) {
-    const res = store.findProject(arg);
-    if (res.ok) return { slug: res.slug, meta: res.meta };
-    if (res.reason === 'ambiguous') {
-      throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
-    }
-    if (path.isAbsolute(arg)) {
-      let isDir = false;
-      try { isDir = fs.statSync(arg).isDirectory(); } catch (_) { /* not a dir */ }
-      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)));
-    }
-    const known = Array.from(new Set(res.known || []));
-    throw new Error(`project "${arg}" does not match any registered board.${known.length ? ' Known: ' + known.join(', ') : ''}`);
-  }
-  return store.ensureProject(store.sessionProjectRoot());
+  return arg ? namedBoard(arg) : sessionBoard();
 }
 
 // A lifecycle call comes from the executor holding the claim, but the MCP server
@@ -257,7 +272,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   story: '',
   story_contract: '',
   story_log: 'Story log.',
-  checkpoint: '',
+  checkpoint: 'Advisory; review binds after submit.',
   sweepClaims: '',
   next: '',
   scopeRequest: '',

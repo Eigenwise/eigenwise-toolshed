@@ -33,6 +33,7 @@ const store = require('../lib/store.js') as {
   VALID_EFFORTS: readonly string[];
   resolveExec(model: string, effort: string): ResolvedExec | null;
   classifyModelFilter(model: string): string;
+  modelsPayload(options: { project?: string; full?: boolean }): { discovered: Array<Record<string, unknown>> };
 };
 
 function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = {
@@ -312,6 +313,33 @@ test('discovery reads schema-4 providers and model providers', () => {
     provider: 'grok', ready: false, state: 'credentials-missing', message: 'Sign in to Grok CLI, then retry.',
   });
   assert.equal(discovery.providerReadiness('gemini'), null);
+});
+
+test('SQ-3183: discovery carries every row context window and billing note into the models payload', () => {
+  const codexNote = 'OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it';
+  writeCatalog([
+    { slug: 'codex-gpt-capped', id: 'claude-gpt-capped[1m]', label: 'Capped', provider: 'codex', contextWindow: 272000, contextWindowNote: codexNote },
+    { slug: 'grok-full', id: 'claude-grok-full[1m]', label: '  ', provider: 'grok', contextWindow: 500000, contextWindowNote: ' ' },
+    { slug: 'codex-gpt-fraction', id: 'claude-gpt-fraction', label: 'Fraction', provider: 'codex', contextWindow: 1.5 },
+    { slug: 'codex-gpt-text', id: 'claude-gpt-text', label: 'Text', provider: 'codex', contextWindow: '272000' },
+    { slug: 'codex-gpt-upper', id: 'claude-gpt-upper', label: 'Upper', provider: 'Codex' },
+  ], {
+    schemaVersion: 4,
+    source: 'model-gateway',
+    providers: {
+      codex: { ready: true, state: 'ready', message: 'Codex is ready.' },
+      grok: { ready: true, state: 'ready', message: 'Grok is ready.' },
+    },
+  });
+  const expected = [
+    { slug: 'codex-gpt-capped', id: 'claude-gpt-capped[1m]', label: 'Capped', provider: 'codex', source: 'model-gateway', contextWindow: 272000, contextWindowNote: codexNote },
+    { slug: 'grok-full', id: 'claude-grok-full[1m]', label: 'grok-full', provider: 'grok', source: 'model-gateway', contextWindow: 500000 },
+    { slug: 'codex-gpt-fraction', id: 'claude-gpt-fraction', label: 'Fraction', provider: 'codex', source: 'model-gateway' },
+    { slug: 'codex-gpt-text', id: 'claude-gpt-text', label: 'Text', provider: 'codex', source: 'model-gateway' },
+  ];
+  assert.deepEqual(discovery.discoverExternalModels(), expected);
+  const payloadRows = store.modelsPayload({}).discovered.filter((row) => row.source === 'model-gateway');
+  assert.deepEqual(payloadRows, expected);
 });
 
 test('discovery ignores future catalog schemas', () => {

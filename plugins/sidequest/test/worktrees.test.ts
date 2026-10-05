@@ -84,11 +84,12 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
   };
 }
 
-function recordedDependencyLink(ticket: any, worktree: string, relativePath: string, target: string): void {
+function recordedDependencyLink(ticket: any, worktree: string, relativePath: string, target: string, mode?: 'copy'): void {
   const dispatch = ticket.dispatch;
   dispatch.ownedDependencyLinks = [{
     relativePath,
     target: worktrees.canonicalPath(target),
+    ...(mode ? { mode } : {}),
     worktree: worktrees.canonicalPath(worktree),
     gitDirectory: worktrees.canonicalPath(dispatch.worktreeGitDirectory),
     commonGitDirectory: worktrees.canonicalPath(dispatch.worktreeCommonGitDirectory),
@@ -102,6 +103,79 @@ function createDependencyLink(worktree: string, relativePath: string, target: st
   fs.mkdirSync(path.dirname(link), { recursive: true });
   fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
   return link;
+}
+
+// Windows junctions are the link a fixture can always create there, and they take an absolute target,
+// so the in-tree link is spelled per platform. Both resolve inside the worktree, which is the only
+// thing the scan judges.
+function createInTreeDependencyLink(worktree: string, relativePath: string, targetRelativePath: string): string {
+  const target = path.join(worktree, ...targetRelativePath.split('/'));
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'sentinel.txt'), 'installed by npm ci');
+  const link = path.join(worktree, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(
+    process.platform === 'win32' ? target : path.relative(path.dirname(link), target),
+    link,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  return link;
+}
+
+// `npm ci` writes every node_modules/.bin entry as a relative link to the installed file, and git
+// lists each one as ignored content. Windows has no file link a fixture can always create, and git
+// there lists the files behind a junction, so the same in-tree shape is spelled as a junction over
+// the .bin directory whose leaves are those installed files (SQ-22).
+function createInstalledBinaryLinks(worktree: string, names: readonly string[]): void {
+  const installed = path.join(worktree, 'node_modules', 'tsx', 'dist');
+  fs.mkdirSync(installed, { recursive: true });
+  for (const name of names) fs.writeFileSync(path.join(installed, name), '#!/usr/bin/env node\n');
+  const binDirectory = path.join(worktree, 'node_modules', '.bin');
+  if (process.platform === 'win32') {
+    fs.symlinkSync(installed, binDirectory, 'junction');
+    return;
+  }
+  fs.mkdirSync(binDirectory, { recursive: true });
+  for (const name of names) {
+    fs.symlinkSync(path.join('..', 'tsx', 'dist', name), path.join(binDirectory, name), 'file');
+  }
+}
+
+// A Windows junction can only hold an absolute target, so a shim `createInstalledBinaryLinks` writes
+// there resolves under whatever tree it was created in -- always absolute, on every platform, so the
+// fixture reproduces the same shape without depending on junction support. A junction dangles after
+// the rename and git lists nothing through it, so the shapes that parked a finished tree (GH-352) were
+// absolute `dir` symlinks; a caller guarding that passes `'dir'` to get one on Windows too.
+function createAbsoluteInTreeDependencyLink(
+  root: string,
+  relativePath: string,
+  targetRelativePath: string,
+  linkType: 'dir' | 'junction' = process.platform === 'win32' ? 'junction' : 'dir',
+): string {
+  const target = path.join(root, ...targetRelativePath.split('/'));
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'sentinel.txt'), 'installed by npm ci');
+  const link = path.join(root, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, linkType);
+  return link;
+}
+
+// Creating a Windows symlink needs Developer Mode or an elevated runner; without it there is no
+// absolute `dir` symlink to test, and pretending a junction stands in for one is what let the sweep
+// test pass against pre-fold source there.
+function symlinkPrivilegeMissing(error: unknown): boolean {
+  return ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException)?.code ?? '');
+}
+
+function matchingWorktreeLease(worktree: string, ticket: any) {
+  const dispatch = ticket.dispatch;
+  return {
+    canonicalWorktree: worktrees.canonicalPath(worktree),
+    canonicalGitDirectory: worktrees.canonicalPath(dispatch.worktreeGitDirectory),
+    canonicalCommonGitDirectory: worktrees.canonicalPath(dispatch.worktreeCommonGitDirectory),
+    observedCheckoutInstance: dispatch.worktreeCheckoutInstance,
+  };
 }
 
 function dependencyTarget(repository: string, name: string): string {
@@ -306,10 +380,112 @@ test('provisionWorktree reports every created link before a setup failure', asyn
     }, { onDependencyLink: (link: { relativePath: string; target: string }) => recorded.push(link) });
 
     assert.equal(failure?.reason, 'exited with status 7');
-    assert.deepEqual(recorded, [{ relativePath: 'dependency-targets/partial', target: worktrees.canonicalPath(target) }]);
+    assert.deepEqual(recorded, [{ relativePath: 'dependency-targets/partial', target: worktrees.canonicalPath(target), mode: 'link' }]);
     assert.equal(fs.lstatSync(path.join(worktree, 'dependency-targets', 'partial')).isSymbolicLink(), true);
   } finally {
     fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// A relative link inside node_modules, like npm's .bin entries or pnpm's package links.
+function installedNodeModules(checkout: string): string {
+  const nodeModules = path.join(checkout, 'node_modules');
+  fs.mkdirSync(path.join(nodeModules, 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(nodeModules, 'installed', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(nodeModules, '.bin'));
+  fs.symlinkSync(path.join('..', 'installed'), path.join(nodeModules, '.bin', 'installed'), 'dir');
+  return nodeModules;
+}
+
+test('GH-370: copy mode provisions node_modules as a real directory whose links stay inside it', async () => {
+  const { repository, worktreeRoot } = repositoryFixture();
+  installedNodeModules(repository);
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'copied-node-modules');
+  const recorded: unknown[] = [];
+  try {
+    const failure = await worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'node_modules', mode: 'copy' }] }, { onDependencyLink: (link: unknown) => recorded.push(link) });
+
+    assert.equal(failure, null);
+    const copied = fs.lstatSync(path.join(worktree, 'node_modules'));
+    assert.equal(copied.isSymbolicLink(), false, 'Turbopack refuses a node_modules link that leaves the project root');
+    assert.equal(copied.isDirectory(), true);
+    assert.equal(fs.readFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'utf8'), 'module.exports = 1;\n');
+    assert.equal(fs.readlinkSync(path.join(worktree, 'node_modules', '.bin', 'installed')), path.join('..', 'installed'), 'a relative link is copied verbatim, not rewritten into the main checkout');
+    assert.deepEqual(recorded, [{ relativePath: 'node_modules', target: worktrees.canonicalPath(path.join(repository, 'node_modules')), mode: 'copy' }]);
+  } finally {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('GH-370: the macOS clone path falls back to a plain copy and yields the same directory', () => {
+  const { repository } = repositoryFixture();
+  const source = installedNodeModules(repository);
+  const target = path.join(repository, 'cloned', 'node_modules');
+  try {
+    worktrees.copyDependencyPath(source, target, { overwrite: false }, 'darwin');
+
+    assert.equal(fs.lstatSync(target).isDirectory(), true);
+    assert.equal(fs.readFileSync(path.join(target, 'installed', 'index.js'), 'utf8'), 'module.exports = 1;\n');
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+function sweepCopiedNodeModules(name: string, prepare: (worktree: string, ticket: any) => void) {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), `sq-${name}-quarantine-`));
+  const worktree = createAgentWorktree(repository, worktreeRoot, name);
+  const ticket = integratedTicket(`SQ-${name.toUpperCase()}`, name, worktree, baseCommit);
+  prepare(worktree, ticket);
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  const cleanup = () => {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  };
+  return { repository, worktree, ticket, quarantineDir, cleanup };
+}
+
+test('GH-370: sweep deletes a recorded node_modules copy, links inside it included, instead of quarantining it', async () => {
+  const fixture = sweepCopiedNodeModules('copied-sweep', (worktree, ticket) => {
+    const copy = installedNodeModules(worktree);
+    createDependencyLink(worktree, 'node_modules/.bin/junction', path.join(copy, 'installed'));
+    recordedDependencyLink(ticket, worktree, 'node_modules', path.join(worktree, 'source-node-modules'), 'copy');
+  });
+  try {
+    const result = await worktrees.sweep(fixture.repository, [fixture.ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir: fixture.quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(fixture.worktree));
+
+    assert.equal(entry.action, 'remove');
+    assert.equal(entry.clean, true);
+    assert.equal(fs.existsSync(fixture.worktree), false);
+    assert.deepEqual(result.quarantined, []);
+    assert.deepEqual(fs.readdirSync(fixture.quarantineDir), []);
+    assert.deepEqual(result.failures, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('GH-370: sweep quarantines a recorded node_modules copy that was replaced by a link', async () => {
+  let target = '';
+  const fixture = sweepCopiedNodeModules('copy-swapped', (worktree, ticket) => {
+    target = path.join(path.dirname(worktree), 'foreign-node-modules');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'sentinel.txt'), 'foreign');
+    createDependencyLink(worktree, 'node_modules', target);
+    recordedDependencyLink(ticket, worktree, 'node_modules', target, 'copy');
+  });
+  try {
+    const result = await worktrees.sweep(fixture.repository, [fixture.ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir: fixture.quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(fixture.worktree));
+
+    assert.equal(entry.action, 'quarantine');
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'foreign');
+  } finally {
+    fixture.cleanup();
   }
 });
 
@@ -611,6 +787,31 @@ test('unclaimed dispatch recovery removes a recorded dependency link without fol
     assert.equal(fs.existsSync(worktree), false);
     assert.equal(fs.existsSync(link), false);
     assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'recovery-owned');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// A record whose own identity has drifted (here: the revision it was recorded against no longer
+// matches) never authorizes trusting the recorded list: `dependencyLinkSafety` reports unsafe and
+// recovery falls back to unlinking every symlink the tree holds, still without following any of them
+// (#224 review item 3 coverage).
+test('unclaimed dispatch recovery falls back to unlinking every link when a recorded identity has drifted', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'drifted-identity');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'drifted-identity');
+  const ticket = integratedTicket('SQ-DRIFTED-IDENTITY', 'drifted-identity', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  ticket.dispatch.ownedDependencyLinks[0]!.revision = 'stale-revision';
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(repository, ticket.dispatch);
+
+    assert.equal(result.reclaimed, true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.equal(fs.existsSync(link), false);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'drifted-identity');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
@@ -980,6 +1181,163 @@ test('sweep quarantines a clean tree holding an installed node_modules next to o
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// SQ-22: the exemption refused any ignored path whose leaf or ancestor was a link, so the three
+// `node_modules/.bin` links `npm ci` leaves behind read as data and every finished worktree parked
+// for the 14-day retention instead of being reclaimed.
+test('sweep removes a finished tree whose only ignored links resolve inside it', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-bin-links');
+  const ticket = integratedTicket('SQ-IN-TREE-BIN-LINKS', 'in-tree-bin-links', worktree, baseCommit);
+  createInstalledBinaryLinks(worktree, ['tsx', 'tsc', 'vitest']);
+  try {
+    assert.match(
+      git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
+      /^!! node_modules\/\.bin\/tsx$/m,
+      'git reports the install link as ignored content',
+    );
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.clean, true);
+    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.action, 'remove');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// #224 review item 1: unlike a Windows junction, git never walks a POSIX directory symlink when
+// listing ignored content -- it reports the link itself as the one leaf, not the files behind it.
+// pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's `node_modules/<pkg> -> ../packages/<pkg>`
+// take this shape, so the leaf has to be accepted as a directory too, as long as it was reached
+// through an in-tree link, or both still park for the 14-day retention like develop does. On Windows
+// the fixture link is a junction, which git does walk, so there the same tree reaches the sweep as
+// files behind an in-tree ancestor link and still has to be removed.
+test('sweep removes a finished tree whose only ignored link is a directory symlink leaf', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-dir-symlink-leaf');
+  const ticket = integratedTicket('SQ-IN-TREE-DIR-SYMLINK-LEAF', 'in-tree-dir-symlink-leaf', worktree, baseCommit);
+  const link = createInTreeDependencyLink(worktree, 'node_modules/tsx-alias', 'node_modules/tsx');
+  try {
+    const status = git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']);
+    if (process.platform === 'win32') {
+      assert.match(status, /^!! node_modules\/tsx-alias\/sentinel\.txt$/m, 'git for Windows walks the junction and lists the files behind it');
+    } else {
+      assert.match(status, /^!! node_modules\/tsx-alias$/m, 'git reports the directory symlink as one leaf, not the files behind it');
+    }
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.clean, true);
+    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.action, 'remove');
+  } finally {
+    // The junction (and, through it, the in-tree link it resolves to) has to come off before
+    // `worktree remove` walks the tree: some git builds descend into a directory-symlink leaf
+    // instead of treating it as a single reparse point, and fail "Directory not empty" trying
+    // to delete the same files twice (owner's local Windows, git version-dependent; #224 item 2).
+    if (fs.existsSync(link)) fs.unlinkSync(link);
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// SQ-80: the delete-time re-read judges the tree at its quarantine destination, where an absolute
+// in-tree symlink resolves under the path the tree was renamed from. The link is a `dir` symlink on
+// every platform: a Windows junction dangles after the rename and passes against pre-fold source. Without that vacated source, the re-read counted `node_modules/.bin/tsx` as escaping
+// and parked every finished tree as late_content_quarantined. Passing `destination` where the
+// vacated source belongs (the swap at the `releaseQuarantinedDependencyLinks` call) leaves the same
+// link escaping, so this test also fails for that.
+test('an executing sweep removes a finished tree whose unrecorded absolute in-tree link resolves under the path it was renamed from', async (t) => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-sweep-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'vacated-source-link');
+  const ticket = integratedTicket('SQ-VACATED-SOURCE-LINK', 'vacated-source-link', worktree, baseCommit);
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    try {
+      createAbsoluteInTreeDependencyLink(worktree, 'node_modules/.bin/tsx', 'node_modules/tsx/dist', 'dir');
+    } catch (error) {
+      if (!symlinkPrivilegeMissing(error)) throw error;
+      t.skip('creating a directory symlink needs privileges this runner lacks');
+      return;
+    }
+    assert.match(
+      git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
+      /^!! node_modules\/\.bin\/tsx(\/sentinel\.txt)?$/m,
+      'git reports the absolute install link as ignored content',
+    );
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'remove');
+    assert.equal(entry.reason, 'ticket_done');
+    assert.deepEqual(result.quarantined, []);
+    assert.equal(result.removed.some((removed: string) => worktrees.canonicalPath(removed) === worktrees.canonicalPath(worktree)), true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.deepEqual(fs.readdirSync(quarantineDir), [], 'the moved copy was deleted, not parked');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// SQ-80: a link resolving anywhere but the tree or the path it left still has to park, so trusting
+// the vacated source did not turn the re-read into a rubber stamp.
+test('an executing sweep still parks a finished tree whose absolute link resolves outside both the tree and the path it was renamed from', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-outside-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-outside-target-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'vacated-source-outside-link');
+  const ticket = integratedTicket('SQ-VACATED-SOURCE-OUTSIDE', 'vacated-source-outside-link', worktree, baseCommit);
+  fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'outside');
+  createDependencyLink(worktree, 'node_modules/.bin/tsx', outside);
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.notEqual(entry.action, 'remove');
+    assert.deepEqual(result.removed, []);
+    assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'outside');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+// The hazard the exemption guards: a link under node_modules pointing at a shared store the tree
+// never owned is data, and removal following it would delete what nothing else holds (SQ-2952).
+test('sweep quarantines a finished tree whose ignored link under node_modules leaves it', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'escaping-bin-link');
+  const ticket = integratedTicket('SQ-ESCAPING-BIN-LINK', 'escaping-bin-link', worktree, baseCommit);
+  createInstalledBinaryLinks(worktree, ['tsx']);
+  const target = dependencyTarget(repository, 'escaping-store');
+  createDependencyLink(worktree, 'node_modules/.pnpm-store', target);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.clean, false);
+    assert.equal(entry.reason, 'untracked_quarantined');
+    assert.equal(entry.action, 'quarantine');
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'escaping-store');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
   }
 });
 
@@ -1792,6 +2150,137 @@ test('a failed quarantine move leaves the recorded dependency link and its recor
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(path.dirname(unusableQuarantineRoot), { recursive: true, force: true });
+  }
+});
+
+// SQ-21: the scan refused every symlink no record named, so a worktree whose executor ran `npm ci`
+// was untrusted on the strength of its `node_modules/.bin` entries and no done worktree was ever
+// reclaimed. A link resolving inside the tree can reach nothing the tree does not already own.
+test('a dependency link no record names is safe to remove once its target resolves inside the worktree', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-link');
+  const ticket = integratedTicket('SQ-IN-TREE-LINK', 'in-tree-link', worktree, baseCommit);
+  createInTreeDependencyLink(worktree, 'node_modules/.bin/tsx', 'node_modules/tsx/dist');
+  try {
+    const safety = worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket));
+
+    assert.equal(safety.safe, true);
+    assert.deepEqual(safety.links, []);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// The hazard the scan exists for: removal follows a link out of the tree and deletes a shared store
+// the worktree never owned. That link still refuses, and now the refusal says which link and where it
+// went instead of leaving an operator with a bare `dependency_link_untrusted` (SQ-21).
+test('a dependency link whose target leaves the worktree stays untrusted and names itself', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'escaping-link');
+  const ticket = integratedTicket('SQ-ESCAPING-LINK', 'escaping-link', worktree, baseCommit);
+  const target = dependencyTarget(repository, 'shared-store');
+  createDependencyLink(worktree, 'node_modules/shared', target);
+  try {
+    const safety = worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket));
+
+    assert.equal(safety.safe, false);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'shared-store');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('a recorded dependency link still refuses without a lease and when its target moved', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'recorded-link-moved');
+  const ticket = integratedTicket('SQ-RECORDED-LINK-MOVED', 'recorded-link-moved', worktree, baseCommit);
+  const recorded = dependencyTarget(repository, 'recorded');
+  createDependencyLink(worktree, 'node_modules/recorded', recorded);
+  recordedDependencyLink(ticket, worktree, 'node_modules/recorded', recorded);
+  try {
+    assert.equal(worktrees.dependencyLinkSafety(worktree, ticket, null).safe, false);
+    assert.equal(worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket)).safe, true);
+
+    recordedDependencyLink(ticket, worktree, 'node_modules/recorded', dependencyTarget(repository, 'relocated'));
+    const moved = worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket));
+
+    assert.equal(moved.safe, false);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// releaseQuarantinedDependencyLinks judges the moved tree at its quarantine destination, so an
+// in-tree link with an absolute target -- the only shape a Windows junction can take, and what
+// createInstalledBinaryLinks writes on win32 -- still resolves under the path the tree was renamed
+// from. Without that vacated source root, the safety walk read it as escaping and parked the tree
+// instead of deleting it (#223 review item 1); passing it is what tells the walk the target still
+// stays with the tree.
+test('releaseQuarantinedDependencyLinks accepts an absolute-target link that still resolves in the path the tree was renamed from', async () => {
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-quarantine-'));
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-'));
+  createAbsoluteInTreeDependencyLink(source, 'node_modules/.bin/tsx', 'node_modules/tsx/dist');
+  try {
+    const quarantine = await worktrees.quarantineCandidate({ path: source }, 'moved for test', { quarantineDir });
+    assert.equal(quarantine.ok, true);
+    const destination = quarantine.destination;
+
+    const withoutVacatedSource = worktrees.releaseQuarantinedDependencyLinks(destination, [], destination);
+    assert.equal(withoutVacatedSource.ok, false);
+    assert.equal(withoutVacatedSource.reason, 'dependency_link_untrusted');
+    assert.match(withoutVacatedSource.detail, /escapes worktree/);
+
+    const withVacatedSource = worktrees.releaseQuarantinedDependencyLinks(destination, [], source);
+    assert.equal(withVacatedSource.ok, true);
+    assert.equal(fs.lstatSync(path.join(destination, 'node_modules', '.bin', 'tsx')).isSymbolicLink(), true);
+  } finally {
+    if (fs.existsSync(source)) fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// SQ-80: a recorded path is exempt from the late-content read by name alone, so before the release
+// unlinks it, it has to still be the link the record named. A regular file that took its place is
+// content the tree holds, and unlinking it would delete data no read ever judged.
+test('releaseQuarantinedDependencyLinks leaves a recorded path alone once it is no longer a link', () => {
+  const destination = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-recorded-replaced-'));
+  const kept = path.join(destination, 'node_modules', 'recorded');
+  fs.mkdirSync(path.dirname(kept), { recursive: true });
+  fs.writeFileSync(kept, 'work that replaced the link\n');
+  try {
+    const released = worktrees.releaseQuarantinedDependencyLinks(destination, ['node_modules/recorded'], destination);
+
+    assert.equal(released.ok, false);
+    assert.equal(released.reason, 'dependency_link_changed');
+    assert.match(released.detail, /node_modules\/recorded/);
+    assert.equal(fs.readFileSync(kept, 'utf8'), 'work that replaced the link\n');
+  } finally {
+    fs.rmSync(destination, { recursive: true, force: true });
+  }
+});
+
+// GH-370 on top of #224: a copied node_modules keeps its links verbatim, and an npm workspace or pnpm
+// junction in the checkout's install points back into that checkout. The copy is install content, so
+// such a link inside it does not park the tree; the same link anywhere else still does.
+test('GH-370: releaseQuarantinedDependencyLinks trusts an escaping link inside a recorded copy and nowhere else', () => {
+  const destination = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-copied-escaping-link-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-copied-escaping-target-'));
+  fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'main checkout package\n');
+  createDependencyLink(destination, 'node_modules/workspace-package', outside);
+  try {
+    const uncopied = worktrees.releaseQuarantinedDependencyLinks(destination, [], destination);
+    assert.equal(uncopied.ok, false);
+    assert.equal(uncopied.reason, 'dependency_link_untrusted');
+
+    const copied = worktrees.releaseQuarantinedDependencyLinks(destination, [], destination, ['node_modules']);
+    assert.equal(copied.ok, true);
+    assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'main checkout package\n');
+  } finally {
+    fs.rmSync(destination, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 

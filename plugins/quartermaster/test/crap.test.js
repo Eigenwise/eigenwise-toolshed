@@ -88,12 +88,13 @@ function makeStale(filePath) {
   fs.utimesSync(filePath, dayAgo, dayAgo);
 }
 
-test('sameRealDir resolves a symlinked alias the way native realpath does, unlike plain realpathSync', () => {
+test('sameRealDir resolves a directory alias the way native realpath does, unlike plain realpathSync', () => {
   // A symlink alias stands in for a Windows 8.3 short name, and the non-native realpathSync is stubbed to
   // leave its input unresolved the way it leaves short names unexpanded on Windows.
   const realDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-real-'));
   const aliasDirPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-alias-')), 'alias');
-  fs.symlinkSync(realDirPath, aliasDirPath, 'dir');
+  // Windows junctions exercise the same directory-alias resolution without requiring symlink privilege.
+  fs.symlinkSync(realDirPath, aliasDirPath, process.platform === 'win32' ? 'junction' : 'dir');
 
   const originalRealpathSync = fs.realpathSync;
   const stubbedRealpathSync = (target) => target;

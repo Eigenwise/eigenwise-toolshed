@@ -399,6 +399,10 @@ function gitWriteTargets(words) {
 function inPlaceEditTargets(words) {
   return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
 }
+function contentCmdletTargets(words) {
+  const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
+  return pathFlag > 0 ? words.slice(pathFlag + 1, pathFlag + 2) : operands(words).slice(0, 1);
+}
 var WRITE_TARGET_READERS = new Map([
   ...[
     "rm",
@@ -412,15 +416,10 @@ var WRITE_TARGET_READERS = new Map([
     "chown",
     "unlink",
     "remove-item",
-    "set-content",
-    "add-content",
-    "out-file",
-    "new-item",
     "move-item",
     "rename-item",
     "clear-content",
     "ri",
-    "ni",
     "del",
     "erase",
     "rd",
@@ -428,6 +427,7 @@ var WRITE_TARGET_READERS = new Map([
     "move",
     "ren"
   ].map((name) => [name, operands]),
+  ...["set-content", "add-content", "out-file", "new-item", "ni"].map((name) => [name, contentCmdletTargets]),
   ...["cp", "copy", "copy-item", "ln", "install", "rsync"].map((name) => [name, (words) => operands(words).slice(-1)]),
   ["sed", inPlaceEditTargets],
   ["perl", inPlaceEditTargets],
@@ -505,7 +505,7 @@ function firstCheckoutWrite(command, cwd) {
 }
 function readOnlyShellRefusal(command, cwd) {
   const blocked = firstCheckoutWrite(command, cwd);
-  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
+  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. Writes under the ticket's verification directory (~/.claude/sidequest/projects/<slug>/verification/<ref>/) are permitted whatever the file says; move the fixture there. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
 }
 
 // src/lib/board-mcp-liveness.ts
@@ -906,21 +906,31 @@ function matchesDeniedWork(records, toolInput) {
   const promptPrefix = deniedWorkPromptPrefix(toolInput);
   return records.some((record) => record.description !== "" && record.description === description || record.promptPrefix !== "" && record.promptPrefix === promptPrefix);
 }
+function boardTouchedThisSession(sessionId) {
+  const inlineWork = readSessionState(sessionStateFile("inline-work", sessionId));
+  return Boolean(inlineWork.boardInteraction || inlineWork.boardTouchedEarlier);
+}
+function exploreDenial(sessionId, state, toolInput, priorPasses) {
+  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
+    return "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.";
+  }
+  if (priorPasses < EXPLORE_FREE_SPAWNS || boardTouchedThisSession(sessionId)) return "";
+  return `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`;
+}
 function guardMainSessionExplore(input, toolInput) {
   const sessionId = guardSessionId(input);
   if (!sessionId || dispatchAdmission(input).status !== "routed") return;
   const file = sessionStateFile("explore-fanout", sessionId);
   const state = readSessionState(file);
-  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
-    writeDeny("PreToolUse", "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.");
-    return;
-  }
   const priorPasses = Number(state.explorePasses) || 0;
-  const boardInteraction = Boolean(readSessionState(sessionStateFile("inline-work", sessionId)).boardInteraction);
-  if (priorPasses >= EXPLORE_FREE_SPAWNS && !boardInteraction) {
-    writeDeny("PreToolUse", `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`);
+  const denial = exploreDenial(sessionId, state, toolInput, priorPasses);
+  if (denial) {
+    writeDeny("PreToolUse", denial);
     return;
   }
+  recordExplorePass(file, state, priorPasses);
+}
+function recordExplorePass(file, state, priorPasses) {
   state.explorePasses = priorPasses + 1;
   writeSessionState(file, state);
   if (priorPasses < EXPLORE_FREE_SPAWNS) {
@@ -991,24 +1001,35 @@ var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "verifyKind",
   "attestationArtifact",
   "verifyCwd",
+  "admitComposition",
   "executorVerify",
   "executorVerifyKind",
   "executorAttestationArtifact",
   "executorVerifyCwd"
 ]);
+var MAIN_THREAD_MUTATIONS = {
+  mcp__plugin_sidequest_board__update: {
+    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
+    denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
+  },
+  mcp__plugin_sidequest_board__remove: {
+    matches: (input) => input.force === true,
+    denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
+  },
+  mcp__plugin_sidequest_board__verdict: {
+    matches: (input) => Object.hasOwn(input, "correct"),
+    denial: "sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread."
+  }
+};
 function executorLiveClaimMutationRefusal(input) {
   if (!isSubagentCaller(input)) return false;
-  const toolName = stringField(input, "tool_name");
   const toolInput = toolInputOf(input);
-  if (toolName === "mcp__plugin_sidequest_board__update" && toolInput && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
-    writeDeny("PreToolUse", "sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.");
-    return true;
-  }
-  if (toolName === "mcp__plugin_sidequest_board__remove" && toolInput && toolInput.force === true) {
-    writeDeny("PreToolUse", "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.");
-    return true;
-  }
-  return false;
+  if (!toolInput) return false;
+  const rule = MAIN_THREAD_MUTATIONS[stringField(input, "tool_name")];
+  if (!rule) return false;
+  if (!rule.matches(toolInput)) return false;
+  writeDeny("PreToolUse", rule.denial);
+  return true;
 }
 function dispatchAgentName(input) {
   const toolInput = toolInputOf(input);

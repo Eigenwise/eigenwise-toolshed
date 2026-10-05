@@ -94,6 +94,15 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     advertisedWindow: 920000,
     sentry: 'synthetic-413',
   }),
+  'gpt-6.1-sol': Object.freeze({
+    backend: 'codex',
+    backendId: 'gpt-6.1-sol',
+    backendWindow: 920012,
+    measurement: 'measured 2026-09-30: 920012 accepted; 935012 refused',
+    pickerAlias: 'claude-gpt-6.1-sol[1m]',
+    advertisedWindow: 920000,
+    sentry: 'synthetic-413',
+  }),
   'grok-4.5': Object.freeze({
     backend: 'grok',
     backendId: 'grok-4.5',
@@ -114,7 +123,132 @@ const MODEL_WINDOW_POLICY = Object.freeze({
   }),
 });
 const CODEX_CONTEXT_WINDOWS = MODEL_WINDOW_POLICY;
-const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
+
+// One persisted setting per backend, shared by the orchestrator and every executor: the gateway sees the same
+// model ids from both, and no request header tells them apart.
+const CONTEXT_WINDOW_PATH = path.join(STATE, 'context-window.json');
+const CONTEXT_WINDOW_BACKENDS = Object.freeze(['claude', 'codex', 'grok']);
+const COMPACT_AT_BACKENDS = Object.freeze(['codex', 'grok']);
+const DEFAULT_CONTEXT_WINDOWS = Object.freeze({ claude: 'full', codex: 272000, grok: 'full' });
+const CODEX_BILLING_RULE = 'OpenAI bills input above 272k tokens at 2x';
+const CODEX_DOUBLE_BILLING_THRESHOLD = 272000;
+// One turn of growth: a response plus the tool results that answer it. The sentry keeps this much headroom.
+const CODEX_COMPACT_HEADROOM = 40000;
+// Claude Code 2.1.286's compaction instructions are about 7.3k characters; 5k tokens covers them with room.
+const COMPACTION_PROMPT_TOKENS = 5000;
+// Claude Code never reads max_input_tokens for a [1m] gateway row (its discovery cache keeps only id and name),
+// so a cap is enforced by the gateway's synthetic-413 sentry. The sentry refuses turn k+1 once turn k's input
+// passed the trigger, so turn k can already be one turn of growth past it, and the compaction turn that follows
+// resends all of that plus one more turn and the compaction prompt. Cap C therefore compacts past
+// C - 2 * 40000 - 5000: 272000 compacts past 187000. Turn growth is unbounded, so this reserve
+// cannot guarantee that crossing turns or compaction requests stay below the cap.
+const CAP_COMPACTION_MARGIN = 2 * CODEX_COMPACT_HEADROOM + COMPACTION_PROMPT_TOKENS;
+const CONTEXT_WINDOW_MAX = 1000000;
+// Claude caps go into Claude Code's own autoCompactWindow, which takes 100k-1M. A gateway cap has to leave the
+// sentry at least 100k to compact past, or a session would compact on its system prompt alone.
+const CONTEXT_WINDOW_MIN = Object.freeze({ claude: 100000, codex: 100000 + CAP_COMPACTION_MARGIN, grok: 100000 + CAP_COMPACTION_MARGIN });
+
+function parseContextWindowValue(backend, value) {
+  if (value === 'full') return 'full';
+  const tokens = Number(value);
+  return Number.isInteger(tokens) && tokens >= CONTEXT_WINDOW_MIN[backend] && tokens <= CONTEXT_WINDOW_MAX ? tokens : null;
+}
+
+// CODEX_GATEWAY_CONTEXT_WINDOW predates the saved setting and still works, below it.
+function resolveContextWindow(backend, saved, env) {
+  const savedValue = parseContextWindowValue(backend, saved?.[backend]);
+  if (savedValue !== null) return { value: savedValue, source: 'saved' };
+  const envValue = backend === 'codex' ? parseContextWindowValue(backend, env.CODEX_GATEWAY_CONTEXT_WINDOW) : null;
+  if (envValue !== null) return { value: envValue, source: 'CODEX_GATEWAY_CONTEXT_WINDOW' };
+  return { value: DEFAULT_CONTEXT_WINDOWS[backend], source: 'default' };
+}
+
+function readSavedContextWindows(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function parseCompactAtValue(value) {
+  if (!['string', 'number'].includes(typeof value)) return null;
+  const tokens = Number(value);
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : null;
+}
+
+function validateCompactAtSettings(compactAt = {}) {
+  for (const [backend, value] of Object.entries(compactAt)) {
+    if (!COMPACT_AT_BACKENDS.includes(backend)) {
+      throw new Error(`unsupported compactAt.${backend}: direct compaction maxima are supported for Codex and Grok only; use --claude <tokens|full> for the native window`);
+    }
+    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`invalid compactAt.${backend}: use a positive whole token count`);
+  }
+}
+
+function resolveContextWindowSetting(backend, saved, env) {
+  const setting = resolveContextWindow(backend, saved, env);
+  const compactAt = saved?.compactAt?.[backend];
+  if (compactAt !== undefined) setting.compactAt = parseCompactAtValue(compactAt);
+  return setting;
+}
+
+function readContextWindowSettings({ file = CONTEXT_WINDOW_PATH, env = process.env } = {}) {
+  const saved = readSavedContextWindows(file);
+  validateCompactAtSettings(saved?.compactAt);
+  return Object.fromEntries(CONTEXT_WINDOW_BACKENDS.map((backend) => [backend, resolveContextWindowSetting(backend, saved, env)]));
+}
+
+function writeContextWindowSettings(values, file = CONTEXT_WINDOW_PATH) {
+  validateCompactAtSettings(values.compactAt);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeFileAtomically(file, JSON.stringify(values, null, 2) + '\n');
+}
+
+const CONTEXT_WINDOWS = readContextWindowSettings();
+const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
+
+function contextWindowCap(backend, windows = CONTEXT_WINDOWS) {
+  const value = windows[backend]?.value;
+  return Number.isInteger(value) ? value : null;
+}
+
+function contextWindowCompactAt(backend, windows = CONTEXT_WINDOWS) {
+  return windows[backend]?.compactAt ?? null;
+}
+
+function gatewayCompactTrigger(cap, compactAt) {
+  if (compactAt !== null && compactAt !== undefined) return Math.min(compactAt, cap ?? Infinity);
+  return cap ? cap - CAP_COMPACTION_MARGIN : null;
+}
+
+function gatewayCompactionCandidates(compactTrigger, cap, compactAt) {
+  if (compactAt !== null) return [{ compactTrigger: gatewayCompactTrigger(cap, compactAt), source: 'compact-at' }];
+  const triggers = [];
+  if (Number.isFinite(compactTrigger) && compactTrigger > 0) triggers.push({ compactTrigger, source: 'env' });
+  if (cap) triggers.push({ compactTrigger: gatewayCompactTrigger(cap, null), source: 'cap' });
+  return triggers;
+}
+
+function sentryBackendWindow(policy) {
+  const backendWindow = policy.backendWindow;
+  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
+    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
+  }
+  return backendWindow;
+}
+
+function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger, cap = contextWindowCap(policy?.backend), compactAt = contextWindowCompactAt(policy?.backend)) {
+  if (policy?.sentry !== 'synthetic-413') return null;
+  const backendWindow = sentryBackendWindow(policy);
+  const triggers = [{ compactTrigger: backendWindow - CODEX_COMPACT_HEADROOM, source: 'derived' },
+    ...gatewayCompactionCandidates(compactTrigger, cap, compactAt)];
+  const [lowest] = triggers.sort((left, right) => left.compactTrigger - right.compactTrigger);
+  return { backendWindow, ...lowest };
+}
+
+function codexBillingNote(cap, compactAt = null) {
+  if (compactAt !== null) return `${CODEX_BILLING_RULE}; the crossing turn and compaction request can still exceed 272k and pay double`;
+  return cap && cap <= CODEX_DOUBLE_BILLING_THRESHOLD
+    ? `${CODEX_BILLING_RULE}; the crossing turn and compaction request can still exceed 272k and pay double`
+    : `${CODEX_BILLING_RULE}; requests past 272k pay double`;
+}
 
 function gatewayBackendModelId(id) {
   return typeof id === 'string' ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '') : '';
@@ -145,9 +279,8 @@ function resolveGatewayModelPolicy(id) {
 function gatewayAdvertisedWindow(id) {
   const policy = resolveGatewayModelPolicy(id);
   if (!policy) return null;
-  return policy.backend === 'codex' && configuredContextWindow
-    ? configuredContextWindow
-    : policy.advertisedWindow;
+  const cap = contextWindowCap(policy.backend);
+  return cap && policy.advertisedWindow ? Math.min(policy.advertisedWindow, cap) : policy.advertisedWindow;
 }
 
 function gatewayClientModelId(id) {
@@ -179,14 +312,14 @@ const PIN_ALIASES = {
 };
 const KNOWN_GOOD_PINS = {
   opus: 'claude-opus-5-5[1m]',
-  sonnet: 'claude-sonnet-5[1m]',
+  sonnet: 'claude-sonnet-5-5[1m]',
   fable: 'claude-fable-5-1[1m]',
 };
 // Defaults this plugin shipped earlier. A wired project still holding one was written by the
 // gateway, not typed by the user, so a pin change must still be allowed to replace it.
 const RETIRED_SHIPPED_PINS = {
   opus: ['claude-opus-5[1m]', 'claude-opus-4-8[1m]'],
-  sonnet: [],
+  sonnet: ['claude-sonnet-5[1m]'],
   fable: [],
 };
 const PIN_OVERRIDE_PATH = path.join(STATE, 'pins.json');
@@ -354,6 +487,10 @@ module.exports = {
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH, LIFECYCLE_LOG_PATH,
   PROJECT_WIRING_REGISTRY_PATH, RETIRED_SHIPPED_PINS, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, STABLE_COMMAND_PATH, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
+  CAP_COMPACTION_MARGIN, CODEX_COMPACT_HEADROOM, CONTEXT_WINDOW_BACKENDS, CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN,
+  CONTEXT_WINDOW_PATH, DEFAULT_CONTEXT_WINDOWS, COMPACT_AT_BACKENDS, gatewayCompactTrigger, codexBillingNote, contextWindowCap,
+  contextWindowCompactAt, effectiveSentryPolicy, parseCompactAtValue,
+  parseContextWindowValue, readContextWindowSettings, writeContextWindowSettings,
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
   codexReadinessMessage,
   gatewayAdvertisedWindow, gatewayBackendModelId, gatewayClientModelId, gatewayDiscoveryModels,

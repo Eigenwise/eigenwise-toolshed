@@ -46,8 +46,12 @@ const {
   canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, resolveStableCommandPath,
   gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
   resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
-  syncGatewayDiscoveryCache,
+  syncGatewayDiscoveryCache, CONTEXT_WINDOW_PATH, contextWindowCap, contextWindowCompactAt, readContextWindowSettings,
+  writeContextWindowSettings,
 } = require('./runtime.js');
+const {
+  contextWindowReport, contextWindowUpdate, gatewayWindowNote, savedContextWindows, saveContextWindowUpdate, syncClaudeContextWindow,
+} = require('./context-window.js');
 const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const {
   CODEX_UPSTREAM_BLOCK_PATH, clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamUnavailable,
@@ -117,7 +121,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
   writePinOverrides,
 } = require('./pins.js');
 
@@ -141,6 +145,21 @@ const USAGE = `usage: model-gateway.js <command>
                    fresh one, and prints the retained catalog unchanged
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
+  context-window [--claude <tokens|full>] [--codex <tokens|full>] [--grok <tokens|full>]
+                   show or persist the context window per backend (${CONTEXT_WINDOW_PATH}); the
+                   orchestrator and every executor share it. Defaults: claude full, codex 272000,
+                   grok full. Without compact-at, a gateway cap compacts 85000 below the cap.
+                   --codex-compact-at <tokens|cap> and --grok-compact-at <tokens|cap> set a direct
+                   maximum before compaction (positive whole tokens); cap removes the override.
+                   The cap and backend window minus 40000 still limit the effective maximum.
+                   A saved compact-at ignores CODEX_GATEWAY_COMPACT_TRIGGER, reported unchanged.
+                   Example: --codex-compact-at 242000 leaves the 272000 cap unchanged. OpenAI bills
+                   input above 272k tokens at 2x; the crossing turn and compaction request can still
+                   exceed 272k. Existing installations keep their current policy until configured.
+                   --claude sets the native autoCompactWindow in project-wired settings; native
+                   engine headroom applies and the exact trigger is unverified. Claude compact-at
+                   is unsupported. No same-model main/subagent split is applied.
+                   CODEX_GATEWAY_CONTEXT_WINDOW is superseded and only applies when no codex value is saved.
   env [--write-project | --write-user | --remove] [--reconcile]
                    print the Claude Code env block, or merge/remove wiring
                    (--write-project writes .claude/settings.local.json; --write-user
@@ -274,13 +293,15 @@ configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, requestS
 //
 // Returns 'user', 'project-only', or 'unknown' when installed_plugins.json is
 // absent (for example, a --plugin-dir development checkout).
-function installScope() {
+function installScope(home = os.homedir()) {
   try {
-    const file = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    const file = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const entries = (data.plugins && data.plugins['model-gateway@eigenwise-toolshed']) || [];
+    const entries = Object.entries(data.plugins || {})
+      .filter(([pluginId]) => pluginId.startsWith('model-gateway@'))
+      .flatMap(([, installs]) => installs);
     if (!entries.length) return 'unknown';
-    return entries.some((e) => e.scope === 'user') ? 'user' : 'project-only';
+    return entries.some((entry) => entry.scope === 'user') ? 'user' : 'project-only';
   } catch { return 'unknown'; }
 }
 
@@ -853,7 +874,58 @@ async function statusReport({ readiness = null, probeShim = probeShimState } = {
   reportCompatibilityListener(health?.compat);
   log(`Codex readiness: ${codex.state}`);
   if (!codex.ready) log(codex.message);
+  reportContextWindows();
   return { ok: codex.ready, health, readiness: codex };
+}
+
+function reportContextWindows() {
+  for (const line of contextWindowReport(readContextWindowSettings(), configuredAutoCompactWindow())) {
+    log(`context window ${line}`);
+  }
+}
+
+// autoCompactWindow is Claude Code's only per-project window knob, so a Claude cap needs project-scoped wiring;
+// written at user scope it would cap every project and every model.
+function applyClaudeWindowChange(previous, next) {
+  if (previous === next) return;
+  const wirings = registeredProjectWirings();
+  if (next !== 'full' && wirings.length === 0) {
+    die('a Claude context window cap is written as autoCompactWindow into each project-wired .claude/settings.local.json, and no project is wired to the gateway at project scope. Run /model-gateway:model-gateway, then use its env --write-project command inside the project first; nothing was saved.', 2);
+  }
+  reportClaudeWindowSync(syncClaudeContextWindow(wirings.map((wiring) => wiring.file), { owned: previous, next }));
+}
+
+function reportClaudeWindowSync(result) {
+  for (const changed of result.changed) log(`updated autoCompactWindow in ${changed.file}`);
+  for (const skipped of result.skipped) log(`skipped ${skipped.file}: ${skipped.reason}`);
+}
+
+// A project wired after the Claude cap was saved gets it at the next refresh, the same way pins reach it.
+// Skips are not reported here: this runs at every session start, and the context-window command already named them.
+function refreshRegisteredClaudeWindow() {
+  const claude = readContextWindowSettings().claude.value;
+  if (claude === 'full') return;
+  const files = registeredProjectWirings().map((wiring) => wiring.file);
+  for (const changed of syncClaudeContextWindow(files, { owned: claude, next: claude }).changed) log(`updated autoCompactWindow in ${changed.file}`);
+}
+
+function contextWindowCommand() {
+  if (!args.length) {
+    reportContextWindows();
+    return;
+  }
+  const current = readContextWindowSettings();
+  const saved = savedContextWindows(current);
+  for (let index = 0; index < args.length; index += 2) {
+    const update = contextWindowUpdate(args[index], args[index + 1]);
+    if (update.error) die(update.error, 2);
+    saveContextWindowUpdate(saved, update);
+  }
+  applyClaudeWindowChange(current.claude.value, saved.claude || 'full');
+  writeContextWindowSettings(saved);
+  log(`saved context windows to ${CONTEXT_WINDOW_PATH}`);
+  reportContextWindows();
+  log('The running gateway serves new Codex and Grok windows after it restarts (stop, then ensure). Restart open Claude Code sessions to pick up a Claude change.');
 }
 
 // -------------------------------------------------------------- env wiring
@@ -871,21 +943,19 @@ function refreshRegisteredProjectPins(ownedPins) {
   return reportRegisteredPinSync(syncRegisteredProjectPins({ ownedPins }));
 }
 
+// Syncs on every refresh, not only when this refresh moved a pin: a release that bumps the
+// shipped default moves the effective pin between plugin versions, and no single refresh sees it.
+// The sync writes nothing when every registered project already agrees.
 async function refreshDetectedPinsAndWiring(options = {}) {
-  const previousPins = effectivePins();
   const ownedPins = ownedPinValues();
   await refreshDetectedPins(options);
-  const changed = Object.entries(effectivePins()).some(([alias, pin]) => (
-    previousPins[alias].override === null && previousPins[alias].value !== pin.value
-  ));
-  if (changed) refreshRegisteredProjectPins(ownedPins);
+  refreshRegisteredProjectPins(ownedPins);
+  refreshRegisteredClaudeWindow();
 }
 
 function reportEffectivePins(label = '', suffix = '') {
   for (const [alias, pin] of Object.entries(effectivePins())) {
     log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
-    const notice = pinLagNotice(alias, pin);
-    if (notice) log(notice);
   }
 }
 
@@ -1138,7 +1208,7 @@ function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
     backendWindow: policy.backendWindow,
     advertisedWindow: gatewayAdvertisedWindow(id),
     clientWindow,
-    clientCompactPoint: Math.min(autoCompact?.window ?? clientWindow, clientWindow) - 33000,
+    clientCompactPoint: 'unverified (native engine headroom)',
     sentry: policy.sentry,
     sentryTrigger: sentryPolicy ? `${sentryPolicy.compactTrigger} (${sentryPolicy.source})` : 'none',
     evidenceDate: evidenceDate(policy.measurement),
@@ -1363,7 +1433,7 @@ function displayName(id, backend = 'codex') {
 const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
+  'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
@@ -1648,6 +1718,13 @@ function providerCatalogReadiness(provider, readiness) {
   return unavailableProviderReadiness(provider);
 }
 
+function catalogContextWindow(id, provider) {
+  const contextWindow = gatewayAdvertisedWindow(id);
+  if (!contextWindow) return {};
+  const contextWindowNote = gatewayWindowNote(provider, contextWindowCap(provider), contextWindowCompactAt(provider), resolveGatewayModelPolicy(id));
+  return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
+}
+
 function buildCatalog(ids, readiness = null) {
   const used = new Set();
   const models = ids
@@ -1658,6 +1735,7 @@ function buildCatalog(ids, readiness = null) {
       id: gatewayClientModelId(id),
       label: details.label,
       provider: details.provider,
+      ...catalogContextWindow(id, details.provider),
     }));
   const providers = Object.fromEntries(
     [...new Set(models.map((model) => model.provider))].map((provider) => [provider, providerCatalogReadiness(provider, readiness)]),
@@ -2698,6 +2776,7 @@ const commands = {
   },
   catalog: () => catalogCommand(),
   pin: () => pinCommand(),
+  'context-window': () => contextWindowCommand(),
   env: () => envCommand(),
   doctor: (options) => doctor(options),
   'remote-control': () => remoteControlCommand(),
@@ -2735,6 +2814,7 @@ module.exports = {
   syncCompatMode,
   waitForStartupReadiness,
   settingsPath,
+  installScope,
   COMPAT_HOST,
   COMPAT_PORT,
   DEFAULT_BASE_URL,

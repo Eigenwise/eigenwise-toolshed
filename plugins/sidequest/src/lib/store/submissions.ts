@@ -11,12 +11,35 @@ const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = 
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
 const worktrees = require('../worktrees.js');
+const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require('./composition-admission.js');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
+import type { CompositionTicket } from './composition-admission.js';
+import type { CompositionRefusal } from './composition-range.js';
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
+  let heldCompositionDelivery: { slug: string; id: string } | null = null;
+
+  function withTicketLock<Result>(slug: string, id: string, callback: () => Result): Result | { ok: false; reason: 'busy'; ticket?: never } {
+    const owned = heldCompositionDelivery;
+    if (owned && owned.slug === slug && owned.id === id) return callback();
+    return withIndependentTicketLock(slug, id, callback);
+  }
+
+  function deliverUnderCompositionLocks<Result>(slug: string, ticket: CompositionTicket, callback: () => Result): Result | CompositionRefusal | { ok: false; reason: 'busy' } {
+    if (!ticket.compositionAdmission) return callback();
+    return dependencies.withCompositionGenerationLock(slug, ticket.id, () => {
+      const previous = heldCompositionDelivery;
+      heldCompositionDelivery = { slug, id: ticket.id };
+      try {
+        return callback();
+      } finally {
+        heldCompositionDelivery = previous;
+      }
+    }, { boundary: 'submitted' });
+  }
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 const SUBMISSION_GITREF_MAX = 200;
@@ -283,7 +306,7 @@ function preservePendingRejection(slug: any, ticket: any, rejected: any, root: s
   for (let attempt = 0; attempt < 100; attempt += 1) {
     rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
     putTicketTransaction(slug, ticket);
-    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef);
     if (preserved.ok || preserved.reason !== 'git_ref_collision') break;
   }
   if (!preserved.ok) {
@@ -622,9 +645,27 @@ function integrationVerifyLogPath(slug: any, ticket: any) {
   return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.log`);
 }
 
+function directlyClaimed(ticket: any) {
+  return (ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt)?.execution === 'direct';
+}
+
+// GH-377: a direct claim over an earlier dispatch runs the ticket's current verify. The terminal
+// dispatch's pin no longer governs it, and nothing re-pins it after `update {verify}`.
+function dispatchPinnedRequirement(ticket: any) {
+  if (directlyClaimed(ticket)) return null;
+  return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+}
+
+// Same form as the briefing's capture line (agentsync capturedVerifyCommand), which a direct claim never gets.
+function directClaimCaptureInvocation(slug: any, ticket: any) {
+  if (!directlyClaimed(ticket)) return '';
+  const script = path.join(__dirname, '..', 'verify-capture.js');
+  return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
+}
+
 function pinnedVerificationRequirement(ticket: any) {
-  const pinned = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-  if (pinned && typeof pinned === 'object') return pinned;
+  const pinned = dispatchPinnedRequirement(ticket);
+  if (pinned instanceof Object) return pinned;
   const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || '').trim();
   if (!legacyCommand) {
     return verificationRequirement({ kind: 'custom', evidence: 'legacy project verifier was not recorded' });
@@ -660,12 +701,10 @@ function amendedVerifierCaptureMessage(ticket: any, pinnedCommand: string, captu
 function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
+  return dependencies.withCompositionGenerationLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
-    const pinnedAtDispatch = ticket.dispatch?.verificationRequirement
-      || ticket.dispatch?.lifecycleAttempt?.verificationRequirement
-      || ticket.lifecycleAttempt?.verificationRequirement;
+    const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
     const requirement = pinnedVerificationRequirement(ticket);
     const capturedCommand = String(capture?.command || '');
     const command = capturedCommand.trim();
@@ -713,7 +752,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
     ticket.updatedAt = new Date().toISOString();
     putTicket(slug, ticket);
     return { ok: true, ticket, capture: verified };
-  });
+  }, { boundary: 'active', refusal: (root: CompositionTicket) => compositionCaptureRefusal(root, capture) });
 }
 
 function skippedVerification(requirement: any, waiver: any) {
@@ -1081,20 +1120,57 @@ function branchNotCheckedOutMessage(targetBranch: string, currentBranch: string,
   return `${targetBranch} must be checked out before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
 }
 
-function integrationTargetCheckoutState(repo: string) {
+function integrationTargetCheckoutState(repo: string): string[] {
   return integrationGit(repo, ['status', '--porcelain=v2', '--untracked-files=all']).split(/\r?\n/).filter(Boolean);
 }
 
-function integrationTargetCheckoutPath(entry: string) {
-  if (/^[?!] /.test(entry)) return entry.slice(2);
-  const fieldsBeforePath = entry.startsWith('1 ') ? 8 : entry.startsWith('2 ') ? 9 : entry.startsWith('u ') ? 10 : 0;
-  return fieldsBeforePath ? entry.split(' ', fieldsBeforePath + 1)[fieldsBeforePath]?.split('\t')[0] || entry : entry;
+const CHECKOUT_ENTRY_FIELDS_BEFORE_PATH: Record<string, number> = { '?': 1, '!': 1, '1': 8, '2': 9, u: 10 };
+
+// A rename entry (type 2) carries its destination and source separated by a tab; both are returned.
+function integrationTargetCheckoutPaths(entry: string) {
+  const fieldsBeforePath = CHECKOUT_ENTRY_FIELDS_BEFORE_PATH[entry[0] || ''] ?? 0;
+  return entry.split(' ').slice(fieldsBeforePath).join(' ').split('\t');
 }
 
-function integrationTargetDirtyMessage(mode: string, checkoutState: string[]) {
-  const paths = checkoutState.slice(0, INTEGRATION_TARGET_DIRTY_PATH_LIMIT).map(integrationTargetCheckoutPath);
-  const remaining = checkoutState.length - paths.length;
-  return `${mode} refused; integration target has pending checkout state: ${paths.join(', ')}${remaining > 0 ? `, and ${remaining} more` : ''}.`;
+function integrationTargetCheckoutPath(entry: string) {
+  return integrationTargetCheckoutPaths(entry)[0] || entry;
+}
+
+// Rename detection is off so a rename's source counts as written, not only its destination.
+function deliveryWrittenPaths(repo: string, submissions: any[]) {
+  return new Set(submissions.flatMap((submission) => [
+    ...(submission.changedPaths || []),
+    ...integrationGit(repo, ['diff', '--name-only', '--no-renames', `HEAD...${submission.commit}`]).split(/\r?\n/).filter(Boolean),
+  ]));
+}
+
+function checkoutEntryBlocksDelivery(entry: string, writtenPaths: Set<string>) {
+  const unstagedOnly = entry.startsWith('? ') || entry.startsWith('1 .');
+  return !unstagedOnly || integrationTargetCheckoutPaths(entry).some((entryPath) => writtenPaths.has(entryPath));
+}
+
+// GH-340: a service rewriting logs or JSON in the registered checkout keeps it dirty forever. An unstaged edit or
+// untracked file outside every path the delivery writes cannot collide with the merge, so integrate proceeds around
+// it and reports it. Staged and unmerged entries still block: git merge and cherry-pick refuse a dirty index.
+function integrationTargetDirt(repo: string, submissions: any[]) {
+  const checkoutState = integrationTargetCheckoutState(repo);
+  if (!checkoutState.length) return { blocking: [], ignoredDirtyPaths: [] };
+  const writtenPaths = deliveryWrittenPaths(repo, submissions);
+  const blocking = checkoutState.filter((entry) => checkoutEntryBlocksDelivery(entry, writtenPaths));
+  const ignoredDirtyPaths = checkoutState.filter((entry) => !blocking.includes(entry)).map(integrationTargetCheckoutPath);
+  return { blocking, ignoredDirtyPaths };
+}
+
+function integrationTargetDirtyMessage(mode: string, blocking: string[], ignoredDirtyPaths: string[]) {
+  const paths = blocking.slice(0, INTEGRATION_TARGET_DIRTY_PATH_LIMIT).map(integrationTargetCheckoutPath);
+  const remaining = blocking.length - paths.length;
+  const more = remaining > 0 ? `, and ${remaining} more` : '';
+  const ignorable = ignoredDirtyPaths.length ? ` ${ignoredDirtyPaths.length} other dirty path(s) sit outside the delivery and were ignorable.` : '';
+  return `${mode} refused; integration target has pending checkout state the delivery writes, or staged or unmerged state: ${paths.join(', ')}${more}. Commit, stash, or remove those paths; unstaged edits and untracked files outside the delivery can stay.${ignorable}`;
+}
+
+function checkoutStateBeyondIgnoredPaths(repo: string, ignoredDirtyPaths: string[]) {
+  return integrationTargetCheckoutState(repo).filter((entry) => !ignoredDirtyPaths.includes(integrationTargetCheckoutPath(entry)));
 }
 
 function integrationOperationResidue(repo: string) {
@@ -1104,10 +1180,10 @@ function integrationOperationResidue(repo: string) {
   });
 }
 
-function restoreCleanIntegrationCheckout(repo: string, before: string) {
+function restoreCleanIntegrationCheckout(repo: string, before: string, ignoredDirtyPaths: string[]) {
   integrationGit(repo, ['reset', '--merge', before]);
   const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
-  const checkoutState = integrationTargetCheckoutState(repo);
+  const checkoutState = checkoutStateBeyondIgnoredPaths(repo, ignoredDirtyPaths);
   const operationResidue = integrationOperationResidue(repo);
   if (resultingHead !== before || checkoutState.length || operationResidue.length) {
     throw new Error(`Expected clean checkout at ${before}; HEAD is ${resultingHead}, status has ${checkoutState.length} entries, operation residue: ${operationResidue.join(', ') || 'none'}.`);
@@ -1131,7 +1207,12 @@ function rejectedPostMergeRollbackMessage(repo: string, before: string, delivery
   return `Automatic rollback refused: ${targetBranch} no longer contains the delivered merge ${deliveryHead}; it now points at ${currentHead}. Manual recovery: inspect ${targetBranch} and recover it from the recorded pre-merge head ${before}.`;
 }
 
-function restorePostMergeVerificationCheckout(repo: string, before: string, deliveryHead: string, targetBranch: string, mode: string) {
+// A hard reset would also revert the unrelated edits integrate merged around (GH-340); --merge keeps them.
+function postMergeRollbackReset(ignoredDirtyPaths: string[]) {
+  return ignoredDirtyPaths.length ? { flag: '--merge', strategy: 'merge-reset-delivery-head' } : { flag: '--hard', strategy: 'hard-reset-delivery-head' };
+}
+
+function restorePostMergeVerificationCheckout(repo: string, before: string, deliveryHead: string, targetBranch: string, mode: string, ignoredDirtyPaths: string[]) {
   const currentBranch = integrationGit(repo, ['branch', '--show-current']);
   const currentHead = integrationGit(repo, ['rev-parse', 'HEAD']);
   const branchHead = integrationGit(repo, ['rev-parse', '--verify', `refs/heads/${targetBranch}^{commit}`]);
@@ -1139,14 +1220,15 @@ function restorePostMergeVerificationCheckout(repo: string, before: string, deli
   if (currentBranch !== targetBranch || currentHead !== deliveryHead || branchHead !== deliveryHead || mergeBase !== before) {
     throw new Error(rejectedPostMergeRollbackMessage(repo, before, deliveryHead, targetBranch, currentHead));
   }
-  integrationGit(repo, ['reset', '--hard', before]);
+  const reset = postMergeRollbackReset(ignoredDirtyPaths);
+  integrationGit(repo, ['reset', reset.flag, before]);
   const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
-  const checkoutState = integrationTargetCheckoutState(repo);
+  const checkoutState = checkoutStateBeyondIgnoredPaths(repo, ignoredDirtyPaths);
   const operationResidue = integrationOperationResidue(repo);
   if (resultingHead !== before || checkoutState.length || operationResidue.length) {
     throw new Error(`Expected clean hard-reset checkout at ${before}; HEAD is ${resultingHead}, status has ${checkoutState.length} entries, operation residue: ${operationResidue.join(', ') || 'none'}.`);
   }
-  return { strategy: 'hard-reset-delivery-head', before, deliveryHead, targetBranch };
+  return { strategy: reset.strategy, before, deliveryHead, targetBranch };
 }
 
 function deliveryLockPath(repo: string) {
@@ -1182,10 +1264,10 @@ function handResolvedConflictRecovery(ticket: any, candidate: string, targetBran
   return `Resolve it by hand: on ${targetBranch} merge the pinned candidate itself (\`git merge --no-ff ${candidate}\`, not a cherry-pick), resolve the conflict in that merge commit, commit and re-gate it, then record it with integrate deliveryCommit ${candidate} and reason (CLI \`sidequest integrate ${ticket.ref} --delivery-commit ${candidate} --reason "<resolution>"\`), or with groomClose passing deliveryCommit <the resolved merge commit> and deliveryMethod "manual". Keeping ${candidate} as a parent of that merge is what proves the candidate content; either record still requires the bound review and a passing merged-tree gate.`;
 }
 
-function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string, deliveryHead: string, targetBranch: string) {
+function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string, deliveryHead: string, targetBranch: string, ignoredDirtyPaths: string[]) {
   const verificationMessage = `${ticket.ref} verification returned ${verify.status} after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;
   try {
-    const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode);
+    const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode, ignoredDirtyPaths);
     restoreRolledBackExpectedUpstreams(slug, repo, before, deliveryHead);
     return integrationFailure(slug, ticket, {
       reason: `${verificationOutcome(verify)}_post_merge`,
@@ -2035,33 +2117,54 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const preflight = validateIntegrationSubmission(slug, idOrRef, { integrationBranch: opts.integrationBranch });
   if (!preflight.ok) return preflight;
-  const ticket = preflight.ticket;
-  if (!submissionUsesGit(ticket)) {
-    const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
-    if (!assembled.ok) return assembled;
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
-    return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
-  }
-  const project = readMeta(slug);
-  const repo = project?.path;
-  let target: any;
+  if (!submissionUsesGit(preflight.ticket)) return integrateSingletonArtifactSubmission(slug, idOrRef, opts);
+  return integrateGitSubmission(slug, idOrRef, opts, preflight.ticket);
+}
+
+function integrateSingletonArtifactSubmission(slug: string, idOrRef: string, opts: { integrationBranch?: string }) {
+  const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
+  if (!assembled.ok) return assembled;
+  const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
+  return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
+}
+
+// Test-only fault seam for the fresh target resolution after admission, so a suite can prove the delivery
+// refusal leaves records and refs untouched. It is failure injection, not an observed race.
+function injectedIntegrationTargetFault(): void {
+  if (String(process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT || '').trim() !== 'second-resolution') return;
+  throw new Error('injected integration target fault at the second resolution');
+}
+
+function integrationTargetRefusal(slug: string, ticket: CompositionTicket, repo: string, opts: { integrationBranch?: string }) {
+  let target: { branch?: string } | null | undefined;
   try {
     target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
-  } catch (error: any) {
+    injectedIntegrationTargetFault();
+  } catch (error: unknown) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
   if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+}
+
+function integrateGitSubmission(slug: string, idOrRef: string, opts: { integrationBranch?: string }, ticket: CompositionTicket) {
+  const repo: string = readMeta(slug)?.path ?? '';
+  const targetRefusal = integrationTargetRefusal(slug, ticket, repo, opts);
+  if (targetRefusal) return targetRefusal;
   let lock: string;
   try {
     lock = deliveryLockPath(repo);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
+  return integrateUnderDeliveryLease(slug, idOrRef, opts, ticket, lock);
+}
+
+function integrateUnderDeliveryLease(slug: string, idOrRef: string, opts: { integrationBranch?: string }, ticket: CompositionTicket, lock: string) {
   const lockLease = acquireLock(lock, { wait: false });
   if (!lockLease) return deliveryInProgress(ticket);
   try {
     lockLease.refresh();
-    return integrateSubmissionUnlocked(slug, idOrRef, opts);
+    return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, opts));
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
@@ -2098,6 +2201,23 @@ function exactAssembledWave(slug: string | undefined, refs: string | readonly st
     };
   }
   return { ok: true, tickets, wave, participantRefs };
+}
+
+function uniqueParticipantRefs(refs: string | readonly string[] | undefined): string[] {
+  return Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || '').trim()).filter(Boolean)));
+}
+
+// A multi-participant wave never takes the composition locks, so an admitted root inside one would skip its
+// source, review and generation revalidation.
+function compositionWaveRefusal(slug: string | undefined, refs: string | readonly string[] | undefined) {
+  const participants = uniqueParticipantRefs(refs);
+  if (participants.length < 2) return;
+  const root: CompositionTicket | undefined = participants.map((ref): CompositionTicket => getTicket(slug, ref)).find((ticket) => ticket?.compositionAdmission);
+  if (root) return { ok: false, reason: 'composition_wave_unsupported', ticket: root, message: `${root.ref} carries a composition admission and integrates only on its own, under its composition locks. Integrate it as a single ref.` };
+}
+
+function deliverSubmissionWave(slug?: string, refs?: string | readonly string[], opts?: WaveDeliveryOptions) {
+  return compositionWaveRefusal(slug, refs) ?? integrateSubmissionWave(slug, refs, opts);
 }
 
 function integrateSubmissionWave(slug?: string, refs?: string | readonly string[], opts?: WaveDeliveryOptions) {
@@ -2161,16 +2281,6 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
   if (!lockLease) return deliveryInProgress(assembled.tickets[0]);
   try {
     lockLease.refresh();
-    const checkoutState = integrationTargetCheckoutState(repo);
-    if (checkoutState.length) {
-      return {
-        ok: false,
-        reason: 'integration_target_dirty',
-        tickets: assembled.tickets,
-        checkoutState,
-        message: integrationTargetDirtyMessage(normalizeDeliveryMode(opts.mode), checkoutState),
-      };
-    }
     const mode = normalizeDeliveryMode(opts.mode);
     const currentBranch = integrationGit(repo, ['branch', '--show-current']);
     if (currentBranch !== target.branch) {
@@ -2185,6 +2295,17 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
         return { ok: false, reason: 'pinned_ref_mismatch', ticket, tickets: assembled.tickets, message: `${gitRef} points to ${pinnedCommit}, not submitted ${submission.commit}.` };
       }
       candidates.push({ ticket, submission, gitRef, pinnedCommit, changedPaths: changedIntegrationPaths(repo, submission) });
+    }
+    const dirt = integrationTargetDirt(repo, candidates.map((candidate) => candidate.submission));
+    if (dirt.blocking.length) {
+      return {
+        ok: false,
+        reason: 'integration_target_dirty',
+        tickets: assembled.tickets,
+        checkoutState: dirt.blocking,
+        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+        message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths),
+      };
     }
     const before = integrationGit(repo, ['rev-parse', 'HEAD']);
     try {
@@ -2201,7 +2322,7 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
       const conflictedPaths = unmergedIntegrationPaths(repo);
       const message = integrationConflictMessage(error, conflictedPaths);
       try {
-        restoreCleanIntegrationCheckout(repo, before);
+        restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
       } catch (rollbackError: any) {
         return { ok: false, reason: 'wave_delivery_rollback_failed', tickets: assembled.tickets, before, conflictedPaths, message: `${message} Rollback failed: ${integrationGitError(rollbackError)}` };
       }
@@ -2211,7 +2332,7 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
     const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
     if (!verificationAccepted(verification)) {
       try {
-        restoreCleanIntegrationCheckout(repo, before);
+        restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
       } catch (rollbackError: any) {
         return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
       }
@@ -2234,6 +2355,7 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
       resultingHead,
       deliveredFiles: candidate.changedPaths,
       dirtyFiles: mode === 'apply' ? candidate.changedPaths : [],
+      ignoredDirtyPaths: dirt.ignoredDirtyPaths,
       verify: verification,
     }));
     const failedIntegration = integrations.find((integration) => !integration.ok);
@@ -2249,6 +2371,7 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
         resultingHead,
         pinnedCommits: candidates.map((candidate) => candidate.pinnedCommit),
         participants: assembled.participantRefs,
+        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
         verify: verification,
       },
     };
@@ -2275,19 +2398,20 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
   if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
-  let checkoutState: string[];
+  let dirt: { blocking: string[]; ignoredDirtyPaths: string[] };
   try {
-    checkoutState = integrationTargetCheckoutState(repo);
+    dirt = integrationTargetDirt(repo, [ticket.submission]);
   } catch (error: any) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
-  if (checkoutState.length) {
+  if (dirt.blocking.length) {
     return {
       ok: false,
       reason: 'integration_target_dirty',
       ticket,
-      checkoutState,
-      message: integrationTargetDirtyMessage(mode, checkoutState),
+      checkoutState: dirt.blocking,
+      ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+      message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths),
     };
   }
   const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
@@ -2346,7 +2470,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
         verify,
         reconciled: true,
         deliveredFiles: changedPaths,
-        ignoredDirtyPaths: [],
+        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
       });
       return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result);
     }
@@ -2359,7 +2483,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
         const conflictedPaths = unmergedIntegrationPaths(repo);
         const message = integrationConflictMessage(error, conflictedPaths);
         try {
-          restoreCleanIntegrationCheckout(repo, before);
+          restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
         } catch (rollbackError: any) {
           return integrationFailure(slug, ticket, {
             reason: 'merge_failed_rollback_failed',
@@ -2378,7 +2502,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
           const conflictedPaths = unmergedIntegrationPaths(repo);
           const message = integrationConflictMessage(error, conflictedPaths);
           try {
-            restoreCleanIntegrationCheckout(repo, before);
+            restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
           } catch (rollbackError: any) {
             return integrationFailure(slug, ticket, {
               reason: `${mode}_failed_rollback_failed`,
@@ -2403,14 +2527,14 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
       ? Array.from(new Set([
         ...integrationGit(repo, ['diff', '--name-only']).split(/\r?\n/).filter(Boolean),
         ...integrationGit(repo, ['diff', '--cached', '--name-only']).split(/\r?\n/).filter(Boolean),
-      ]))
+      ])).filter((deliveredPath) => !dirt.ignoredDirtyPaths.includes(deliveredPath))
       : changedPaths;
     const verify = verifyDeliveredSubmission(slug, ticket, opts);
     const acceptedVerify = verificationAccepted(verify);
-    if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch);
+    if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch, dirt.ignoredDirtyPaths);
     delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
     const waveDelivery = recordTicketWaveDelivery(slug, ticket, { source: 'git', value: resultingHead, observedAt: new Date().toISOString() }, verify);
-    if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch);
+    if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch, dirt.ignoredDirtyPaths);
     const result = updateSubmissionIntegration(slug, ticket.id, {
       outcome: 'delivered',
       deliveredAt: new Date().toISOString(),
@@ -2418,7 +2542,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
       verify,
       dirtyFiles: mode === 'apply' ? deliveredFiles : [],
       deliveredFiles,
-      ignoredDirtyPaths: [],
+      ignoredDirtyPaths: dirt.ignoredDirtyPaths,
     });
     return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result);
   } catch (error: any) {
@@ -2455,7 +2579,7 @@ function sharedTreeDescendantPaths(slug: any, ticket: any, range: any, admittedS
   }
 }
 
-function submissionVerificationResult(ticket: any, sourceRevision: any, verify: any, candidateCommit?: any) {
+function submissionVerificationResult(ticket: any, sourceRevision: any, verify: any, candidateCommit?: any, directCaptureInvocation?: string) {
   const requirement = pinnedVerificationRequirement(ticket);
   const evidence = String(verify || '').trim();
   if (requirement.kind === 'attestation' || sourceRevision != null) {
@@ -2488,7 +2612,7 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
     return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
       source: 'git',
       value: String(candidateCommit || '').trim().toLowerCase(),
-    }, String(ticket.dispatchNonce || ''));
+    }, String(ticket.dispatchNonce || ''), directCaptureInvocation);
   }
   if (requirement.command) {
     const error = verifyCommandError(requirement.command);
@@ -2502,7 +2626,7 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
     return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
       source: 'git',
       value: String(candidateCommit || '').trim().toLowerCase(),
-    }, String(ticket.dispatchNonce || ''));
+    }, String(ticket.dispatchNonce || ''), directCaptureInvocation);
   }
   if (requirement.kind === 'custom' && requirement.evidenceContract === 'legacy project verifier was not recorded' && !evidence) {
     return { result: { kind: 'custom', status: 'passed', evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -2520,7 +2644,7 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
     ? opts.admissionFacts
     : null;
   const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-  const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
+  const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit, directClaimCaptureInvocation(slug, ticket));
   const completion = sourceRevision
     ? { ok: true }
     : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
@@ -2606,11 +2730,10 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
 function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
-  const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
-  if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
+  const submissionComment = preparedSubmissionComment(opts);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
+  return dependencies.withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
     // Review start freezes the candidate: no amendment, no replacement submit.
@@ -2759,7 +2882,21 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (comment) queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
     const advisories = [(submissionComment as any)?.advisory, workingPathAdvisory].filter(Boolean);
     return { ok: true, ticket: t, comment, ...(advisories.length ? { advisory: advisories.join(' ') } : {}) };
-  });
+  }, { boundary: 'active', refusal: (root: CompositionTicket & { submissionRetry?: object | null }) => compositionSubmissionRefusal(root, opts) });
+}
+
+// Hydrates the locked root's own retry checkpoint, so a retried submit is held to the same exact C and BASE..C.
+function compositionSubmissionRefusal(root: CompositionTicket & { submissionRetry?: object | null }, opts: object): CompositionRefusal | undefined {
+  const submissionOptions = hydratedSubmissionOptions(opts, root.submissionRetry || null);
+  const commit = String(submissionOptions.commit || '').trim().toLowerCase();
+  const range = submissionRangeMetadata(submissionOptions.range, commit);
+  return exactCompositionSubmissionRefusal(root, { commit, base: range?.base, commits: range?.commits });
+}
+
+function preparedSubmissionComment(opts: { submissionComment?: unknown }) {
+  const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
+  if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
+  return submissionComment;
 }
 
 function workingTreeVerification(ticket: any, candidate: any, verify?: any) {
@@ -3017,6 +3154,14 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+// Only `rework` gets its own wording: nothing is being released there, and the
+// generic "has no claim to release" phrasing names the wrong operation (GH-375).
+// The other two callers (reject-submission, clear-submission) keep it, unchanged.
+function notOwnerSubmissionMessage(ref: string, submissionOwner: string, by: string, operation?: string): string {
+  if (operation === 'rework') return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+  return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+}
+
 function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
   opts = opts || {};
   if (ticket.status === 'done') return { ok: false, reason: 'done', ticket };
@@ -3038,7 +3183,7 @@ function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
       reason: 'not_owner',
       ticket,
       ...(held ? { claim: held } : {}),
-      ...(!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}),
+      ...(!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}),
     };
   }
   if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -3138,7 +3283,7 @@ function reworkSubmission(slug?: any, idOrRef?: any, opts?: any) {
     if (!pendingSubmission(ticket) && !retryCheckpoint) {
       return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
     }
-    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: 'rework' });
     if (ownershipFailure) return ownershipFailure;
     const history = rejectionHistory(ticket);
     const source = opts.source || 'cli';
@@ -3817,7 +3962,7 @@ function submissionsPayload(slug?: any) {
 }
 
 
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 
 module.exports = { createSubmissions };

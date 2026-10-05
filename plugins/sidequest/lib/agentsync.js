@@ -25,7 +25,7 @@ const RESTART_NOTICE = RELOAD_NOTICE;
 const ARTIFACT_LIFECYCLE_MARKER = "[sidequest-artifact-mode]";
 const NON_MAX_EFFORTS = ["low", "medium", "high", "xhigh"];
 const EXEC_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 75;
 const EXECUTOR_CONTRADICTION_RULE = "Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.";
 function defaultAgentsDir() {
   const explicit = process.env.SIDEQUEST_AGENTS_DIR;
@@ -100,7 +100,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
   };
 }
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 function scratchWorktreeNote() {
   return "\n\n**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.";
@@ -561,13 +561,10 @@ function linkedPlanSuffix(link, slug) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : "";
 }
 function capturedVerifyCommand(verify, ticketRef, project, boundWorktree) {
-  const command = String(verify || "").trim();
-  if (!command) return "";
-  const encoded = Buffer.from(command, "utf8").toString("base64");
   const captureScript = path.join(__dirname, "verify-capture.js");
-  const target = String(ticketRef || "").trim() && String(project || "").trim() ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : "";
-  const worktree = String(boundWorktree || "").trim() ? ` --worktree ${JSON.stringify(String(boundWorktree))}` : "";
-  return `node "${captureScript}" --base64 ${encoded}${target}${worktree}`;
+  const commandSource = ticketRef && project ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : ` --base64 ${Buffer.from(verify.trim(), "utf8").toString("base64")}`;
+  const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : "";
+  return `node "${captureScript}"${commandSource}${worktree}`;
 }
 function ticketEvidenceGuidance(ticket) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || "").trim();
@@ -707,10 +704,34 @@ function rejectedSubmissionRows(ticket) {
     ...rejected.supersededAt ? { supersededAt: rejected.supersededAt, supersededBy: rejected.supersededBy || null } : {}
   }));
 }
+function latestPendingRework(ticket) {
+  const latest = ticket.rejectedSubmissions.filter(Boolean).at(-1);
+  return latest.rejectionKind === "rework" && !latest.supersededAt && !ticket.submission ? latest : null;
+}
+function preservedRefSuffix(rejected) {
+  return rejected.quarantineRef && rejected.preservationState !== "pending" ? ` (preserved at ${rejected.quarantineRef})` : "";
+}
+function pendingReworkBody(ticket) {
+  const latest = latestPendingRework(ticket);
+  if (!latest) return null;
+  const candidate = latest.commit || latest.sourceRevision.value;
+  const preserved = preservedRefSuffix(latest);
+  return [
+    "## Pending rework",
+    `This dispatch repairs a rejected candidate. Candidate ${candidate} was sent back for rework at ${latest.rejectedAt} and the ticket returned to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
+    `Rejected candidate: ${candidate}${preserved}`,
+    `Rework reason:
+${latest.reason}`,
+    `Review:
+${latest.review}`
+  ].join("\n\n");
+}
 function rejectedSubmissionHistoryBody(ticket) {
   const rows = rejectedSubmissionRows(ticket);
   if (!rows.length) return null;
+  const pendingRework = pendingReworkBody(ticket);
   return [
+    ...pendingRework ? [pendingRework] : [],
     "## Rejected submission history",
     `${rows.length} prior candidate${rows.length === 1 ? " was" : "s were"} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
     ...rows.map((rejected) => [
@@ -776,9 +797,13 @@ function scopeAddedBeyondDeclared(ticket, slug, declared) {
   const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
   return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
 }
+function noDeclaredFilesText(ticket) {
+  const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
+  return writeScope ? `(No files were declared.) ${writeScope}.` : "(No files were declared.)";
+}
 function taskAndScopeBody(ticket, slug) {
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : noDeclaredFilesText(ticket);
   const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
@@ -1155,15 +1180,35 @@ function renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDenie
     disallowedTools: readOnlyTools.disallowedTools
   }));
 }
-function discoveredModelAgentSources(readOnlyDeniedTools) {
-  const sources = /* @__PURE__ */ new Map();
+function routedDiscoveredModelExec(route) {
+  const exec = route && store.resolveExec(route.model, route.effort);
+  return isDiscoveredModelExecutor(exec?.agent) ? exec : null;
+}
+function routedDiscoveredModelDefinitions() {
+  const globalFallback = store.getRoutingFallback();
+  const definitions = [];
+  for (const { route, fallback, readonly } of store.getCategoryRoutePairs()) {
+    for (const exec of [route, fallback, globalFallback].map(routedDiscoveredModelExec)) {
+      if (!exec) continue;
+      definitions.push({ name: exec.agent, effort: exec.effort, modelId: exec.spawnId, readOnly: false });
+      if (readonly) definitions.push({ name: exec.readOnlyAgent, effort: exec.effort, modelId: exec.spawnId, readOnly: true });
+    }
+  }
+  return definitions;
+}
+function requestedDiscoveredModelDefinitions(executor) {
   for (const backend of store.discoveredModelBackends()) {
     for (const effort of EXEC_EFFORTS) {
-      const name = discoveredModelExecutorName(backend.agentSlug, effort);
-      const readOnlyName = readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort);
-      sources.set(`${name}.md`, renderDiscoveredModelAgent(name, effort, backend.id));
-      sources.set(`${readOnlyName}.md`, renderReadOnlyDiscoveredModelAgent(readOnlyName, effort, backend.id, readOnlyDeniedTools));
+      if (discoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: false }];
+      if (readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: true }];
     }
+  }
+  return [];
+}
+function discoveredModelAgentSources(definitions, readOnlyDeniedTools) {
+  const sources = /* @__PURE__ */ new Map();
+  for (const { name, effort, modelId, readOnly } of definitions) {
+    sources.set(`${name}.md`, readOnly ? renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) : renderDiscoveredModelAgent(name, effort, modelId));
   }
   return sources;
 }
@@ -1198,19 +1243,24 @@ function writeOwnedDiscoveredModelAgent(filePath, source) {
   fs.writeFileSync(filePath, source);
   return true;
 }
-function syncDiscoveredModelAgents(opts) {
-  const dir = opts?.dir || defaultAgentsDir();
-  const wanted = discoveredModelAgentSources(opts?.readOnlyDeniedTools);
-  const removed = pruneDiscoveredModelAgents(dir, wanted);
+function writeDiscoveredModelAgents(dir, wanted) {
   let written = 0;
   for (const [filename, source] of wanted) {
     if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
   }
+  return written;
+}
+function syncDiscoveredModelAgents(opts) {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(routedDiscoveredModelDefinitions(), opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  const written = writeDiscoveredModelAgents(dir, wanted);
   return { written, removed, unchanged: wanted.size - written };
 }
 function ensureDiscoveredModelAgents(executor, opts) {
   if (!isDiscoveredModelExecutor(executor)) return;
-  if (syncDiscoveredModelAgents(opts).written > 0) waitForNativeAgentReload(opts?.waitMs);
+  const wanted = discoveredModelAgentSources(requestedDiscoveredModelDefinitions(executor), opts?.readOnlyDeniedTools);
+  if (writeDiscoveredModelAgents(opts?.dir || defaultAgentsDir(), wanted) > 0) waitForNativeAgentReload(opts?.waitMs);
 }
 function syncExecAgentsIfChanged(_prefs, opts) {
   const migrated = migrateExecAgents(_prefs, opts);

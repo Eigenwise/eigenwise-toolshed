@@ -205,17 +205,28 @@ function currentCatalog(catalogPath, schemas) {
   if (usable || !isRecord(storedCatalog)) return usable;
   return usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
 }
+function catalogText(value, fallback = "") {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || fallback;
+}
+function catalogProvider(model, schema) {
+  if (schema < 4) return "codex";
+  const provider = model.provider;
+  return typeof provider === "string" && provider === provider.toLowerCase() && SLUG_RE.test(provider) ? provider : "";
+}
+function catalogContextWindow(model) {
+  const contextWindow = model.contextWindow;
+  if (typeof contextWindow !== "number" || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return {};
+  const contextWindowNote = catalogText(model.contextWindowNote);
+  return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
+}
 function validateEntry(raw, source, schema) {
-  if (!isRecord(raw)) return null;
-  const model = raw;
-  const slug = typeof model.slug === "string" ? model.slug.trim().toLowerCase() : "";
-  if (!SLUG_RE.test(slug)) return null;
-  const id = typeof model.id === "string" ? model.id.trim() : "";
-  if (!id) return null;
-  const provider = schema >= 4 ? typeof model.provider === "string" && model.provider === model.provider.toLowerCase() && SLUG_RE.test(model.provider) ? model.provider : "" : "codex";
-  if (!provider) return null;
-  const label = typeof model.label === "string" && model.label.trim() ? model.label.trim() : slug;
-  return { slug, id, label, provider, source };
+  const model = isRecord(raw) ? raw : {};
+  const slug = catalogText(model.slug).toLowerCase();
+  const id = catalogText(model.id);
+  const provider = catalogProvider(model, schema);
+  if (!SLUG_RE.test(slug) || !id || !provider) return null;
+  return { slug, id, label: catalogText(model.label, slug), provider, source, ...catalogContextWindow(model) };
 }
 function configuredExternalModelProvider(slug) {
   const normalizedSlug = slug.trim().toLowerCase();

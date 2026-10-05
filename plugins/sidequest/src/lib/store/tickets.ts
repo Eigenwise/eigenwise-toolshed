@@ -157,9 +157,10 @@ function bindReviewTarget(slug: any, reviewTicket: any, requested: any, persistR
 // transaction(), which would make the transition's own boundary a reentrant
 // no-op and hand the atomicity guarantee to the caller. The binding owns its
 // boundary, so the source lock here is mutual exclusion only.
-function withSourceTicketLock(slug: any, sourceId: any, fn: any) {
+function withSourceTicketLock<Result>(slug: string, sourceId: string, fn: () => Result, requireLock = false) {
   const lock = ticketLockPath(slug, sourceId);
-  const locked = acquireLock(lock); // best-effort, matching the per-ticket update lock
+  const locked = acquireLock(lock);
+  if (requireLock && !locked) return { ok: false, reason: 'busy', message: 'The source ticket lock is busy.' };
   try {
     return fn();
   } finally {
@@ -685,6 +686,13 @@ function packageScopeRefusalNote(rulings: Array<{ file: string; reason: string |
   return refusals.length ? ` Not auto-approved: ${refusals.map((ruling) => `${ruling.file}: ${ruling.reason}`).join('; ')}.` : '';
 }
 
+// A live allowUnscoped dispatch commits anywhere (GH-341), so a request inside it is covered, not refused.
+function liveWholeTreeScope(ticket?: any): string[] {
+  const dispatch = dispatchState(ticket);
+  const bound = dispatch && !dispatch.terminalAt ? dispatch.declaredFiles : null;
+  return Array.isArray(bound) && bound.includes(commitScope.WHOLE_TREE_SCOPE) ? [commitScope.WHOLE_TREE_SCOPE] : [];
+}
+
 function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -719,7 +727,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     ));
     // Match the commit gate (submissions.ts), which admits the ticket's own release
     // fragment implicitly; asking for it back must read as covered, not as an addition.
-    const scope = commitScope.ticketCommitScope(effectiveScope(slug, t), t.files, t.ref);
+    const scope = commitScope.ticketCommitScope([...effectiveScope(slug, t), ...liveWholeTreeScope(t)], t.files, t.ref);
     const additions = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
     const covered = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
     const now = new Date().toISOString();
@@ -1389,7 +1397,7 @@ function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };

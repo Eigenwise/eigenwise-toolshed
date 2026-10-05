@@ -380,8 +380,8 @@ function deliveryTicket(label: string, opts: any = {}) {
   return { fixture, slug, ticket, runCli: runner.runCli };
 }
 
-test('one passing wave delivers its exact Git participant set before recording delivery', () => {
-  const fixture = makeRepo('wave-delivery');
+function assembledTwoCandidateWave(label: string) {
+  const fixture = makeRepo(label);
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
   git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
   const secondCommit = commitFile(secondWorktree, 'second.txt', 'second executor work\n');
@@ -422,6 +422,11 @@ test('one passing wave delivers its exact Git participant set before recording d
   });
   assert.equal(wave.ok, true, JSON.stringify(wave));
   assert.equal(wave.gate.state, 'gate_passed');
+  return { fixture, slug, first, second, target };
+}
+
+test('one passing wave delivers its exact Git participant set before recording delivery', () => {
+  const { fixture, slug, first, second, target } = assembledTwoCandidateWave('wave-delivery');
   const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
   assert.equal(individual.ok, false);
   assert.equal(individual.reason, 'assembled_wave_delivery_required');
@@ -1048,13 +1053,13 @@ function makeUnmergedTarget(repo: string, label: string) {
   assert.throws(() => git(['merge', competingBranch], repo));
 }
 
+// Staged and unmerged state blocks anywhere; an untracked file blocks where the delivery writes (feature.txt).
 const dirtyIntegrationTargetStates = [
-  ['unstaged', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'unstaged target edit\n')],
   ['staged', (fixture: any) => {
     fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'staged target edit\n');
     git(['add', 'README.md'], fixture.repo);
   }],
-  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'target-scratch.log'), 'untracked target file\n')],
+  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'untracked target file\n')],
   ['unmerged', (fixture: any, ticket: any) => makeUnmergedTarget(fixture.repo, ticket.ref)],
 ] as const;
 
@@ -1070,13 +1075,103 @@ for (const [state, dirtyTarget] of dirtyIntegrationTargetStates) {
 
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'integration_target_dirty');
-    if (state === 'untracked') assert.match(result.message, /target-scratch\.log/);
+    if (state === 'untracked') assert.match(result.message, /feature\.txt/);
     assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), checkoutBefore);
     assert.equal(head(fixture.repo), headBefore);
     assert.deepEqual(store.getTicket(slug, ticket.ref).submission, submissionBefore);
     assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
   });
 }
+
+// GH-340: a service rewriting files in the registered checkout keeps it dirty; paths the delivery never writes stay put.
+function dirtyOutsideDelivery(repo: string) {
+  fs.writeFileSync(path.join(repo, 'README.md'), 'service rewrote this\n');
+  fs.writeFileSync(path.join(repo, 'service.log'), 'service log line\n');
+}
+
+function assertOutsideDeliveryDirtKept(repo: string) {
+  assert.equal(fs.readFileSync(path.join(repo, 'README.md'), 'utf8'), 'service rewrote this\n');
+  assert.equal(fs.readFileSync(path.join(repo, 'service.log'), 'utf8'), 'service log line\n');
+}
+
+function failsOnMainVerify() {
+  return nodeVerify("const {execFileSync}=require('node:child_process'); if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main') process.exit(7)");
+}
+
+for (const mode of ['merge', 'apply']) {
+  test(`GH-340: integrate ${mode} goes around unstaged and untracked paths the delivery never writes and reports them`, () => {
+    const { fixture, slug, ticket } = deliveryTicket(`dirty-target-disjoint-${mode}`);
+    dirtyOutsideDelivery(fixture.repo);
+
+    const result = store.integrateSubmission(slug, ticket.ref, { mode, target: fixture.target });
+
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(result.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+    assert.deepEqual(result.integration.deliveredFiles, ['feature.txt']);
+    assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+    assertOutsideDeliveryDirtKept(fixture.repo);
+  });
+}
+
+test('GH-340: a failed post-merge verification rolls back without reverting dirt outside the delivery', () => {
+  const fixture = makeRepo('post-merge-dirty-disjoint');
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'rollback around unrelated dirt',
+    category: 'codebase-exploration',
+    description: 'A delivery fixture whose post-merge verifier fails while the checkout holds unrelated edits.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture);
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'suite', executorVerify: failsOnMainVerify() });
+  dirtyOutsideDelivery(fixture.repo);
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.reason, 'verification_failed_suite_post_merge', result.message);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.rollback.strategy, 'merge-reset-delivery-head');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
+
+test('GH-340: a wave refuses dirt on a participant path, naming only it, then delivers around dirt outside the delivery', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-dirty-target');
+  dirtyOutsideDelivery(fixture.repo);
+  fs.writeFileSync(path.join(fixture.repo, 'second.txt'), 'operator copy\n');
+  const before = head(fixture.repo);
+
+  const refused = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(refused.reason, 'integration_target_dirty', refused.message);
+  assert.deepEqual(refused.checkoutState, ['? second.txt']);
+  assert.deepEqual(refused.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+  assert.match(refused.message, /: second\.txt\. Commit, stash, or remove those paths.* 2 other dirty path\(s\) sit outside the delivery and were ignorable\./);
+  assert.equal(head(fixture.repo), before);
+
+  fs.rmSync(path.join(fixture.repo, 'second.txt'));
+  const delivered = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.deepEqual(delivered.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
+
+test('GH-340: a wave whose delivery verification fails rolls back without reverting dirt outside the delivery', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-dirty-rollback');
+  store.updateTicket(slug, first.ref, { executorVerifyKind: 'suite', executorVerify: failsOnMainVerify() });
+  dirtyOutsideDelivery(fixture.repo);
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(result.reason, 'verification_failed_suite_wave_delivery', result.message);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
 
 function makeGreenfieldRepo(label: string, locked = true) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-greenfield-${label}-`));

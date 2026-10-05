@@ -55,7 +55,7 @@ const commitScope = require('../lib/commit-scope.js') as {
   headCommit(cwd: string): string | null;
   candidatePaths(cwd: string, changedPaths: string[], commit: string, upstreamCommit: string): string[];
   outsideScopeCommitState(result: { commit?: string; rolledBack?: boolean; message?: string }): string;
-  preserveCommitRef(cwd: string, commit: string, gitRef: string): { ok: boolean; reason?: string; commit?: string; gitRef?: string };
+  preserveCommitRef(cwd: string, commit: string, gitRef: string, replaces?: string[]): { ok: boolean; reason?: string; message?: string; commit?: string; gitRef?: string };
 };
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -287,6 +287,21 @@ test('updating declared files with an absolute path is refused with non-repo gui
     (error: Error) => /paths outside the repo worktree/.test(error.message) && /non-repo\/artifact work/.test(error.message) && /declare in-repo paths/.test(error.message),
   );
   assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['plugins/sidequest/worker.js'], 'the refused update changed nothing');
+});
+
+test('the whole-tree scope of an unscoped dispatch commits every changed path, deletions and new directories included (GH-341)', async () => {
+  const root = repo();
+  const wholeTree = ['**', 'docs/'];
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'app.js'), 'module.exports = 1;\n');
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'index.js'), 'other\n');
+  fs.rmSync(path.join(root, 'README.md'));
+
+  const committed = await commitScope.commitScoped(root, 'unscoped work', wholeTree);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['README.md', 'plugins/other-plugin/index.js', 'src/app.js']);
+  assert.deepEqual(committed.missingScopes, ['docs'], 'a missing board path rides beside the whole tree without blocking it');
+  assert.equal(git(root, ['status', '--porcelain']), '');
 });
 
 test('missing declared paths warn while existing declared paths commit', async () => {
@@ -1472,4 +1487,42 @@ test('GH-229: undoing a widened root commit leaves the repository without a HEAD
   assert.equal(result.reason, 'outside_scope');
   assert.equal(result.rolledBack, true);
   assert.equal(commitScope.headCommit(root), null, 'the widened root commit is gone');
+});
+
+test('GH-378: pinning over another board\'s refs/sidequest/SQ-1 is refused and leaves that candidate in place', () => {
+  const root = repo();
+  const foreign = git(root, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'new-board.js'), 'new board candidate\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'new board SQ-1 candidate']);
+  const candidate = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['update-ref', 'refs/sidequest/SQ-1', foreign]);
+
+  const refused = commitScope.preserveCommitRef(root, candidate, 'refs/sidequest/SQ-1', [candidate]);
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'git_ref_collision');
+  assert.match(refused.message || '', new RegExp(`refs/sidequest/SQ-1 already points to ${foreign}, a commit this ticket never recorded, so it belongs to another board`));
+  assert.ok((refused.message || '').includes(`git update-ref refs/sidequest-archived/foreign/SQ-1 ${foreign} && git update-ref -d refs/sidequest/SQ-1 ${foreign}`));
+  assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-1']), foreign);
+});
+
+test('GH-378: a ticket re-pins its own candidate ref over a tip it recorded', () => {
+  const root = repo();
+  const first = git(root, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'repin.js'), 'second round\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'second round candidate']);
+  const second = git(root, ['rev-parse', 'HEAD']);
+  assert.equal(commitScope.preserveCommitRef(root, first, 'refs/sidequest/SQ-2').ok, true, 'a missing ref is created');
+
+  const repinned = commitScope.preserveCommitRef(root, second, 'refs/sidequest/SQ-2', [first.slice(0, 12)]);
+  assert.equal(repinned.ok, true, repinned.message || '');
+  assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-2']), second);
+
+  const unchanged = commitScope.preserveCommitRef(root, second, 'refs/sidequest/SQ-2');
+  assert.equal(unchanged.ok, true, 'pinning the tip the ref already holds needs no recorded revision');
+  assert.equal(commitScope.preserveCommitRef(root, second, 'refs/sidequest/bad..ref').reason, 'invalid_git_ref');
+  assert.equal(commitScope.preserveCommitRef(root, 'f'.repeat(40), 'refs/sidequest/SQ-2').reason, 'missing_commit');
+  assert.equal(commitScope.preserveCommitRef(root, second, '').reason, 'missing_git_ref');
 });
