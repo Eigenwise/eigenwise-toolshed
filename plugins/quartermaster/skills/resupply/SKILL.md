@@ -177,7 +177,10 @@ Repeated command sequences, hand-rolled scripts written more than once, the same
 across sessions. First ask whether the work needs a new capability at all. Search the project, then
 existing plugins, skills, rules, standard-library or native capabilities, and installed dependencies
 before proposing anything new. Improve an existing capability when it covers the goal; a new plugin,
-skill, or rule needs evidence that the existing options do not fit.
+skill, rule, or native Claude Code mod needs evidence that the existing options do not fit.
+For an on-screen or event-driven gap, assess a native mod through the existing
+[host-extension route](references/routing.md#2a-host-extension-or-package), using only the bounded
+aggregate and the actual host's authoring evidence.
 
 When the work needs a coding-agent capability such as delegation, first identify the actual host from
 direct evidence and separately assess its native capability, configured extensions, and live usable
@@ -262,7 +265,8 @@ so it is a rule about not doing it.
 
 Map each finding to exactly one destination using [references/routing.md](references/routing.md).
 Prefer the highest destination that fits: installable things beat written rules, and written rules
-beat asking someone to remember.
+beat asking someone to remember. Native mods use the host-extension route, with runtime behavior
+owned outside Quartermaster; assessment, approved setup, and bounded acceptance checks stay here.
 
 New skills and skill improvements go through **skill-creator**. A hand-rolled SKILL.md tends to
 encode the one example in front of you instead of the general shape, and its description ends up
@@ -292,6 +296,10 @@ relevant). That command resolves only marketplaces already added here, so it fai
 marketplace is missing: read the plugin at its source and propose the
 `claude plugin marketplace add <source>` line alongside the install, rather than dropping the
 candidate as uninspectable. Wait for an explicit yes or no before touching anything or moving on. Never batch-apply.
+Native-mod proposals also name the checked host event/API, exact on-screen behavior and scope,
+runtime owner, usage/model-call cost, and measured versus inferred savings as specified in the route.
+Approval of a resupply round or skill improvement grants no approval to build or load a proposed mod,
+change settings/hooks/permissions, delete, publish, or take paid actions.
 
 Best first means value weighted by how well the evidence carries it, not step 4's search order. An
 attested measurement gap is the strongest thing you can lead with. An inferred one belongs below the
@@ -310,7 +318,10 @@ to look useful is how these passes turn into noise the user learns to skip.
 ### 7. Record and close
 
 On approval, apply exactly what was shown, then record it. Record rejections too, since that is
-what stops the same advice from resurfacing.
+what stops the same advice from resurfacing. For native mods, reuse this ledger with `--kind other`
+and the route's stable fingerprint; record approval and activation status in `--detail`. Keep an
+approved but unverified setup `deferred`, then update it to `applied` only after the user's native
+hot-reload decision and a successful live-usability check. A declined load is not a rejected proposal.
 
 `--status rejected` means the user said no, in their own words, to a proposal you actually showed
 them. It is the one status that silences a fingerprint for good, so it records their decision and
@@ -321,7 +332,7 @@ never find out it was raised.
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decisions add --project "${CLAUDE_PROJECT_DIR}" \
-  --title "<short title>" --fingerprint "<kind>:<stable-slug>" --status applied|rejected \
+  --title "<short title>" --fingerprint "<kind>:<stable-slug>" --status applied|rejected|deferred \
   --kind plugin-install|rule|permission|disable|skill|other \
   --signal denials|interrupts|corrections|toolErrors|any
 ```
