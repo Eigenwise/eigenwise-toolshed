@@ -18,6 +18,17 @@ checks only functions the change added or modified. Untouched legacy functions, 
 a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
 its prior score was lower.
 
+In a JavaScript-family file (`.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`), a function is changed or
+new only when a changed line falls inside its span. That span is the one the gate measured after the
+corrections below; `--json` gives it as `line` to `end`. A changed line is a line the change added or
+edited. Where the change only deleted lines, it is the line just above the deleted ones. A function that
+holds no changed line is pre-existing, however lizard read the base revision. lizard can read the same
+unchanged text with different bounds on each side, for example when a `<` comparison earlier in the file
+makes it read a type argument (GitHub issue #482). Such a function used to have no base copy to pair
+with, and it failed as new code. Among the functions that hold a changed line, pairing with the baseline,
+described next, still decides which ones count. In other languages, every function in a changed file
+goes to pairing.
+
 Deciding which functions the change touched means pairing each of today's functions with its copy in
 the baseline revision. Position alone cannot do that: adding one function shifts every function below
 it, and names repeat inside a file, because lizard names every arrow function or closure it cannot
@@ -29,7 +40,8 @@ claims across the whole file before name and position is consulted at all, and *
 nothing is new code judged on its own number**. So an untouched over-ceiling `run` keeps passing when a
 new `run` lands above it, while a byte-identical copy of an over-ceiling function is new code over the
 ceiling even though its twin is untouched, and a third `run` in a file that already had two is gated on
-its own number.
+its own number. A function that holds no changed line claims its baseline copy first, so the copy git
+reports as added is the one judged as new, even when it was pasted above its twin.
 
 The source text is the line span lizard reports, with runs of whitespace collapsed, so reindenting a
 function alone does not make it changed. For a nested closure in a JavaScript file that span can be

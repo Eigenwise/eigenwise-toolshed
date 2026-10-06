@@ -1583,3 +1583,118 @@ test('an arrow whose template literal body runs over several lines keeps the row
   assert.deepEqual(spanRows(source, rows, 'src/moves.js'), ['(anonymous)@1-3 cc=1']);
   assert.deepEqual(unmeasuredDefinitionLines(source, rows), []);
 });
+
+// GitHub issue #482: lizard 1.24.0 reads `s.pages < maxPages` as a type argument that only a `>`
+// further down closes. It ends `while` on line 17 and drops `later` and `evenLater`, so once its rows are
+// reconciled, `later` spans 11-14 here. With the operands swapped, lizard reads every function, and
+// `later` keeps its row to line 16, the line of the next token. The same untouched text then had no
+// base copy to pair with.
+const ITERATE_SOURCE = [
+  'export const run = (maxPages: number) =>',
+  '  Effect.iterate(initial, {',
+  '    while: (s) => s.done === "more" && s.pages < maxPages,',
+  '    body: (s) =>',
+  '      Effect.map(load(s), (data) => ({',
+  '        done: data.rowCount < PAGE_SIZE ? "complete" : "more",',
+  '        pages: s.pages + 1,',
+  '      })),',
+  '  });',
+  '',
+  'export function later(a: number): number {',
+  '  if (a > 1) return 1;',
+  '  return 2;',
+  '}',
+  '',
+  'export function evenLater(b: string): string {',
+  '  return b.length > 2 ? "long" : "short";',
+  '}',
+  '',
+].join('\n');
+const ITERATE_SWAPPED_SOURCE = ITERATE_SOURCE.replace('s.pages < maxPages', 'maxPages > s.pages').replace('data.rowCount < PAGE_SIZE', 'PAGE_SIZE > data.rowCount');
+// Only the second comparison is a `<`. lizard runs the inner arrow to line 16, the reconciliation clamps it
+// to 5-8, and `later` and `evenLater` come from the source scan.
+const ITERATE_INNER_LT_SOURCE = ITERATE_SWAPPED_SOURCE.replace('PAGE_SIZE > data.rowCount', 'data.rowCount < PAGE_SIZE');
+
+function writeIterate(projectDir, source) {
+  fs.writeFileSync(path.join(projectDir, 'src/iterate.ts'), source, 'utf8');
+}
+
+test('the real lizard backend charges an edit only to the functions holding its lines when lizard misread the base revision', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('iterate.ts', ITERATE_SOURCE);
+  commitBase(projectDir);
+  writeIterate(projectDir, ITERATE_SWAPPED_SOURCE);
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  // Lines 3 and 6 changed. `later`, `evenLater` and `body` hold neither line, whatever lizard read for the base.
+  assert.equal(result.stdout, 'src/iterate.ts:3 while cc=2 coverage=0% CRAP=6\nsrc/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nCRAP gate failed: 2 of 2 changed or new functions at or above 6\n');
+});
+
+test('the real lizard backend keeps an untouched function out when lizard misreads only the candidate, and charges an edit inside it to its reconciled row', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('iterate.ts', ITERATE_SWAPPED_SOURCE);
+  commitBase(projectDir);
+
+  // Swapping the first comparison back too would make lizard swallow the inner arrow, which gets no
+  // source-scan row, and line 6 would rightly exit 2 as unmeasured.
+  writeIterate(projectDir, ITERATE_INNER_LT_SOURCE);
+  const untouched = runCli([], projectDir);
+  assert.equal(untouched.status, 1, untouched.stderr);
+  assert.equal(untouched.stdout, 'src/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+
+  writeIterate(projectDir, ITERATE_INNER_LT_SOURCE.replace('  return 2;', '  return 3;'));
+  const edited = runCli([], projectDir);
+  assert.equal(edited.status, 1, edited.stderr);
+  assert.equal(edited.stdout, 'src/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nsrc/iterate.ts:11 later cc=2 coverage=0% CRAP=6 source=source-scan\nCRAP gate failed: 2 of 2 changed or new functions at or above 6\n');
+});
+
+test('the real lizard backend charges a deletion-only change to the function the removed line sat in', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  // The `>` on the added line closes lizard's type argument, so it reads the base revision whole.
+  const fullLine = '        full: data.rowCount > PAGE_SIZE,\n';
+  const projectDir = realLizardProject('iterate.ts', ITERATE_INNER_LT_SOURCE.replace('        pages:', `${fullLine}        pages:`));
+  commitBase(projectDir);
+  writeIterate(projectDir, ITERATE_INNER_LT_SOURCE);
+
+  const result = runCli([], projectDir);
+
+  // git reports the removal as `+6,0`, the line it followed. `later` holds no changed line.
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+test('a copy pasted above its untouched twin is the new function, and an edited function is still changed', () => {
+  const other = ['function other(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const helper = ['function helper(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/util.js': [...other, '', ...helper, ''].join('\n'),
+    'coverage/lcov.info': lcov([2, 3, 7, 8, 12, 13].map((line) => [line, 1]), 'src/util.js'),
+  });
+  commitBase(projectDir);
+  const edited = other.map((line) => line.replace('n > 0', 'n > 1'));
+  fs.writeFileSync(path.join(projectDir, 'src/util.js'), [...helper, '', ...edited, '', ...helper, ''].join('\n'), 'utf8');
+
+  const report = crapReport({
+    projectDir,
+    base: 'main',
+    runLizard: runner(
+      csv([{ complexity: 10, name: 'helper', start: 1, end: 4 }, { complexity: 2, name: 'other', start: 6, end: 9 }, { complexity: 10, name: 'helper', start: 11, end: 14 }], 'src/util.js'),
+      csv([{ complexity: 2, name: 'other', start: 1, end: 4 }, { complexity: 10, name: 'helper', start: 6, end: 9 }], 'src/util.js'),
+    ),
+  });
+
+  // git reports lines 1-5 as added and the twin at 11-14 as unchanged, so the twin keeps the only baseline helper.
+  assert.deepEqual(report.failures.map((entry) => entry.line), [1]);
+  assert.equal(report.checked, 2, 'the paste and the edited other are judged; the untouched twin is not');
+});

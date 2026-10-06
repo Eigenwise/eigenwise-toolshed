@@ -123,6 +123,7 @@ function measuredFunction(entry, coverage, projectDir) {
   return {
     file,
     line: entry.start,
+    end: entry.end,
     function: entry.name,
     ordinal: entry.ordinal,
     cc: entry.complexity,
@@ -304,6 +305,7 @@ function baselineFunctions({ projectDir, baseReference, files, exclude, runLizar
   const base = git(projectDir, ['merge-base', 'HEAD', baseReference], hint).trim();
   const changed = new Set(git(projectDir, ['diff', '--name-only', '--relative', base], hint).split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   const changedHere = [...files].filter((file) => changed.has(file));
+  const changedLines = new Map(changedHere.filter((file) => SCRIPT_SOURCE.test(file)).map((file) => [file, diffLines(projectDir, base, file)]));
   const index = { byIdentity: new Map(), byFingerprint: new Map() };
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
   try {
@@ -317,7 +319,7 @@ function baselineFunctions({ projectDir, baseReference, files, exclude, runLizar
         indexBaselineEntry(index, entry);
       }
     }
-    return { base, changed, ...index };
+    return { base, changed, changedLines, ...index };
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
@@ -486,10 +488,34 @@ function sameFingerprint(entry, previous) {
   return Boolean(entry.fingerprint && entry.fingerprint === previous?.fingerprint);
 }
 
+function holdsChangedLine(entry, lines) {
+  for (let line = entry.line; line <= entry.end; line += 1) {
+    if (lines.has(line)) return true;
+  }
+  return false;
+}
+
+/**
+ * Changed lines are read only for a JavaScript-family file, where the safety net exits 2 for a changed line
+ * no row measures, so no change can slip between rows. Any other changed file is judged by pairing alone.
+ */
+function touched(entry, baseline) {
+  if (!baseline.changed.has(entry.file)) return false;
+  const lines = baseline.changedLines.get(entry.file);
+  return !lines || holdsChangedLine(entry, lines);
+}
+
+/**
+ * lizard can read the same unchanged text with other bounds on the base side, and that base copy pairs with
+ * nothing (#482), so only a function holding a changed line can be changed or new. Pairing still keeps out a
+ * touched function whose text is a base function's, reindented or moved. Untouched functions claim their base
+ * text first, so when git places a paste above its twin, the paste is the new copy.
+ */
 function changedFunctions(functions, baseline) {
   if (!baseline) return functions;
-  const pairs = pairWithBaseline(functions, baseline);
-  return functions.filter((entry) => baseline.changed.has(entry.file) && !sameFingerprint(entry, pairs.get(entry)));
+  const touchedFunctions = new Set(functions.filter((entry) => touched(entry, baseline)));
+  const pairs = pairWithBaseline([...functions.filter((entry) => !touchedFunctions.has(entry)), ...touchedFunctions], baseline);
+  return [...touchedFunctions].filter((entry) => !sameFingerprint(entry, pairs.get(entry)));
 }
 
 /** lizard scores every `??` as two branches, so the command-line-then-config fallbacks go through one lookup. */
