@@ -1,4 +1,18 @@
 "use strict";
+function readLockHolder(fs, lockPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8").trim());
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+function recordLockHolder(fs, lockPath, lease, holder) {
+  const acquired = readLockHolder(fs, lockPath);
+  if (!acquired || acquired.token !== lease?.token) return false;
+  fs.writeFileSync(lockPath, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
+  return true;
+}
 function createLocks(dependencies) {
   const { fs, path, ticketsDir, transaction } = dependencies;
   function ticketLockPath(slug, id) {
@@ -16,15 +30,10 @@ function createLocks(dependencies) {
     return `${process.pid}-${Date.now()}-${process.hrtime.bigint()}-${Math.random().toString(36).slice(2)}`;
   }
   function readLockOwner(lockPath) {
-    try {
-      const content = fs.readFileSync(lockPath, "utf8").trim();
-      const parsed = JSON.parse(content);
-      const pid = Number(parsed?.pid);
-      const token = typeof parsed?.token === "string" ? parsed.token : null;
-      return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
-    } catch (_) {
-      return null;
-    }
+    const parsed = readLockHolder(fs, lockPath);
+    const pid = Number(parsed?.pid);
+    const token = typeof parsed?.token === "string" ? parsed.token : null;
+    return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
   }
   function lockOwnerIsAlive(owner) {
     if (!owner || !Number.isInteger(owner.pid) || owner.pid < 1) return null;
@@ -131,4 +140,4 @@ function createLocks(dependencies) {
     withTicketLock
   };
 }
-module.exports = { createLocks };
+module.exports = { createLocks, readLockHolder, recordLockHolder };

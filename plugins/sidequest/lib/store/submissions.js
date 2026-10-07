@@ -1,6 +1,7 @@
 "use strict";
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
+const { readLockHolder, recordLockHolder } = require("./locks.js");
 const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capture.js");
 const { worktreeSetupDeadlineMs } = require("../hook-timeouts.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
@@ -672,7 +673,7 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
     const verify = (environment) => runProcessVerification(requirement, {
       cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
       timeoutMilliseconds,
-      logPath: integrationVerifyLogPath(slug, ticket),
+      logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
       outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
       environment
     });
@@ -999,13 +1000,19 @@ ${verify.outputTail}` : null
   function deliveryLockPath(repo) {
     return path.resolve(repo, integrationGit(repo, ["rev-parse", "--git-common-dir"]), "sidequest-delivery.lock");
   }
-  function deliveryInProgress(ticket) {
+  function deliveryLockHolder(slug, ticket, refs) {
     return {
-      ok: false,
-      reason: "delivery_in_progress",
-      ticket,
-      message: `Integration is already delivering another submission into this checkout. Retry ${ticket.ref} after that delivery finishes.`
+      ticket: refs,
+      pinnedCommit: String(ticket.submission?.commit || ""),
+      command: pinnedVerificationRequirement(ticket).command || null,
+      logPath: integrationVerifyLogPath(slug, ticket),
+      startedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
+  }
+  function deliveryInProgress(ticket, lock) {
+    const holder = readLockHolder(fs, lock);
+    const named = holder?.ticket && holder.startedAt ? `Integration is already delivering ${holder.ticket} (${holder.pinnedCommit}) into this checkout since ${holder.startedAt}; log ${holder.logPath}. Retry ${ticket.ref} after it finishes.` : `Integration is already delivering another submission into this checkout. Retry ${ticket.ref} after that delivery finishes.`;
+    return { ok: false, reason: "delivery_in_progress", ticket, holder, message: named };
   }
   function restoreRolledBackExpectedUpstreams(slug, repo, before, rolledBackHead) {
     const rolledBack = new Set(integrationGit(repo, ["rev-list", `${before}..${rolledBackHead}`]).split(/\r?\n/).filter(Boolean));
@@ -1774,11 +1781,12 @@ ${verify.outputTail}` : null
     return integrateUnderDeliveryLease(slug, idOrRef, opts, ticket, lock);
   }
   function integrateUnderDeliveryLease(slug, idOrRef, opts, ticket, lock) {
+    const holder = deliveryLockHolder(slug, ticket, String(ticket.ref));
     const lockLease = acquireLock(lock, { wait: false });
-    if (!lockLease) return deliveryInProgress(ticket);
+    if (!lockLease) return deliveryInProgress(ticket, lock);
     try {
-      lockLease.refresh();
-      return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, opts));
+      recordLockHolder(fs, lock, lockLease, holder);
+      return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }));
     } finally {
       lockLease.refresh();
       releaseLock(lock, lockLease);
@@ -1893,10 +1901,12 @@ ${verify.outputTail}` : null
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets, message: integrationGitError(error) };
     }
+    const holder = deliveryLockHolder(slug, assembled.tickets[0], assembled.participantRefs.join(","));
     const lockLease = acquireLock(lock, { wait: false });
-    if (!lockLease) return deliveryInProgress(assembled.tickets[0]);
+    if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
+    opts = { ...opts, verifyLogPath: holder.logPath };
     try {
-      lockLease.refresh();
+      recordLockHolder(fs, lock, lockLease, holder);
       const mode = normalizeDeliveryMode(opts.mode);
       const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
       if (currentBranch !== target.branch) {
