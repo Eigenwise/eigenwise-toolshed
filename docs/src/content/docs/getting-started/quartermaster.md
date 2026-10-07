@@ -52,9 +52,10 @@ Setup installs the approved plugins and writes the approved project files, then 
 
 ### Keep complex code tested
 
-Setup proposes a CRAP gate for a codebase. CRAP combines a function's branching complexity and test
-coverage, so a large function with little coverage gets a high score. The fixed threshold is 6, and
-6 fails. It checks every new or modified function, while untouched legacy functions stay out of scope.
+The quality gate is optional. Run `/quartermaster:setup` and approve its CRAP gate proposal to turn
+it on. CRAP combines a function's branching complexity and test coverage, so a large function with
+little coverage gets a high score. The gate owns its threshold and checks new or modified functions;
+untouched legacy functions stay out of scope. Without a configured gate, run your tests and continue.
 
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 

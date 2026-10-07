@@ -13,6 +13,10 @@ which keeps every function either small or tested.
 
 ## Threshold policy
 
+This gate is opt-in. Approval creates the project config and live rule; a project without them
+runs its tests and continues. The gate is the only place the threshold lives. Setup, resupply,
+executors and orchestrators discover it rather than copying a number into their instructions.
+
 The threshold is fixed at 6, and 6 fails. The gate compares against the configured base revision and
 checks only functions the change added or modified. Untouched legacy functions, including functions in
 a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
@@ -160,6 +164,6 @@ description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
 Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
-Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
+Use the gate's threshold and report per-function rows honestly; unmeasured bodies stay unmeasured, no averages. Untouched legacy functions are out of scope.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

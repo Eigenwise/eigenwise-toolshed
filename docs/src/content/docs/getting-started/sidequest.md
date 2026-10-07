@@ -80,10 +80,16 @@ Tickets should fit implementation plus final verification comfortably before abo
 Larger work is split along cohesive boundaries. A Continuation checkpoint commits progress, records
 remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
 
-Quality uses the existing local owner: early measured complexity where supported, then trustworthy fresh
+Quality gates are optional. Run `/quartermaster:setup` and approve the gate proposal to turn one on
+through `.claude/quartermaster/crap.json` and a project live rule. Sidequest discovers the configured
+gate in the executor briefing; user-injected rules still apply. Without a gate, run the pinned verifier,
+state once "no quality gate is configured for this project; Quartermaster setup can add one", and continue.
+Gate absence never holds integration or marks work UNVERIFIED.
+
+A configured gate uses the existing local owner: early measured complexity where supported, then trustworthy fresh
 coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
-supported path rather than another full suite. Each new or modified function must score CRAP below 6;
-untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
+supported path rather than another full suite. Report per-function rows honestly, with no averages;
+untouched legacy functions stay outside scope. Missing analyzer or coverage for a configured gate is UNVERIFIED, and measurement
 tooling and reports stay local and uncommitted. The repository's `scripts/quality/crap.mjs` parses with
 TypeScript's sync named-pipe API by default; `collectFunctions(text, file, { transport: 'async' })` or
 `CRAP_PARSER_TRANSPORT=async` switches to the stdio transport, which also runs under
@@ -97,7 +103,7 @@ unsupported measurement stays visible.
 Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
 
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
-tests: shared authority and callers, the smallest existing seam, measured-quality support, genuine
+tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine
 native baseline/candidate ownership, a runnable check and its actual timeout/resource fit. Small
 deterministic fixes keep one owner and a focused check. A plan advisor is useful only for a named
 architectural risk or contested approach worth its cost. Quartermaster handles setup; the dedicated
