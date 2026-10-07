@@ -796,7 +796,7 @@ test('sync writes route-independent generated executors', () => {
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
   assert.ok(body.includes(agentsync.MARKER));
-  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 100);
+  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 75);
   assert.doesNotMatch(body, /verified milestone/);
   assert.doesNotMatch(body, /sidequest submit <ref>/);
   assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);

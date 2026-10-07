@@ -2277,6 +2277,44 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
   }
 });
 
+function integrateWithFailedFreshTarget(ref: string) {
+  process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT = 'second-resolution';
+  try {
+    return store.integrateSubmission(slug, ref, { mode: 'merge' });
+  } finally {
+    delete process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT;
+  }
+}
+
+// Deterministic failure injection at the fresh target resolution that runs after admission.
+test('a failed fresh integration target resolution refuses delivery without writes, then the ordinary path delivers', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    const { t, recorded, commit } = sq3144SubmittedOnRecordedBranch('target-fault');
+    git(['checkout', '-f', recorded]);
+    const recordedHead = git(['rev-parse', recorded]);
+    const worktreeState = git(['status', '--porcelain']);
+    const before = JSON.stringify(store.getTicket(slug, t.ref));
+
+    const refused = integrateWithFailedFreshTarget(t.ref);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'integration_target_unavailable');
+    assert.match(refused.message, /injected integration target fault at the second resolution/);
+    assert.strictEqual(git(['rev-parse', recorded]), recordedHead, 'the target branch does not move');
+    assert.strictEqual(git(['status', '--porcelain']), worktreeState, 'index and working tree are untouched');
+    assert.strictEqual(JSON.stringify(store.getTicket(slug, t.ref)), before, 'the ticket and submission are unchanged');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, recorded]), '');
+    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${recorded}.`]);
+    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
 // GH-340: long-running services keep rewriting files in the registered checkout. Integrate refuses only
 // dirt the delivery would write, including a rename's source, and reports the rest as ignored.
 function gh340SubmittedCandidate(label: string, files: string[], writeCandidate: (ticket: { ref: string }) => void) {

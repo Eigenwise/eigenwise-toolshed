@@ -36,3 +36,7 @@ runtime or public install surface, and users should not install it separately.
 ## License
 
 MIT, under the repository license.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of these internal test helpers. Donations are never required to use the files in this directory.

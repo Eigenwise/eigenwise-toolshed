@@ -191,7 +191,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   story: "",
   story_contract: "",
   story_log: "Story log.",
-  checkpoint: "",
+  checkpoint: "Advisory; review binds after submit.",
   sweepClaims: "",
   next: "",
   scopeRequest: "",

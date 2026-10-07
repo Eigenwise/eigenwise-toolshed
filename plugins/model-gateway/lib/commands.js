@@ -46,11 +46,11 @@ const {
   canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, resolveStableCommandPath,
   gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
   resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
-  syncGatewayDiscoveryCache, CONTEXT_WINDOW_PATH, contextWindowCap, readContextWindowSettings,
+  syncGatewayDiscoveryCache, CONTEXT_WINDOW_PATH, contextWindowCap, contextWindowCompactAt, readContextWindowSettings,
   writeContextWindowSettings,
 } = require('./runtime.js');
 const {
-  contextWindowReport, contextWindowUpdate, gatewayWindowNote, savedContextWindows, syncClaudeContextWindow,
+  contextWindowReport, contextWindowUpdate, gatewayWindowNote, savedContextWindows, saveContextWindowUpdate, syncClaudeContextWindow,
 } = require('./context-window.js');
 const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const {
@@ -148,10 +148,17 @@ const USAGE = `usage: model-gateway.js <command>
   context-window [--claude <tokens|full>] [--codex <tokens|full>] [--grok <tokens|full>]
                    show or persist the context window per backend (${CONTEXT_WINDOW_PATH}); the
                    orchestrator and every executor share it. Defaults: claude full, codex 272000,
-                   grok full. OpenAI bills Codex input above 272k tokens at 2x; the gateway compacts
-                   a capped session 85000 below the cap so no request, compaction included, passes it.
-                   A Claude cap is written as autoCompactWindow into each project-wired
-                   .claude/settings.local.json and bounds every model in that session.
+                   grok full. Without compact-at, a gateway cap compacts 85000 below the cap.
+                   --codex-compact-at <tokens|cap> and --grok-compact-at <tokens|cap> set a direct
+                   maximum before compaction (positive whole tokens); cap removes the override.
+                   The cap and backend window minus 40000 still limit the effective maximum.
+                   A saved compact-at ignores CODEX_GATEWAY_COMPACT_TRIGGER, reported unchanged.
+                   Example: --codex-compact-at 242000 leaves the 272000 cap unchanged. OpenAI bills
+                   input above 272k tokens at 2x; the crossing turn and compaction request can still
+                   exceed 272k. Existing installations keep their current policy until configured.
+                   --claude sets the native autoCompactWindow in project-wired settings; native
+                   engine headroom applies and the exact trigger is unverified. Claude compact-at
+                   is unsupported. No same-model main/subagent split is applied.
                    CODEX_GATEWAY_CONTEXT_WINDOW is superseded and only applies when no codex value is saved.
   env [--write-project | --write-user | --remove] [--reconcile]
                    print the Claude Code env block, or merge/remove wiring
@@ -912,7 +919,7 @@ function contextWindowCommand() {
   for (let index = 0; index < args.length; index += 2) {
     const update = contextWindowUpdate(args[index], args[index + 1]);
     if (update.error) die(update.error, 2);
-    saved[update.backend] = update.value;
+    saveContextWindowUpdate(saved, update);
   }
   applyClaudeWindowChange(current.claude.value, saved.claude || 'full');
   writeContextWindowSettings(saved);
@@ -1201,7 +1208,7 @@ function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
     backendWindow: policy.backendWindow,
     advertisedWindow: gatewayAdvertisedWindow(id),
     clientWindow,
-    clientCompactPoint: Math.min(autoCompact?.window ?? clientWindow, clientWindow) - 33000,
+    clientCompactPoint: 'unverified (native engine headroom)',
     sentry: policy.sentry,
     sentryTrigger: sentryPolicy ? `${sentryPolicy.compactTrigger} (${sentryPolicy.source})` : 'none',
     evidenceDate: evidenceDate(policy.measurement),
@@ -1714,7 +1721,7 @@ function providerCatalogReadiness(provider, readiness) {
 function catalogContextWindow(id, provider) {
   const contextWindow = gatewayAdvertisedWindow(id);
   if (!contextWindow) return {};
-  const contextWindowNote = gatewayWindowNote(provider, contextWindowCap(provider));
+  const contextWindowNote = gatewayWindowNote(provider, contextWindowCap(provider), contextWindowCompactAt(provider), resolveGatewayModelPolicy(id));
   return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
 }
 
