@@ -2082,20 +2082,24 @@ function candidateCommitRefusal(entry: RegisteredWorktreeEntry, head: string, ba
 function removeReclaimedWorktree(repository: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim();
   const branch = localBranchName(entry.branch);
-  const lateContent = baseAncestryRefusal(entry, dispatch) || movedBranchRefusal(repository, entry, branch, head);
-  if (lateContent) return lateContent;
-  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
-  if (!dependencyLinksReleased.ok) {
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      reason: dependencyLinksReleased.reason,
-      message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ''}.`,
-    };
-  }
+  const refusal = baseAncestryRefusal(entry, dispatch)
+    || movedBranchRefusal(repository, entry, branch, head)
+    || dependencyLinksRefusal(entry, dispatch, lease);
+  if (refusal) return refusal;
   execFileSync('git', ['worktree', 'remove', entry.worktree], { cwd: repository, windowsHide: true });
-  const branchKept = branch ? keptBranchReason(repository, branch, head) : null;
+  const branchKept = keptBranchReason(repository, branch, head);
   return { worktree: entry.worktree, branch, reclaimed: true, ...(branchKept ? { branchKept } : {}) };
+}
+
+function dependencyLinksRefusal(entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
+  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
+  if (dependencyLinksReleased.ok) return null;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: dependencyLinksReleased.reason,
+    message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ''}.`,
+  };
 }
 
 function movedBranchRefusal(repository: string, entry: RegisteredWorktreeEntry, branch: string | null, head: string): ReclaimRefusal | null {
@@ -2111,7 +2115,8 @@ function movedBranchRefusal(repository: string, entry: RegisteredWorktreeEntry, 
 }
 
 // The checkout is already gone when this runs, so a failure here is reported as a kept branch, never as a kept checkout.
-function keptBranchReason(repository: string, branch: string, head: string): string | null {
+function keptBranchReason(repository: string, branch: string | null, head: string): string | null {
+  if (!branch) return null;
   try {
     execFileSync('git', ['update-ref', '-d', `refs/heads/${branch}`, head], { cwd: repository, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
     return null;

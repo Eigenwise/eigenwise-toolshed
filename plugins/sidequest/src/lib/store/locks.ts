@@ -2,6 +2,7 @@
 
 type TicketLockKey = { slug: string; id: string };
 type BusyTicketLock = { ok: false; reason: 'busy' };
+const LOCK_HELD_ELSEWHERE = Symbol('lock held elsewhere');
 
 function createLocks(dependencies: any) {
   const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {} } = dependencies;
@@ -77,31 +78,44 @@ function createLocks(dependencies: any) {
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      try {
-        const fd = fs.openSync(lockPath, 'wx');
-        try {
-          fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
-        } catch (_: any) {
-          fs.closeSync(fd);
-          try { fs.unlinkSync(lockPath); } catch (_: any) { /* ignore */ }
-          return false;
-        }
-        fs.closeSync(fd);
-        return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
-      } catch (error: any) {
-        if (!error || error.code !== 'EEXIST') return false;
-        if (lockCanBeReclaimed(lockPath)) {
-          try {
-            fs.unlinkSync(lockPath);
-          } catch (_: any) {
-            /* ignore */
-          }
-          continue;
-        }
-        busyWait(RETRY_MS);
-      }
+      const created = createLockFile(lockPath, ownerToken);
+      if (created !== LOCK_HELD_ELSEWHERE) return created;
+      if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
     }
     return false;
+  }
+
+  function createLockFile(lockPath: string, ownerToken: string) {
+    let fd: number;
+    try {
+      fd = fs.openSync(lockPath, 'wx');
+    } catch (error: any) {
+      return error?.code === 'EEXIST' ? LOCK_HELD_ELSEWHERE : false;
+    }
+    if (!writeLockOwner(lockPath, fd, ownerToken)) return false;
+    return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
+  }
+
+  function writeLockOwner(lockPath: string, fd: number, ownerToken: string): boolean {
+    try {
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
+    } catch (_: any) {
+      fs.closeSync(fd);
+      try { fs.unlinkSync(lockPath); } catch (_: any) { /* ignore */ }
+      return false;
+    }
+    fs.closeSync(fd);
+    return true;
+  }
+
+  function removeReclaimableLock(lockPath: string): boolean {
+    if (!lockCanBeReclaimed(lockPath)) return false;
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (_: any) {
+      /* ignore */
+    }
+    return true;
   }
 
   function refreshLock(lockPath?: any, ownerToken?: any) {

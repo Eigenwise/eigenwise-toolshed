@@ -2374,7 +2374,7 @@ function submissionReopen(request, facts) {
   if (!request.opts.status || !pendingSubmission(t)) return { reopened: null };
   const reopenStatus = coerceStatus(request.opts.status, t.status);
   if (reopenStatus === "done") return { reopened: null };
-  if (request.opts.force) return { reopened: t.submission ?? null };
+  if (request.opts.force) return { reopened: t.submission };
   return { refusal: pendingSubmissionRefusal(t, facts.heldOwner, reopenStatus) };
 }
 function pendingSubmissionRefusal(t, heldOwner, reopenStatus) {

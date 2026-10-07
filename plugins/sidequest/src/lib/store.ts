@@ -2510,7 +2510,7 @@ type ReleaseFacts = {
   terminalReadOnlyOracle: boolean;
 };
 type ReleaseCloseout = ReleaseFacts & {
-  reopenedSubmission: ReleaseSubmission | null;
+  reopenedSubmission: ReleaseSubmission | null | undefined;
   oracleRelease: boolean;
   noOpRelease: boolean;
   releaseWorktreeFacts: ReturnType<typeof observeReleaseWorktreeFacts>;
@@ -2654,12 +2654,12 @@ function readOnlyModes(t: ReleaseTicket, dispatch: ReleaseDispatch | null, activ
 // ticket looked reopened (SQ-1010). --force on a reopen means "reject the
 // submission", not "look past it" — clear it as part of the explicit
 // reopen instead of silently wedging the ticket again.
-function submissionReopen(request: ReleaseRequest, facts: ReleaseFacts): { refusal: ReleaseResult } | { reopened: ReleaseSubmission | null } {
+function submissionReopen(request: ReleaseRequest, facts: ReleaseFacts): { refusal: ReleaseResult } | { reopened: ReleaseSubmission | null | undefined } {
   const { t } = facts;
   if (!request.opts.status || !pendingSubmission(t)) return { reopened: null };
   const reopenStatus = coerceStatus(request.opts.status, t.status);
   if (reopenStatus === 'done') return { reopened: null };
-  if (request.opts.force) return { reopened: t.submission ?? null };
+  if (request.opts.force) return { reopened: t.submission };
   return { refusal: pendingSubmissionRefusal(t, facts.heldOwner, reopenStatus) };
 }
 
@@ -2947,7 +2947,7 @@ function releaseBlockerDetail(releaseBlocker: ReleaseBlocker, paths: { newlyChan
   return `${baselineDetail} Newly changed paths: ${paths.newlyChangedPaths.join(', ') || 'none'}.`;
 }
 
-function releaseCloseout(request: ReleaseRequest, facts: ReleaseFacts, reopenedSubmission: ReleaseSubmission | null): ReleaseCloseout {
+function releaseCloseout(request: ReleaseRequest, facts: ReleaseFacts, reopenedSubmission: ReleaseSubmission | null | undefined): ReleaseCloseout {
   return {
     ...facts,
     reopenedSubmission,

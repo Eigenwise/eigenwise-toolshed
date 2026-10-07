@@ -1567,20 +1567,21 @@ function candidateCommitRefusal(entry, head, baseCommit) {
 function removeReclaimedWorktree(repository, entry, dispatch, lease) {
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim();
   const branch = localBranchName(entry.branch);
-  const lateContent = baseAncestryRefusal(entry, dispatch) || movedBranchRefusal(repository, entry, branch, head);
-  if (lateContent) return lateContent;
-  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
-  if (!dependencyLinksReleased.ok) {
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      reason: dependencyLinksReleased.reason,
-      message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ""}.`
-    };
-  }
+  const refusal = baseAncestryRefusal(entry, dispatch) || movedBranchRefusal(repository, entry, branch, head) || dependencyLinksRefusal(entry, dispatch, lease);
+  if (refusal) return refusal;
   execFileSync("git", ["worktree", "remove", entry.worktree], { cwd: repository, windowsHide: true });
-  const branchKept = branch ? keptBranchReason(repository, branch, head) : null;
+  const branchKept = keptBranchReason(repository, branch, head);
   return { worktree: entry.worktree, branch, reclaimed: true, ...branchKept ? { branchKept } : {} };
+}
+function dependencyLinksRefusal(entry, dispatch, lease) {
+  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
+  if (dependencyLinksReleased.ok) return null;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: dependencyLinksReleased.reason,
+    message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ""}.`
+  };
 }
 function movedBranchRefusal(repository, entry, branch, head) {
   if (!branch) return null;
@@ -1594,6 +1595,7 @@ function movedBranchRefusal(repository, entry, branch, head) {
   };
 }
 function keptBranchReason(repository, branch, head) {
+  if (!branch) return null;
   try {
     execFileSync("git", ["update-ref", "-d", `refs/heads/${branch}`, head], { cwd: repository, encoding: "utf8", windowsHide: true, stdio: "pipe" });
     return null;

@@ -461,6 +461,43 @@ test('a sweep releasing a dead shared-tree claim inspects the checkout outside t
   }
 });
 
+function claimedSharedTreeTicket(title: string, owner: string): { ref: string; id: string } {
+  const ticket = sidequest.createTicket(slug, { title: `${title} ${process.pid}-${Date.now()}`, category: 'codebase-exploration', description: 'SQ-3449 fixture.', files: ['README.md'] });
+  const prepared = sidequest.prepareDispatch(slug, ticket.ref, { sharedTree: true });
+  assert.equal(sidequest.claimTicket(slug, ticket.ref, owner, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, source: 'test' }).ok, true);
+  return ticket;
+}
+
+test('a sweep release re-checked under the lock leaves a live claim alone', () => {
+  const owner = 'live-sweep-owner';
+  const ticket = claimedSharedTreeTicket('live sweep', owner);
+  try {
+    const refused = sidequest.releaseTicket(slug, ticket.ref, owner, { status: 'todo', source: 'test', requireReleaseVerdict: true });
+    assert.equal(refused.reason, 'claim_live');
+    assert.match(refused.message, /still live-claimed by "live-sweep-owner"/);
+    assert.equal(sidequest.getTicket(slug, ticket.ref).claim.by, owner);
+  } finally {
+    sidequest.releaseTicket(slug, ticket.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('a claimed dispatch that lost its claim refuses a foreign release without recovery evidence guidance', () => {
+  const ticket = claimedSharedTreeTicket('claim lost', 'claim-lost-owner');
+  const editor = new DatabaseSync(path.join(SIDEQUEST_HOME, 'sidequest.db'), { timeout: 2000 });
+  try {
+    editor.prepare("UPDATE tickets SET data = json_set(data, '$.claim', json('null')) WHERE project = ? AND id = ?").run(slug, ticket.id);
+  } finally {
+    editor.close();
+  }
+  try {
+    const refused = sidequest.releaseTicket(slug, ticket.ref, 'foreign-executor', { status: 'todo', source: 'test' });
+    assert.equal(refused.reason, 'unclaimed_active_dispatch');
+    assert.match(refused.message, /has an active claimed dispatch but no claim owned by foreign-executor\. Do not release another runtime's attempt\./);
+  } finally {
+    sidequest.releaseTicket(slug, ticket.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
 test('composition dispatch preparation hands control to the caller before it observes the admission', () => {
   const { createCompositionAdmissions } = require('../lib/store/composition-admission.js');
   const events: string[] = [];

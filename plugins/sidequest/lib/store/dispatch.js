@@ -2190,12 +2190,14 @@ function createDispatch(dependencies) {
   }
   function checkoutReclaimWarning(reclaim) {
     try {
-      const result = reclaim();
-      if (!result.reclaimed) return [`Dispatch committed; retired checkout ${result.worktree} was kept: ${result.message || result.reason}`];
-      return result.branchKept ? [`Dispatch committed; retired checkout ${result.worktree} was removed, but deleting its branch ${result.branch} failed and the branch was kept: ${result.branchKept}`] : [];
+      return reclaimOutcomeWarning(reclaim());
     } catch (error) {
       return [`Dispatch committed; removing the retired checkout failed and it was left in place: ${error instanceof Error ? error.message : String(error)}`];
     }
+  }
+  function reclaimOutcomeWarning(result) {
+    if (!result.reclaimed) return [`Dispatch committed; retired checkout ${result.worktree} was kept: ${result.message || result.reason}`];
+    return result.branchKept ? [`Dispatch committed; retired checkout ${result.worktree} was removed, but deleting its branch ${result.branch} failed and the branch was kept: ${result.branchKept}`] : [];
   }
   function commitLockedPreparation(slug, lockedIds, assertAdmissionHolds, effects, prepare) {
     const generations = ticketGenerations(slug, lockedIds);
@@ -3428,14 +3430,17 @@ function createDispatch(dependencies) {
     const sides = lockedIds.map((id) => creationExchangeSide(slug, sessionId, crossing, id));
     if (!sides.every((side) => side !== null)) return null;
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const holderSide = sides.find((side) => side.ticket.id === crossing.holder.id);
-    const movedRecord = crossing.heldFacts || !holderSide ? null : movedCreationRecord(holderSide.state);
+    const movedRecord = holderCreationRecord(crossing, sides);
     for (const side of sides) {
       applyCreationExchange(side.state, side.facts, side.otherRef, movedRecord, now);
       stampDispatchEvent(side.ticket, "worktree-create-exchange", now);
       putTicket(slug, side.ticket);
     }
     return { ok: true, exchangedWith: crossing.holder.ref };
+  }
+  function holderCreationRecord(crossing, sides) {
+    const holderSide = sides.find((side) => side.ticket.id === crossing.holder.id);
+    return crossing.heldFacts || !holderSide ? null : movedCreationRecord(holderSide.state);
   }
   function creationExchangeSide(slug, sessionId, crossing, id) {
     const ticket = getTicket(slug, id);
