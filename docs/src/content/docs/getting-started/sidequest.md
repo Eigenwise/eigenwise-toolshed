@@ -67,11 +67,24 @@ command and descendants ended, then the parent explicitly hands the slot to the 
 terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
 and process counts cannot. No polling or automatic restart is needed.
 
-The gate's Windows direct-leaf runner accepts a caller `AbortSignal`. Pre-aborted input rejects
-before spawning; later cancellation and deadlines terminate through the retained `ChildProcess`.
-Successful cleanup waits for the child's actual exit. A bounded cleanup failure stays explicit and
-proves no termination. Leaf exit does not prove arbitrary descendants were cleaned up. POSIX
-process-group supervision is unchanged; this Windows signal option does not cancel a POSIX phase.
+On Windows the pinned verify (the verify-capture wrapper), `test:full` and `build:check` run inside a
+Job Object. The first run builds a small owner from `scripts/windows-job-owner.cs` with the .NET
+Framework `csc.exe` that ships with Windows and caches it per user under the temp directory, keyed by
+the source hash, so later runs skip the compile. The owner joins its own job before it creates the
+verify command, so the command and every descendant that inherited the job, including ones reparented
+away from their parent or started detached, are job members from the instant they exist; a Python, cmd,
+pnpm, Turbo chain can't outlive the owner, and killing the owner at any point kills the tree. A process
+created through a broker (a service, COM activation, a daemon such as `dockerd` that `docker` asks to
+start a container) is outside the job and is not tracked. The deadline (600 s by
+default) or a caller `AbortSignal` asks the owner to exit, which reports the job's own list of live
+members and closes the job; an owner that does not exit in time is killed, which closes the job just the
+same. A pre-aborted signal starts nothing. The capture then fails as `timeout` or `could_not_run`, and
+its reason names the processes the job ended, any that refused to end, the broker boundary, and the
+output log path. When the owner left no account of its job, or one cut off mid-write or malformed, the
+reason says "survivor state unknown" rather than claiming none survived. A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
+instead of running the verify unowned. Set `SIDEQUEST_JOB_AFFINITY_MASK` (for example `3` for two
+cores) in the verify's environment to pin the whole job to those processors. POSIX keeps its
+process-group supervision unchanged; the signal option does not cancel a POSIX phase.
 
 Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
 only says where a read starts; the processed cursor advances after the instructions are consumed.
