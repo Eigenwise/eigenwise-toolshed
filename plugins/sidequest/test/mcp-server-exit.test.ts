@@ -112,12 +112,12 @@ function initialize(server: import('node:child_process').ChildProcess) {
   return response;
 }
 
-function heartbeatTestEnvironment(): NodeJS.ProcessEnv {
+function heartbeatTestEnvironment(heartbeatTimeoutMilliseconds = 40): NodeJS.ProcessEnv {
   return {
     ...process.env,
     NODE_ENV: 'test',
     SIDEQUEST_TEST_MCP_HEARTBEAT_INTERVAL_MILLISECONDS: '20',
-    SIDEQUEST_TEST_MCP_HEARTBEAT_TIMEOUT_MILLISECONDS: '40',
+    SIDEQUEST_TEST_MCP_HEARTBEAT_TIMEOUT_MILLISECONDS: String(heartbeatTimeoutMilliseconds),
     SIDEQUEST_TEST_MCP_INITIALIZATION_DEADLINE_MILLISECONDS: '50',
   };
 }
@@ -275,11 +275,14 @@ test('MCP server exits when an initialized client keeps stdin open but abandons 
 });
 
 test('MCP server keeps an initialized client alive beyond its initialization deadline when it answers heartbeats', async () => {
-  const server = mcpServer(heartbeatTestEnvironment());
+  // This test proves a live client survives, not how fast the server reaps a dead one, so the reap
+  // timeout and the overall deadline are sized for a loaded machine: a slow test process must still
+  // answer in time, and process start must not eat the window the four heartbeats need.
+  const server = mcpServer(heartbeatTestEnvironment(2_000));
 
   try {
     server.stdout?.setEncoding('utf8');
-    const answeredHeartbeats = answerHeartbeats(server, 4, 500);
+    const answeredHeartbeats = answerHeartbeats(server, 4, 10_000);
     await initialize(server);
     server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
     await answeredHeartbeats;
