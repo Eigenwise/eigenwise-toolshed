@@ -8,6 +8,128 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.593.0 (2026-10-07)
+
+### Repository
+
+- crap.mjs takes cyclomatic complexity from the TypeScript AST instead of Lizard (SQ-3091)
+  scripts/quality/crap.mjs counts complexity from the same TypeScript AST it uses to find functions (1 + if, loop, case, catch, conditional, &&, ||, ??; nested functions excluded) and no longer runs lizard, so a Lizard parse failure can no longer leave a function UNVERIFIED. scripts/quality/README.md documents the convention.
+- Let collectFunctions take a supplied TypeScript parser transport (SQ-3417)
+  scripts/quality/crap.mjs accepts { transport: 'async' } or CRAP_PARSER_TRANSPORT=async so CRAP measurement runs under node --permission with read-only filesystem access.
+- crap.mjs scores every changed JavaScript/TypeScript file, including plugin scripts and tests (SQ-3453)
+  scripts/quality/crap.mjs now takes its file list from the changed range instead of plugins/*/lib and plugins/*/src, so plugin scripts, repository scripts and test files (test callbacks included) get rows with coverage from the suites behind them: scripts/quality, scripts/release and docs/scripts run their documented node --test suites. A changed .cs, .py, .sh, .ps1, .svelte, .tsx or .jsx file prints one UNVERIFIED "no analyzer" row instead of being skipped silently, a file no suite loaded is UNVERIFIED with the NODE_V8_COVERAGE child-process hint instead of scoring 0%, and coverage of tsx-loaded .ts files is mapped back through the source map Node caches beside the coverage. scripts/quality/README.md documents the suites and the unverified reasons.
+- crap.mjs pairs a file's own coverage records with its functions by position (SQ-3461)
+  scripts/quality/crap.mjs no longer scores a nested callback that ran at 0%. Coverage recorded on the scored file itself (a tsx-loaded test, a plain script) is paired by position: a V8 record belongs to the innermost function holding its remapped start. Pairing by V8's function name and by an exact start offset missed assigned hooks (V8 names them ""), class constructors (named after the class), single-parameter arrows (esbuild drops the parentheses) and tsx's `__name`-wrapped arrows. On SQ-3449's write-lock-git.test.ts this moves ten 0% rows to their executed coverage.
+- crap.mjs regression for tsx-loaded async arrows (SQ-3465)
+  Internal: scripts/quality/crap.test.mjs now covers async arrows in a tsx-loaded test file. That includes one assigned to a local, one set as a property of a returned object, its sync twin, and an async arrow that never runs, which must score 0 and not inherit its enclosing callback's coverage. The 0% `cleanup` row in SQ-3456's process-owner.test.ts came from that candidate's older crap.mjs, which never remapped tsx offsets. The current script scores it at 96.8%, so crap.mjs itself doesn't change.
+- crap.mjs no longer re-scores every later callback when a test is inserted or deleted (SQ-3467)
+  scripts/quality/crap.mjs used to decide "changed" by a per-parent ordinal identity, so inserting one test shifted every later anonymous callback onto a different base function and the gate scored them all. It now pairs base and head functions parent by parent: a function whose own text appears once on each side pairs first, the rest pair in order between those anchors. Against the SQ-3458 candidate, plugins/sidequest/test/mcp.test.ts now contributes only the 5 functions in its one inserted hunk, down from about 110.
+
+### model-gateway 0.54.0 → 0.54.1
+
+#### Fixes
+
+- Remove duplicate gateway route-marker parser (SQ-3419)
+- Gateway catalog test no longer reads the real gateway home (SQ-3435)
+  The model-gateway test suite's in-process catalog test now runs against a throwaway home with a scrubbed environment, so a developer's saved compact-at setting or an exported `CODEX_GATEWAY_COMPACT_TRIGGER` no longer changes its result. Test-only change, no runtime behavior affected.
+- Context-overflow errors name their phase, size, limit and recovery, and the sentry tracks each agent separately (SQ-3446)
+
+### quartermaster 0.11.10 → 0.12.0
+
+#### Features
+
+- quartermaster crap: every lizard row is bound to its own definition, misread spans are corrected, and the gate fails closed on a changed line no row measures; adds --cc-only and the stale-base warning (SQ-3459)
+  Closes GitHub issues #357, #471, #476, #477, #482, #433 and #423; supersedes PRs #478, #358, #434 and #425.
+
+  The CRAP gate no longer skips a `function`, method or constructor whose parameter list holds a call,
+  such as `load(path = resolve(), opts)`. lizard reports no row at all for that function, and can lose
+  plain functions after it in the same file, so the gate never checked them, and a file holding only
+  such functions exited 2 with "lizard reported zero functions". The gate now reads each definition
+  lizard left out from the source and scores it by its own branch count, labelled `source=source-scan`.
+  An edit to it counts as a change against the base revision, and it passes or fails on coverage like
+  any other function.
+
+  The CRAP gate no longer trusts the span lizard 1.24.0 reports for a JavaScript-family function. It
+  reads where each function really starts and ends from the source and corrects three misreads:
+
+  - A template literal nested in another one's `${...}` (#471) made lizard run a row past the function's
+    end, charging an edit in a later function to the wrong one at the wrong complexity, or drop every
+    function after it, so a new over-ceiling function passed as `0 of 0`. The gate now clamps that row to
+    the real body, recounts its branches, and reads the functions lizard lost from the source
+    (`source=source-scan`).
+  - lizard's TypeScript reader could end a `.tsx` component inside its JSX (#476), so an edit near the
+    bottom of the component sat outside every row and passed. The gate now widens the row to the
+    component's real end.
+  - For an arrow whose `=>` ends a line (#477), lizard started and ended the row on the body's first
+    line, so the gate exited 2 for a line with no coverage data, and an edit lower in the arrow sat in no
+    row. The gate now starts the row at the arrow and ends it with the arrow's body.
+
+  User-visible change: a change the gate used to pass can now exit 2. When a changed or new line lies
+  inside a function the source scan finds but no row of that function's own measures, even after these
+  corrections, the gate exits 2 with "changed lines are unmeasured at `<file>:<line>`" instead of passing
+  code nothing measured. A parent's row never stands in for a nested function lizard dropped, and the
+  gate now ends an honest row where the body ends, so a change to the next function's signature line no
+  longer counts as a change to the function above it. A regex literal holding an unbalanced `(` or `{`
+  shifts every later lizard row up a line; the gate widens such a row back onto its signature where it
+  can, and exits 2 for an edit below one it cannot place.
+
+  A change could also fail on functions it never touched (#482). A `<` comparison such as
+  `s.pages < maxPages` makes lizard read a type argument, so the same unchanged text got different bounds
+  on the base and candidate sides. An untouched function then had no base copy to pair with and failed as
+  new code. In a JavaScript-family file, the gate now counts a function as changed or new only when a
+  changed line falls inside its span. A changed line is an added or edited line, or for a deletion, the
+  line just above it.
+
+  The unverified-measurement guard counts function-like tokens in code only (#433): in a JavaScript-family
+  file, `function`, `=>` or `name(...) {` inside a comment or string text is no definition, while a
+  template's `${...}` expression is code. Other languages keep the raw-text count.
+
+  `crap --cc-only` checks the cc 6 ceiling without coverage (#423): lizard only, no coverage command, no
+  lcov, the same changed-function selection and exit codes. A full-gate failure whose cc alone reaches the
+  ceiling says so (`cc 6 or more fails at any coverage`), and a local base behind its upstream warns on
+  stderr without failing the gate.
+
+#### Fixes
+
+- Recommend native Claude Code mods through resupply (SQ-3408)
+- Quality gates are discovered per project (SQ-3451)
+  Sidequest briefings discover the project quality gate instead of imposing a shipped CRAP threshold. Projects without a gate run their pinned verifier and continue. Quartermaster setup and resupply offer the gate as an opt-in proposal, with its command and measurement costs.
+- CRAP gate's regex-literal test passes on lizard 1.24.0 and 1.24.1 (SQ-3468)
+  The real-lizard test for a function below a regex literal holding `(` assumed every lizard misreads it. CI has no `lizard` on PATH and gets PyPI's latest (1.24.1) through `pipx run`, which reads the function on its real lines, so the test failed there. It now asks the resolved lizard for the row first and expects exit 1 with the row at line 10 when the row is right, or exit 2 naming line 12 as unmeasured when it sits one line high. A new injected-CSV test pins that fail-closed path for any lizard version. Only tests changed.
+
+### sidequest 5.7.1 → 5.8.0
+
+#### Features
+
+- Let a board declare verifyEnvironment and pin a shared verifier into isolated dispatches (SQ-3423)
+- Submit and the wave gate admit a deferred verification on a shared verify environment (SQ-3424)
+  On a board with `verifyEnvironment: shared`, an isolated dispatch's command verifier runs once, in the shared checkout, when integrate delivers the candidate. Submit no longer needs an executor verify-capture for it and records the verification as `deferred` (visible state, never read as accepted); wave assembly records `gate_deferred` without provisioning a checkout; delivery takes that gate only with an accepted merged-tree verification. The verify-capture wrapper refuses to run an environment-bound verifier (`verification_capture_environment_lane`) and tells the executor to run focused checks, commit, and submit. Any other requirement is refused exactly as before.
+- Run verify-capture under a Windows Job Object the owner joins before it spawns (SQ-3456)
+  On Windows the pinned verify, test:full and build:check now run inside a kill-on-close Job Object built on first use from scripts/windows-job-owner.cs with the csc.exe that ships with Windows. The owner joins its own job before it creates the command, so the command and every reparented or detached descendant are job members from creation and the owner's death ends them all; there is no instant in which a verify process exists outside the job. A deadline or cancellation asks the owner to exit, it reports the job's own live member list, and the capture names the processes the job ended and any that refused. A capture whose owner left no job account says "survivor state unknown" instead of "none survived".
+
+#### Fixes
+
+- Full-suite capture test no longer fails when the sibling-count variable is inherited (GH-455)
+  The verify-capture test that checks scoped commands stay outside the full-suite slot now starts those captures without `SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT`. Before, any capture of `npm run test:full` exported the variable to the test process, so the test failed and submit refused the ticket. Only the test changed.
+- Negative-control test names ignore RegExp .test() calls with a string literal argument (GH-473)
+- Wait for owned leaf exit after caller cancellation (SQ-3396)
+- Board MCP calls after /clear or /resume use the session's current id, so executors bind again (GH-467) (SQ-3432)
+  The board server kept the session id it was started with, so after `/clear` every MCP `dispatch` recorded the old id, the hooks (which see the new id) could not bind the executor, and every executor write was refused. The server now reads the current id from the record Claude Code rewrites for its own process on every session switch, and falls back to the startup environment when that record is missing. No `/reload-plugins` is needed after `/clear` anymore. The isolation refusal for an unmatched worktree now says the dispatch was likely recorded under an older session id instead of reading like an executor fault.
+- Keep slow Git and nested lock waits outside global SQLite writes (SQ-3449)
+  Dispatch preparation and claim release now run their Git checks under the ticket file lock only, then write in a short transaction that refuses if the ticket changed meanwhile, so one slow checkout no longer holds every project's board writes. Multi-ticket operations take all their file locks in one order before the single write lock, and a retired checkout is removed only after the new dispatch commits. Those two writes run guarded: starting a child process or waiting on any lock file inside them fails with `WriteLockHeldError` instead of holding the lock, and a release with a session id now drops its session-registry entry after its write commits. A crossed-creation exchange checks both reservations before writing either, a composition adopted while a dispatch waited for its locks refuses that dispatch instead of being consumed without its source locks, and a retired checkout that gained a commit or whose branch moved after the reclaim decision is kept. When the checkout is removed but its branch deletion fails, the warning says the branch was kept.
+- Quality gates are discovered per project (SQ-3451)
+  Sidequest briefings discover the project quality gate instead of imposing a shipped CRAP threshold. Projects without a gate run their pinned verifier and continue. Quartermaster setup and resupply offer the gate as an opt-in proposal, with its command and measurement costs.
+- Keep the live dispatch verification sync under CRAP 6 by splitting it along its steps (SQ-3457)
+  Internal: syncLiveDispatchVerification now reads, applies and records through named step functions so the SQ-3423 environment pin lands with every touched body below CRAP 6. No behavior change.
+- The worktree-isolation refusal builds its summary per cause, keeping the GH-467 fix under the CRAP gate (SQ-3458)
+  No change to what an executor reads. The unknown-dispatch refusal in the worktree-isolation guard now picks its summary sentence (unbound claim, shared checkout, unmatched linked worktree) in one named builder instead of nested ternaries, so the GH-467 wording for a dispatch recorded under an older session id lands with every touched function below CRAP 6.
+- A cut-off Windows job account reads as survivor state unknown, and the capture names the broker boundary (SQ-3469)
+  The Windows job owner now writes its member account as `members <count> <pid>... end`, and the supervisor accepts only a record whose count matches its ids and that reaches `end`. An owner killed mid-write, or a report read before the owner finished, used to leave a bare `members` line that read as an empty job and a capture claiming "none survived"; any cut-off or malformed account now reports "survivor state unknown". A failed Windows capture's reason, the docs and the owner's comments say the job ends every descendant that inherited it, and that a process created through a broker (a service, COM activation, a daemon such as dockerd) is outside the job and not tracked.
+- Hold the checkout's HEAD lock while a retired worktree is reclaimed (SQ-3472)
+  Reclaiming a retired checkout now takes that checkout's own `HEAD.lock` before its last HEAD and branch reads and holds it through `git worktree remove`. Every commit in the checkout, on a branch or detached, needs that lock to move HEAD, and so do checkout and switch. A commit that already wrote its index when the reclaim started now fails at its ref update with Git's usual "HEAD.lock: File exists" error, its staged change stays, and the removal refuses the dirty checkout instead of deleting it. When the lock is already held, the reclaim keeps the checkout and its branch and reports `commit_in_progress`. This replaces the earlier `index.lock` guard, which a commit releases before it moves the ref.
+- The verifier's process owner loads from the source tree as well as the built one (SQ-3473)
+  The verification port found `scripts/owned-process-tree.js` with a fixed `../..` from its own directory, which is right for the built `lib/ports` but points at a missing `src/scripts` when the source runs under tsx. Anything that pulled the store in from source (the worktree sweep, `worktrees sweep --all-projects`) died at load with MODULE_NOT_FOUND. It now walks up to the plugin's `package.json` and loads the script from there, so source, the build and an installed copy all resolve the same file. The installed-copy compatibility test now keeps `scripts/` the way the marketplace install does, so it exercises the owner and the Windows job source it compiles.
+
 ## v3.592.0 (2026-10-04)
 
 ### Repository
