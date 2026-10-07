@@ -2,6 +2,7 @@
 function createNotifications(dependencies) {
   const {
     acquireLock,
+    afterCommit,
     crypto,
     getTicket,
     path,
@@ -15,6 +16,8 @@ function createNotifications(dependencies) {
   const NOTIFICATION_KINDS = ["comment", "created", "status", "reminder"];
   const NOTIFY_PREF_DEFAULTS = { comment: true, created: true, status: true };
   const MAX_READ_KEPT = 100;
+  const DAY_MS = 24 * 60 * 60 * 1e3;
+  const PRUNED_ON_OPEN_KEY = "notifications-pruned-on-open";
   function notificationsLockPath() {
     return path.join(projectsRoot(), ".notifications.lock");
   }
@@ -26,7 +29,29 @@ function createNotifications(dependencies) {
     return data && Array.isArray(data.notifications) ? data.notifications : [];
   }
   function writeNotifications(list) {
-    writeGlobal("notifications", { notifications: list });
+    writeGlobal("notifications", { notifications: boundUnreadList(list) });
+  }
+  function positiveNumberFromEnv(name, fallback) {
+    const value = Number(process.env[name]);
+    return value > 0 ? value : fallback;
+  }
+  function notificationTime(notification) {
+    return String(notification.fireAt || notification.createdAt || "");
+  }
+  function boundUnreadList(list) {
+    const maxUnread = positiveNumberFromEnv("SIDEQUEST_NOTIFICATIONS_MAX_UNREAD", 200);
+    const maxAgeDays = positiveNumberFromEnv("SIDEQUEST_NOTIFICATIONS_MAX_AGE_DAYS", 30);
+    const oldestKept = new Date(Date.now() - maxAgeDays * DAY_MS).toISOString();
+    const keptUnread = list.filter((n) => !n.readAt).filter((n) => notificationTime(n) >= oldestKept).sort((a, b) => notificationTime(b).localeCompare(notificationTime(a))).slice(0, maxUnread);
+    const kept = /* @__PURE__ */ new Set([...list.filter((n) => n.readAt), ...keptUnread]);
+    return list.filter((n) => kept.has(n));
+  }
+  function pruneOversizedNotificationsOnce() {
+    if (readGlobal(PRUNED_ON_OPEN_KEY, null)) return;
+    transaction(() => {
+      writeNotifications(readNotifications());
+      writeGlobal(PRUNED_ON_OPEN_KEY, { at: (/* @__PURE__ */ new Date()).toISOString() });
+    });
   }
   function withNotificationsLock(fn) {
     const lock = notificationsLockPath();
@@ -106,25 +131,35 @@ function createNotifications(dependencies) {
     if (kind === "created") return { title: `New side quest · ${ref}`, body: ticket.title };
     return { title: `${ref} → ${ticket.status}`, body: ticket.title };
   }
+  function eventNotificationWanted(slug, kind, source) {
+    if (!source || String(source) === "dashboard") return false;
+    return Boolean(getNotifyPrefs()[kind]) && readMeta(slug)?.notify !== false;
+  }
+  function ticketEventKey(notification) {
+    return `${notification.ticketId}|${notification.kind}|${notification.ticketEventAt}`;
+  }
+  function saveEventNotification(event) {
+    try {
+      const duplicate = readNotifications().some((n) => ticketEventKey(n) === ticketEventKey(event));
+      if (!duplicate) addNotification(event);
+    } catch (error) {
+      process.stderr.write(`sidequest: the ${event.kind} notification for ${event.ticketRef} was not saved: ${error}
+`);
+    }
+  }
   function queueEventNotification(slug, ticket, kind, source, extra) {
-    if (!ticket || !source || String(source) === "dashboard") return null;
-    if (NOTIFY_PREF_DEFAULTS[kind] == null) return null;
-    if (!getNotifyPrefs()[kind]) return null;
-    const pmeta = readMeta(slug);
-    if (pmeta && pmeta.notify === false) return null;
-    const eventAt = ticket.updatedAt;
-    const dup = readNotifications().some((n) => n.ticketId === ticket.id && n.kind === kind && n.ticketEventAt === eventAt);
-    if (dup) return null;
+    if (!ticket || !eventNotificationWanted(slug, kind, source)) return;
     const copy = eventNotificationCopy(ticket, kind, extra);
-    return addNotification({
+    const event = {
       kind,
       title: copy.title,
       body: copy.body,
       projectSlug: slug,
       ticketRef: ticket.ref,
       ticketId: ticket.id,
-      ticketEventAt: eventAt
-    });
+      ticketEventAt: ticket.updatedAt
+    };
+    afterCommit(() => saveEventNotification(event));
   }
   function markRead(id) {
     return withNotificationsLock(() => {
@@ -253,6 +288,7 @@ function createNotifications(dependencies) {
     markAllRead,
     markRead,
     pendingReminders,
+    pruneOversizedNotificationsOnce,
     pruneRead,
     queueEventNotification,
     setNotifyPrefs,

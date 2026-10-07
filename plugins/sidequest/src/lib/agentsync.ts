@@ -23,16 +23,27 @@
  * codex-gateway shim resolves per request (SQ-347/SQ-348), overwriting
  * output_config.effort, so per-effort dispatch defs carried dead frontmatter.
  * The Claude ladder stays per-effort: the Agent tool has no effort parameter,
- * leaving frontmatter as the only carrier. The def set is therefore fixed —
- * route edits never write or register agent files.
+ * leaving frontmatter as the only carrier. The bundled def set is therefore
+ * fixed — route edits never write or register agent files.
+ *
+ * A discovered model the shim does not serve (GH-263) cannot ride the Agent
+ * `model` parameter either: it only accepts sonnet/opus/haiku/fable (GH-361).
+ * syncDiscoveredModelAgents() writes a user-scope definition instead, `model:
+ * <full id>` and `effort:` both in frontmatter (verified on the wire 2026-09-29
+ * against Claude Code 2.1.284: the subagent request carried the pinned id and
+ * output_config.effort), only for the (model, effort) pairs some category route
+ * or fallback uses, with a read-only twin where that category is read-only
+ * (GH-369), and prunes every other generated definition at SessionStart.
+ * ensureDiscoveredModelAgents() writes the one definition a dispatch spawns,
+ * since a ticket override can route a pair no category uses.
  *
  * syncExecAgents() renders through scripts/_exec-template.md via
  * renderExecAgent() below, so the ticket-execution protocol body stays in one
  * place for every generated file.
  *
  * Lifecycle safety: every stable executor file this module writes starts with
- * the generation-two MARKER on its own line. A file WITHOUT either recognized
- * marker — whether or not its name collides with one we'd generate — is NEVER
+ * the generation-two MARKER on its own line, and every discovered-model file
+ * with DISCOVERED_MODEL_MARKER. A file WITHOUT its recognized marker — whether or not its name collides with one we'd generate — is NEVER
  * written, overwritten, or deleted; it isn't ours.
  */
 
@@ -40,7 +51,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require('./exec-names.js');
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require('./exec-names.js');
 const { createWorktreeLease, canonicalPath } = require('./kernel/worktree.js');
 const crypto = require('crypto');
 const store = require('./store.js');
@@ -62,6 +73,8 @@ const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md')
 // treats gen2 files as user-authored and leaves them alone during version skew.
 const LEGACY_MARKER = '<!-- generated-by: sidequest-agentsync -->';
 const MARKER = '<!-- generated-by: sidequest-agentsync gen2 -->';
+// Distinct from MARKER so the bundled-ladder migration never deletes these, and this sync never touches that.
+const DISCOVERED_MODEL_MARKER = '<!-- generated-by: sidequest-agentsync discovered-model -->';
 // No generational marker change is needed for temporary definitions: they are
 // nonce-named and short-lived, so stale version sessions cannot disrupt the
 // stable ladder through this cleanup path.
@@ -74,7 +87,7 @@ const ARTIFACT_LIFECYCLE_MARKER = '[sidequest-artifact-mode]';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 75;
 const EXECUTOR_CONTRADICTION_RULE = 'Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.';
 
 // Earlier releases generated stable executors in this directory. The migration
@@ -113,34 +126,34 @@ function routeMarker(dispatchModel?: any, effort?: any, ticketRef?: any) {
   return marker;
 }
 
+function recipeAgentWiring(exec?: any, effort?: any) {
+  if (exec.backend === 'codex') {
+    return {
+      agent: { model: DISPATCH_MODEL_ID, promptPrefix: `${routeMarker(exec.dispatchModel, effort)}\n\n` },
+      effortCarrier: 'marker',
+    };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) {
+    ensureDiscoveredModelAgents(exec.agent);
+    return { agent: { model: null, subagentType: exec.agent, promptPrefix: '' }, effortCarrier: 'definition' };
+  }
+  return { agent: { model: exec.model, promptPrefix: '' }, effortCarrier: 'none' };
+}
+
 function workflowRecipe(category?: any, resolved?: any) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error('A resolved category route is required.');
 
-  const recipe: any = {
+  return {
     project: category.project,
     category: category.id,
     categoryName: category.name,
     backend: exec.backend,
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
-    agent: null,
-    effortCarrier: null,
+    ...recipeAgentWiring(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : [],
   };
-
-  if (exec.backend === 'codex') {
-    recipe.agent = {
-      model: DISPATCH_MODEL_ID,
-      promptPrefix: `${routeMarker(exec.dispatchModel, resolved.effort)}\n\n`,
-    };
-    recipe.effortCarrier = 'marker';
-  } else {
-    recipe.agent = { model: exec.model, promptPrefix: '' };
-    recipe.effortCarrier = 'none';
-  }
-
-  return recipe;
 }
 
 // Render one agent file's full source from the shared template. `name` and
@@ -190,7 +203,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools?: any) {
 }
 
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
 // SQ-2747: `git worktree remove --force` on a raw scratch checkout deletes a junctioned
@@ -783,16 +796,16 @@ function linkedPlanSuffix(link?: any, slug?: any) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : '';
 }
 
-function capturedVerifyCommand(verify?: any, ticketRef?: any, project?: any, boundWorktree?: any) {
-  const command = String(verify || '').trim();
-  if (!command) return '';
-  const encoded = Buffer.from(command, 'utf8').toString('base64');
+// GH-373: with a board target the wrapper loads the pinned command from the ticket, so the
+// briefing carries no base64 blob for an executor to retype, where one wrong character ran a
+// different command.
+function capturedVerifyCommand(verify: string, ticketRef?: string, project?: string, boundWorktree?: string | null) {
   const captureScript = path.join(__dirname, 'verify-capture.js');
-  const target = String(ticketRef || '').trim() && String(project || '').trim()
+  const commandSource = ticketRef && project
     ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}`
-    : '';
-  const worktree = String(boundWorktree || '').trim() ? ` --worktree ${JSON.stringify(String(boundWorktree))}` : '';
-  return `node "${captureScript}" --base64 ${encoded}${target}${worktree}`;
+    : ` --base64 ${Buffer.from(verify.trim(), 'utf8').toString('base64')}`;
+  const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : '';
+  return `node "${captureScript}"${commandSource}${worktree}`;
 }
 
 function ticketEvidenceGuidance(ticket?: any) {
@@ -960,10 +973,39 @@ function rejectedSubmissionRows(ticket?: any) {
   }));
 }
 
+// A later submit stamps supersededAt on the rejection it replaces, so an
+// unsuperseded newest rework is the repair this dispatch exists to make. The
+// caller returns first when there are no rows, so the array is never empty here.
+function latestPendingRework(ticket: any) {
+  const latest = ticket.rejectedSubmissions.filter(Boolean).at(-1);
+  return latest.rejectionKind === 'rework' && !latest.supersededAt && !ticket.submission ? latest : null;
+}
+
+// A failed ref preservation leaves the row pending, so the ref may not exist yet.
+function preservedRefSuffix(rejected: any) {
+  return rejected.quarantineRef && rejected.preservationState !== 'pending' ? ` (preserved at ${rejected.quarantineRef})` : '';
+}
+
+function pendingReworkBody(ticket: any) {
+  const latest = latestPendingRework(ticket);
+  if (!latest) return null;
+  const candidate = latest.commit || latest.sourceRevision.value;
+  const preserved = preservedRefSuffix(latest);
+  return [
+    '## Pending rework',
+    `This dispatch repairs a rejected candidate. Candidate ${candidate} was sent back for rework at ${latest.rejectedAt} and the ticket returned to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
+    `Rejected candidate: ${candidate}${preserved}`,
+    `Rework reason:\n${latest.reason}`,
+    `Review:\n${latest.review}`,
+  ].join('\n\n');
+}
+
 function rejectedSubmissionHistoryBody(ticket?: any) {
   const rows = rejectedSubmissionRows(ticket);
   if (!rows.length) return null;
+  const pendingRework = pendingReworkBody(ticket);
   return [
+    ...(pendingRework ? [pendingRework] : []),
     '## Rejected submission history',
     `${rows.length} prior candidate${rows.length === 1 ? ' was' : 's were'} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
     ...rows.map((rejected: any) => [
@@ -1025,9 +1067,14 @@ function scopeAddedBeyondDeclared(ticket: any, slug: string, declared: string[])
     + scopeListing('Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)', added.filter((file: string) => alwaysKeys.has(scopeKey(file))));
 }
 
+function noDeclaredFilesText(ticket?: any) {
+  const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
+  return writeScope ? `(No files were declared.) ${writeScope}.` : '(No files were declared.)';
+}
+
 function taskAndScopeBody(ticket?: any, slug?: any) {
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file: any) => `- ${file}`).join('\n') : '(No files were declared.)';
+  const declaredFiles = declared.length ? declared.map((file: any) => `- ${file}`).join('\n') : noDeclaredFilesText(ticket);
   const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
@@ -1270,6 +1317,7 @@ function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, p
   const taskLabel = suppliedLabel || 'Sidequest ticket executor.';
   const reducedAgentSchema = options?.reducedAgentSchema === true;
   const subagentType = bundledAgentType(agentType || name);
+  ensureDiscoveredModelAgents(subagentType);
   return Object.assign({ subagent_type: subagentType, description: taskLabel },
     reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
     isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
@@ -1416,12 +1464,132 @@ function migrateExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
   return { written: 0, removed, unchanged };
 }
 
+function renderDiscoveredModelAgent(name: string, effort: string, modelId: string): string {
+  return renderExecAgent({ name, effort, modelId, marker: DISCOVERED_MODEL_MARKER });
+}
+
+function renderReadOnlyDiscoveredModelAgent(name: string, effort: string, modelId: string, readOnlyDeniedTools?: any): string {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
+  return withoutPermissionMode(renderExecAgent({
+    name,
+    effort,
+    modelId,
+    marker: DISCOVERED_MODEL_MARKER,
+    extraNote: readOnlyNote(),
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools,
+  }));
+}
+
+type DiscoveredModelDefinition = { name: string; effort: string; modelId: string; readOnly: boolean };
+
+function routedDiscoveredModelExec(route: any) {
+  const exec = route && store.resolveExec(route.model, route.effort);
+  return isDiscoveredModelExecutor(exec?.agent) ? exec : null;
+}
+
+// The agents folder is user-scope, so every board's category routes count, and the global fallback can
+// stand in for any of them (GH-369).
+function routedDiscoveredModelDefinitions(): DiscoveredModelDefinition[] {
+  const globalFallback = store.getRoutingFallback();
+  const definitions: DiscoveredModelDefinition[] = [];
+  for (const { route, fallback, readonly } of store.getCategoryRoutePairs()) {
+    for (const exec of [route, fallback, globalFallback].map(routedDiscoveredModelExec)) {
+      if (!exec) continue;
+      definitions.push({ name: exec.agent, effort: exec.effort, modelId: exec.spawnId, readOnly: false });
+      if (readonly) definitions.push({ name: exec.readOnlyAgent, effort: exec.effort, modelId: exec.spawnId, readOnly: true });
+    }
+  }
+  return definitions;
+}
+
+// A ticket route or read-only override can dispatch a pair no category routes.
+function requestedDiscoveredModelDefinitions(executor: string): DiscoveredModelDefinition[] {
+  for (const backend of store.discoveredModelBackends()) {
+    for (const effort of EXEC_EFFORTS) {
+      if (discoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: false }];
+      if (readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: true }];
+    }
+  }
+  return [];
+}
+
+function discoveredModelAgentSources(definitions: DiscoveredModelDefinition[], readOnlyDeniedTools?: any): Map<string, string> {
+  const sources = new Map<string, string>();
+  for (const { name, effort, modelId, readOnly } of definitions) {
+    sources.set(`${name}.md`, readOnly
+      ? renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools)
+      : renderDiscoveredModelAgent(name, effort, modelId));
+  }
+  return sources;
+}
+
+function readTextOrNull(filePath: string): string | null {
+  try { return fs.readFileSync(filePath, 'utf8'); } catch (_) { return null; }
+}
+
+function agentFileNames(dir: string): string[] {
+  try { return fs.readdirSync(dir); } catch (_) { return []; }
+}
+
+function pruneDiscoveredModelAgents(dir: string, wanted: Map<string, string>): number {
+  let removed = 0;
+  for (const filename of agentFileNames(dir)) {
+    if (wanted.has(filename) || !isDiscoveredModelExecutor(filename.replace(/\.md$/, ''))) continue;
+    if (!readTextOrNull(path.join(dir, filename))?.includes(DISCOVERED_MODEL_MARKER)) continue;
+    fs.rmSync(path.join(dir, filename), { force: true });
+    removed++;
+  }
+  return removed;
+}
+
+// A same-named file without DISCOVERED_MODEL_MARKER is the user's, so it is left alone.
+function writeOwnedDiscoveredModelAgent(filePath: string, source: string): boolean {
+  const previous = readTextOrNull(filePath);
+  if (previous === source || (previous !== null && !previous.includes(DISCOVERED_MODEL_MARKER))) return false;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, source);
+  return true;
+}
+
+function writeDiscoveredModelAgents(dir: string, wanted: Map<string, string>): number {
+  let written = 0;
+  for (const [filename, source] of wanted) {
+    if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
+  }
+  return written;
+}
+
+// Writes a definition for each (model, effort) pair a category route or fallback uses on a model the shim
+// does not serve, and removes every other generated one.
+function syncDiscoveredModelAgents(opts?: SyncOptions): SyncResult {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(routedDiscoveredModelDefinitions(), opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  const written = writeDiscoveredModelAgents(dir, wanted);
+  return { written, removed, unchanged: wanted.size - written };
+}
+
+// Every spawn and recipe that names a discovered-model executor writes its definition first, so a route,
+// override, or catalog changed after SessionStart still has it registered by the time the caller runs Agent.
+// It never prunes: a parallel dispatch's unrouted definition may still be waiting for its Agent call.
+function ensureDiscoveredModelAgents(executor?: any, opts?: SyncOptions & { waitMs?: number }) {
+  if (!isDiscoveredModelExecutor(executor)) return;
+  const wanted = discoveredModelAgentSources(requestedDiscoveredModelDefinitions(executor), opts?.readOnlyDeniedTools);
+  if (writeDiscoveredModelAgents(opts?.dir || defaultAgentsDir(), wanted) > 0) waitForNativeAgentReload(opts?.waitMs);
+}
+
 function syncExecAgentsIfChanged(_prefs?: any, opts?: SyncOptions): FastSyncResult {
-  const result = migrateExecAgents(_prefs, opts);
-  return Object.assign({}, result, {
-    skipped: result.removed === 0,
+  const migrated = migrateExecAgents(_prefs, opts);
+  const discovered = syncDiscoveredModelAgents(opts);
+  const removed = migrated.removed + discovered.removed;
+  return {
+    written: discovered.written,
+    removed,
+    unchanged: migrated.unchanged + discovered.unchanged,
+    skipped: removed === 0 && discovered.written === 0,
     installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools),
-  });
+  };
 }
 
 // An explicit directory is a build and test seam. SessionStart and every CLI
@@ -1524,6 +1692,9 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  syncDiscoveredModelAgents,
+  ensureDiscoveredModelAgents,
+  DISCOVERED_MODEL_MARKER,
   migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,

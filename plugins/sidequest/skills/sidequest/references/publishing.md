@@ -55,6 +55,12 @@ wave delivers its exact Git participant set and the resulting revision passes it
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
+Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
+(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
+`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
+The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
+refuses `branch_not_checked_out`.
+
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
 reused. A candidate verified against an ancestor of the current target can join that wave; the merged-tree
@@ -105,7 +111,7 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 
 ### Overlapping candidates with different pinned verifiers
 
-A wave refuses when participants pin different verifier requirements. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
+A wave refuses `wave_verifier_mismatch` when participants pin different verifier requirements. Non-executable kinds (document, link, manual, attestation, review) only need to agree on kind, so three document tickets with different verify text still assemble as one wave; executable kinds must pin the same command, and a mix of executable and non-executable kinds refuses. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
 
 This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ without naming the hand-resolved ones in `resolvedPaths`. `groomClose` compares the pinned candidate to the registered target working tree, or to the tree at `deliveryRevision` when one is named, and reruns delivery verification before it records delivery.
 
@@ -123,9 +129,11 @@ File the repair so all of this holds before dispatching it:
 
 - Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
   the overlap is refused; an unrelated submitted range is never inherited.
-- The source's candidate needs an oracle-confirmed rejection: a bound `review-audit` ticket whose verdict
-  rejected that exact candidate. A source-side `submission.review` mirror alone is not authority, and a
-  rejection pinned to a different commit than the submission now records does not count.
+- The source's candidate needs an effective oracle-confirmed rejection: a bound `review-audit` ticket whose
+  verdict rejected that exact candidate, or whose mistaken finalized acceptance has an authorized
+  [MCP `verdict.correct`](invocation-contracts.md) rejection. Both binding halves must agree. A source-side
+  `submission.review` mirror alone is not authority, and a rejection pinned to a different commit than the
+  submission now records does not count.
 - Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
   deleted or added and the repair never touches. Scope admission covers every path in the range.
 - The rejected range is inherited whole. A range carrying only part of it is refused.
@@ -262,14 +270,16 @@ the ticket.
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
-4. **Put the project's registered checkout on a clean configured target branch.** `integrate` always
+4. **Put the project's registered checkout on the configured target branch, clean where the delivery writes.** `integrate` always
    merges and verifies in that registered checkout: the control plane folds whatever directory you call
    it from back to the registered repo root, so adding a scratch linked worktree does NOT move the
    target. Check out the configured integration branch there and confirm
-   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. Any staged,
-   modified, or untracked file in that checkout refuses with `integration_target_dirty` and names the
-   offending paths before a branch moves or a verifier runs, so commit, stash, or remove them first
-   rather than trying to hide them in another worktree. Install the touched plugin's dependencies
+   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. A modified or
+   untracked file the delivery writes (a rename's source included), and any staged or unmerged entry,
+   refuses with `integration_target_dirty` and names only those paths before a branch moves or a
+   verifier runs, so commit, stash, or remove them first rather than trying to hide them in another
+   worktree. Unstaged edits and untracked files outside the delivery (a running service's logs or
+   JSON) stay put: the merge goes around them and the delivery record lists them in `ignoredDirtyPaths`. Install the touched plugin's dependencies
    before reverifying, for this repo: `cd plugins/<name> && npm ci`.
 5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
    still points to the submitted tip. Require the recorded upstream commit to remain reachable from
@@ -280,7 +290,9 @@ the ticket.
    queued ticket. A merge commit inside the submitted range is admissible when this reconstruction and
    scope admission pass. Scope admission is mechanical at queue read and again at delivery closure,
    against the immutable submit-time snapshot. Leave rejected submissions parked.
-6. **Assemble and deliver exact waves**, oldest compatible waves first. For every group, call
+6. **Assemble and deliver exact waves**, oldest compatible waves first. Preserve the real pinned
+   verifier and all immutable capture/candidate checks; assembled-tree proof is reusable only when
+   the runtime authorizes its exact tree, command, candidate, and capture identities. For every group, call
    `sidequest assemble-wave` with every intended participant and its project-defined gate evidence.
    A moved baseline, missing verifier, out-of-scope surface, or overlapping participant surface refuses
    assembly and reports the affected candidates without changing their submissions. Pass only the exact
@@ -293,23 +305,28 @@ the ticket.
    every participant and completes them as control-plane tickets. A conflict or failed delivery
    verification rolls back the delivery, leaves the wave parked, and requires a repair or refreshed
    assembly. This local completion does not wait for remote reachability.
-7. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
-   (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
-   plugins) so per-ticket-green but jointly-red seams are caught before versioning or the push.
+7. **Run one combined full merged-tree gate per wave** after delivery and before versioning,
+   including a singleton. Use the project's documented full gate covering the touched suites; combine
+   the wave's checks in that gate rather than adding a second seam suite or per-ticket full runs.
+   Preserve delivery's pinned verifier. A changed tree after rebase requires a fresh full gate.
 8. **Apply review at the sized depth**: consume each submission report and the delivery and
    merged-tree gate evidence. Do not inspect executor source or diffs as an orchestrator review.
-   A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
-   candidate when the oracle is weak, consumers remain materially unchecked, or the work is
-   high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
+   A deterministic oracle that covers the contract needs no bound review, at any wave size.
+   Bind a `review-audit` ticket to the exact candidate only for a contract-named seam the oracle
+   cannot exercise or a required high-stakes review. Multiple lenses need distinct named risks,
+   never merely multiple waves. Bind required candidate reviews before step 6; step 8 consumes
+   their terminal evidence, since a bound candidate cannot deliver while review is pending. A bound candidate
    cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes.
    Neither the candidate nor its bound review can ever be deleted, even with `force`; keep both
    immutable records instead of cancelling the review. This guard does not repair older orphaned
    records. A fresh independently reviewed replacement is separate work. No caller-controlled route
    can reject the candidate: `rework` and every other direct route return
    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
-   the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
-   defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
-   reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
+   the review ticket and releases that review with `kind=oracle`. When the defect means the bound
+   candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and
+   verdict text does not override the enum. For a mistaken finalized `accepted`, the main thread uses MCP
+   `verdict` with `correct` under the [correction contract](invocation-contracts.md). After a fresh repair
+   is reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
    Integration also needs the immutable terminal dispatch identities for the submitted source and
    completed review, and refuses when either is missing or both are the same agent. Resolve or
    explicitly accept every finding before versioning or pushing. A finding that needs repair leaves
@@ -320,7 +337,7 @@ the ticket.
    published plugin left a fragment in `.release/unreleased/`, and that the window is the one you mean
    to ship: `node scripts/release/plan.mjs` then `node scripts/release/cut.mjs --prepare --dry-run`.
    A missing fragment is what `node scripts/release/note.mjs <REF> --plugins <name> --bump <level>
-   --commit <sha>` is for. If this or the seam/review gate fails, the locally delivered ticket is
+   --commit <sha>` is for. If this or the full/review gate fails, the locally delivered ticket is
    already done; record the failure and do not claim that it was pushed.
 10. **Push and confirm**: push the integration branch the dispatch recorded, from the registered
     checkout — never a new branch. Where that branch is protected (Toolshed: both `develop` and
@@ -345,7 +362,7 @@ the ticket.
 ## Integration failures fail closed
 
 A submission that conflicts or fails post-integration reverify before local delivery closure is never
-force-merged and never silently dropped. A seam, review, version, or push failure after local delivery
+force-merged and never silently dropped. A full gate, review, version, or push failure after local delivery
 is recorded against the already-done ticket; it must not be described as remotely reachable:
 
 - Before local delivery closure, leave its submission parked (do NOT `done`, do NOT clear it reflexively).
@@ -357,7 +374,9 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
-  normal repair claim.
+  normal repair claim. The repair dispatch's briefing carries a "Pending rework" section naming
+  the rejected candidate, reason, and review above the comment thread, so do not restate the rework
+  as a comment before dispatching.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
   returned an unbound candidate to its producer without a review rejection, and the candidate must
   be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate
@@ -377,7 +396,7 @@ just to run `submit` or `done`.
 The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction leaves: a
 held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the TTL or
 `--steal`s a provably stale holder), a registered checkout left mid-delivery or dirty (`git status`,
-and `integrate` refuses it as `integration_target_dirty` until it is clean), and either parked
+and `integrate` refuses it as `integration_target_dirty` until the paths the delivery writes are clean), and either parked
 submissions from a pre-delivery failure or done tickets whose local delivery has not reached the remote
 yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's completion and delivery
 record, recover any durable refs needed for the push, then finish the push or record the failure on the

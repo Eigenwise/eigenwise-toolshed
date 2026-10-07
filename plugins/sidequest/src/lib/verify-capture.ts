@@ -35,6 +35,7 @@ type VerificationCaptureStore = Readonly<{
   findProject(project: string): Readonly<{ ok: boolean; slug?: string; meta?: Readonly<{ path?: string }> }>;
   getTicket(slug: string, ticket: string): unknown;
   workingTreeDeliveryCandidate(slug: string, ticket: unknown): Readonly<{ candidate: Readonly<{ source: string; value: string }> }> | null;
+  pinnedVerificationRequirement(ticket: unknown): Readonly<{ command?: string }>;
   recordVerificationCapture(slug: string, ticket: string, capture: Readonly<Record<string, unknown>>): CaptureRecordResult;
   crossedWorktreeBinding(slug: string, ticket: unknown, actualWorktree: string): import('./refusal-guidance.js').CrossedWorktreeBinding | null;
 }>;
@@ -77,7 +78,7 @@ async function runVerifyCapture(command: string, cwd = process.cwd(), timeoutMil
 }
 
 function isFullSuiteCommand(command: string): boolean {
-  return /(?:^|[\s&;()])npm\s+run\s+test:full(?:\s|$)/.test(command);
+  return /(?:^|[\s&;()])npm(?:\.cmd|\.exe)?\s+(?:(?:--(?:prefix|workspace)|-w)(?:=|\s+)(?:"[^"]+"|'[^']+'|[^\s&;|()]+)\s+|(?:--workspaces|-ws)\s+)*run\s+(?:test:full|quality:crap)(?:\s|$)/.test(command);
 }
 
 function repositoryRoot(directory: string): string {
@@ -706,27 +707,70 @@ function report(capture: VerifyCapture, recorded?: CaptureRecordResult | null) {
   }
 }
 
-async function main() {
-  const args = process.argv.slice(2);
+const usage = 'Usage: node verify-capture.js --project <path> --ticket <ref> [--worktree <path>]\n'
+  + '       node verify-capture.js --base64 <base64 verify command> [--worktree <path>]';
+
+function base64Command(args: readonly string[]): string {
   const encoded = args[0] === '--base64' ? args[1] : '';
-  const command = encoded ? Buffer.from(encoded, 'base64').toString('utf8').trim() : '';
-  if (!command) {
-    process.stderr.write('Usage: node verify-capture.js --base64 <base64 verify command> [--project <path> --ticket <ref>] [--worktree <path>]\n');
-    process.exitCode = 2;
-    return;
-  }
+  return encoded ? Buffer.from(encoded, 'base64').toString('utf8').trim() : '';
+}
+
+function unrecordedRefusal(reason: string, message: string): Readonly<{ refusal: string }> {
+  return Object.freeze({ refusal: `verify-capture: capture=unrecorded reason=${reason}\n${message}` });
+}
+
+// GH-373: executors retyped the briefing's base64 blob, and one wrong character ran a different
+// command. The ticket's pinned requirement is the same authority recordVerificationCapture compares
+// against, so loading it here leaves nothing to copy.
+function pinnedTicketCommand(target: CaptureTarget): Readonly<{ command: string }> | Readonly<{ refusal: string }> {
+  const project = captureProject(target);
+  if (!project) return unrecordedRefusal('project_not_found', `No Sidequest board is registered for ${target.project}, so there is no pinned verify command to run for ${target.ticket}.`);
+  const store = require('./store.js') as VerificationCaptureStore;
+  const ticket = store.getTicket(project.slug, target.ticket);
+  if (!ticket) return unrecordedRefusal('not_found', `Ticket ${target.ticket} does not exist on the board for ${target.project}.`);
+  const command = String(store.pinnedVerificationRequirement(ticket).command || '').trim();
+  if (!command) return unrecordedRefusal('verification_capture_no_pinned_command', `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
+  return Object.freeze({ command });
+}
+
+// A passed command that matches the pin changes nothing; one that differs is refused rather than
+// silently replaced, so the caller learns its copy was wrong.
+function pinnedCommandMatching(target: CaptureTarget, passedCommand: string): Readonly<{ command: string }> | Readonly<{ refusal: string }> {
+  const pinned = pinnedTicketCommand(target);
+  if ('refusal' in pinned || !passedCommand || passedCommand === pinned.command) return pinned;
+  return unrecordedRefusal('verification_capture_command_mismatch', [
+    `The command passed with --base64 is not the verify command pinned on ${target.ticket}, so nothing ran.`,
+    `Pinned command: ${JSON.stringify(pinned.command)}`,
+    `Passed command: ${JSON.stringify(passedCommand)}`,
+    'Drop --base64 and rerun with only --project and --ticket (and --worktree if the briefing gave one): the wrapper then loads the pinned command from the ticket itself.',
+  ].join('\n'));
+}
+
+function captureCommand(args: readonly string[], target: CaptureTarget | null): Readonly<{ command: string }> | Readonly<{ refusal: string }> {
+  const passedCommand = base64Command(args);
+  if (target) return pinnedCommandMatching(target, passedCommand);
+  return passedCommand ? Object.freeze({ command: passedCommand }) : Object.freeze({ refusal: usage });
+}
+
+async function captureFromArguments(args: readonly string[]) {
   const target = captureTarget(args);
-  const explicitWorktree = explicitWorktreeArgument(args);
-  const { capture, recorded, refusal } = await runCapturedVerification(command, target, process.cwd(), fs, explicitWorktree);
+  const resolved = captureCommand(args, target);
+  if ('refusal' in resolved) return Object.freeze({ capture: null, recorded: null, refusal: resolved.refusal });
+  return runCapturedVerification(resolved.command, target, process.cwd(), fs, explicitWorktreeArgument(args));
+}
+
+async function main() {
+  const { capture, recorded, refusal } = await captureFromArguments(process.argv.slice(2));
   if (refusal) {
     process.stderr.write(`${refusal}\n`);
     process.exitCode = 2;
     return;
   }
   report(capture!, recorded);
-  process.exitCode = capture!.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
+  // recorded is null exactly when no --project/--ticket target was given.
+  process.exitCode = capture!.exitCode === 0 && (!recorded || recorded.ok) ? 0 : 2;
 }
 
-module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 
 if (require.main === module) void main();

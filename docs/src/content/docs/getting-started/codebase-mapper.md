@@ -1,6 +1,6 @@
 ---
-title: Codebase Mapper
-description: Give Claude a current map of your project so sessions can get oriented quickly.
+title: Codebase Mapper for Claude Code
+description: Keep a project map current across Claude Code sessions.
 ---
 
 Codebase Mapper creates a project map that helps Claude understand where things live, how the main pieces fit together, and where to start when you ask for work. It works with existing and new projects.
@@ -14,7 +14,7 @@ Run these in Claude Code:
 /plugin install codebase-mapper@eigenwise-toolshed --scope project
 ```
 
-Then ask Claude:
+Reload plugins or start a new Claude Code session, then ask Claude:
 
 > Map this codebase for future sessions.
 

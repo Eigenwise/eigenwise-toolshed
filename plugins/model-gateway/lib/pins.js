@@ -40,12 +40,6 @@ function comparePinVersions(first, second) {
   return Math.sign(firstVersion[1] - secondVersion[1]) || Math.sign(firstVersion[2] - secondVersion[2]);
 }
 
-function pinLagNotice(alias, pin) {
-  if (comparePinVersions(pin.default, pin.shipped) !== -1) return null;
-  const override = pin.override ? ` Your override ${pin.override} overrides detected ${pin.default}.` : '';
-  return `Claude CLI ${alias} alias lags: ${pin.default} is older than ${pin.shipped}. Run pin --${alias} ${pin.shipped} to update it.${override}`;
-}
-
 function isGatewayModelId(id) {
   return codexBaseFromId(id) != null || (typeof id === 'string' && id.startsWith(GROK_PREFIX));
 }
@@ -109,8 +103,16 @@ function recordDetectedPin(cache, alias, pin, version) {
   cache.detectedFor[alias] = version;
 }
 
+// A CLI can keep resolving an alias to a model this plugin already shipped past (SQ-3205: Sonnet 5
+// after Sonnet 5.5 shipped). Letting that detection win would rewrite every wired project backwards.
+function detectedPinOutranksShipped(alias, pin) {
+  return !RETIRED_SHIPPED_PINS[alias].includes(pin) && comparePinVersions(pin, KNOWN_GOOD_PINS[alias]) !== -1;
+}
+
 function detectedPinDefaults() {
-  return { ...KNOWN_GOOD_PINS, ...currentDetectedPins(readDetectedPinCache()) };
+  const usable = Object.entries(currentDetectedPins(readDetectedPinCache()))
+    .filter(([alias, pin]) => detectedPinOutranksShipped(alias, pin));
+  return { ...KNOWN_GOOD_PINS, ...Object.fromEntries(usable) };
 }
 
 function writeDetectedPinCache(cache) {
@@ -296,15 +298,17 @@ function effectivePins() {
   return Object.fromEntries(Object.entries(PIN_ALIASES).map(([alias]) => [alias, {
     default: defaults[alias],
     shipped: KNOWN_GOOD_PINS[alias],
+    detected: detected[alias],
     override: overrides[alias] || null,
     value: overrides[alias] || defaults[alias],
-    source: overrides[alias] ? 'override' : detected[alias] ? 'detected' : 'shipped',
+    source: overrides[alias] ? 'override' : defaults[alias] === detected[alias] ? 'detected' : 'shipped',
   }]));
 }
 
 function pinProvenance(pin) {
   if (pin.source === 'override') return `overridden; without it ${pin.default}`;
   if (pin.source === 'detected') return 'detected for this CLI';
+  if (pin.detected) return `shipped default; this CLI resolves ${pin.detected}, which it replaces`;
   return `shipped fallback, not detected for this CLI`;
 }
 
@@ -353,6 +357,6 @@ function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
   codexBaseFromId, comparePinVersions, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinLagNotice, pinProvenance, probeClaudeAlias, readPinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides,
   refreshDetectedPins, stalePinUpdates, writePinOverrides,
 };

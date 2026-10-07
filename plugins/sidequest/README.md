@@ -2,6 +2,8 @@
 
 Sidequest is a local board for planning, tracking, and delivering Claude Code work. It keeps a visible backlog across your projects, groups related tickets into stories, and gives Claude a consistent way to delegate, verify, review, and hand work back.
 
+Every task saved as a ticket survives context compaction and new sessions. Its instructions, reproduction steps, status, and recorded discussion stay on the local board, so Claude can retrieve the work after the chat context shrinks.
+
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/sidequest/) · [Toolshed marketplace](../../README.md)
 
 ## Install
@@ -19,17 +21,31 @@ Open the board with `/sidequest:board`, or tell Claude to show it. The dashboard
 
 ## Start with Claude
 
+For a small first task, [save a checkpoint and read it in a new session](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/#check-your-first-saved-task) before trying a full story.
+
 Tell Claude the outcome you want:
 
 > Plan the checkout refresh as a Sidequest story and show me the backlog.
 
-Claude can create the story, split it into tickets, connect dependencies, and classify the work from the board's configured categories. Review the backlog, then ask Claude to dispatch the ready tickets. Claude handles routing, executor startup, verification, and ticket updates.
+Claude can create the story, split it into tickets, connect dependencies, and classify the work from the board's configured categories. Review the backlog, then ask Claude to dispatch the ready tickets. Claude handles routing, executor startup, verification, and ticket updates. Dispatch uses the model access you configure; any paid subscription or API usage follows that provider's pricing and limits.
 
 When work is ready, ask Claude to review and integrate it:
 
 > Review and integrate the submitted checkout tickets if their checks pass.
 
 A codebase ticket hands back a verified revision. Non-Git work hands back a verified project snapshot. Larger or higher-risk changes can get an independent review when the verification evidence needs one.
+
+## Keep tasks through context compaction
+
+Ask Claude to save each task as a ticket, including the outcome you want and any reproduction steps. Keep decisions, progress, verification evidence, and the next action in the ticket description or comments as work proceeds. Those records give Claude somewhere to resume after compaction or in another session.
+
+> Save this task in Sidequest with the current progress and next steps so we can continue after context compaction.
+
+In the next session, ask:
+
+> Check the active Sidequest tickets for this project and continue from their recorded next steps.
+
+Ticket fields and comments persist independently of the conversation. Details that matter for resuming the task need to be recorded on the ticket.
 
 ## Use the board every day
 
@@ -59,7 +75,7 @@ For worktree storage, recovery, and command details, see the [generated referenc
 
 ## Support
 
-Optional, if Sidequest saves you time: [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Sidequest's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 

@@ -9,7 +9,7 @@ import { stubSidequestInstall } from './_sidequest-install-fixture.js';
 
 stubSidequestInstall();
 
-function createClaimedDispatch() {
+function createClaimedDispatch(files: string[] = ['plugins/sidequest/src/lib/store/tickets.ts']) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-evidence-home-'));
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-evidence-repo-'));
   execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: repository, windowsHide: true });
@@ -21,7 +21,7 @@ function createClaimedDispatch() {
   const ticket = store.createTicket(project, {
     title: 'Keep scope requests accurate',
     category: 'debugging',
-    files: ['plugins/sidequest/src/lib/store/tickets.ts'],
+    files,
   });
   const sessionId = `scope-evidence-${process.pid}`;
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId });
@@ -60,4 +60,16 @@ test('scopeRequest identifies ticket-specific repository probe output as verific
   assert.match(comment, /The refused path is board-owned verification evidence/);
   assert.match(comment, /admitted helpers can write verification evidence/);
   assert.match(comment, /without requesting scope/);
+});
+
+test('scopeRequest inside a whole-tree unscoped dispatch reads as covered, not refused (GH-341)', () => {
+  const fixture = createClaimedDispatch([]);
+  assert.deepEqual(fixture.ticket.dispatch.declaredFiles, ['**']);
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', ['src/app.ts']);
+  const comments = fixture.store.getTicket(fixture.project, fixture.ticket.ref).comments || [];
+
+  assert.equal(result.state, 'granted');
+  assert.deepEqual(result.covered, ['src/app.ts']);
+  assert.deepEqual(result.approved, []);
+  assert.equal(comments.some((comment: { body: string }) => /declares no files/.test(comment.body)), false);
 });

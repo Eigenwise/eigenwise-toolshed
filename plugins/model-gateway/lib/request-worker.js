@@ -31,7 +31,7 @@ const {
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
   MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS,
   codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
-  resolveGatewayModelPolicy,
+  resolveGatewayModelPolicy, CODEX_COMPACT_HEADROOM, effectiveSentryPolicy,
 } = require('./runtime.js');
 
 const execFileAsync = promisify(execFile);
@@ -69,26 +69,71 @@ function readinessMessage(state, upstreamBlocked, upstreamUnavailable) {
     : codexReadinessMessage(state, undefined, upstreamBlocked || upstreamUnavailable);
 }
 
-async function getCodexReadiness({
+async function probeProxyAndAuth({
   binaryPresent = fs.existsSync(PROXY_BIN),
   probeProxyModels = proxyModelsAnswering,
   authStatus = isAuthed,
-  shimHealth = undefined,
-  fetchHealth = fetchShimHealth,
-  now = Date.now(),
 } = {}) {
   const proxyBinary = Boolean(binaryPresent);
-  const [proxyModels, health, authenticated] = await Promise.all([
-    proxyBinary ? probeProxyModels() : false,
+  const [proxyModels, codexAuth] = await Promise.all([proxyBinary && probeProxyModels(), proxyBinary && authStatus()]);
+  return { proxyBinary, proxyModels: Boolean(proxyModels), codexAuth: Boolean(codexAuth) };
+}
+
+async function getCodexReadiness({ shimHealth = undefined, fetchHealth = fetchShimHealth, now = Date.now(), ...probeOptions } = {}) {
+  const [probed, health] = await Promise.all([
+    probeProxyAndAuth(probeOptions),
     shimHealth === undefined ? fetchHealth() : shimHealth,
-    proxyBinary && authStatus(),
   ]);
-  const codexAuth = Boolean(authenticated);
+  return readinessFromChecks(probed, health, now);
+}
+
+const CODEX_CHECK_FRESH_MS = 15000;
+
+// `codex auth status` can take 8 s when it reads the macOS Keychain, longer than any /healthz probe
+// waits (#367). /healthz answers at once from the last check and starts at most one new one.
+function sharedProxyAndAuthCheck({ runCheck = probeProxyAndAuth, clock = Date.now } = {}) {
+  let latest = null;
+  let inFlight = null;
+  return function latestProxyAndAuthCheck() {
+    const fresh = latest && clock() - latest.checkedAt < CODEX_CHECK_FRESH_MS;
+    if (!fresh && !inFlight) {
+      inFlight = runCheck()
+        .then((checks) => { latest = { ...checks, checkedAt: clock() }; })
+        .finally(() => { inFlight = null; });
+    }
+    return latest;
+  };
+}
+
+function healthzCodexReadiness(latestCheck, health, now = Date.now()) {
+  if (!latestCheck) {
+    return {
+      ready: false,
+      state: 'checking',
+      message: 'Codex readiness is still being checked (proxy /v1/models and codex auth status); ask /healthz again in a few seconds.',
+      checks: null,
+      upstreamBlocked: readUpstreamBlocked(now),
+      upstreamUnavailable: readUpstreamUnavailable(now),
+      checkedAt: null,
+      ageMs: null,
+      stale: true,
+    };
+  }
+  const ageMs = Math.max(0, now - latestCheck.checkedAt);
+  return {
+    ...catalogReadiness(readinessFromChecks(latestCheck, health, now)),
+    checkedAt: new Date(latestCheck.checkedAt).toISOString(),
+    ageMs,
+    stale: ageMs >= CODEX_CHECK_FRESH_MS,
+  };
+}
+
+function readinessFromChecks({ proxyBinary, proxyModels, codexAuth }, health, now) {
   const shimRunning = Boolean(health?.ok);
   const servingVersion = servingShimVersion(health);
   const checks = {
     proxyBinary,
-    proxyModels: Boolean(proxyModels),
+    proxyModels,
     codexAuth,
     shimRunning,
     servingVersion,
@@ -171,7 +216,7 @@ function displayName(id, backend = 'codex') {
 const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
+  'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
@@ -228,27 +273,6 @@ function statelessBackendThreadRefusal(payload) {
 }
 
 const SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
-const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
-const CODEX_COMPACT_HEADROOM = 40000;
-
-function sentryBackendWindow(policy) {
-  const backendWindow = policy.backendWindow;
-  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
-    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
-  }
-  return backendWindow;
-}
-
-function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
-  if (policy?.sentry !== 'synthetic-413') return null;
-  const backendWindow = sentryBackendWindow(policy);
-  const derivedTrigger = backendWindow - CODEX_COMPACT_HEADROOM;
-  const useConfiguredTrigger = Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger;
-  return useConfiguredTrigger
-    ? { backendWindow, compactTrigger, source: 'env' }
-    : { backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
-}
-
 function sentryPolicyFor(model) {
   return effectiveSentryPolicy(resolveGatewayModelPolicy(model));
 }
@@ -937,6 +961,34 @@ function requestHeader(req, name) {
 }
 
 
+// A shim that died without closing leaves its socket file behind, and binding over it fails with
+// EADDRINUSE although nothing answers there (#367). Only a refused connection to an actual socket
+// proves no process owns the path, so anything else is left alone.
+function removeStaleSocket(socketPath) {
+  return new Promise((resolve) => {
+    const probe = net.connect(socketPath);
+    probe.once('connect', () => { probe.destroy(); resolve(false); });
+    probe.once('error', (error) => {
+      try {
+        if (error.code !== 'ECONNREFUSED' || !fs.lstatSync(socketPath).isSocket()) return resolve(false);
+        fs.unlinkSync(socketPath);
+        resolve(true);
+      } catch { resolve(false); }
+    });
+  });
+}
+
+function listenOnUnixSocket(server, socketPath, onBindFailure) {
+  server.once('listening', () => console.log(`model-gateway shim listening on ANTHROPIC_UNIX_SOCKET ${socketPath}`));
+  server.once('error', async (error) => {
+    if (error.code !== 'EADDRINUSE' || !await removeStaleSocket(socketPath)) return onBindFailure(error);
+    console.error(`model-gateway: removed stale ANTHROPIC_UNIX_SOCKET ${socketPath}; no process was listening on it`);
+    server.once('error', onBindFailure);
+    server.listen(socketPath);
+  });
+  server.listen(socketPath);
+}
+
 function runWorker() {
   const controlToken = ensureControlToken();
   process.once('disconnect', () => process.exit(0));
@@ -958,6 +1010,7 @@ function runWorker() {
   // machine-wide and would misdirect the passthrough forward either way.
   const compatState = { hostsDetected: false, hostsLine: null, port80Bound: false, reason: null };
   const servers = new Set();
+  const latestProxyAndAuthCheck = sharedProxyAndAuthCheck();
   let draining = false;
   let activeRequests = 0;
   const anthropicBypass = createHostsBypassResolver();
@@ -1971,14 +2024,8 @@ function runWorker() {
           settingsLevelBaseUrl: !!settingsWiring,
         },
       };
-      getCodexReadiness({ shimHealth: health }).then((readiness) => {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ...health, codexReadiness: catalogReadiness(readiness) }));
-      }).catch((error) => {
-        res.writeHead(503, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: error.message }));
-      });
-      return;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ ...health, codexReadiness: healthzCodexReadiness(latestProxyAndAuthCheck(), health) }));
     }
 
     if (req.method === 'GET' && pathOnly === '/v1/models') {
@@ -2266,12 +2313,9 @@ function runWorker() {
 
   const socketServer = makeServer();
   servers.add(socketServer);
-  socketServer.once('error', (error) => {
+  listenOnUnixSocket(socketServer, SOCKET_PATH, (error) => {
     servers.delete(socketServer);
     console.error(`model-gateway: could not bind ANTHROPIC_UNIX_SOCKET ${SOCKET_PATH}: ${error.code || error.message}`);
-  });
-  socketServer.listen(SOCKET_PATH, () => {
-    console.log(`model-gateway shim listening on ANTHROPIC_UNIX_SOCKET ${SOCKET_PATH}`);
   });
 
   // RC-compatibility: only attempted when the user has added the exact hosts
@@ -2302,5 +2346,6 @@ function runWorker() {
 
 module.exports = {
   catalogReadiness, createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, getCodexReadiness,
-  hasOpenAiRejectionEvidence, noteCodexUpstreamRejection, runWorker,
+  hasOpenAiRejectionEvidence, healthzCodexReadiness, listenOnUnixSocket, noteCodexUpstreamRejection, runWorker,
+  sharedProxyAndAuthCheck,
 };

@@ -44,7 +44,7 @@ const {
   isFilesystemSnapshotLimitError,
   isFilesystemSnapshotChildError,
 } = sourceRevisionCapability;
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
@@ -63,6 +63,8 @@ const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
+const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
@@ -77,6 +79,7 @@ const { createConfig } = require('./store/config.js');
 const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
 const { createProjects } = require('./store/projects.js');
+const candidateRefs = require('./store/candidate-refs.js');
 const { createWarnings } = require('./store/warnings.js');
 
 let servingInstallResolved = false;
@@ -158,11 +161,36 @@ function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
 function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
 function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
 function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
+function takeSourceRevisionAdapterSwitch(slug: string) { return projectsLayer.takeSourceRevisionAdapterSwitch(slug); }
 function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
-function archiveProject(...args: any[]) { return projectsLayer.archiveProject(...args); }
-function unarchiveProject(...args: any[]) { return projectsLayer.unarchiveProject(...args); }
+// A board whose path is gone or outside Git has no candidate refs to move.
+function boardRepository(slug: string): string | null {
+  const projectPath = String(readMeta(slug)?.path || '');
+  try {
+    return projectPath ? commitScope.repoRoot(projectPath) : null;
+  } catch (_: any) {
+    return null;
+  }
+}
+
+function archiveProject(slug: string) {
+  const result = projectsLayer.archiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.archiveBoardCandidateRefs(commitScope, repository, slug, listTickets(slug)) } : result;
+}
+
+function unarchiveProject(slug: string) {
+  const result = projectsLayer.unarchiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.restoreBoardCandidateRefs(commitScope, repository, slug) } : result;
+}
+
+function ticketRecordedCommits(ticket: any): string[] { return candidateRefs.ticketRecordedCommits(ticket); }
 function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProjectExact(...args); }
 function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
+function listProjectsFlaggingMissingPaths(...args: any[]) { return projectsLayer.listProjectsFlaggingMissingPaths(...args); }
+function registerProject(...args: any[]) { return projectsLayer.registerProject(...args); }
+function boardRootRefusal(...args: any[]) { return projectsLayer.boardRootRefusal(...args); }
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
 function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
 
@@ -352,9 +380,15 @@ function storyContractDriftWarnings(...args: any[]) { return warningsLayer.story
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
 function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
+// The baseline source changed under this dispatch, so its result says so (GH-334).
+function sourceRevisionAdapterSwitchWarnings(ticket: any): string[] {
+  const adapterSwitch = ticket?.dispatch?.sourceRevisionAdapterSwitch;
+  if (!adapterSwitch) return [];
+  return [`Dispatch information: this board switched its source revision adapter from ${adapterSwitch.from} to ${adapterSwitch.to} at ${adapterSwitch.at}, because a .git now exists at or above its path. This and later dispatches take git baselines instead of filesystem snapshots.`];
+}
 function dispatchWarnings(ticket?: any, slug?: any) {
   const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
-  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+  return [...warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null)), ...sourceRevisionAdapterSwitchWarnings(ticket)];
 }
 function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
 function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
@@ -402,6 +436,7 @@ const {
   dispatchRouteState,
   execFromBackend,
   resolveExec,
+  discoveredModelBackends,
   resolveReportedExec,
   resolveModelId,
   routingModels,
@@ -596,6 +631,8 @@ const {
   agentDispatchWorktrees,
   reconcileLaunchedDispatches,
 } = (dispatch = createDispatch({
+  withCompositionDispatchPreparation: (slug: string, ref: string, callback: () => unknown) => withCompositionDispatchPreparation(slug, ref, callback),
+  withCompositionGenerationLock: (slug: string, ref: string, callback: () => unknown) => withCompositionGenerationLock(slug, ref, callback),
   ARTIFACT_BASELINE_MAX_PATHS,
   normalizeCategoryId: (...args: any[]) => normalizeCategoryId(...args),
   projectRoutingEnabled,
@@ -636,6 +673,7 @@ const {
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
+  takeSourceRevisionAdapterSwitch,
   dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
@@ -725,12 +763,22 @@ function sessionProjectRoot() {
   return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 }
 
+// A missing path must not fold up to an ancestor repo: the refusal has to name what was typed.
+function explicitProjectRoot(absPath: string) {
+  const resolved = path.resolve(absPath);
+  return fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory() ? nearestRepoRoot(resolved) : resolved;
+}
+
+function claudeHome() {
+  return process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+}
+
 /* ------------------------------------------------------------------ *
  *  SQLite persistence
  * ------------------------------------------------------------------ */
 
 const dbByHome = new Map<string, any>();
-const transactionDepth = new WeakMap<object, number>();
+const openTransactionCommitTasks = new WeakMap<object, Array<() => void>>();
 
 // SQLite has no nested transactions, so anything that begins one has to know whether one is already open on
 // that handle. Every writer must come through here rather than calling db.txn itself: the seed refreshers
@@ -738,13 +786,28 @@ const transactionDepth = new WeakMap<object, number>();
 // seed turned into `cannot start a transaction within a transaction` from whichever unrelated test happened
 // to leave a routing profile entry mismatched (SQ-2196).
 function withinTransaction(handle: object, fn: () => any) {
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
+  if (openTransactionCommitTasks.has(handle)) return fn();
+  const commitTasks: Array<() => void> = [];
+  openTransactionCommitTasks.set(handle, commitTasks);
+  let result;
   try {
-    return db.txn(handle, fn);
+    result = db.txn(handle, () => {
+      // A busy retry reruns fn, so only the attempt that commits may leave tasks behind.
+      commitTasks.length = 0;
+      return fn();
+    });
   } finally {
-    transactionDepth.delete(handle);
+    openTransactionCommitTasks.delete(handle);
   }
+  for (const task of commitTasks) task();
+  return result;
+}
+
+// Side writes that must not hold the write lock or roll back the transaction that caused them (GH-351).
+function afterCommit(task: () => void) {
+  const commitTasks = openTransactionCommitTasks.get(database());
+  if (commitTasks) commitTasks.push(task);
+  else task();
 }
 
 cacheLayer = createCache({ database, db, fs });
@@ -777,12 +840,14 @@ const {
   markAllRead,
   markRead,
   pendingReminders,
+  pruneOversizedNotificationsOnce,
   pruneRead,
   queueEventNotification,
   setNotifyPrefs,
   setReminder,
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -813,8 +878,8 @@ function capturedTestName(match?: RegExpMatchArray | null) {
 
 function testDefinitionName(line: string, modifiers = false) {
   const call = modifiers
-    ? /\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/
-    : /\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/;
+    ? /(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/
+    : /(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/;
   return capturedTestName(line.match(call) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/));
 }
 
@@ -1257,6 +1322,7 @@ const {
   appendExperimentEntry,
   appendOverturnLine,
   applyExperimentVerdict,
+  recordBoundReviewOutcome,
   experimentPacket,
   ticketPlanInfo,
   writeOracleExperimentRound,
@@ -1289,6 +1355,7 @@ const {
   readOnlyOverrideActive,
   dispatchReadOnly,
   submissionReviewRelation,
+  withSourceTicketLock,
   createTicket,
   normalizeLabels,
   normalizeFiles,
@@ -1363,6 +1430,17 @@ const {
   upperRef,
   stripLinksTo,
   withTicketLock,
+});
+
+const { admitComposition, withCompositionDispatchPreparation, withCompositionGenerationLock } = createCompositionAdmissions({
+  getTicket, listTickets, submissionReviewRelation, readMeta,
+  withTicketLock, putTicket, createComment, invalidateStoreCaches,
+  dispatchTokenDigest: (nonce: string) => dispatchTokenDigest(nonce),
+});
+
+const { correctAcceptedReviewVerdict } = createReviewCorrections({
+  getTicket, pendingSubmission: pendingSubmissionForTickets, isReadOnlyExecutor, submissionReviewRelation,
+  withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
 });
 
 function pendingSubmissionForTickets(...args: any[]) {
@@ -1446,6 +1524,7 @@ const {
   closeSubmissionAsSuperseded,
   submissionOwnershipFailure,
   submitTicket,
+  pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
   reconcileSubmissionRejections,
@@ -1482,6 +1561,7 @@ const {
   integrationTargetCommit,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -1514,6 +1594,7 @@ const {
   verifyCommandErrors,
   verifyCommandError,
   withTicketLock,
+  withCompositionGenerationLock,
 });
 
 let refreshingRoutingProfileSeeds = false;
@@ -1567,57 +1648,67 @@ function refreshRoutingProfileSeeds(handle?: any) {
   invalidateStoreCaches();
 }
 
-// A profile entry is keyed by the id inside its stored category; a project layer row carries its own.
-function categoryNeedingReadonlyFlag(readonlyIds: Set<string>, data: string, rowId?: string) {
+type StoredCategoryRewrite = (category: any, categoryId: unknown) => object | null;
+
+function rewrittenStoredCategory(rewrite: StoredCategoryRewrite, data: string, categoryId: string) {
   let category: any;
   try { category = JSON.parse(data); } catch (_: any) { return null; }
-  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== undefined) return null;
-  return category;
+  return category ? rewrite(category, categoryId) : null;
 }
 
-function readonlyCategorySeedsAreStale(handle: any, readonlyIds: Set<string>) {
-  for (const row of handle.prepare('SELECT data FROM routing_profile_entries').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+function storedCategoriesNeedRewrite(handle: any, rewrite: StoredCategoryRewrite) {
+  return handle.prepare('SELECT category_id, data FROM routing_profile_entries').all()
+    .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.category_id))
+    || handle.prepare('SELECT id, data FROM project_categories').all()
+      .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.id));
+}
+
+interface StoredCategoryRewriteOutcome { affectedProjects: Set<string>; rewrittenIds: Set<string> }
+
+function rewriteProfileEntries(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
+  const now = new Date().toISOString();
+  for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.category_id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+    for (const pointer of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) outcome.affectedProjects.add(String(pointer.project));
+    outcome.rewrittenIds.add(String(row.category_id));
   }
-  for (const row of handle.prepare('SELECT id, data FROM project_categories').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+}
+
+function rewriteProjectCategories(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
+  for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), row.project, row.id);
+    outcome.affectedProjects.add(String(row.project));
+    outcome.rewrittenIds.add(String(row.id));
   }
-  return false;
+}
+
+// Scanning first means a settled store never opens a write transaction, which is the whole cost
+// of a load-time rewrite on process start. The scan inside the transaction stays authoritative so the
+// decision is never acted on from outside the lock.
+function rewriteStoredCategories(handle: any, rewrite: StoredCategoryRewrite) {
+  if (!storedCategoriesNeedRewrite(handle, rewrite)) return;
+  withinTransaction(handle, () => {
+    const outcome: StoredCategoryRewriteOutcome = { affectedProjects: new Set(), rewrittenIds: new Set() };
+    rewriteProfileEntries(handle, rewrite, outcome);
+    rewriteProjectCategories(handle, rewrite, outcome);
+    if (outcome.rewrittenIds.size) refreshPreparedDispatches(handle, [...outcome.affectedProjects], [...outcome.rewrittenIds]);
+  });
 }
 
 function refreshReadonlyCategorySeeds(handle?: any) {
-  const readonlyIds = new Set([
+  const readonlyIds = new Set<unknown>([
     ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
     'hand-analysis',
   ]);
-  // Scanning first means a settled store never opens a write transaction, which is the whole cost
-  // of this refresher on process start. The scan inside the transaction stays authoritative so the
-  // decision is never acted on from outside the lock.
-  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
-  const affected = new Set<string>();
-  let changed = false;
-  withinTransaction(handle, () => {
-    const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
-    const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
-    const now = new Date().toISOString();
-    for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
-      if (!category) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
-      if (!category) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
+  rewriteStoredCategories(handle, (category, categoryId) => (
+    readonlyIds.has(categoryId) && category.readonly === undefined ? { ...category, readonly: true } : null
+  ));
 }
 
 function refreshRoutingProfileSeedsForCatalogState(handle: unknown, root: string) {
@@ -1635,6 +1726,8 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    rewriteStoredCategories(handle, categoryWithCurrentCodexRoutes);
+    pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
@@ -1921,6 +2014,7 @@ function stableExecutorName(ticket?: any, artifactMode = false) {
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
+  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
   return resolved.backend === 'codex'
     ? stableReadOnlyDispatchName(ticket.effort)
     : stableReadOnlyClaudeName(ticket.effort);
@@ -2178,7 +2272,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   by = String(by || 'agent');
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  const result = withTicketLock(slug, found.id, () => {
+  const result = withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
     // A bound candidate is frozen for its review: reclaiming it would let the
@@ -2372,13 +2466,18 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
   });
-  if (result.reason !== 'busy' || opts.force) return result;
-  const t = getTicket(slug, found.id);
-  const held = t && t.claim;
-  if (held && held.by && held.by !== by && !claimReclaimable(t)) {
-    return { ok: false, reason: 'claimed', ticket: t, claim: held };
-  }
-  return result;
+  return lockedClaimOutcome(slug, found.id, by, result, opts.force);
+}
+
+function heldByAnotherLiveClaimant(ticket: { claim?: { by?: string } | null } | null, by: string): boolean {
+  const claimant = ticket?.claim?.by;
+  return Boolean(claimant) && claimant !== by && !claimReclaimable(ticket);
+}
+
+function lockedClaimOutcome<Result extends { reason?: string }>(slug: string, ticketId: string, by: string, result: Result, force?: boolean) {
+  if (result.reason !== 'busy' || force) return result;
+  const ticket = getTicket(slug, ticketId);
+  return heldByAnotherLiveClaimant(ticket, by) ? { ok: false, reason: 'claimed', ticket, claim: ticket.claim } : result;
 }
 
 function nullableText(value?: any) {
@@ -2424,6 +2523,13 @@ function failedClaimCanSurrender(ticket?: any, dispatch?: any, by?: any, opts?: 
 function boundReviewLeftScopeUnused(dispatch: any, completionDelta: any, declaredFiles: string[]) {
   if (dispatch?.reviewTarget?.candidate?.source !== 'git' || !completionDelta?.ok) return false;
   return ![...completionDelta.working, ...completionDelta.committed].some((file: string) => commitScope.isInScope(file, declaredFiles));
+}
+
+// A readonly category's artifactRoots name the one write it authorizes, so done must not count those paths
+// against it (GH-332).
+function readOnlyChangesOutsideArtifactRoots(slug: string, ticket: any, changedPaths: string[]) {
+  const artifactRoots: string[] = normalizeArtifactRoots(getCategory(ticketCategory(ticket), { project: slug })?.artifactRoots);
+  return { artifactRoots, paths: changedPaths.filter((file) => !commitScope.isInScope(file, artifactRoots)) };
 }
 
 // Release a claim. Only the owner or a reclaimable claim may release it.
@@ -2477,7 +2583,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
             reason: 'pending_submission',
             ticket: t,
             submission: t.submission,
-            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
           };
         }
         reopenedSubmission = t.submission;
@@ -2525,18 +2631,19 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         const scopedWorking = completionDelta.working.filter((file: string) => commitScope.isInScope(file, declaredFiles));
         // A restricted read-only executor cannot own shared-checkout changes; siblings must remain free to commit during its run.
         const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch?.sharedTree === true;
-        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
-          ? Array.from(new Set([...scopedWorking, ...scopedCommitted]))
-          : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
+        const readOnlyChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
+          ? readOnlyChangesOutsideArtifactRoots(slug, t, Array.from(new Set([...scopedWorking, ...scopedCommitted])))
+          : { artifactRoots: [], paths: [] };
+        if (readOnlyChanges.paths.length) {
+          const paths = readOnlyChanges.paths.sort();
           const mode = activeReadOnlyDispatch ? 'read-only dispatch' : 'declared scope';
           return {
             ok: false,
             reason: 'done_scope_violation',
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(', ')}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope and outside its category artifactRoots [${readOnlyChanges.artifactRoots.join(', ')}] since dispatch base: ${paths.join(', ')}. Paths under those artifactRoots are the only writes a read-only dispatch may close with. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
             unscopedPaths: paths,
+            artifactRoots: readOnlyChanges.artifactRoots,
           };
         }
       }
@@ -3202,6 +3309,36 @@ function ticketIntegrationTargets(slug?: any, tickets?: any) {
   return { ok: true, target: first, targets: resolved };
 }
 
+// The dispatch-time branch stays the default target, but an integrator that has since
+// fast-forwarded past it, or names integrationBranch, delivers onto the branch it has
+// checked out (SQ-3144). Any other checkout keeps the recorded target, so delivery
+// still refuses branch_not_checked_out. A local topic branch has no origin/<branch>
+// for remote mode to read, and delivery only ever moves the local branch, so that
+// target falls back to local mode rather than refusing.
+function deliveryIntegrationTarget(slug?: any, recorded?: any, integrationBranch?: any) {
+  const branch = integrationBranch == null
+    ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded))
+    : normalizeIntegrationBranch(integrationBranch);
+  if (!branch || branch === recorded.branch) return recorded;
+  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
+}
+
+function deliveryBranchMode(slug: any, recordedMode: string, branch: string) {
+  return recordedMode === 'remote' && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? 'remote' : 'local';
+}
+
+function checkedOutBranchDescendingFrom(repo: string, ref: string) {
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: 'pipe' }).trim();
+  const currentBranch = git(['branch', '--show-current']);
+  try {
+    git(['merge-base', '--is-ancestor', ref, 'HEAD']);
+    return currentBranch;
+  } catch (error: any) {
+    if (error?.status === 1) return '';
+    throw error;
+  }
+}
+
 function recordedDelivery(slug?: any, ticket?: any, commit?: any, evidence?: any) {
   const requestedCommit = String(commit || '').trim();
   const recordedEvidence = String(evidence || '').trim();
@@ -3527,7 +3664,11 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     // already re-validated under its own deliveryMethod waiver) before this control-plane
     // closure re-checks admission. Dropping deliveryMethod here re-ran that same check
     // unwaived and refused the closure MCP `integrate` had just recorded.
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
+    const admitted = validateIntegrationSubmission(slug, idOrRef, {
+      requireDeliveredWave: true,
+      deliveryMethod: opts.deliveryMethod,
+      integrationBranch: ticket.submission?.integration?.targetBranch,
+    });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3783,7 +3924,7 @@ const {
 } = stories;
 
 projectsLayer = createProjects({
-  acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
+  acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
   deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
   path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction,
 });
@@ -3852,6 +3993,7 @@ module.exports = {
   availableRoute,
   resolveModelId,
   resolveExec,
+  discoveredModelBackends,
   resolveReportedExec,
   normalizeReportedModel,
   resolvedDispatchRoute,
@@ -3913,6 +4055,7 @@ module.exports = {
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
@@ -3933,9 +4076,14 @@ module.exports = {
   normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
+  listProjectsFlaggingMissingPaths,
+  registerProject,
+  boardRootRefusal,
+  explicitProjectRoot,
   findProject,
   archiveProject,
   unarchiveProject,
+  ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
   setProjectNotify,
@@ -3950,6 +4098,8 @@ module.exports = {
   ticketPlanInfo,
   appendExperimentEntry,
   applyExperimentVerdict,
+  correctAcceptedReviewVerdict,
+  admitComposition,
   appendOverturnLine,
   experimentPacket,
   listTickets,
@@ -4023,6 +4173,7 @@ module.exports = {
   MAX_CHECKPOINT_TTL_MIN,
   submissionOwnershipFailure,
   submitTicket,
+  pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
   reconcileSubmissionRejections,

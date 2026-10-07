@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
 const BIN = path.join(ROOT, 'bin', 'sidequest.js');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-'));
-const project = path.join(home, 'project');
+const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-project-'));
 const discovery = path.join(home, 'discovery');
 fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
@@ -22,7 +22,7 @@ fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.str
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
     { slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' },
-    { slug: 'codex-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' },
+    { slug: 'codex-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'Codex Sol' },
   ],
 }));
 const env = Object.assign({}, process.env, {
@@ -94,7 +94,7 @@ test('route resolves a ticket override without changing its sibling recipe', () 
   const overrideRecipe = jsonCli('route', 'workflow-override', '--ticket', overridden.body.ticket.ref);
   assert.equal(overrideRecipe.result.status, 0, overrideRecipe.result.stderr);
   assert.deepEqual(overrideRecipe.body.route, { model: 'codex-sol', effort: 'high' });
-  assert.equal(overrideRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-sol effort=high]\n\n');
+  assert.equal(overrideRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-6.1-sol effort=high]\n\n');
   assert.deepEqual(overrideRecipe.body.ticket, {
     ref: overridden.body.ticket.ref,
     route: { model: 'codex-sol', effort: 'high' },
@@ -104,6 +104,38 @@ test('route resolves a ticket override without changing its sibling recipe', () 
   assert.equal(siblingRecipe.result.status, 0, siblingRecipe.result.stderr);
   assert.deepEqual(siblingRecipe.body.route, { model: 'codex-terra', effort: 'medium' });
   assert.equal(siblingRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n');
+});
+
+test('GH-361: a non-shim discovered route recipe names its pinned executor and never a full id as the Agent model', () => {
+  const providerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-gh361-'));
+  const providerDiscovery = path.join(providerHome, 'discovery');
+  fs.mkdirSync(path.join(providerDiscovery, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(providerDiscovery, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    source: 'model-gateway',
+    providers: { opencode: { ready: true, state: 'ready', message: 'ready' } },
+    models: [{ slug: 'opencode-deepseek-v4-1-flash', id: 'claude-opencode-deepseek-v4.1-flash', label: 'DeepSeek Flash', provider: 'opencode' }],
+  }));
+  const providerEnv = Object.assign({}, env, { SIDEQUEST_HOME: providerHome, SIDEQUEST_DISCOVERY_DIRS: providerDiscovery, CLAUDE_PROJECT_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-gh361-project-')) });
+  const providerCli = (...args: any[]) => {
+    const result = spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env: providerEnv });
+    return { result, body: result.stdout ? JSON.parse(result.stdout) : null };
+  };
+
+  const added = providerCli('category', 'add', 'workflow-opencode', '--profile', 'coding', '--name', 'Workflow OpenCode', '--route-model', 'opencode-deepseek-v4-1-flash', '--route-effort', 'max');
+  assert.equal(added.result.status, 0, added.result.stderr);
+  const recipe = providerCli('route', 'workflow-opencode');
+  assert.equal(recipe.result.status, 0, recipe.result.stderr);
+  assert.equal(recipe.body.backend, 'opencode');
+  assert.deepEqual(recipe.body.agent, { model: null, subagentType: 'sidequest-exec-model-opencode-deepseek-v4-1-flash-max', promptPrefix: '' });
+  assert.equal(recipe.body.effortCarrier, 'definition');
+  const definition = fs.readFileSync(path.join(providerHome, 'agents', 'sidequest-exec-model-opencode-deepseek-v4-1-flash-max.md'), 'utf8');
+  assert.match(definition, /^model: claude-opencode-deepseek-v4\.1-flash$/m, 'route wrote the definition the recipe names');
+
+  const claude = providerCli('category', 'add', 'workflow-sonnet', '--profile', 'coding', '--name', 'Workflow Sonnet', '--route-model', 'sonnet', '--route-effort', 'high');
+  assert.equal(claude.result.status, 0, claude.result.stderr);
+  assert.equal(providerCli('route', 'workflow-sonnet').body.agent.model, 'sonnet');
 });
 
 export {};

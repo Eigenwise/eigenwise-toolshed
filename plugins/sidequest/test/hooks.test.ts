@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('node:crypto');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { createContext, runInContext } = require('node:vm');
 
 // A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
 // subprocess and inherits this env) reads a fixture board, never the real one. The
@@ -27,7 +28,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
     { slug: 'codex-gpt-5-6-luna', id: 'claude-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna' },
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' },
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
   ],
 }));
@@ -199,20 +200,26 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
 // keep a floor above the ~3.6s durations already observed on a loaded Windows
 // runner (SQ-2895). The calibration spawn itself carries an explicit timeout so a
 // stalled child (or an inherited preload that never returns) fails loudly instead
-// of hanging test collection indefinitely (SQ-2999/SQ-3000).
+// of hanging test collection indefinitely (SQ-2999/SQ-3000). A one-time calibration
+// at module load only sees the runner's load at collection time; a runner that gets
+// busy later (e.g. neighbouring tests spawning hook processes) can outrun that stale
+// baseline (SQ-3175). Re-measure it fresh at each unbounded waitForPath call instead,
+// via the default-parameter expression below, so the bound tracks load at the wait.
 const PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS = 5_000;
 const PROCESS_SPAWN_CALIBRATION_OPTIONS = {
   windowsHide: true,
   timeout: PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS,
 } as const;
-const PROCESS_SPAWN_BASELINE_MS = (() => {
+function measureProcessSpawnBaselineMs(): number {
   const started = Date.now();
   execFileSync(process.execPath, ['-e', ''], PROCESS_SPAWN_CALIBRATION_OPTIONS);
   return Math.max(1, Date.now() - started);
-})();
-const WAIT_FOR_PATH_DEFAULT_MS = Math.max(5000, PROCESS_SPAWN_BASELINE_MS * 40);
+}
+function waitForPathDefaultBudgetMs(): number {
+  return Math.max(5000, measureProcessSpawnBaselineMs() * 40);
+}
 
-async function waitForPath(file: string, budgetMs: number = WAIT_FOR_PATH_DEFAULT_MS): Promise<void> {
+async function waitForPath(file: string, budgetMs: number = waitForPathDefaultBudgetMs()): Promise<void> {
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
@@ -551,8 +558,8 @@ test('pre-tool hook: terminal guard leaves live and submitted executors alone', 
 // When A's own executor closed A, every later call from B's executor was refused as "A is closed".
 test('pre-tool hook: a sibling closing never closes a live executor that claimed its own ticket', () => {
   const sessionId = `sq53-terminal-${++sqSeq}`;
-  const siblingTicket = addStopTicket('SQ-53 sibling that closes first');
-  const ownTicket = addStopTicket('SQ-53 live executor that keeps working');
+  const siblingTicket = addStopTicket('SQ-53 sibling that closes first', { files: ['src/sq53-sibling.ts'] });
+  const ownTicket = addStopTicket('SQ-53 live executor that keeps working', { files: ['src/sq53-own.ts'] });
   const siblingPrepared = store.prepareDispatch(slug, siblingTicket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const ownPrepared = store.prepareDispatch(slug, ownTicket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const executor = siblingPrepared.ticket.dispatchExecutor;
@@ -736,7 +743,7 @@ test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   gitFixture(['init', '-b', 'main', '--quiet'], projectPath);
   gitFixture(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], projectPath);
   const project = store.ensureProject(projectPath).slug;
-  const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', source: 'cli' });
+  const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', files: ['src/shared.ts'], source: 'cli' });
   const sessionId = `shared-commit-${++sqSeq}`;
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const agentId = `shared-commit-agent-${sqSeq}`;
@@ -790,7 +797,7 @@ test('pre-tool hook: readonly Claude executors inherit the session mode while di
       tool_input: {
         subagent_type: stableReadOnlyDispatchName(effort),
         model: 'fable',
-        prompt: `Review SQ-1.\n[sidequest-route model=gpt-5.6-sol effort=${effort}]`,
+        prompt: `Review SQ-1.\n[sidequest-route model=gpt-6.1-sol effort=${effort}]`,
       },
     });
     assert.equal(dispatch.hookSpecificOutput.permissionDecision, 'deny');
@@ -1861,9 +1868,10 @@ test('pre-tool inline-work hook makes board dispatch the default for solo work',
   });
   assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage, 'the nudge must reach the model, not only the terminal');
-  assert.match(output.systemMessage, /^sidequest: 0 reads \/ 1 commands this session, no board interaction\./);
-  assert.match(output.systemMessage, /Multi-file work defaults to board dispatch\./);
-  assert.match(output.systemMessage, /offer dispatch, or name why inline serves the user better than an executor/i);
+  assert.match(output.systemMessage, /^sidequest: 0 reads \/ 1 commands with no board call\./);
+  assert.match(output.systemMessage, /standing authorization: file the ticket\(s\) with add and dispatch now; do not offer\./);
+  assert.match(output.systemMessage, /Only a one-or-two-file edit at a known location stays inline\.$/);
+  assert.doesNotMatch(output.systemMessage, /offer dispatch|name why inline/i);
   assert.ok(Buffer.byteLength(output.systemMessage, 'utf8') <= 768, 'the PreToolUse nudge must fit its context budget');
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
@@ -1875,24 +1883,24 @@ test('pre-tool inline-work hook nudges prolonged investigations with live counts
   const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
   for (let readActions = 1; readActions < 8; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
   const firstInvestigationNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(firstInvestigationNudge.systemMessage, /^sidequest: 8 reads \/ 0 commands this session, no board interaction\./);
+  assert.match(firstInvestigationNudge.systemMessage, /^sidequest: 8 reads \/ 0 commands with no board call\./);
   assert.ok(Buffer.byteLength(firstInvestigationNudge.systemMessage, 'utf8') <= 768, 'the PreToolUse investigation nudge must fit its context budget');
   for (let readActions = 9; readActions < 24; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
   const escalation = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(escalation.systemMessage, /^sidequest: 24 reads \/ 0 commands this session, no board interaction\. You have continued after an earlier reminder\./);
+  assert.match(escalation.systemMessage, /^sidequest: 24 reads \/ 0 commands with no board call\. You have continued after an earlier reminder\./);
   assert.ok(Buffer.byteLength(escalation.systemMessage, 'utf8') <= 768, 'the repeated PreToolUse nudge must fit its context budget');
 });
 
 test('pre-tool inline-work hook escalates substantive work at widening intervals', () => {
   const session_id = `inline-escalation-${Date.now()}`;
   const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /1 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /1 commands with no board call/);
   for (let substantiveActions = 2; substantiveActions < 4; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 4 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 4 commands with no board call/);
   for (let substantiveActions = 5; substantiveActions < 12; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 12 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 12 commands with no board call/);
   for (let substantiveActions = 13; substantiveActions < 36; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands with no board call/);
 });
 
 test('pre-tool inline-work hook nudges the second native Agent spawn at widening intervals', () => {
@@ -2043,6 +2051,65 @@ test('pre-tool inline-work nudge ignores automation prompts', () => {
   for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
 });
 
+test('pre-tool inline-work nudge counts PowerShell edits and skips test and build runs', () => {
+  const session_id = `inline-shells-${Date.now()}`;
+  const shell = (tool_name: string, command: string) => runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name, tool_input: { command } });
+  for (const [tool, command] of <Array<[string, string]>>[
+    ['Bash', 'npm test'],
+    ['Bash', 'cd plugins/demo && npm run build:check'],
+    ['Bash', 'node --import tsx --test test/hooks.test.ts'],
+    ['Bash', 'node -e "console.log(1)"'],
+    ['PowerShell', 'npm test'],
+    ['PowerShell', 'Get-ChildItem src'],
+  ]) assert.equal(shell(tool, command), null, `${tool}: ${command} must not count as an edit`);
+  assert.match(shell('PowerShell', 'Set-Content notes.txt hello').systemMessage, /^sidequest: 1 reads \/ 1 commands with no board call\./);
+});
+
+test('a new user prompt reopens the inline-work nudge after a board call, and keeps the Explore cap lifted', () => {
+  const session_id = `inline-reopen-${Date.now()}`;
+  const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__list', tool_input: {} }), null);
+  for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null, 'a board call silences the nudge for the rest of that prompt');
+  runHookOutput(BOARD_FIRST_REMINDER, { session_id, cwd: BOARD_PATH, prompt: 'hi' });
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).systemMessage, /^sidequest: 0 reads \/ 1 commands with no board call\./);
+  for (let round = 1; round <= 3; round += 1) {
+    const spawn = runHookOutput(FORCE_BYPASS, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: `Sweep the docs tree, angle ${round}.` },
+    });
+    assert.notEqual(spawn?.hookSpecificOutput?.permissionDecision, 'deny', `Explore spawn ${round} after an earlier board call`);
+  }
+});
+
+test('user-prompt reminder waits for a work request instead of a greeting', () => {
+  const payload = { session_id: `board-first-greeting-${Date.now()}`, cwd: BOARD_PATH };
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'hi' }), null);
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'what is the status?' }), null);
+  const reminder = runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Refactor the claim flow.' });
+  assert.match(reminder.hookSpecificOutput.additionalContext, /file precise tickets with add and dispatch them without offering\. Only a one-or-two-file edit at a known location stays inline\.$/);
+  assert.doesNotMatch(reminder.hookSpecificOutput.additionalContext, /informed inline judgment/);
+});
+
+test('user-prompt reminder tells a boardless git repo root that the first add creates its board', (testContext: TestContext) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-boardless-'));
+  testContext.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  const repo = path.join(scratch, 'repo');
+  const plainFolder = path.join(scratch, 'plain');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.mkdirSync(plainFolder);
+  const prompt = 'Add a settings page to the app.';
+
+  const hint = runHookOutput(BOARD_FIRST_REMINDER, { session_id: `boardless-repo-${Date.now()}`, cwd: repo, prompt });
+  assert.equal(hint.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(hint.hookSpecificOutput.additionalContext, /^sidequest: no board here yet\. .*the first add creates this repo's board and dispatch is ready through the default profile/);
+  assert.equal(store.findProject(repo).ok, false, 'the hint must not create the board');
+  // The suite's throwaway SIDEQUEST_HOME lives under temp, which makes the store accept temp fixtures;
+  // pointing the hook's temp dir at the scratch folder restores the rule a real session sees.
+  const scratchAsTemp = { TEMP: scratch, TMP: scratch, TMPDIR: scratch };
+  for (const cwd of [repo, plainFolder]) {
+    assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { session_id: `boardless-temp-${Date.now()}`, cwd, prompt }, scratchAsTemp), null, `${cwd} under the temp dir stays silent`);
+  }
+});
+
 test('user-prompt reminder fires once for the first human prompt', () => {
   const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
@@ -2082,7 +2149,7 @@ test('user-prompt reminder ignores automation without consuming the session flag
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<agent-message>Worker needs input.</agent-message>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command>Command output.</local-command>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command-caveat>Command output.</local-command-caveat>' }), null);
-  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /Use informed inline judgment/);
+  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /file precise tickets with add and dispatch them without offering/);
 });
 
 test('user-prompt reminder ignores subagent identity variants and routing-disabled boards', () => {
@@ -2238,7 +2305,7 @@ test('pre-tool hook gates MCP closeout updates by subagent caller, not executor 
       tool_input: { ref: 'SQ-2397', [field]: value },
     });
     assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', String(field) + ' must be denied');
-    assert.match(output.hookSpecificOutput.permissionDecisionReason, /subagents cannot update closeout fields through MCP/i);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /subagents cannot update closeout fields or admit a composition through MCP/i);
     assert.match(output.hookSpecificOutput.permissionDecisionReason, /scopeRequest.*orchestrator.*main thread/i);
   }
 
@@ -2291,6 +2358,43 @@ test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-s
     tool_input: { ref: 'SQ-2397', project: 'p', force: true },
   });
   assert.equal(mainThread, null, 'the orchestrator main thread may force-remove');
+});
+
+// The tests above feed force-exec-bypass.js directly, so they cannot see whether
+// Claude Code's hooks.json actually routes a tool name to it (SQ-3203: it never
+// did for board__remove, so an executor's remove {force:true} reached the MCP
+// handler unblocked). This walks the live-claim mutation rules out of the source
+// and checks each one against the real manifest, so a rule added without a route
+// fails here instead of silently reaching the handler.
+type HookRoutingEntry = { matcher: string; hooks: Array<{ command: string }> };
+
+function routesForceExecBypass(entries: HookRoutingEntry[], toolName: string): boolean {
+  return entries.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
+    && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
+}
+
+test('hook manifest routes force-exec-bypass for every live-claim mutation rule tool name (SQ-3203)', () => {
+  const source: string = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
+  const rules = source.match(/const MAIN_THREAD_MUTATIONS[^\n]* = \{([\s\S]*?)^\};/m);
+  assert.ok(rules, 'MAIN_THREAD_MUTATIONS must still define the main-thread-only rules');
+  const toolNames = [...rules![1]!.matchAll(/^  (mcp__plugin_sidequest_board__\w+):/gm)].map((match) => match[1]!);
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__update'), 'the update authority rule must be checked');
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__remove'), 'the remove authority rule must be checked');
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__verdict'), 'the verdict correction authority rule must be checked');
+
+  const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+  const preToolUse: HookRoutingEntry[] = config.hooks.PreToolUse;
+  const command = 'node hooks/force-exec-bypass.js';
+  for (const toolName of toolNames) {
+    assert.ok(routesForceExecBypass(preToolUse, toolName), `${toolName} has an authority rule but no force-exec-bypass.js route`);
+    for (const matcher of ['*', toolNames.join('|'), 'mcp__plugin_sidequest_board__(?:update|remove|verdict)']) {
+      assert.ok(routesForceExecBypass([{ matcher, hooks: [{ command }] }], toolName), `${matcher} must route ${toolName}`);
+    }
+    assert.equal(routesForceExecBypass([{ matcher: `${toolName}_other`, hooks: [{ command }] }], toolName), false, 'a different tool must not route');
+    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [{ command: 'node hooks/other.js' }] }], toolName), false, 'a matching tool without the guard must not route');
+    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [] }], toolName), false, 'a matching tool without hooks must not route');
+    assert.equal(routesForceExecBypass([], toolName), false, 'an omitted tool route must fail');
+  }
 });
 
 test('pre-tool hook: stable dispatch executors require preparation even with a ref', () => {
@@ -3535,8 +3639,10 @@ test('session-start: loads user-story for routed work beyond small tasks', () =>
     assert.match(context, new RegExp(userStoryDefault, 'i'));
     assert.match(context, new RegExp(dispatchDefault, 'i'));
     assert.match(context, /multi-file change, at an unknown location that needs discovery, or an investigation/i);
+    const heading = source ? '=== sidequest (active — context restored) ===' : '=== sidequest (active) ===';
+    assert.ok(context.includes(`${heading}\n${dispatchDefault}`), 'the standing authorization is the first line of the orchestrator block');
+    assert.ok(context.indexOf(dispatchDefault) < context.indexOf('ROLE: ORCHESTRATOR'));
     assert.ok(context.indexOf(inlineCarveOut) < context.indexOf(userStoryDefault));
-    assert.ok(context.indexOf(userStoryDefault) < context.indexOf(dispatchDefault));
     assert.doesNotMatch(context, /can ask to use it/i);
   }
 });
@@ -4296,6 +4402,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.equal(fs.readFileSync(path.join(first, 'setup-ready.txt'), 'utf8'), 'ready');
 
   const createdDispatch = store.getTicket(project, createdTicket.ref).dispatch;
+  assert.deepEqual(createdDispatch.ownedDependencyLinks.map((record: any) => [record.relativePath, record.mode]), [['cached-dependency', 'copy']], 'the sweep reads the copy mode from this record (GH-370)');
   runHook(SUBAGENT_START, {
     hook_event_name: 'SubagentStart',
     session_id: 'hook-test',
@@ -4756,8 +4863,10 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__update'
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__update')
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the closeout update guard must cover the update MCP tool');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__remove')
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the force-remove guard must cover the remove MCP tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover Sidequest CLI commands');
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');
@@ -4900,6 +5009,156 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
     const stop = claimStopTicket(ticket, session, `worker-${effort}`);
     const ctx = runHook(SUBAGENT_STOP, stop);
     assert.match(ctx, new RegExp(`^exec WAITING: ${ticket.ref} ended a turn while holding its claim; it may resume\.`));
+  }
+});
+
+test('subagent-stop: held claim guidance preserves pure pre-claim fallback classification', () => {
+  const context = createContext({
+    process,
+    __dirname: HOOKS,
+    require(moduleName: string): unknown {
+      if (moduleName === 'node:fs') {
+        return { readFileSync() { return ''; } };
+      }
+      return require(moduleName);
+    },
+  });
+  runInContext(fs.readFileSync(SUBAGENT_STOP, 'utf8'), context, {
+    filename: require('node:url').pathToFileURL(SUBAGENT_STOP).href,
+    timeout: 1000,
+  });
+  const verdict: (stopped: boolean, classification: { kind: string }) => string | null = runInContext('stoppedBeforeClaimVerdict', context);
+  assert.match(verdict(true, { kind: 'codex_dispatch' }), /^exec DIED before claiming;/);
+  assert.equal(verdict(false, { kind: 'codex_dispatch' }), null);
+  assert.equal(verdict(true, { kind: 'unknown' }), null);
+});
+
+test('subagent-stop: held claim uses only authentic original ID and session without lifecycle changes', () => {
+  const sessionId = `held-original-${++sqSeq}`;
+  const ticket = addStopTicket('held original guidance');
+  const holder = 'distinct-holder-label';
+  const stop = claimStopTicket(ticket, sessionId, holder);
+  const before = store.getTicket(slug, ticket.ref);
+  const output = runHookOutput(SUBAGENT_STOP, stop);
+  const context = output.hookSpecificOutput.additionalContext;
+  assert.match(context, /^exec WAITING:/);
+  assert.ok(context.includes(`only original session ${JSON.stringify(sessionId)} may SendMessage once to exact ID ${JSON.stringify(stop.agent_id)}`), 'the exact original ID and recorded same-session fence must survive the output budget');
+  assert.doesNotMatch(context, new RegExp(holder), 'claim holder is never the address');
+  assert.doesNotMatch(context, new RegExp(stop.agent_name), 'a name is not the raw-ID fallback');
+  assert.match(context, /continuation UNVERIFIED, preserve claim\/work/);
+  assert.match(context, /Queued\/failed\/absent\/completed isn't death; original response\/activity proves resumed/);
+  assert.match(context, /User Pause retries stops sends/, 'a user pause overrides the conditional send');
+  assert.match(context, /Never use claim.by\/guess\/replace\/restart terminal/);
+  assert.ok(Buffer.byteLength(context) <= 512);
+  assert.deepStrictEqual(Object.keys(output), ['hookSpecificOutput'], 'guidance has no auto-send or host continuation command');
+  assert.deepStrictEqual(Object.keys(output.hookSpecificOutput), ['hookEventName', 'additionalContext']);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.deepStrictEqual(after.claim, before.claim, 'held claim is unchanged');
+  assert.equal(after.dispatchNonce, before.dispatchNonce, 'nonce is unchanged');
+  assert.equal(after.dispatch.outcome, before.dispatch.outcome, 'turn-stop is not death');
+  assert.equal(after.dispatch.terminalAt, before.dispatch.terminalAt, 'turn-stop has no terminal mutation');
+});
+
+function claimNameOnlyStopTicket(sessionId: string, holder: string) {
+  const ticket = addStopTicket('held name-only guidance');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+  const agentName = `name-only-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, holder, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  return { ticket, stop: { session_id: sessionId, agent_type: prepared.ticket.dispatchExecutor, agent_name: agentName } };
+}
+
+test('subagent-stop: held claim with name-only identity keeps raw-ID continuation unverified', () => {
+  const sessionId = `held-name-only-${++sqSeq}`;
+  const { ticket, stop } = claimNameOnlyStopTicket(sessionId, 'label-is-not-an-address');
+  const before = store.getTicket(slug, ticket.ref);
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, /^exec WAITING:/);
+  assert.match(context, /Continuation UNVERIFIED: no recorded original ID\/session; preserve claim\/work/);
+  assert.doesNotMatch(context, /SendMessage once|label-is-not-an-address/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.deepStrictEqual(after.claim, before.claim);
+  assert.equal(after.dispatchNonce, before.dispatchNonce);
+  assert.equal(after.dispatch.outcome, before.dispatch.outcome);
+});
+
+test('subagent-stop: held claim with missing recorded session keeps authentic ID unverified', () => {
+  const ticket = addStopTicket('held missing-session guidance');
+  const stop = claimStopTicket(ticket, `held-missing-session-${++sqSeq}`, 'missing-session-holder');
+  const current = store.getTicket(slug, ticket.ref);
+  delete current.dispatch.sessionId;
+  db.putRow(database, 'tickets', {
+    id: current.id, project: slug, ref: current.ref, status: current.status,
+    archived: current.archived ? 1 : 0, ord: current.order, claim_by: current.claim.by, data: current,
+  });
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, /^exec WAITING:/);
+  assert.match(context, /Continuation UNVERIFIED: no recorded original ID\/session; preserve claim\/work/);
+  assert.doesNotMatch(context, /SendMessage once|exact ID/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.deepStrictEqual(after.claim, current.claim);
+  assert.equal(after.dispatchNonce, current.dispatchNonce);
+  assert.equal(after.dispatch.outcome, current.dispatch.outcome);
+  assert.equal(after.dispatch.terminalAt, current.dispatch.terminalAt);
+});
+
+test('subagent-stop: held claim with mismatched or unknown current session exposes no handle', () => {
+  const ticket = addStopTicket('held session fence');
+  const stop = claimStopTicket(ticket, `held-session-${++sqSeq}`, 'session-fenced-holder');
+  const before = store.getTicket(slug, ticket.ref);
+  assert.equal(runHook(SUBAGENT_STOP, { ...stop, session_id: 'different-original-host' }), '', 'another session cannot use the original handle');
+  assert.equal(runHook(SUBAGENT_STOP, { ...stop, session_id: '' }, { CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '' }), '', 'unknown current session cannot use the original handle');
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref), before, 'unmatched hook payload changes no board state');
+});
+
+test('subagent-stop: held claim label-only identity is never an address substitute', () => {
+  const ticket = addStopTicket('held label-only guidance');
+  const stop = claimStopTicket(ticket, `held-label-only-${++sqSeq}`, 'label-only-holder');
+  const before = store.getTicket(slug, ticket.ref);
+  assert.equal(runHook(SUBAGENT_STOP, { ...stop, agent_id: '', agent_name: before.claim.by }), '');
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref), before, 'claim.by cannot identify a dispatch to send or stop');
+});
+
+test('subagent-stop: held claim terminal release forbids restarting the original executor', () => {
+  const ticket = addStopTicket('held terminal guidance');
+  const holder = 'terminal-held-holder';
+  const stop = claimStopTicket(ticket, `held-terminal-${++sqSeq}`, holder);
+  assert.equal(store.releaseTicket(slug, ticket.ref, holder, { status: 'todo' }).ok, true);
+  const before = store.getTicket(slug, ticket.ref);
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, /^exec FINISHED after terminal release:/);
+  assert.doesNotMatch(context, /SendMessage|exec WAITING|exact ID/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.claim, null);
+  assert.equal(after.dispatchNonce, before.dispatchNonce);
+  assert.equal(after.dispatch.outcome, before.dispatch.outcome);
+  assert.equal(after.dispatch.terminalAt, before.dispatch.terminalAt);
+});
+
+test('subagent-stop: held claim with a recorded terminal dispatch never permits an ID send', () => {
+  for (const outcome of ['died', 'failed', 'unknown']) {
+    const ticket = addStopTicket(`held terminal ${outcome} guidance`);
+    const stop = claimStopTicket(ticket, `held-terminal-record-${++sqSeq}`, 'recorded-terminal-holder');
+    const current = store.getTicket(slug, ticket.ref);
+    current.dispatch.outcome = outcome;
+    current.dispatch.terminalAt = new Date().toISOString();
+    current.dispatch.terminalSource = 'subagent-stop';
+    db.putRow(database, 'tickets', {
+      id: current.id, project: slug, ref: current.ref, status: current.status,
+      archived: current.archived ? 1 : 0, ord: current.order, claim_by: current.claim.by, data: current,
+    });
+    const context = runHook(SUBAGENT_STOP, stop);
+    assert.match(context, outcome === 'unknown' ? /Terminal executor: never restart/ : /^exec DIED:/);
+    assert.doesNotMatch(context, /SendMessage once|exact ID/);
+    const after = store.getTicket(slug, ticket.ref);
+    assert.deepStrictEqual(after.claim, current.claim);
+    assert.equal(after.dispatchNonce, current.dispatchNonce);
+    assert.equal(after.dispatch.outcome, outcome);
+    assert.equal(after.dispatch.terminalAt, current.dispatch.terminalAt);
   }
 });
 
@@ -5113,11 +5372,11 @@ test('pre-tool hook: route marker batches require an exact prepared briefing', (
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [
       { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' },
-      { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' },
+      { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]' },
     ],
   }));
   const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
-  const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-5-6-sol', 'high');
+  const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-6-1-sol', 'high');
   const proseSibling = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
@@ -5125,7 +5384,7 @@ test('pre-tool hook: route marker batches require an exact prepared briefing', (
   assert.equal(proseSibling.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(proseSibling.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
   const mixed = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-6-1-sol effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
@@ -5203,7 +5462,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
     assert.match(retired.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is/);
 
     const drifted = runForceBypassWithEnv(
-      { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol') },
+      { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-6.1-sol') },
       { SIDEQUEST_DISCOVERY_DIRS: catalog }
     );
     assert.equal(drifted.hookSpecificOutput.permissionDecision, 'deny');
@@ -5255,7 +5514,7 @@ test('pre-tool hook: exact prepared briefing is the sole dispatch launch authori
     },
     {
       name: 'route mismatch',
-      mutate: (prompt: string) => prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol'),
+      mutate: (prompt: string) => prompt.replace('model=gpt-5.6-terra', 'model=gpt-6.1-sol'),
     },
   ];
   for (const dispatchCase of cases) {
@@ -5433,16 +5692,16 @@ test('readonly category executors pass spawn correction, start binding, and stop
     updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
-    models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' }],
+    models: [{ slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
   process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
   try {
     const cases = [
       ['codebase-exploration', 'sonnet', 'low', 'sidequest-exec-readonly-low'],
-      ['research', 'codex-gpt-5-6-sol', 'medium', 'sidequest-exec-dispatch-readonly'],
+      ['research', 'codex-gpt-6-1-sol', 'medium', 'sidequest-exec-dispatch-readonly'],
       ['review-audit', 'sonnet', 'high', 'sidequest-exec-readonly-high'],
-      ['spike-investigation', 'codex-gpt-5-6-sol', 'xhigh', 'sidequest-exec-dispatch-readonly'],
+      ['spike-investigation', 'codex-gpt-6-1-sol', 'xhigh', 'sidequest-exec-dispatch-readonly'],
     ] as const;
     const projectPath = store.readMeta(slug).path;
 
@@ -5558,7 +5817,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
 });
 
 test('a subagent session start preserves a fresh re-dispatch and stale attempt authority stays refused', () => {
-  const ticket = addEffortTicket('fresh launch after failed worktree creation', 'high');
+  const ticket = addStopTicket('fresh launch after failed worktree creation', { files: ['src/fresh-reprepare.ts'] });
   const sessionId = `fresh-reprepare-${++sqSeq}`;
   const first = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: false });
   const replacement = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
@@ -5589,7 +5848,7 @@ test('a subagent session start preserves a fresh re-dispatch and stale attempt a
     sessionId,
   }).reason, 'token');
 
-  const failedTicket = addEffortTicket('same attempt launch failure', 'high');
+  const failedTicket = addStopTicket('same attempt launch failure', { files: ['src/launch-failure.ts'] });
   const failedSession = `same-attempt-failure-${++sqSeq}`;
   const failed = store.prepareDispatch(slug, failedTicket.ref, { allowUnscoped: true, sessionId: failedSession, sharedTree: true });
   assert.equal(store.recordDispatchLaunch(slug, failedTicket.ref, {
@@ -5770,6 +6029,34 @@ test('read-only shell guard: a linked worktree cannot write into its main checko
   const reason = runReadOnlyShell(`echo x > "${path.join(root, 'leak.txt')}"`, linked)?.hookSpecificOutput?.permissionDecisionReason || '';
   assert.match(reason, /refusing a shell write inside the repository checkout/);
   assert.equal(runReadOnlyShell('git status', linked), null);
+});
+
+test('read-only shell guard: a content cmdlet writes only its path, so fixture text naming git reaches the evidence root (SQ-3202)', () => {
+  const root = readOnlyShellCheckout();
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-evidence-'));
+  const fixture = "git(['checkout', 'main'])";
+  const evidenceFile = path.join(evidence, 'probe.ts');
+  const runPowerShell = (command: string) => runReadOnlyShell(command, root, stableReadOnlyDispatchName(), 'PowerShell');
+  for (const command of [
+    `Set-Content -Path "${evidenceFile}" -Value "${fixture}"`,
+    `Set-Content "${evidenceFile}" "${fixture}"`,
+    `New-Item -Path "${evidenceFile}" -ItemType File -Value "${fixture}"`,
+    `"${fixture}" | Out-File -Encoding utf8 -FilePath "${evidenceFile}"`,
+  ]) {
+    assert.equal(runPowerShell(command), null, command);
+  }
+  assert.equal(runReadOnlyShell(`node -e "require('fs').writeFileSync(process.argv[1], process.argv[2])" "${evidenceFile}" "${fixture}"`, root), null);
+
+  for (const command of [
+    `Set-Content -Path "${path.join(root, 'probe.ts')}" -Value "${fixture}"`,
+    `Set-Content probe.ts "${fixture}"`,
+    `"${fixture}" | Out-File -FilePath sub/probe.ts`,
+  ]) {
+    const reason = runPowerShell(command)?.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.match(reason, /read-only executor, refusing a shell write inside the repository checkout/, command);
+    assert.match(reason, /Writes under the ticket's verification directory .* are permitted whatever the file says; move the fixture there/, command);
+  }
+  assert.equal(runReadOnlyShell('git checkout main', root)?.hookSpecificOutput?.permissionDecision, 'deny');
 });
 
 test('read-only executors never ship or spawn with bypassPermissions (GH-282)', () => {

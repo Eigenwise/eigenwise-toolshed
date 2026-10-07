@@ -57,6 +57,18 @@ function without coverage data, is unverified rather than a pass. A file covered
 `exclude` pattern is never treated as unverified, even with zero lizard rows and function-like tokens.
 Fix the printed problem, then run the gate again.
 
+lizard's JavaScript, TypeScript and TSX readers end a function at the first `)` in its parameter list.
+A parameter list with parentheses of its own, such as a function-typed prop
+(`onSelect: (card: Card) => void`) or a default arrow (`read = (value) => value`), makes lizard report
+a span that stops inside the signature, where LCOV usually has no line data, and a complexity that
+leaves out every branch in the body. The gate reads the source and widens that span to the function's
+real body before it looks up coverage or compares the function with the base revision, so an edit to
+its body counts as a change. It also counts the body's branches the way lizard does (`if`, `for`,
+`while`, `case`, `catch`, `&&`, `||`, `??` and a ternary `?`, plus one) and scores the larger of that
+count and lizard's number. A function nested in the body keeps its own row, so its branches are not
+counted twice. When the gate cannot find where the body ends, it keeps lizard's span, and the function
+is reported as unverified, as before.
+
 ## React files (.tsx and .jsx)
 
 lizard 1.24.0, the current release, has a TSX reader that abandons an opening tag as soon as one of

@@ -31,6 +31,7 @@ const SERVING_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.
 const dispatchPreflight = require('../lib/dispatch-preflight.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJ = path.join(os.tmpdir(), 'sq-claim-effort-fixtures', 'board');
+fs.mkdirSync(PROJ, { recursive: true });
 
 // SQ-1017: dispatch and native-agent now refuse before spawning unless
 // Claude Code's plugin registry has a runnable, board-MCP-capable
@@ -375,14 +376,14 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   const agents = path.join(SIDEQUEST_HOME, 'agents');
   fs.mkdirSync(agents, { recursive: true });
 
-  const doneRef = seed('guard.codex');
+  // Read-only so done closes it: an unscoped write dispatch owns the whole tree and must submit (GH-341).
+  const doneRef = seed('guard.readonly');
   const preparedDone = prepareBoundDispatch(slug, doneRef);
   assert.equal(preparedDone.ok, true);
   assert.ok(preparedDone.token);
   // Instant dispatch points the guard at the STABLE per-model executor, not a
   // fresh per-ticket definition, and writes no def file.
-  assert.equal(preparedDone.ticket.dispatchExecutor, 'sidequest-exec-dispatch');
-  assert.equal(preparedDone.ticket.dispatchExecutor, ticket(doneRef).exec.agent);
+  assert.equal(preparedDone.ticket.dispatchExecutor, 'sidequest-exec-dispatch-readonly');
   // The stable executor is registered from session start; closeout on done/release
   // must never delete it (it is not a per-ticket temp def).
   const stableDef = path.join(agents, `${preparedDone.ticket.dispatchExecutor}.md`);
