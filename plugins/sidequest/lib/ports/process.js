@@ -270,7 +270,7 @@ function failedResult(requirement, status, command, logPath, reason, exitCode, t
     failureIdentities: Object.freeze([identity])
   });
 }
-const OWNED_PROCESS_TREE_SCRIPT = path.join(__dirname, "..", "..", "scripts", "owned-process-tree.js");
+const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), "scripts", "owned-process-tree.js");
 const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15e3;
 const OWNED_TREE_TIMEOUT_MARKER = /^__SIDEQUEST_VERIFY_TIMEOUT__=\d+$/m;
 function verifierRun(requirement, command, options) {

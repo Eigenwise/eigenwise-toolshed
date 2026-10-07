@@ -374,9 +374,9 @@ type VerifierRun = Readonly<{
 
 type SpawnOutcome = import('node:child_process').SpawnSyncReturns<Buffer>;
 
-const OWNED_PROCESS_TREE_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'owned-process-tree.js');
+const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), 'scripts', 'owned-process-tree.js');
 // Room for the owned phase to terminate its tree and drain output after its own deadline fired:
-// taskkill /T takes about a second on Windows, then the grace and drain windows.
+// the termination grace and the output drain windows.
 const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15_000;
 const OWNED_TREE_TIMEOUT_MARKER = /^__SIDEQUEST_VERIFY_TIMEOUT__=\d+$/m;
 

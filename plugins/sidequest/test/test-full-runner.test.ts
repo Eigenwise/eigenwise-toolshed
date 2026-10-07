@@ -1179,6 +1179,10 @@ test('SQ-2195: a value that is not a process id is refused rather than answered 
 });
 
 // SQ-3425: the script's CLI entry runs one verifier shell for a synchronous caller (runProcessVerification).
+// Windows runs the phase under the job owner, which names the missing file in its own words.
+const MISSING_VERIFIER_MESSAGE = process.platform === 'win32'
+  ? /^The Windows job owner could not run the phase: The system cannot find the file specified$/m
+  : /ENOENT/;
 function runOwnedVerifyCli(spec: Record<string, unknown>) {
   return spawnSync(process.execPath, [runnerModulePath, JSON.stringify(spec)], {
     encoding: 'utf8',
@@ -1210,44 +1214,37 @@ test('SQ-3425: the owned verify entry forwards output and passes the verifier ex
 
   const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(unspawned.status, 2, unspawned.stderr);
-  assert.match(unspawned.stderr, /ENOENT/);
+  assert.match(unspawned.stderr, MISSING_VERIFIER_MESSAGE);
 });
 
-// SQ-3476: the root exits shortly before the deadline while a detached descendant still holds the phase's
-// output open, so the phase is still settling when the deadline fires and taskkill /T finds no root to walk.
-const rootLeavingDrainingDescendantScript = writeScript(
-  'root-leaving-draining-descendant.js',
+// A detached descendant leaves libuv's job, so before the job owner (SQ-3456) it outlived a Windows deadline
+// and kept the phase's output open. The job owner's job holds it, so the deadline ends it with the root.
+const rootWithDetachedOutputHolderScript = writeScript(
+  'root-with-detached-output-holder.js',
   "const { spawn } = require('node:child_process');\n"
     + "const fs = require('node:fs');\n"
-    + 'const [descendantPidPath, markerPath, rootLifetime] = process.argv.slice(2);\n'
+    + 'const [descendantPidPath, markerPath] = process.argv.slice(2);\n'
     + `const descendant = spawn(process.execPath, [${JSON.stringify(descendantScript)}, markerPath, '5000', '0'], { detached: true, stdio: 'inherit', windowsHide: true });\n`
     + descendantPidWriteSource
     + 'descendant.unref();\n'
-    + 'setTimeout(() => process.exit(0), Number(rootLifetime));\n',
+    + 'setInterval(() => {}, 1000);\n',
 );
 
-test('SQ-3477: a Windows deadline whose sweep finds the root already gone still reports a timeout, not the root\'s exit 0', { skip: process.platform !== 'win32' && 'the taskkill sweep runs only on Windows', timeout: 60_000 }, async () => {
-  const descendantPidPath = workspacePath('draining-descendant.pid');
+test('SQ-3477: a Windows deadline ends a detached descendant holding the output open and records the timeout', { skip: process.platform !== 'win32' && 'detached is a new session on POSIX, which escapes the process group by design', timeout: 60_000 }, async () => {
+  const descendantPidPath = workspacePath('detached-output-holder.pid');
+  const markerPath = workspacePath('detached-output-holder.marker');
   const deadlineMilliseconds = 1500;
-  // The root exits 450ms before the deadline, measured from its own start, and the phase settles 500ms after
-  // the root exits, so the deadline lands while a descendant still holds the output open.
   const result = runOwnedVerifyCli({
     command: process.execPath,
-    args: [rootLeavingDrainingDescendantScript, descendantPidPath, workspacePath('draining-descendant.marker'), String(deadlineMilliseconds - 450)],
-    // Outside the workspace: Windows keeps an escaped process's cwd busy for a moment after it dies, and the
+    args: [rootWithDetachedOutputHolderScript, descendantPidPath, markerPath],
+    // Outside the workspace: Windows keeps a killed process's cwd busy for a moment after it dies, and the
     // suite's cleanup removes the workspace.
     cwd: os.tmpdir(),
     timeoutMilliseconds: deadlineMilliseconds,
   });
-  try {
-    assert.match(result.stderr, /taskkill \/T found no live tree/, 'the root must already be gone at the deadline, or this row proves nothing');
-    assert.equal(result.status, 124, result.stderr);
-    assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${deadlineMilliseconds}$`, 'm'));
-  } finally {
-    const descendantPid = recordedDescendantPid(descendantPidPath);
-    if (descendantPid !== null) {
-      try { process.kill(descendantPid); } catch { /* already gone */ }
-      await assertTerminalWithin(descendantPid, SETTLED_BUDGET_MILLISECONDS, 'the escaped descendant');
-    }
-  }
+
+  assert.equal(result.status, 124, result.stderr);
+  assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${deadlineMilliseconds}$`, 'm'));
+  await assertTerminalWithin(requireProcessId(recordedDescendantPid(descendantPidPath), 'the detached descendant'), SETTLED_BUDGET_MILLISECONDS, 'the detached descendant');
+  assert.equal(fs.existsSync(markerPath), false, 'the detached descendant acted after the deadline');
 });

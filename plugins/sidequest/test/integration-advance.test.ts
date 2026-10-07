@@ -1559,6 +1559,17 @@ test('SQ-3425: a verifier whose log cannot be opened reports could_not_run with 
   assert.deepEqual(result.failureIdentities, ['could_not_run:exit-2']);
 });
 
+test('SQ-3477: a verifier exiting 127 reads as a missing toolchain, never a failed suite', () => {
+  const { runProcessVerification } = require('../lib/ports/process.js');
+  const requirement = { kind: 'command', command: nodeVerify('process.exit(127)'), evidenceContract: 'exit 0' };
+
+  const result = runProcessVerification(requirement, { timeoutMilliseconds: 20_000 });
+
+  assert.equal(result.status, 'toolchain_missing');
+  assert.equal(result.exitCode, 127);
+  assert.match(result.evidence, /could not find a command while running/);
+});
+
 function writeDeliveryLock(repo: string, holder: Record<string, unknown>) {
   const lock = path.join(repo, '.git', 'sidequest-delivery.lock');
   fs.writeFileSync(lock, JSON.stringify(holder));

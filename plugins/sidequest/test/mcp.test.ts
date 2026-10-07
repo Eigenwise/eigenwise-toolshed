@@ -7623,19 +7623,19 @@ test('SQ-3477: a two-participant source-revision wave needs the resulting revisi
       verify: `attestation: ${revision.value} | review-accepted | reviewer approved the immutable revision`,
       body: `Reviewed ${revision.value}.`,
     });
-    assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+    assert.equal(submitted.ok, true, JSON.stringify(submitted));
     refs.push(ticket.ref);
   }
   const verification = store.getTicket(project, refs[0]).submission.verificationResult;
   const assembled = await callTool('integrate', { project, ref: refs.join(','), by: 'mcp-source-publisher', wave: { verification } });
-  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  assert.equal(assembled.ok, true, JSON.stringify(assembled));
 
   const deliveryRevision = { source: 'wiki', value: 'wiki-52', observedAt: '2026-08-15T00:00:00.000Z' };
   assert.equal(store.integrateSubmissionWave(project, refs, {}).reason, 'wave_delivery_revision_required');
   assert.equal(store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: { ...verification, status: 'failed_suite' } }).reason, 'wave_delivery_verification_required');
   const delivered = store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: verification });
 
-  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.ok, true, JSON.stringify(delivered));
   assert.equal(delivered.integration.mode, 'source-revision');
   assert.deepEqual(delivered.integration.participants, refs);
   for (const ref of refs) assert.equal(store.getTicket(project, ref).submission.integration.sourceRevision.value, 'wiki-52');

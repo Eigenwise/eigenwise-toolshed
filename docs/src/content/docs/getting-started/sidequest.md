@@ -57,7 +57,8 @@ A verifier pinned to a shared environment (`verifyEnvironment: shared`) delivers
 runs it under an owned process tree: at the deadline the whole tree ends and the delivery rolls back with exit
 124. On POSIX that tree is the verifier's process group, so anything it starts with `setsid` (or another new
 session or group) escapes the deadline and needs its own teardown in the verify command. On Windows the
-deadline counts as a timeout even when the root already exited and `taskkill /T` finds nothing to end.
+tree is the job owner's job, which holds detached descendants too; a process started through a service or
+broker (dockerd, for one) is outside it.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or
