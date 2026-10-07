@@ -379,6 +379,7 @@ const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), 'scri
 // the termination grace and the output drain windows.
 const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15_000;
 const OWNED_TREE_TIMEOUT_MARKER = /^__SIDEQUEST_VERIFY_TIMEOUT__=\d+$/m;
+const OWNED_TREE_CLEANUP_ERROR_MARKER = /^__SIDEQUEST_VERIFY_CLEANUP_ERROR__=(.+)$/m;
 
 function verifierRun(requirement: VerificationRequirement, command: string, options: ProcessVerificationOptions): VerifierRun {
   return Object.freeze({
@@ -436,6 +437,19 @@ function timeoutResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutc
   return failedResult(run.requirement, 'timeout', run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
 }
 
+function ownedTreeCleanupError(run: VerifierRun): string | null {
+  if (!run.ownedTree) return null;
+  return OWNED_TREE_CLEANUP_ERROR_MARKER.exec(fs.readFileSync(run.logPath, 'utf8'))?.[1] ?? null;
+}
+
+// The verifier's own exit code passes nothing while its tree may still be running (SQ-3480).
+function abnormalVerifierResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult | null {
+  if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
+  const cleanupError = ownedTreeCleanupError(run);
+  if (cleanupError === null) return null;
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+}
+
 function exitCodeResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
   const exitCode = markerExitCode(run.logPath);
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);
@@ -481,8 +495,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     fs.rmSync(scriptPath, { force: true });
   }
   const tail = outputTail(run.logPath, run.outputTailBytes);
-  if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
-  return exitCodeResult(run, shell, outcome, tail);
+  return abnormalVerifierResult(run, shell, outcome, tail) ?? exitCodeResult(run, shell, outcome, tail);
 }
 
 export function createProcessPort(): VerificationProcessPort {

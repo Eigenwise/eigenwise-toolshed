@@ -58,7 +58,9 @@ runs it under an owned process tree: at the deadline the whole tree ends and the
 124. On POSIX that tree is the verifier's process group, so anything it starts with `setsid` (or another new
 session or group) escapes the deadline and needs its own teardown in the verify command. On Windows the
 tree is the job owner's job, which holds detached descendants too; a process started through a service or
-broker (dockerd, for one) is outside it.
+broker (dockerd, for one) is outside it. A verifier that exits 0 but leaves the tree unaccounted for (a member
+still alive, or no account of the job's members) is recorded as `could_not_run` with the cleanup error, and the
+delivery rolls back.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or

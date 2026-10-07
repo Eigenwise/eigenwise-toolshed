@@ -273,6 +273,7 @@ function failedResult(requirement, status, command, logPath, reason, exitCode, t
 const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), "scripts", "owned-process-tree.js");
 const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15e3;
 const OWNED_TREE_TIMEOUT_MARKER = /^__SIDEQUEST_VERIFY_TIMEOUT__=\d+$/m;
+const OWNED_TREE_CLEANUP_ERROR_MARKER = /^__SIDEQUEST_VERIFY_CLEANUP_ERROR__=(.+)$/m;
 function verifierRun(requirement, command, options) {
   return Object.freeze({
     requirement,
@@ -317,6 +318,16 @@ function verifierTimedOut(run, outcome) {
 function timeoutResult(run, shell, outcome, tail) {
   return failedResult(run.requirement, "timeout", run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
 }
+function ownedTreeCleanupError(run) {
+  if (!run.ownedTree) return null;
+  return OWNED_TREE_CLEANUP_ERROR_MARKER.exec(fs.readFileSync(run.logPath, "utf8"))?.[1] ?? null;
+}
+function abnormalVerifierResult(run, shell, outcome, tail) {
+  if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
+  const cleanupError = ownedTreeCleanupError(run);
+  if (cleanupError === null) return null;
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+}
 function exitCodeResult(run, shell, outcome, tail) {
   const exitCode = markerExitCode(run.logPath);
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);
@@ -360,8 +371,7 @@ function runProcessVerification(requirement, options = {}) {
     fs.rmSync(scriptPath, { force: true });
   }
   const tail = outputTail(run.logPath, run.outputTailBytes);
-  if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
-  return exitCodeResult(run, shell, outcome, tail);
+  return abnormalVerifierResult(run, shell, outcome, tail) ?? exitCodeResult(run, shell, outcome, tail);
 }
 function createProcessPort() {
   return Object.freeze({ run: runProcessVerification });

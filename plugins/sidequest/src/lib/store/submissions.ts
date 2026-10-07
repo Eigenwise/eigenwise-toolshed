@@ -2,7 +2,7 @@
 
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
-const { readLockHolder, recordLockHolder } = require('./locks.js');
+const { readLockHolder } = require('./locks.js');
 const { isFullSuiteCommand, runFullSuiteVerification } = require('../verify-capture.js');
 const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
@@ -2185,10 +2185,9 @@ function integrateGitSubmission(slug: string, idOrRef: string, opts: { integrati
 
 function integrateUnderDeliveryLease(slug: string, idOrRef: string, opts: { integrationBranch?: string }, ticket: CompositionTicket, lock: string) {
   const holder = deliveryLockHolder(slug, ticket, String(ticket.ref));
-  const lockLease = acquireLock(lock, { wait: false });
+  const lockLease = acquireLock(lock, { wait: false, holder });
   if (!lockLease) return deliveryInProgress(ticket, lock);
   try {
-    recordLockHolder(fs, lock, lockLease, holder);
     return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }));
   } finally {
     lockLease.refresh();
@@ -2341,10 +2340,9 @@ function deliverGitWaveUnderLease(slug: string | undefined, assembled: Assembled
     return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets, message: integrationGitError(error) };
   }
   const holder = deliveryLockHolder(slug, assembled.tickets[0], assembled.participantRefs.join(','));
-  const lockLease = acquireLock(lock, { wait: false });
+  const lockLease = acquireLock(lock, { wait: false, holder });
   if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
   try {
-    recordLockHolder(fs, lock, lockLease, holder);
     return deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, repo, target);
   } catch (error: any) {
     return { ok: false, reason: 'wave_delivery_error', tickets: assembled.tickets, message: integrationGitError(error) };

@@ -897,12 +897,14 @@ function runOwnedPhase(rawOptions) {
 
 const ownedVerifyTimeoutExitCode = 124;
 const ownedVerifyTimeoutMarker = '__SIDEQUEST_VERIFY_TIMEOUT__';
+const ownedVerifyCleanupErrorMarker = '__SIDEQUEST_VERIFY_CLEANUP_ERROR__';
 
 /**
  * Runs one verifier shell as an owned phase for a synchronous caller: the deadline ends the
  * whole tree (process group on POSIX, the job owner's job on Windows), the output is forwarded to
  * stdout/stderr, and a timeout is reported with a marker line and exit code 124 so the caller
- * can tell it from the verifier's own exit.
+ * can tell it from the verifier's own exit. A cleanupError after the verifier exited is reported
+ * with its own marker line: the verifier's exit code is then no proof that its tree ended.
  */
 function ownedVerifyExitCode(result, timedOut, timeoutMilliseconds) {
   if (timedOut) {
@@ -911,6 +913,10 @@ function ownedVerifyExitCode(result, timedOut, timeoutMilliseconds) {
   }
   if (result.error) {
     process.stderr.write(`${result.error.message}\n`);
+    return 2;
+  }
+  if (result.cleanupError !== null) {
+    process.stderr.write(`\n${ownedVerifyCleanupErrorMarker}=${result.cleanupError}\n`);
     return 2;
   }
   return result.status ?? 2;

@@ -15,18 +15,6 @@ function readLockHolder(fs: any, lockPath?: any) {
   }
 }
 
-// Names the holder on a lock this process already acquired. The pid and token stay as acquired, so
-// refresh, release and pid reclaim read the file exactly as before. The payload lands by rename: a
-// rewrite in place truncates first, and a reader racing it would see no owner at all.
-function recordLockHolder(fs: any, lockPath: any, lease: any, holder: any) {
-  const acquired = readLockHolder(fs, lockPath);
-  if (!acquired || acquired.token !== lease?.token) return false;
-  const pending = `${lockPath}.${acquired.token}.pending`;
-  fs.writeFileSync(pending, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
-  fs.renameSync(pending, lockPath);
-  return true;
-}
-
 function createLocks(dependencies: any) {
   const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {} } = dependencies;
 
@@ -96,27 +84,29 @@ function createLocks(dependencies: any) {
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const created = createLockFile(lockPath, ownerToken);
+      const created = createLockFile(lockPath, ownerToken, options.holder);
       if (created !== LOCK_HELD_ELSEWHERE) return created;
       if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
     }
     return false;
   }
 
-  function createLockFile(lockPath: string, ownerToken: string) {
+  function createLockFile(lockPath: string, ownerToken: string, holder?: object) {
     let fd: number;
     try {
       fd = fs.openSync(lockPath, 'wx');
     } catch (error: any) {
       return error?.code === 'EEXIST' ? LOCK_HELD_ELSEWHERE : false;
     }
-    if (!writeLockOwner(lockPath, fd, ownerToken)) return false;
+    if (!writeLockOwner(lockPath, fd, ownerToken, holder)) return false;
     return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
   }
 
-  function writeLockOwner(lockPath: string, fd: number, ownerToken: string): boolean {
+  function writeLockOwner(lockPath: string, fd: number, ownerToken: string, holder?: object): boolean {
+    // The holder lands in the same write as the pid and token, before anyone else can open the file. A
+    // later rename over the lock fails with EPERM on Windows while a reader holds it open (SQ-3480).
     try {
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
+      fs.writeSync(fd, JSON.stringify({ ...holder, pid: process.pid, token: ownerToken }));
     } catch (_: any) {
       fs.closeSync(fd);
       try { fs.unlinkSync(lockPath); } catch (_: any) { /* ignore */ }
@@ -204,4 +194,4 @@ function createLocks(dependencies: any) {
   };
 }
 
-module.exports = { createLocks, readLockHolder, recordLockHolder };
+module.exports = { createLocks, readLockHolder };

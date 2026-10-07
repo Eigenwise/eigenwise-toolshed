@@ -1636,31 +1636,75 @@ test('SQ-3477: a wave whose merge git refuses rolls the target back to its pre-d
   assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
 });
 
-test('SQ-3477: a reader racing the lock-holder publication sees the acquired lease or the full holder, never a truncated lock', () => {
-  const { recordLockHolder } = require('../lib/store/locks.js');
-  const lockPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lock-holder-')), 'sidequest-delivery.lock');
-  const acquired = JSON.stringify({ pid: process.pid, token: 'lease-1' });
-  fs.writeFileSync(lockPath, acquired);
-  const holder = { ticket: 'SQ-1', pinnedCommit: 'abc123', command: 'npm test', logPath: 'verify.log', startedAt: '2026-10-07T00:00:00.000Z' };
-  const published = JSON.stringify({ ...holder, pid: process.pid, token: 'lease-1' });
-  const observed: string[] = [];
-  const racingFs = new Proxy(fs, {
-    get(target, name) {
-      const real = Reflect.get(target, name);
-      if (typeof real !== 'function') return real;
-      return (...args: unknown[]) => {
-        // A write in place truncates the lock before its bytes land; that empty instant is what a racing reader sees.
-        if (name === 'writeFileSync' && path.resolve(String(args[0])) === lockPath) observed.push('');
-        const result = real.apply(target, args);
-        observed.push(target.readFileSync(lockPath, 'utf8'));
-        return result;
-      };
-    },
-  });
+// Holds a reader open on the delivery lock from the instant it is created until the delivery ends, reading the
+// file through that handle right after the create and after every write to it.
+function deliverUnderHeldLockReader(repo: string, deliver: () => any) {
+  const lockPath = path.resolve(repo, '.git', 'sidequest-delivery.lock');
+  const { openSync, writeSync } = fs;
+  const reader: { descriptor: number | null; lockDescriptor: number | null; observed: string[] } = { descriptor: null, lockDescriptor: null, observed: [] };
+  const readThroughReader = () => {
+    const buffer = Buffer.alloc(4096);
+    reader.observed.push(buffer.toString('utf8', 0, fs.readSync(reader.descriptor, buffer, 0, buffer.length, 0)));
+  };
+  fs.openSync = (target: string, flags: string, ...rest: unknown[]) => {
+    const descriptor = openSync.call(fs, target, flags, ...rest);
+    if (flags === 'wx' && path.resolve(String(target)) === lockPath) {
+      reader.lockDescriptor = descriptor;
+      reader.descriptor = openSync.call(fs, lockPath, 'r');
+      readThroughReader();
+    }
+    return descriptor;
+  };
+  fs.writeSync = (descriptor: number, ...rest: unknown[]) => {
+    const written = writeSync.call(fs, descriptor, ...rest);
+    if (descriptor === reader.lockDescriptor) readThroughReader();
+    return written;
+  };
+  try {
+    return { result: deliver(), reader, lockPath };
+  } finally {
+    fs.openSync = openSync;
+    fs.writeSync = writeSync;
+    if (reader.descriptor !== null) fs.closeSync(reader.descriptor);
+  }
+}
 
-  assert.equal(recordLockHolder(racingFs, lockPath, { token: 'lease-1' }, holder), true);
+test('SQ-3480: a reader holding the delivery lock open never aborts the delivery and sees no holder or the whole holder', () => {
+  const { fixture, slug, ticket } = deliveryTicket('lock-held-reader');
 
-  assert.equal(fs.readFileSync(lockPath, 'utf8'), published);
-  for (const content of observed) assert.ok(content === acquired || content === published, `a racing reader saw ${JSON.stringify(content)}`);
-  assert.deepEqual(fs.readdirSync(path.dirname(lockPath)), ['sidequest-delivery.lock']);
+  const { result, reader, lockPath } = deliverUnderHeldLockReader(fixture.repo, () => store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target }));
+
+  assert.equal(result.ok, true, result.message);
+  assert.notEqual(reader.descriptor, null, 'the reader held the lock open while the holder was published');
+  const published = reader.observed.at(-1);
+  const holder = JSON.parse(published);
+  assert.equal(holder.ticket, ticket.ref);
+  assert.equal(holder.pinnedCommit, fixture.submitted);
+  assert.equal(holder.pid, process.pid);
+  assert.ok(typeof holder.token === 'string' && holder.token.length > 0);
+  for (const content of reader.observed) assert.ok(content === '' || content === published, `the held reader saw ${JSON.stringify(content)}`);
+  assert.equal(fs.existsSync(lockPath), false, 'the lock was released');
+  assert.deepEqual(fs.readdirSync(path.dirname(lockPath)).filter((name: string) => name.startsWith('sidequest-delivery.lock')), []);
+});
+
+test('SQ-3480: a passing environment-lane verifier whose job owner leaves no member account is not accepted and rolls the delivery back', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-cleanup-error');
+  // Deleting the job owner's report on main leaves the run with no account of the job's members.
+  const verify = nodeVerify([
+    "const {execFileSync}=require('node:child_process');",
+    "if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main') require('node:fs').rmSync(process.env.SIDEQUEST_JOB_OWNER_REPORT);",
+  ].join(''));
+  pinSharedEnvironment(slug, ticket.ref, verify);
+  const before = head(fixture.repo);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null, result.stdout);
+  assert.equal(payload.verifyFailed.status, 'could_not_run', JSON.stringify(payload));
+  assert.match(payload.verifyFailed.evidence, /^The verification command ended, but its process tree did not\. Survivor state unknown: the job owner left no account of its job members\./);
+  assert.match(fs.readFileSync(payload.verifyFailed.logPath, 'utf8'), /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
+  assert.equal(head(fixture.repo), before, 'the unaccounted delivery was rolled back');
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
 });

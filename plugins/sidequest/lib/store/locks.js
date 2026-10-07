@@ -8,14 +8,6 @@ function readLockHolder(fs, lockPath) {
     return null;
   }
 }
-function recordLockHolder(fs, lockPath, lease, holder) {
-  const acquired = readLockHolder(fs, lockPath);
-  if (!acquired || acquired.token !== lease?.token) return false;
-  const pending = `${lockPath}.${acquired.token}.pending`;
-  fs.writeFileSync(pending, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
-  fs.renameSync(pending, lockPath);
-  return true;
-}
 function createLocks(dependencies) {
   const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {
   } } = dependencies;
@@ -73,25 +65,25 @@ function createLocks(dependencies) {
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const created = createLockFile(lockPath, ownerToken);
+      const created = createLockFile(lockPath, ownerToken, options.holder);
       if (created !== LOCK_HELD_ELSEWHERE) return created;
       if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
     }
     return false;
   }
-  function createLockFile(lockPath, ownerToken) {
+  function createLockFile(lockPath, ownerToken, holder) {
     let fd;
     try {
       fd = fs.openSync(lockPath, "wx");
     } catch (error) {
       return error?.code === "EEXIST" ? LOCK_HELD_ELSEWHERE : false;
     }
-    if (!writeLockOwner(lockPath, fd, ownerToken)) return false;
+    if (!writeLockOwner(lockPath, fd, ownerToken, holder)) return false;
     return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
   }
-  function writeLockOwner(lockPath, fd, ownerToken) {
+  function writeLockOwner(lockPath, fd, ownerToken, holder) {
     try {
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
+      fs.writeSync(fd, JSON.stringify({ ...holder, pid: process.pid, token: ownerToken }));
     } catch (_) {
       fs.closeSync(fd);
       try {
@@ -169,4 +161,4 @@ function createLocks(dependencies) {
     withTicketLocks
   };
 }
-module.exports = { createLocks, readLockHolder, recordLockHolder };
+module.exports = { createLocks, readLockHolder };
