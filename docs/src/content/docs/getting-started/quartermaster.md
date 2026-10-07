@@ -63,6 +63,11 @@ When you approve it, setup writes `.claude/quartermaster/crap.json` and a live r
 node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
 
+A function with complexity 6 or more fails at any coverage, so the failure line says to split it
+rather than add tests. Add `--cc-only` to check just that: it needs only lizard, runs no coverage
+command, and finishes in seconds. If your local `develop`, `main` or `master` is behind its upstream,
+the gate warns on stderr and suggests `--base <branch>@{upstream}`.
+
 The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
 the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
 its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` into, so concurrent runs
@@ -72,7 +77,9 @@ fresh coverage exits 2 instead of scoring stale results.
 It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
-file that has function-like source tokens. Follow the printed hint, then run the gate again.
+file that has function-like source tokens. It also covers a changed line inside a function lizard
+misread so badly that no row of its own measures it, a nested function lizard dropped included, even
+after the gate corrects lizard's spans from the source. Follow the printed hint, then run the gate again.
 
 React files get one extra step. lizard's TSX reader miscounts ordinary JSX badly enough to score a
 component for code that is not in it, so the gate measures `.tsx` and `.jsx` with lizard's TypeScript

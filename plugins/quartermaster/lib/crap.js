@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { crapScore, functionTokenCount, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
+const { SCANNED_SOURCE, SCRIPT_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, unmeasuredDefinitionLines, withBodySpans } = require('./crap-core.cjs');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
@@ -106,10 +106,7 @@ function readSource(projectDir, filePath) {
   }
 }
 
-/** A named function rather than an inline callback, so V8 coverage can attribute its ranges to it. */
-function measuredFunction(entry, coverage, projectDir) {
-  const file = displayPath(projectDir, entry.file);
-  const lines = coverage.get(comparablePath(projectDir, entry.file));
+function lineCoverage(entry, lines) {
   let executable = 0;
   let covered = 0;
   for (let line = entry.start; line <= entry.end; line += 1) {
@@ -119,24 +116,47 @@ function measuredFunction(entry, coverage, projectDir) {
       if (hits > 0) covered += 1;
     }
   }
-  const coverageRatio = executable ? covered / executable : 0;
+  return { ratio: executable ? covered / executable : 0, unmeasured: executable === 0 };
+}
+
+/**
+ * Without coverage (--cc-only) a function is scored as if every line were covered: CRAP at full coverage
+ * is exactly cc, the lowest CRAP the function can ever have, so the ceiling check stays the one it always was.
+ */
+function coverageOf(entry, coverage, projectDir) {
+  if (!coverage) return { ratio: 1, unmeasured: false };
+  return lineCoverage(entry, coverage.get(comparablePath(projectDir, entry.file)));
+}
+
+/** A named function rather than an inline callback, so V8 coverage can attribute its ranges to it. */
+function measuredFunction(entry, coverage, projectDir) {
+  const file = displayPath(projectDir, entry.file);
+  const { ratio, unmeasured } = coverageOf(entry, coverage, projectDir);
   return {
     file,
     line: entry.start,
+    end: entry.end,
     function: entry.name,
     ordinal: entry.ordinal,
     cc: entry.complexity,
-    coverage: rounded(coverageRatio, 4),
-    crap: rounded(crapScore(entry.complexity, coverageRatio), 2),
+    coverage: coverage ? rounded(ratio, 4) : null,
+    crap: rounded(crapScore(entry.complexity, ratio), 2),
     fingerprint: fingerprint(projectDir, file, entry.start, entry.end),
-    unmeasured: executable === 0,
+    unmeasured,
     source: entry.source,
   };
 }
 
-/** Each row is widened against its own real source before scoring, so a truncated signature's counted branches raise cc the same way for every reader. */
-function measure(lizardFunctions, coverage, projectDir) {
-  return withBodySpans(lizardFunctions, (file) => readSource(projectDir, file)).map((entry) => measuredFunction(entry, coverage, projectDir));
+/**
+ * Each row is widened against its own real source before scoring, so a truncated signature's counted branches raise cc the same way for every reader.
+ * A function lizard left out of its rows altogether gets one read from that source too; `extraFiles` are files lizard gave no row.
+ */
+function spanRows(lizardFunctions, projectDir, extraFiles = []) {
+  return withBodySpans(lizardFunctions, (file) => readSource(projectDir, file), extraFiles);
+}
+
+function measure(lizardFunctions, coverage, projectDir, extraFiles = []) {
+  return spanRows(lizardFunctions, projectDir, extraFiles).map((entry) => measuredFunction(entry, coverage, projectDir));
 }
 
 /** lizard picks its reader by extension, case-insensitively; undefined for a file its default reader measures honestly. */
@@ -292,28 +312,40 @@ function indexBaselineEntry(index, entry) {
   if (entry.fingerprint) pushBucket(index.byFingerprint, fingerprintIdentity(entry), entry);
 }
 
+/** The base revision's copy of `file`, written under `temporaryDir` at its own relative path, so lizard and the fingerprint read it by the same name; false when the base has no such file. */
+function writeBaseCopy(projectDir, base, file, temporaryDir) {
+  const show = spawnSync('git', ['show', `${base}:${file}`], { cwd: projectDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+  if (show.status !== 0) return false;
+  const target = path.join(temporaryDir, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, show.stdout, 'utf8');
+  return true;
+}
+
+/** Every function of each changed file as the base revision had it, measured by the same lizard and span rules as today's copy, without coverage. */
+function indexBaseFunctions(index, { projectDir, base, files, exclude, runLizard }) {
+  const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
+  try {
+    for (const file of files) {
+      if (!writeBaseCopy(projectDir, base, file, temporaryDir)) continue;
+      for (const entry of measure(lizardRows(runLizard, { cwd: temporaryDir, sources: [file], exclude }), new Map(), temporaryDir, [file])) {
+        indexBaselineEntry(index, entry);
+      }
+    }
+  } finally {
+    fs.rmSync(temporaryDir, { recursive: true, force: true });
+  }
+}
+
 function baselineFunctions({ projectDir, baseReference, files, exclude, runLizard }) {
   const hint = `check that ${JSON.stringify(baseReference)} is a git ref this repository knows`;
   const base = git(projectDir, ['merge-base', 'HEAD', baseReference], hint).trim();
   const changed = new Set(git(projectDir, ['diff', '--name-only', '--relative', base], hint).split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   const changedHere = [...files].filter((file) => changed.has(file));
+  const changedLines = new Map(changedHere.filter((file) => SCRIPT_SOURCE.test(file)).map((file) => [file, diffLines(projectDir, base, file)]));
   const index = { byIdentity: new Map(), byFingerprint: new Map() };
-  const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
-  try {
-    for (const file of changedHere) {
-      const show = spawnSync('git', ['show', `${base}:${file}`], { cwd: projectDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-      if (show.status !== 0) continue;
-      const target = path.join(temporaryDir, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, show.stdout, 'utf8');
-      for (const entry of measure(lizardRows(runLizard, { cwd: temporaryDir, sources: [file], exclude }), new Map(), temporaryDir)) {
-        indexBaselineEntry(index, entry);
-      }
-    }
-    return { base, changed, ...index };
-  } finally {
-    fs.rmSync(temporaryDir, { recursive: true, force: true });
-  }
+  indexBaseFunctions(index, { projectDir, base, files: changedHere, exclude, runLizard });
+  return { base, changed, changedLines, ...index };
 }
 
 function lizardRunner() {
@@ -412,13 +444,25 @@ function excludedByConfig(projectDir, exclude) {
   return (filePath) => patterns.some((pattern) => path.matchesGlob(displayPath(projectDir, filePath), pattern));
 }
 
-function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
-  const measured = new Set(entries.map((entry) => comparablePath(projectDir, entry.file)));
+function configuredSourceFiles(projectDir, sources, exclude) {
   const isExcluded = excludedByConfig(projectDir, exclude);
-  return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source)))
+  return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source))).filter((file) => !isExcluded(file));
+}
+
+function rowsOfFile(projectDir, entries, file) {
+  const key = comparablePath(projectDir, file);
+  return entries.filter((entry) => comparablePath(projectDir, entry.file) === key);
+}
+
+/** Any lizard row makes a file measured; without one, every definition in it has to lie inside a row read from its source. */
+function unmeasuredFile(file, rows) {
+  return !rows.some((entry) => entry.source !== SCANNED_SOURCE) && definitionOutsideRows(fs.readFileSync(file, 'utf8'), rows, file);
+}
+
+function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
+  return configuredSourceFiles(projectDir, sources, exclude)
     .filter((file) => changed.has(displayPath(projectDir, file)))
-    .filter((file) => !isExcluded(file))
-    .filter((file) => functionTokenCount(fs.readFileSync(file, 'utf8')) && !measured.has(comparablePath(projectDir, file)))
+    .filter((file) => unmeasuredFile(file, rowsOfFile(projectDir, entries, file)))
     .map((file) => displayPath(projectDir, file));
 }
 
@@ -467,10 +511,34 @@ function sameFingerprint(entry, previous) {
   return Boolean(entry.fingerprint && entry.fingerprint === previous?.fingerprint);
 }
 
+function holdsChangedLine(entry, lines) {
+  for (let line = entry.line; line <= entry.end; line += 1) {
+    if (lines.has(line)) return true;
+  }
+  return false;
+}
+
+/**
+ * Changed lines are read only for a JavaScript-family file, where the safety net exits 2 for a changed line
+ * no row measures, so no change can slip between rows. Any other changed file is judged by pairing alone.
+ */
+function touched(entry, baseline) {
+  if (!baseline.changed.has(entry.file)) return false;
+  const lines = baseline.changedLines.get(entry.file);
+  return !lines || holdsChangedLine(entry, lines);
+}
+
+/**
+ * lizard can read the same unchanged text with other bounds on the base side, and that base copy pairs with
+ * nothing (#482), so only a function holding a changed line can be changed or new. Pairing still keeps out a
+ * touched function whose text is a base function's, reindented or moved. Untouched functions claim their base
+ * text first, so when git places a paste above its twin, the paste is the new copy.
+ */
 function changedFunctions(functions, baseline) {
   if (!baseline) return functions;
-  const pairs = pairWithBaseline(functions, baseline);
-  return functions.filter((entry) => baseline.changed.has(entry.file) && !sameFingerprint(entry, pairs.get(entry)));
+  const touchedFunctions = new Set(functions.filter((entry) => touched(entry, baseline)));
+  const pairs = pairWithBaseline([...functions.filter((entry) => !touchedFunctions.has(entry)), ...touchedFunctions], baseline);
+  return [...touchedFunctions].filter((entry) => !sameFingerprint(entry, pairs.get(entry)));
 }
 
 /** lizard scores every `??` as two branches, so the command-line-then-config fallbacks go through one lookup. */
@@ -501,8 +569,29 @@ function complexityEntries(workDir, options, settings) {
   return lizardRows(settings.runLizard, { cwd: workDir, sources: settings.sources, exclude: settings.exclude });
 }
 
-function baselineFor(workDir, settings, functions) {
-  const baseReference = settings.baseReference ?? defaultBase(workDir);
+/** A local base behind its upstream makes already-merged work read as changed; no upstream, or an unreadable one, is no news. */
+function commitsBehindUpstream(workDir, baseReference) {
+  const count = tryGit(workDir, ['rev-list', '--count', `${baseReference}..${baseReference}@{upstream}`]);
+  return Number(count) || 0;
+}
+
+function baseWarnings(workDir, baseReference, baseline) {
+  const behind = baseline ? commitsBehindUpstream(workDir, baseReference) : 0;
+  if (!behind) return [];
+  return [`local base ${baseReference} is ${behind} commit${behind === 1 ? '' : 's'} behind its upstream, so work already merged there can read as changed; pass --base ${baseReference}@{upstream}, or fetch and fast-forward ${baseReference}`];
+}
+
+function baseReferenceFor(workDir, settings) {
+  return settings.baseReference ?? defaultBase(workDir);
+}
+
+/** The ceiling needs no coverage in --cc-only, so neither the coverage command nor the lcov is touched. */
+function coverageFor(options, settings, workDir) {
+  if (options.ccOnly) return null;
+  return coverageByFile(acquireLcovText(workDir, settings), workDir);
+}
+
+function baselineFor(workDir, baseReference, functions, settings) {
   if (baseReference === 'HEAD') return null;
   return baselineFunctions({ projectDir: workDir, baseReference, files: new Set(functions.map((entry) => entry.file)), exclude: settings.exclude, runLizard: settings.runLizard });
 }
@@ -516,20 +605,73 @@ function functionLabel(entry) {
   return `${entry.file}:${entry.line} ${entry.function}`;
 }
 
-function assertMeasured(workDir, settings, { lizardEntries, changed, candidates }) {
-  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, lizardEntries, changed, settings.exclude);
+const DIFF_HUNK = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/gm;
+
+/** A hunk's lines in the current file; a pure deletion marks the line it followed, where the removed code sat. */
+function hunkLines(match) {
+  const start = Number(match[1]);
+  const count = match[2] === undefined ? 1 : Number(match[2]);
+  return Array.from({ length: Math.max(count, 1) }, (_, offset) => start + offset);
+}
+
+function diffLines(workDir, base, file) {
+  const diff = git(workDir, ['diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', base, '--', file], `check that ${base} is still a commit this repository knows`);
+  return new Set(Array.from(diff.matchAll(DIFF_HUNK), hunkLines).flat());
+}
+
+function lineRanges(lines) {
+  const ranges = [];
+  for (const line of lines) {
+    const last = ranges[ranges.length - 1];
+    if (last && last[1] === line - 1) last[1] = line;
+    else ranges.push([line, line]);
+  }
+  return ranges.map(([from, to]) => (from === to ? `${from}` : `${from}-${to}`));
+}
+
+/** Without a base revision every line is new, as every function is. */
+function unplacedLines(workDir, file, rows, baseline) {
+  const text = readSource(workDir, file);
+  const lines = text === null ? [] : unmeasuredDefinitionLines(text, rowsOfFile(workDir, rows, file));
+  if (!lines.length) return [];
+  const changed = baseline ? diffLines(workDir, baseline.base, file) : null;
+  return lineRanges(changed ? lines.filter((line) => changed.has(line)) : lines).map((range) => `${file}:${range}`);
+}
+
+/**
+ * Changed lines in a JavaScript-family file that lie inside a definition the source scan reads but in no
+ * row, after every row was reconciled with its real span: lizard misread the function holding them, and
+ * passing the gate there would pass code nothing measured.
+ */
+function unplacedChangedLines(workDir, settings, { rows, changed, baseline }) {
+  const isExcluded = excludedByConfig(workDir, settings.exclude);
+  const files = [...new Set(rows.map((entry) => entry.file))].filter((file) => changed.has(file) && SCRIPT_SOURCE.test(file) && !isExcluded(file));
+  return files.flatMap((file) => unplacedLines(workDir, file, rows, baseline));
+}
+
+function assertMeasured(workDir, settings, measured) {
+  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, measured.rows, measured.changed, settings.exclude);
   if (lizardFailures.length) throw new PrerequisiteError(`lizard reported zero functions for ${lizardFailures.join(', ')}`, 'measurement is unverified; fix the parser input before passing the gate');
-  const unmeasured = candidates.filter((entry) => entry.unmeasured);
+  const unmeasured = measured.candidates.filter((entry) => entry.unmeasured);
   if (unmeasured.length) throw new PrerequisiteError(`coverage is unverified for ${unmeasured.map(functionLabel).join(', ')}`, 'run coverage that includes every changed function before passing the gate');
+  const unplaced = unplacedChangedLines(workDir, settings, measured);
+  if (unplaced.length) throw new PrerequisiteError(`changed lines are unmeasured at ${unplaced.join(', ')}`, 'measurement is unverified; lizard misread the function holding these lines, so no row of its own measures them. Rewrite what it cannot read (a template literal nested in another one, or a regex literal holding an unbalanced ( or {) or move the code into a named function lizard reports, then run the gate again');
 }
 
 function byCrapThenPlace(left, right) {
   return right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line;
 }
 
-function gateResult(workDir, functions, candidates, baseline, usedDeprecatedRatchet) {
+function gateResult(workDir, functions, candidates, baseline, extra) {
   const failures = candidates.filter((entry) => entry.crap >= DEFAULT_MAX).sort(byCrapThenPlace).map((entry) => ({ ...entry, reason: 'ceiling' }));
-  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null, usedDeprecatedRatchet };
+  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null, ...extra };
+}
+
+/** Coverage is read from nowhere in this mode, so naming a coverage source would be silently ignored. */
+function assertCcOnlyOptions(options) {
+  if (options.ccOnly && (options.lcov || options.coverageCommand)) {
+    throw new PrerequisiteError('--cc-only runs no coverage, so --lcov and --coverage-command do not apply', 'drop --cc-only, or drop --lcov and --coverage-command');
+  }
 }
 
 /**
@@ -541,14 +683,18 @@ function crapReport(options) {
   const projectDir = path.resolve(options.projectDir ?? process.cwd());
   const projectPathGiven = Boolean(options.projectPathGiven);
   const workDir = resolveWorkDir({ projectDir, cwd: options.cwd, projectPathGiven });
+  assertCcOnlyOptions(options);
   const settings = gateSettings(options, readConfig(projectPathGiven ? projectDir : workDir));
-  const lcovText = acquireLcovText(workDir, settings);
+  const coverage = coverageFor(options, settings, workDir);
   const lizardEntries = complexityEntries(workDir, options, settings);
-  const functions = measure(lizardEntries, coverageByFile(lcovText, workDir), workDir);
-  const baseline = baselineFor(workDir, settings, functions);
+  const rows = spanRows(lizardEntries, workDir, configuredSourceFiles(workDir, settings.sources, settings.exclude).map((file) => displayPath(workDir, file)));
+  const functions = rows.map((entry) => measuredFunction(entry, coverage, workDir));
+  const baseReference = baseReferenceFor(workDir, settings);
+  const baseline = baselineFor(workDir, baseReference, functions, settings);
   const candidates = changedFunctions(functions, baseline);
-  assertMeasured(workDir, settings, { lizardEntries, changed: changedFiles(baseline, functions), candidates });
-  return gateResult(workDir, functions, candidates, baseline, settings.usedDeprecatedRatchet);
+  assertMeasured(workDir, settings, { rows, changed: changedFiles(baseline, functions), candidates, baseline });
+  const extra = { usedDeprecatedRatchet: settings.usedDeprecatedRatchet, ccOnly: Boolean(options.ccOnly), warnings: baseWarnings(workDir, baseReference, baseline) };
+  return gateResult(workDir, functions, candidates, baseline, extra);
 }
 
 /** Only file types lizard has more than one reader for name the measurement, so ordinary lines stay unchanged. */
@@ -556,9 +702,19 @@ function readerNote(entry) {
   return entry.source === LIZARD_SOURCE ? '' : ` source=${entry.source}`;
 }
 
+const CC_NOTE = 'fails at any coverage (CRAP is never below cc)';
+
+/** At cc at or above the ceiling no test can help, so the line tells the agent to split the function rather than add coverage. */
+function failureLine(entry, ccOnly) {
+  const place = `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc}`;
+  if (ccOnly) return `${place} ${CC_NOTE}${readerNote(entry)}`;
+  const measured = `${place} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}${readerNote(entry)}`;
+  return entry.cc >= DEFAULT_MAX ? `${measured} - cc ${DEFAULT_MAX} or more ${CC_NOTE}: split the function, more tests will not help` : measured;
+}
+
 function formatReport(report) {
-  const lines = report.failures.map((entry) => `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}${readerNote(entry)}`);
-  lines.push(`CRAP gate ${report.failures.length ? 'failed' : 'passed'}: ${report.failures.length} of ${report.checked} changed or new functions at or above ${report.max}`);
+  const lines = report.failures.map((entry) => failureLine(entry, report.ccOnly));
+  lines.push(`CRAP gate${report.ccOnly ? ' (cc-only, no coverage)' : ''} ${report.failures.length ? 'failed' : 'passed'}: ${report.failures.length} of ${report.checked} changed or new functions at or above ${report.max}`);
   return `${lines.join('\n')}\n`;
 }
 
