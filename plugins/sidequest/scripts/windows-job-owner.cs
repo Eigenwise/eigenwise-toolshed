@@ -16,7 +16,11 @@ using Microsoft.Win32.SafeHandles;
 //
 // Standard input is the exit request: EOF on it makes the owner account for its job and exit, which
 // closes the job. The command itself reads NUL.
-// SIDEQUEST_JOB_OWNER_REPORT names a file that receives one line per event: "affinity <mask>",
+// The first two arguments are the report file and the caller's per-run nonce; the command follows them.
+// The command inherits neither, and SIDEQUEST_JOB_OWNER_REPORT, where older owners read the report
+// path, is removed from the environment it inherits, so nothing the command writes to a report path it
+// learns some other way carries the nonce (SQ-3490).
+// Every report line is the nonce followed by one event: "affinity <mask>",
 // "requested" when the owner exited on request before the command did, "members <count> <pid> ... end"
 // for the job's live processes other than this owner as the job closed (QueryInformationJobObject, so
 // "members 0 end" is the job's own word that it was empty; the count and the closing "end" let the
@@ -98,6 +102,7 @@ static class SidequestJobOwner
     const int ProcessIdListHeaderBytes = 8;
 
     static TextWriter report = TextWriter.Null;
+    static string nonce;
     static readonly ManualResetEvent exitRequested = new ManualResetEvent(false);
 
     static void Require(bool succeeded)
@@ -107,22 +112,26 @@ static class SidequestJobOwner
 
     static void Report(string line)
     {
-        report.WriteLine(line);
+        report.WriteLine(nonce + " " + line);
     }
 
-    static void OpenReport()
+    static void OpenReport(string reportPath)
     {
-        string reportPath = Environment.GetEnvironmentVariable("SIDEQUEST_JOB_OWNER_REPORT");
-        if (string.IsNullOrEmpty(reportPath)) return;
         FileStream stream = new FileStream(reportPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         report = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
     }
 
-    // libuv already quoted the command and its arguments behind this owner's own path.
-    static string CommandLineAfterOwner(string ownerCommandLine)
+    // libuv quoted each argument. Neither the owner path nor the report path can hold a quote and the
+    // nonce holds no space, so each of the three ends at its closing quote or its first space.
+    static string AfterFirstArgument(string commandLine)
     {
-        int ownerPathEnd = ownerCommandLine.StartsWith("\"") ? ownerCommandLine.IndexOf('"', 1) + 1 : ownerCommandLine.IndexOf(' ');
-        return ownerCommandLine.Substring(ownerPathEnd).TrimStart(' ', '\t');
+        int argumentEnd = commandLine.StartsWith("\"") ? commandLine.IndexOf('"', 1) + 1 : commandLine.IndexOf(' ');
+        return commandLine.Substring(argumentEnd).TrimStart(' ', '\t');
+    }
+
+    static string CommandLineAfterOwnerArguments(string ownerCommandLine)
+    {
+        return AfterFirstArgument(AfterFirstArgument(AfterFirstArgument(ownerCommandLine)));
     }
 
     static ulong RequestedAffinityMask()
@@ -257,17 +266,19 @@ static class SidequestJobOwner
     }
 
     // Returning closes the job's only handle, which ends whatever the command left running.
-    static int Main()
+    static int Main(string[] arguments)
     {
         IntPtr job = IntPtr.Zero;
         try
         {
-            OpenReport();
+            nonce = arguments[1];
+            OpenReport(arguments[0]);
+            Environment.SetEnvironmentVariable("SIDEQUEST_JOB_OWNER_REPORT", null);
             job = KillOnCloseJob(RequestedAffinityMask());
             Require(AssignProcessToJobObject(job, GetCurrentProcess()));
             ReportOwnAffinity();
             new Thread(WatchForExitRequest) { IsBackground = true }.Start();
-            return Supervise(Start(CommandLineAfterOwner(Environment.CommandLine)));
+            return Supervise(Start(CommandLineAfterOwnerArguments(Environment.CommandLine)));
         }
         catch (Exception error)
         {

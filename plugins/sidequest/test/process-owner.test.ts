@@ -56,14 +56,16 @@ type OwnedPhaseRunner = (options: {
   forwardStderr(chunk: Buffer): void;
 }) => Promise<{ timedOut: boolean; cleanupError: string | null; jobClosedProcessIds: number[] | null }>;
 
-// Re-requires the runner behind a spawn that loses the owner's exit request, so only the SIGKILL
-// escalation ends the owner and it dies without accounting for its job.
-function runnerWhoseOwnerIgnoresExitRequests(context: TestContext) {
+// Re-requires the runner behind a spy on the owner's spawn, which hands the test (never the phase) the
+// owner's own arguments before it starts. An owner whose exit requests are lost ends only through the
+// SIGKILL escalation, and dies without accounting for its job.
+function runnerWithOwnerSpy(context: TestContext, ignoreExitRequests: boolean, beforeOwnerSpawn: (ownerArguments: string[]) => void = () => {}) {
   const childProcesses: typeof import('node:child_process') = require('node:child_process');
   const spawnOwner = childProcesses.spawn;
   context.mock.method(childProcesses, 'spawn', (command: string, argumentsList: string[], options: SpawnOptions) => {
+    beforeOwnerSpawn(argumentsList);
     const owner = spawnOwner(command, argumentsList, options);
-    context.mock.method(owner.stdin!, 'end', () => owner.stdin);
+    if (ignoreExitRequests) context.mock.method(owner.stdin!, 'end', () => owner.stdin);
     return owner;
   });
   const runnerModulePath = require.resolve('../scripts/owned-process-tree.js');
@@ -220,7 +222,7 @@ test('an already-cancelled caller starts nothing and gets a could_not_run result
 
 test('an owner killed before it can account for its job still takes the whole job down, and the phase reports survivor state unknown', { ...windowsOnly, timeout: 120_000 }, async (context: TestContext) => {
   const fixture = nestedVerifyFixture('sq-3456-hard-kill-');
-  const runOwnedPhase = runnerWhoseOwnerIgnoresExitRequests(context);
+  const runOwnedPhase = runnerWithOwnerSpy(context, true);
   try {
     const result = await runOwnedPhase({
       command: process.execPath,
@@ -243,6 +245,66 @@ test('an owner killed before it can account for its job still takes the whole jo
   }
 });
 
+// The phase learns the real report path from a file the test fills in from the owner's arguments,
+// standing in for any way a phase could find it (SQ-3490).
+test('SQ-3490: a phase that writes "members 0 end" into its real job report cannot pass a hard-killed owner off as an empty job', { ...windowsOnly, timeout: 120_000 }, async (context: TestContext) => {
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3490-forged-members-'));
+  const reportPathHandoff = path.join(evidence, 'report.path');
+  const forgedMarker = path.join(evidence, 'forged');
+  const forger = path.join(evidence, 'forger.js');
+  fs.writeFileSync(forger, [
+    "const fs = require('node:fs');",
+    "fs.appendFileSync(fs.readFileSync(process.argv[2], 'utf8'), 'members 0 end\\n');",
+    "fs.writeFileSync(process.argv[3], '');",
+    'setInterval(() => {}, 1000);',
+    '',
+  ].join('\n'));
+  const runOwnedPhase = runnerWithOwnerSpy(context, true, ([reportPath]) => fs.writeFileSync(reportPathHandoff, reportPath));
+  try {
+    const result = await runOwnedPhase({
+      command: process.execPath,
+      args: [forger, reportPathHandoff, forgedMarker],
+      cwd: evidence,
+      env: process.env,
+      timeoutMilliseconds: FIXTURE_DEADLINE_MILLISECONDS,
+      terminationGraceMilliseconds: 100,
+      forwardStdout() {},
+      forwardStderr() {},
+    });
+    assert.equal(fs.existsSync(forgedMarker), true, 'the phase wrote its forged record into the real report');
+    assert.equal(result.timedOut, true);
+    assert.equal(result.jobClosedProcessIds, null, 'the forged record was read as the job account');
+    assert.equal(result.cleanupError, 'Survivor state unknown: the job owner left no account of its job members.');
+  } finally {
+    fs.rmSync(evidence, { recursive: true, force: true });
+  }
+});
+
+test('SQ-3490: the job owner hands its phase neither its report path, its nonce nor an inherited SIDEQUEST_JOB_OWNER_REPORT', { ...windowsOnly, timeout: 120_000 }, async (context: TestContext) => {
+  let ownerArguments: string[] = [];
+  const runOwnedPhase = runnerWithOwnerSpy(context, false, (argumentsList) => { ownerArguments = argumentsList; });
+  let printed = '';
+  const result = await runOwnedPhase({
+    command: process.execPath,
+    args: ['-e', 'process.stdout.write(JSON.stringify({ argv: process.argv, env: process.env }))'],
+    cwd: os.tmpdir(),
+    env: { ...process.env, SIDEQUEST_JOB_OWNER_REPORT: 'inherited-owner-report.log' },
+    timeoutMilliseconds: 20_000,
+    terminationGraceMilliseconds: 100,
+    forwardStdout(chunk) { printed += chunk.toString('utf8'); },
+    forwardStderr() {},
+  });
+  const [reportPath = '', nonce = ''] = ownerArguments;
+  assert.ok(reportPath !== '' && nonce !== '', 'the owner was spawned with its report path and nonce');
+  const phase = JSON.parse(printed);
+  const visibleToPhase = [...phase.argv, ...Object.values(phase.env)].join('\n');
+
+  assert.equal(result.cleanupError, null, 'the owner accounted for its job on the argument channel');
+  assert.equal('SIDEQUEST_JOB_OWNER_REPORT' in phase.env, false, 'the phase inherited SIDEQUEST_JOB_OWNER_REPORT');
+  assert.equal(visibleToPhase.includes(reportPath), false, 'the phase saw the report path');
+  assert.equal(visibleToPhase.includes(nonce), false, 'the phase saw the nonce');
+});
+
 test('a capture whose owner left no account of its job says survivor state unknown, never none survived', async (context: TestContext) => {
   const ownedProcessTree = require('../scripts/owned-process-tree.js');
   context.mock.method(ownedProcessTree, 'runOwnedPhase', async () => ({
@@ -263,29 +325,32 @@ test('a capture whose owner left no account of its job says survivor state unkno
   fs.rmSync(result.logPath, { force: true });
 });
 
+const REPORT_NONCE = 'c0ffee00-3490-4000-8000-000000000000';
+
+// The owner starts every report line with the run's nonce.
+function stamped(text: string, nonce = REPORT_NONCE) {
+  return text.split('\n').map((line) => (line === '' ? line : `${nonce} ${line}`)).join('\n');
+}
+
 // Settles a timed-out phase against a job owner report holding exactly this text.
 function jobEvidenceFromReport(text: string) {
   const reportPath = path.join(os.tmpdir(), `sq-3469-job-report-${process.pid}-${Math.random().toString(16).slice(2)}.log`);
   fs.writeFileSync(reportPath, text);
-  return withJobEvidence({ status: null, signal: null, error: null, timedOut: true, cleanupError: null }, reportPath, 0);
+  return withJobEvidence({ status: null, signal: null, error: null, timedOut: true, cleanupError: null }, { reportPath, nonce: REPORT_NONCE }, 0);
 }
 
 // An owner killed while writing its account, or read before it finished, leaves any prefix of it (SQ-3466).
 test('a members record cut off anywhere, or malformed, reports survivor state unknown, never an empty job', async () => {
-  const completeReport = 'affinity 3\nrequested\nmembers 3 4120 9984 10236 end\n';
+  const completeReport = stamped('affinity 3\nrequested\nmembers 3 4120 9984 10236 end\n');
   const recordEnd = completeReport.indexOf(' end') + ' end'.length;
-  const reviewPrefix = await jobEvidenceFromReport('affinity 3\nrequested\nmembers');
+  const reviewPrefix = await jobEvidenceFromReport(stamped('affinity 3\nrequested\nmembers'));
   assert.deepEqual(
     { jobClosedProcessIds: reviewPrefix.jobClosedProcessIds, survivingProcessIds: reviewPrefix.survivingProcessIds, cleanupError: reviewPrefix.cleanupError },
     { jobClosedProcessIds: null, survivingProcessIds: null, cleanupError: "Survivor state unknown: the job owner's account of its job members was cut off or malformed." },
   );
   const incompleteReports = [
     ...Array.from({ length: recordEnd }, (_, length) => completeReport.slice(0, length)),
-    'members 2 4120 end\n',
-    'members 1 41x0 end\n',
-    'members x end\n',
-    'members 1  4120 end\n',
-    'members 0\n',
+    ...['members 2 4120 end\n', 'members 1 41x0 end\n', 'members x end\n', 'members 1  4120 end\n', 'members 0\n'].map((report) => stamped(report)),
   ];
   const claimedAccounts = [];
   for (const report of incompleteReports) {
@@ -298,13 +363,30 @@ test('a members record cut off anywhere, or malformed, reports survivor state un
 });
 
 test('a whole members record is the job account, an empty one included', async () => {
-  const listed = await jobEvidenceFromReport('affinity 3\nmembers 3 4120 9984 10236 end\n');
+  const listed = await jobEvidenceFromReport(stamped('affinity 3\nmembers 3 4120 9984 10236 end\n'));
   assert.deepEqual(listed.jobClosedProcessIds, [4120, 9984, 10236]);
-  const empty = await jobEvidenceFromReport('affinity 3\nrequested\nmembers 0 end\n');
+  const empty = await jobEvidenceFromReport(stamped('affinity 3\nrequested\nmembers 0 end\n'));
   assert.deepEqual(
     { jobClosedProcessIds: empty.jobClosedProcessIds, survivingProcessIds: empty.survivingProcessIds, cleanupError: empty.cleanupError },
     { jobClosedProcessIds: [], survivingProcessIds: [], cleanupError: null },
   );
+});
+
+test('SQ-3490: a job report line without this run\'s nonce is no event, so an unstamped or foreign "members 0 end" is survivor state unknown', async () => {
+  const forgedReports = [
+    'members 0 end\n',
+    stamped('members 0 end\n', 'f0e1d2c3-3490-4000-8000-000000000000'),
+    `${stamped('affinity 3\n')}members 0 end\n`,
+    `${stamped('affinity 3\n')}${REPORT_NONCE}members 0 end\n`,
+  ];
+  for (const report of forgedReports) {
+    const result = await jobEvidenceFromReport(report);
+    assert.deepEqual(
+      { jobClosedProcessIds: result.jobClosedProcessIds, survivingProcessIds: result.survivingProcessIds, cleanupError: result.cleanupError },
+      { jobClosedProcessIds: null, survivingProcessIds: null, cleanupError: 'Survivor state unknown: the job owner left no account of its job members.' },
+      JSON.stringify(report),
+    );
+  }
 });
 
 test('a failed capture names what the Windows job ended and the broker boundary it cannot see past', async (context: TestContext) => {

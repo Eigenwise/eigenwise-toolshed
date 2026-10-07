@@ -1709,17 +1709,38 @@ test('SQ-3480: a reader holding the delivery lock open never aborts the delivery
   assert.deepEqual(fs.readdirSync(path.dirname(lockPath)).filter((name: string) => name.startsWith('sidequest-delivery.lock')), []);
 });
 
+// The test plants this fault in the owned tree's own process through NODE_OPTIONS; the verifier has no
+// hand in it. On main, reading the Windows job owner's report runs `fault` instead (SQ-3490).
+function runCliWithJobReportFault(repo: string, fault: string) {
+  const preload = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-job-report-fault-')), 'fault.js');
+  fs.writeFileSync(preload, [
+    "const { execFileSync } = require('node:child_process');",
+    "const fs = require('node:fs');",
+    "const ownedTree = /owned-process-tree\\.js$/.test(process.argv[1] || '');",
+    "if (ownedTree && execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim() === 'main') {",
+    '  const read = fs.readFileSync;',
+    `  fs.readFileSync = function (target, ...rest) { if (/sidequest-job-[^/\\\\]*\\.log$/.test(String(target))) { ${fault} } return read.call(this, target, ...rest); };`,
+    '}',
+    '',
+  ].join('\n'));
+  const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --require "${forwardSlashes(preload)}"`.trim();
+  return makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: repo, NODE_OPTIONS: nodeOptions }, { cwd: repo }).runCli;
+}
+
+const JOB_OWNER_LEFT_NO_ACCOUNT = "return '';";
+const JOB_OWNER_CRASHED = "throw new Error('test-injected owner crash');";
+
+// The candidate gate passes untouched; on main the verifier runs `mainSource`, then exits.
+function mainBranchVerifier(mainSource: string, mainExitCode: number) {
+  return nodeVerify(`if(require('node:child_process').execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main'){${mainSource}process.exit(${mainExitCode});}`);
+}
+
 test('SQ-3480: a passing environment-lane verifier whose job owner leaves no member account is not accepted and rolls the delivery back', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
-  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-cleanup-error');
-  // Deleting the job owner's report on main leaves the run with no account of the job's members.
-  const verify = nodeVerify([
-    "const {execFileSync}=require('node:child_process');",
-    "if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main') require('node:fs').rmSync(process.env.SIDEQUEST_JOB_OWNER_REPORT);",
-  ].join(''));
-  pinSharedEnvironment(slug, ticket.ref, verify);
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-cleanup-error');
+  pinSharedEnvironment(slug, ticket.ref, nodeVerify('process.exit(0)'));
   const before = head(fixture.repo);
 
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+  const result = runCliWithJobReportFault(fixture.repo, JOB_OWNER_LEFT_NO_ACCOUNT)(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
   assert.equal(result.status, 1, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
@@ -1731,50 +1752,37 @@ test('SQ-3480: a passing environment-lane verifier whose job owner leaves no mem
   assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
 });
 
-// The candidate gate passes untouched; on main the verifier tampers with the job owner's report, then exits.
-function jobOwnerReportTamperingVerifier(tamper: string, mainExitCode: number) {
-  return nodeVerify([
-    "const {execFileSync}=require('node:child_process');const fs=require('node:fs');const report=process.env.SIDEQUEST_JOB_OWNER_REPORT;",
-    `if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main'){${tamper}process.exit(${mainExitCode});}`,
-  ].join(''));
-}
-
 // The done line alone is SQ-3487's reproduction: the owner's old log parse recorded it passed with exit 0.
 for (const [forgery, forgedLines] of [['every owner marker', FORGED_OWNER_MARKERS], ['the done line alone', "console.error('__SIDEQUEST_VERIFY_DONE__');"]] as const) {
   test(`SQ-3488: an environment-lane owner that crashes while its verifier prints ${forgery} and exits 0 is never accepted and rolls the delivery back`, { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
-    const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-owner-crash-'));
-    const reportPathFile = forwardSlashes(path.join(evidenceDirectory, 'report.path'));
-    const { fixture, slug, ticket, runCli } = deliveryTicket(`environment-lane-owner-crash-${forgery.replace(/ /g, '-')}`);
-    // A directory in place of the job report makes the owner's read throw after the verifier exited 0,
-    // and the verifier forges the owner's old lines on the way out.
-    pinSharedEnvironment(slug, ticket.ref, jobOwnerReportTamperingVerifier(`${forgedLines}fs.writeFileSync('${reportPathFile}',report);fs.rmSync(report);fs.mkdirSync(report);`, 0));
+    const { fixture, slug, ticket } = deliveryTicket(`environment-lane-owner-crash-${forgery.replace(/ /g, '-')}`);
+    // The owner crashes reading its job report after the verifier exited 0, and the verifier forges
+    // the owner's old lines on the way out.
+    pinSharedEnvironment(slug, ticket.ref, mainBranchVerifier(forgedLines, 0));
     const before = head(fixture.repo);
 
-    try {
-      const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+    const result = runCliWithJobReportFault(fixture.repo, JOB_OWNER_CRASHED)(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
-      assert.equal(result.status, 1, result.stderr + result.stdout);
-      const payload = JSON.parse(result.stdout);
-      assert.equal(payload.delivery, null, result.stdout);
-      assert.equal(payload.verifyFailed.status, 'could_not_run', JSON.stringify(payload));
-      assert.match(payload.verifyFailed.evidence, /^The verification owner ended without reporting\./);
-      const log = fs.readFileSync(payload.verifyFailed.logPath, 'utf8');
-      assert.match(log, /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
-      assert.match(log, /^__SIDEQUEST_VERIFY_DONE__\r?$/m, 'the verifier forged the done line');
-      assert.equal(head(fixture.repo), before, 'the unreported delivery was rolled back');
-      assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
-    } finally {
-      if (fs.existsSync(reportPathFile)) fs.rmSync(fs.readFileSync(reportPathFile, 'utf8'), { recursive: true, force: true });
-    }
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.delivery, null, result.stdout);
+    assert.equal(payload.verifyFailed.status, 'could_not_run', JSON.stringify(payload));
+    assert.match(payload.verifyFailed.evidence, /^The verification owner ended without reporting\./);
+    const log = fs.readFileSync(payload.verifyFailed.logPath, 'utf8');
+    assert.match(log, /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
+    assert.match(log, /^__SIDEQUEST_VERIFY_DONE__\r?$/m, 'the verifier forged the done line');
+    assert.match(log, /test-injected owner crash/, 'the owner crashed on the injected fault');
+    assert.equal(head(fixture.repo), before, 'the unreported delivery was rolled back');
+    assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
   });
 }
 
 test('SQ-3484: an environment-lane verifier exiting 7 with a cleanup error records the suite failure and keeps the cleanup text', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
-  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-failure-and-cleanup-error');
-  pinSharedEnvironment(slug, ticket.ref, jobOwnerReportTamperingVerifier('fs.rmSync(report);', 7));
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-failure-and-cleanup-error');
+  pinSharedEnvironment(slug, ticket.ref, mainBranchVerifier('', 7));
   const before = head(fixture.repo);
 
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+  const result = runCliWithJobReportFault(fixture.repo, JOB_OWNER_LEFT_NO_ACCOUNT)(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
   assert.equal(result.status, 1, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);

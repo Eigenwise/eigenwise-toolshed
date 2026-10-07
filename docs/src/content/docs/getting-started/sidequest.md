@@ -94,7 +94,11 @@ members and closes the job; an owner that does not exit in time is killed, which
 same. A pre-aborted signal starts nothing. The capture then fails as `timeout` or `could_not_run`, and
 its reason names the processes the job ended, any that refused to end, the broker boundary, and the
 output log path. When the owner left no account of its job, or one cut off mid-write or malformed, the
-reason says "survivor state unknown" rather than claiming none survived. A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
+reason says "survivor state unknown" rather than claiming none survived. The owner gets its report file
+and a per-run nonce only as its own arguments, stamps every report line with that nonce, and removes
+`SIDEQUEST_JOB_OWNER_REPORT` from the environment the verify inherits. A report line without the nonce
+counts for nothing, so a verify that finds the report file and writes an empty-job record into it still
+gets "survivor state unknown". A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
 instead of running the verify unowned. Set `SIDEQUEST_JOB_AFFINITY_MASK` (for example `3` for two
 cores) in the verify's environment to pin the whole job to those processors. POSIX keeps its
 process-group supervision unchanged; the signal option does not cancel a POSIX phase.
