@@ -1565,14 +1565,14 @@ function candidateCommitRefusal(entry, head, baseCommit) {
   };
 }
 function removeReclaimedWorktree(repository, entry, dispatch, lease) {
-  const indexLock = path.resolve(entry.worktree, execFileSync("git", ["rev-parse", "--git-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim(), "index.lock");
-  if (!createdExclusively(indexLock)) return commitInProgressRefusal(entry, indexLock);
+  const headLock = path.resolve(entry.worktree, execFileSync("git", ["rev-parse", "--git-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim(), "HEAD.lock");
+  if (!createdExclusively(headLock)) return commitInProgressRefusal(entry, headLock);
   let outcome;
   try {
-    outcome = removeUnderIndexLock(repository, entry, dispatch, lease);
+    outcome = removeUnderHeadLock(repository, entry, dispatch, lease);
     return outcome;
   } finally {
-    if (!outcome?.reclaimed) nativeFs.rmSync(indexLock, { force: true });
+    if (!outcome?.reclaimed) nativeFs.rmSync(headLock, { force: true });
   }
 }
 function createdExclusively(file) {
@@ -1584,15 +1584,15 @@ function createdExclusively(file) {
     throw error;
   }
 }
-function commitInProgressRefusal(entry, indexLock) {
+function commitInProgressRefusal(entry, headLock) {
   return {
     worktree: entry.worktree,
     reclaimed: false,
     reason: "commit_in_progress",
-    message: `immutable recovery fact: ${indexLock} exists, so a Git command is writing in ${entry.worktree}; the checkout and its branch were kept.`
+    message: `immutable recovery fact: ${headLock} exists, so a Git command is writing in ${entry.worktree}; the checkout and its branch were kept.`
   };
 }
-function removeUnderIndexLock(repository, entry, dispatch, lease) {
+function removeUnderHeadLock(repository, entry, dispatch, lease) {
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim();
   const branch = localBranchName(entry.branch);
   const refusal = baseAncestryRefusal(entry, dispatch) || movedBranchRefusal(repository, entry, branch, head) || dependencyLinksRefusal(entry, dispatch, lease);

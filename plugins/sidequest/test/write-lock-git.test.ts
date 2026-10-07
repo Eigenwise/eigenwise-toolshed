@@ -227,20 +227,85 @@ test('a candidate committed between the reclaim decision and the removal keeps t
     assert.equal(removal.reason, 'candidate_commit');
     assert.equal(fs.existsSync(retired.worktree), true, 'the checkout holding the late candidate stays');
     assert.equal(git(PROJECT, ['rev-parse', `refs/heads/${retired.branch}`]), git(retired.worktree, ['rev-parse', 'HEAD']), 'its branch still retains the candidate');
-    assert.equal(fs.existsSync(checkoutIndexLock(retired.worktree)), false, 'a refusal releases the index lock it took');
+    assert.equal(fs.existsSync(checkoutHeadLock(retired.worktree)), false, 'a refusal releases the HEAD lock it took');
   } finally {
     sidequest.releaseTicket(slug, retired.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
     removeWorktreeBranch(retired.worktree, retired.branch);
   }
 });
 
-function checkoutIndexLock(worktree: string): string {
-  return path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir']), 'index.lock');
+function checkoutHeadLock(worktree: string): string {
+  return path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir']), 'HEAD.lock');
 }
 
-// SQ-3463: the reviewer's interleaving. The commit is attempted after the final HEAD and branch reads and the
-// dependency cleanup, just before `git worktree remove` runs.
-test('a commit attempted between the final reads and the removal is refused by the held index lock, so nothing is lost', () => {
+function waitForFile(file: string): void {
+  const deadline = Date.now() + 30_000;
+  while (!fs.existsSync(file)) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${file}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+}
+
+type PausedCommit = { resume: () => { status: number | null; stderr: string } };
+
+// Pauses a real `git commit` in its commit-msg hook: after it wrote the index and released index.lock, before it
+// writes the commit object and moves HEAD. resume() lets it finish and waits for its exit.
+function commitPausedAfterIndexWrite(worktree: string): PausedCommit {
+  const signals = fs.mkdtempSync(path.join(SIDEQUEST_HOME, 'paused-commit-'));
+  const signal = (name: string) => path.join(signals, name).replace(/\\/g, '/');
+  const hooks = path.join(signals, 'hooks');
+  fs.mkdirSync(hooks);
+  fs.writeFileSync(path.join(hooks, 'commit-msg'), `#!/bin/sh\n: > "${signal('paused')}"\nwhile [ ! -f "${signal('resume')}" ]; do sleep 0.05; done\n`, { mode: 0o755 });
+  const runner = "const r = require('node:child_process').spawnSync('git', process.argv.slice(1), { encoding: 'utf8' }); require('node:fs').writeFileSync(process.env.SQ_COMMIT_DONE, JSON.stringify({ status: r.status, stderr: r.stderr }));";
+  childProcess.spawn(process.execPath, ['-e', runner, '--', '-c',`core.hooksPath=${hooks.replace(/\\/g, '/')}`, '-c', 'user.name=Sidequest Test', '-c', 'user.email=sidequest-test@example.invalid', 'commit', '-m', 'in flight'], {
+    cwd: worktree, stdio: 'ignore', windowsHide: true, env: { ...process.env, SQ_COMMIT_DONE: signal('done') },
+  });
+  waitForFile(signal('paused'));
+  return {
+    resume() {
+      fs.writeFileSync(signal('resume'), '');
+      waitForFile(signal('done'));
+      return JSON.parse(fs.readFileSync(signal('done'), 'utf8'));
+    },
+  };
+}
+
+// SQ-3472: the bound review's interleaving. The commit wrote its index before the reclaim took its lock and moves
+// its ref after the final HEAD and branch reads, just before `git worktree remove` runs.
+test('a commit that wrote its index before the reclaim fails at its ref update and the dirty checkout is kept', () => {
+  const retired = retiredCheckout('in-flight-commit');
+  const base = git(retired.worktree, ['rev-parse', 'HEAD']);
+  let paused: PausedCommit | null = null;
+  let commit: { status: number | null; stderr: string } | null = null;
+  gitHook = (args) => {
+    if (args[0] === 'worktree' && args[1] === 'remove' && paused) commit = paused.resume();
+  };
+  try {
+    const decision = worktrees.unclaimedDispatchWorktreeReclaim(PROJECT, sidequest.getTicket(slug, retired.ref).dispatch);
+    assert.equal(typeof decision.reclaim, 'function', JSON.stringify(decision));
+    fs.writeFileSync(path.join(retired.worktree, 'in-flight.txt'), 'staged before the reclaim\n');
+    git(retired.worktree, ['add', 'in-flight.txt']);
+    paused = commitPausedAfterIndexWrite(retired.worktree);
+    assert.throws(() => decision.reclaim(), 'the non-forced removal refuses the checkout the failed commit left dirty');
+    assert.ok(commit, 'the in-flight commit finished between the final reads and the removal');
+    assert.notEqual(commit!.status, 0, 'the in-flight commit could not move HEAD while the reclaim held its lock');
+    assert.match(commit!.stderr, /HEAD\.lock/);
+    assert.equal(fs.existsSync(retired.worktree), true, 'the checkout stays');
+    assert.match(git(retired.worktree, ['status', '--porcelain']), /^A {2}in-flight\.txt$/m, 'the staged change is still in the checkout');
+    assert.equal(git(retired.worktree, ['rev-parse', 'HEAD']), base);
+    assert.equal(git(PROJECT, ['rev-parse', `refs/heads/${retired.branch}`]), base, 'the branch stays where it was');
+    assert.equal(fs.existsSync(checkoutHeadLock(retired.worktree)), false, 'the reclaim released its HEAD lock');
+  } finally {
+    gitHook = null;
+    if (paused && !commit) paused.resume();
+    sidequest.releaseTicket(slug, retired.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(retired.worktree, retired.branch);
+  }
+});
+
+// SQ-3463: the commit is attempted after the final HEAD and branch reads and the dependency cleanup, just before
+// `git worktree remove` runs.
+test('a commit attempted between the final reads and the removal is refused by the held HEAD lock, so nothing is lost', () => {
   const retired = retiredCheckout('late-commit');
   const lateCommits: { status: number | null; stderr: string }[] = [];
   gitHook = (args) => {
@@ -252,8 +317,8 @@ test('a commit attempted between the final reads and the removal is refused by t
     assert.equal(typeof decision.reclaim, 'function', JSON.stringify(decision));
     const removal = decision.reclaim();
     assert.equal(lateCommits.length, 1, 'the late commit was attempted just before the removal');
-    assert.notEqual(lateCommits[0]!.status, 0, 'the late commit could not land while the reclaim held the index lock');
-    assert.match(lateCommits[0]!.stderr, /index\.lock/);
+    assert.notEqual(lateCommits[0]!.status, 0, 'the late commit could not land while the reclaim held the HEAD lock');
+    assert.match(lateCommits[0]!.stderr, /HEAD\.lock/);
     assert.equal(removal.reclaimed, true, JSON.stringify(removal));
     assert.equal(fs.existsSync(retired.worktree), false);
   } finally {
@@ -263,22 +328,22 @@ test('a commit attempted between the final reads and the removal is refused by t
   }
 });
 
-test('a reclaim that finds the index lock already held keeps the checkout, the branch and the foreign lock', () => {
-  const retired = retiredCheckout('held-index-lock');
-  const indexLock = checkoutIndexLock(retired.worktree);
+test('a reclaim that finds the HEAD lock already held keeps the checkout, the branch and the foreign lock', () => {
+  const retired = retiredCheckout('held-head-lock');
+  const headLock = checkoutHeadLock(retired.worktree);
   try {
     const decision = worktrees.unclaimedDispatchWorktreeReclaim(PROJECT, sidequest.getTicket(slug, retired.ref).dispatch);
     assert.equal(typeof decision.reclaim, 'function', JSON.stringify(decision));
-    fs.writeFileSync(indexLock, '');
+    fs.writeFileSync(headLock, '');
     const removal = decision.reclaim();
     assert.equal(removal.reclaimed, false);
     assert.equal(removal.reason, 'commit_in_progress');
-    assert.match(removal.message, /immutable recovery fact: .*index\.lock exists/);
+    assert.match(removal.message, /immutable recovery fact: .*HEAD\.lock exists/);
     assert.equal(fs.existsSync(retired.worktree), true, 'the checkout stays');
     assert.equal(branchExists(retired.branch), true, 'the branch stays');
-    assert.equal(fs.existsSync(indexLock), true, 'the lock another Git command holds is left alone');
+    assert.equal(fs.existsSync(headLock), true, 'the lock another Git command holds is left alone');
   } finally {
-    fs.rmSync(indexLock, { force: true });
+    fs.rmSync(headLock, { force: true });
     sidequest.releaseTicket(slug, retired.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
     removeWorktreeBranch(retired.worktree, retired.branch);
   }

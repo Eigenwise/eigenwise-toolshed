@@ -2076,19 +2076,21 @@ function candidateCommitRefusal(entry: RegisteredWorktreeEntry, head: string, ba
   };
 }
 
-// A commit could still land between those reads and the removal (SQ-3463). git commit, merge, rebase, checkout and
-// reset all create the checkout's index.lock exclusively and hold it across their ref update, while
-// `git worktree remove` tolerates a foreign index.lock and deletes it with the checkout's git directory
-// (checked on git 2.52.0.windows.1). Holding that lock from the reads through the removal excludes them.
+// A commit could still land between those reads and the removal (SQ-3463). index.lock does not exclude it: git commit
+// writes the index and releases that lock before it moves the ref (SQ-3472). Every commit in the checkout, on a
+// branch or detached, locks the checkout's own HEAD.lock for its ref transaction, and so do checkout and switch, while
+// `git worktree remove` deletes a foreign HEAD.lock with the checkout's git directory (checked on git
+// 2.52.0.windows.1). A commit that wrote its index before this lock was taken fails at its ref update and leaves
+// the staged change, so the non-forced removal refuses the dirty checkout.
 function removeReclaimedWorktree(repository: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
-  const indexLock = path.resolve(entry.worktree, execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim(), 'index.lock');
-  if (!createdExclusively(indexLock)) return commitInProgressRefusal(entry, indexLock);
-  let outcome: ReturnType<typeof removeUnderIndexLock> | undefined;
+  const headLock = path.resolve(entry.worktree, execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim(), 'HEAD.lock');
+  if (!createdExclusively(headLock)) return commitInProgressRefusal(entry, headLock);
+  let outcome: ReturnType<typeof removeUnderHeadLock> | undefined;
   try {
-    outcome = removeUnderIndexLock(repository, entry, dispatch, lease);
+    outcome = removeUnderHeadLock(repository, entry, dispatch, lease);
     return outcome;
   } finally {
-    if (!outcome?.reclaimed) nativeFs.rmSync(indexLock, { force: true });
+    if (!outcome?.reclaimed) nativeFs.rmSync(headLock, { force: true });
   }
 }
 
@@ -2102,19 +2104,19 @@ function createdExclusively(file: string): boolean {
   }
 }
 
-function commitInProgressRefusal(entry: RegisteredWorktreeEntry, indexLock: string): ReclaimRefusal {
+function commitInProgressRefusal(entry: RegisteredWorktreeEntry, headLock: string): ReclaimRefusal {
   return {
     worktree: entry.worktree,
     reclaimed: false,
     reason: 'commit_in_progress',
-    message: `immutable recovery fact: ${indexLock} exists, so a Git command is writing in ${entry.worktree}; the checkout and its branch were kept.`,
+    message: `immutable recovery fact: ${headLock} exists, so a Git command is writing in ${entry.worktree}; the checkout and its branch were kept.`,
   };
 }
 
 // The decision may have been made before a write transaction and its commit, and nothing in the ticket row changes
 // when the executor commits in its checkout. So the removal reads HEAD and the branch tip again first, and deletes the
 // branch only if it still points at that HEAD (SQ-3449).
-function removeUnderIndexLock(repository: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
+function removeUnderHeadLock(repository: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim();
   const branch = localBranchName(entry.branch);
   const refusal = baseAncestryRefusal(entry, dispatch)
