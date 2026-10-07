@@ -13,6 +13,7 @@ const { crapScore } = crapCore;
 function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed', relativePath = 'plugins/example/lib/subject.js' }) {
   return {
     identity: `<root>/FunctionDeclaration:${name}#0`,
+    parent: '<root>',
     name,
     fingerprint,
     relativePath,
@@ -24,7 +25,7 @@ function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed
 }
 
 function baselineOf(entries) {
-  return async () => new Map(entries);
+  return async () => entries.map(([identity, fingerprint]) => ({ identity, parent: '<root>', fingerprint }));
 }
 
 test('collects stable identities and source fingerprints', async () => {
@@ -36,14 +37,31 @@ test('collects stable identities and source fingerprints', async () => {
 const workerBefore = 'function runWorker(items) {\n  const forward = (item) => item.id;\n  return items.map(forward);\n}\n';
 
 async function changedFunctionNames(before, after) {
-  const baseline = new Map((await collectFunctions(before, 'worker.js')).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
   const metrics = (await collectFunctions(after, 'worker.js')).map((descriptor) => ({ ...descriptor, relativePath: 'worker.js' }));
-  return (await changedMetricsAgainstBase(metrics, ['worker.js'], 'base-sha', async () => baseline)).map((metric) => metric.name);
+  return (await changedMetricsAgainstBase(metrics, ['worker.js'], 'base-sha', () => collectFunctions(before, 'worker.js'))).map((metric) => metric.name);
 }
 
 test('an enclosing function is fingerprinted over its own text, so editing a nested arrow touches only the arrow', async () => {
   assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('item.id', 'item.id ?? item.ref')), ['forward']);
   assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('items.map(forward)', 'items.flatMap(forward)')), ['runWorker']);
+});
+
+async function changedLines(before, after) {
+  const metrics = (await collectFunctions(after, 'suite.js')).map((descriptor) => ({ ...descriptor, relativePath: 'suite.js' }));
+  return (await changedMetricsAgainstBase(metrics, ['suite.js'], 'base-sha', () => collectFunctions(before, 'suite.js'))).map((metric) => metric.line);
+}
+
+const testCase = (title, assertion = 'equal') => `test('${title}', () => {\n  assert.${assertion}(run('${title}', (value) => value + 1), 1);\n});\n`;
+const suiteBefore = ['first', 'second', 'third', 'fourth'].map((title) => testCase(title)).join('');
+const suiteWithInsertion = suiteBefore.replace(testCase('third'), testCase('inserted') + testCase('third'));
+
+test('inserting or deleting a test callback leaves every later unchanged callback out of the changed set', async () => {
+  assert.deepEqual(await changedLines(suiteBefore, suiteWithInsertion), [7, 8]);
+  assert.deepEqual(await changedLines(suiteBefore, suiteBefore.replace(testCase('second'), '')), []);
+});
+
+test('a later callback whose own text changed is still scored beside an insertion, and its unchanged nested arrow is not', async () => {
+  assert.deepEqual(await changedLines(suiteBefore, suiteWithInsertion.replace(testCase('fourth'), testCase('fourth', 'notEqual'))), [7, 8, 13]);
 });
 
 test('strictly fails a new function with a CRAP score of six', async () => {

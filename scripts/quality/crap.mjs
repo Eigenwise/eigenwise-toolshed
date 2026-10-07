@@ -339,6 +339,7 @@ export async function sourceMetrics(sourcePath, coverageScripts) {
   return descriptors.map((descriptor) => {
     const metric = {
       identity: descriptor.identity,
+      parent: descriptor.parent,
       fingerprint: descriptor.fingerprint,
       line: descriptor.line,
       name: descriptor.name,
@@ -375,8 +376,59 @@ export function diffEntries(base, pathspec, cwd = repositoryRoot) {
 }
 
 export async function baselineFunctions(base, relativePath, cwd = repositoryRoot) {
-  const text = runGit(['show', `${base}:${relativePath}`], cwd);
-  return new Map((await collectFunctions(text, relativePath)).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
+  return collectFunctions(runGit(['show', `${base}:${relativePath}`], cwd), relativePath);
+}
+
+function siblingsBetweenAnchors(siblings, anchors) {
+  let segment = 0;
+  const between = [];
+  for (const sibling of siblings) {
+    if (anchors.has(sibling)) segment += 1;
+    else between.push({ segment, sibling });
+  }
+  return Map.groupBy(between, (entry) => entry.segment);
+}
+
+function pairInOrder(heads, bases, pairs, accepts) {
+  const taken = new Set(pairs.values());
+  const free = bases.filter((base) => !taken.has(base));
+  for (const head of heads) {
+    const index = pairs.has(head) ? -1 : free.findIndex((base) => accepts(head, base));
+    if (index >= 0) pairs.set(head, free.splice(index, 1)[0]);
+  }
+}
+
+// An identity ends in a per-parent ordinal, so an inserted or deleted sibling shifts every later one.
+// Siblings whose own text appears exactly once on each side anchor the pairing; the rest pair in order
+// within the gap between the same two anchors, equal text first, so an edited body keeps its partner.
+function pairSiblings(baseSiblings, headSiblings) {
+  const baseByFingerprint = Map.groupBy(baseSiblings, (sibling) => sibling.fingerprint);
+  const headByFingerprint = Map.groupBy(headSiblings, (sibling) => sibling.fingerprint);
+  const isUnique = (groups, sibling) => groups.get(sibling.fingerprint)?.length === 1;
+  const pairs = new Map(headSiblings.filter((head) => isUnique(headByFingerprint, head) && isUnique(baseByFingerprint, head)).map((head) => [head, baseByFingerprint.get(head.fingerprint)[0]]));
+  const baseGaps = siblingsBetweenAnchors(baseSiblings, new Set(pairs.values()));
+  for (const [segment, headEntries] of siblingsBetweenAnchors(headSiblings, new Set(pairs.keys()))) {
+    const heads = headEntries.map((entry) => entry.sibling);
+    const bases = (baseGaps.get(segment) ?? []).map((entry) => entry.sibling);
+    pairInOrder(heads, bases, pairs, (head, base) => head.fingerprint === base.fingerprint);
+    pairInOrder(heads, bases, pairs, () => true);
+  }
+  return pairs;
+}
+
+// Pairs top-down, so a function's children are compared only with the children of its own partner.
+export function baseFunctionByIdentity(baseFunctions, headFunctions) {
+  const baseChildren = Map.groupBy(baseFunctions, (descriptor) => descriptor.parent);
+  const headChildren = Map.groupBy(headFunctions, (descriptor) => descriptor.parent);
+  const partners = new Map();
+  const pairChildren = (baseParent, headParent) => {
+    for (const [head, base] of pairSiblings(baseChildren.get(baseParent) ?? [], headChildren.get(headParent) ?? [])) {
+      partners.set(head.identity, base);
+      pairChildren(base.identity, head.identity);
+    }
+  };
+  pairChildren('<root>', '<root>');
+  return partners;
 }
 
 function pathAndBaselinePath(entry) {
@@ -398,13 +450,14 @@ export async function changedMetricsAgainstBase(metrics, changedPaths, base, rea
   for (const [relativePath, fileMetrics] of byPath) {
     if (!baselinePathByPath.has(relativePath)) continue;
     const baselinePath = baselinePathByPath.get(relativePath);
-    let baseline = new Map();
+    let baseline = [];
     try {
       baseline = await readBaseline(base, baselinePath);
     } catch (error) {
       if (!pathAbsentAtBase(error, baselinePath)) throw error;
     }
-    changedMetrics.push(...fileMetrics.filter((metric) => baseline.get(metric.identity) !== metric.fingerprint));
+    const partners = baseFunctionByIdentity(baseline, fileMetrics);
+    changedMetrics.push(...fileMetrics.filter((metric) => partners.get(metric.identity)?.fingerprint !== metric.fingerprint));
   }
   return changedMetrics;
 }
