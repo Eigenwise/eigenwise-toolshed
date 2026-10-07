@@ -118,7 +118,7 @@ test('guides host-capability recommendations without assuming a universal catalo
 
 test('resupply offers an optional gate and ties requirements to a named user rule', () => {
   const resupply = readSkill('resupply');
-  const proposal = resupply.slice(resupply.indexOf('For a codebase with tests but no'), resupply.indexOf('#### 4b.'));
+  const proposal = resupply.slice(resupply.indexOf('#### 4a.'), resupply.indexOf('#### 4b.'));
   assert.match(proposal, /offer an optional CRAP gate/);
   assert.match(proposal, /State the cost: a complexity analyzer, stack-specific LCOV setup, and a coverage run/);
   assert.ok(proposal.includes('node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap'));
