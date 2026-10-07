@@ -13,7 +13,7 @@ function boardMcpSessionId() {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 27600;
+const MCP_TOOLS_LIST_MAX_BYTES = 27900;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -266,6 +266,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
+  board_config: { verifyEnvironment: "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."

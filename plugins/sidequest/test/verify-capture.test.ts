@@ -99,9 +99,10 @@ function commitHead(cwd: string): string {
 // these tests runs exactly this command.
 const ISOLATED_DISPATCH_VERIFY_COMMAND = 'git rev-parse HEAD';
 
-function setupIsolatedDispatch(agentId: string) {
+function setupIsolatedDispatch(agentId: string, boardConfig: Record<string, unknown> = {}) {
   const project = initGitRepo(`sq-verify-capture-worktree-fixture-${agentId}-`);
   const { slug } = store.ensureProject(project);
+  if (Object.keys(boardConfig).length) store.setBoardConfig(slug, boardConfig);
   const ticket = store.createTicket(slug, {
     title: `isolated worktree fixture ${agentId}`,
     category: 'codebase-exploration',
@@ -183,6 +184,8 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-slot-'));
   const coverageDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-full-suite-coverage-'));
   const environment = { ...process.env, NODE_V8_COVERAGE: coverageDirectory };
+  // The outer run may be a full-suite capture that exported the count; scoped.js must see only what the wrapper under test adds.
+  const { SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: _inheritedCount, ...scopedEnvironment } = process.env;
   const started = path.join(project, 'started');
   const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
   const observedCoverage = path.join(project, 'observed-coverage');
@@ -209,7 +212,7 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
     await waitForFile(started);
     for (const scopedCommand of ['node scoped.js', 'npm --prefix "." run test:files']) {
       const scopedTicket = store.createTicket(boardProject.slug, { title: 'scoped capture', executorVerifyKind: 'command', executorVerify: scopedCommand });
-      const scopedCapture = runCaptureProcess(scopedCommand, project, scopedTicket.ref);
+      const scopedCapture = runCaptureProcess(scopedCommand, project, scopedTicket.ref, { environment: scopedEnvironment });
       spawnedCaptures.push(scopedCapture);
       const scoped = await scopedCapture;
       assert.equal(scoped.status, 0, scoped.output);
@@ -1006,5 +1009,21 @@ test('GH-373: the wrapper names a missing board or ticket, and keeps --base64 al
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(unregistered, { recursive: true, force: true });
+  }
+});
+
+// SQ-3424: on a shared verify environment the pinned command runs in the shared checkout at integrate,
+// so the wrapper refuses to run it in the executor's worktree and records nothing.
+test('SQ-3424: the wrapper refuses an environment-bound verifier and tells the executor to submit', async () => {
+  const fixture = setupIsolatedDispatch('environment-lane', { verifyEnvironment: 'shared' });
+  try {
+    assert.equal(fixture.ticket.dispatch.verificationRequirement.environment, 'shared');
+    const { status, output } = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(status, 2, output);
+    assert.match(output, /capture=unrecorded reason=verification_capture_environment_lane/);
+    assert.ok(output.includes(`${fixture.ticket.ref}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`), output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
   }
 });
