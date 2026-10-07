@@ -8,8 +8,9 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
+const { isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
 
+isolateInProcessGatewayEnvironment(test);
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gw = require(CLI);
 
