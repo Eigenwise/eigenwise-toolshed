@@ -24,7 +24,7 @@
 
 const path = require('path');
 const store = require('./store');
-const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
+const { compactSchema, conciseDescription, resolveProject, runtimeSessionId, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
 const { sidequestMutationFreshness } = require('./plugin-freshness');
 const { tools: readTools } = require('./mcp-read');
 const { tools: ticketTools } = require('./mcp-tickets');
@@ -42,7 +42,7 @@ type RpcId = string | number | null | undefined;
 type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any };
 
 function boardMcpSessionId(): string {
-  return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '').trim();
+  return runtimeSessionId() || '';
 }
 
 const SERVER_NAME = 'sidequest';
@@ -264,7 +264,7 @@ function assertMutationFreshness(projectArg: unknown) {
 
 function groomCloseArgs(tool: ToolDefinition, args: Record<string, unknown>) {
   if (tool.name !== 'groomClose' || String(args.by || '').trim()) return args;
-  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '').trim();
+  const sessionId = runtimeSessionId();
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
 
