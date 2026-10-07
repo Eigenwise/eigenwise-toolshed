@@ -396,11 +396,12 @@ function verifierRun(requirement: VerificationRequirement, command: string, opti
     outputTailBytes: options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES,
     cwd: options.cwd,
     environment: verifierEnvironment(options.environment || process.env),
-    ownerChannel: requirement.environment === 'shared' ? ownerChannel() : null,
+    ownerChannel: ownerChannel(requirement),
   });
 }
 
-function ownerChannel(): OwnerChannel {
+function ownerChannel(requirement: VerificationRequirement): OwnerChannel | null {
+  if (requirement.environment !== 'shared') return null;
   return Object.freeze({ reportPath: path.join(os.tmpdir(), `sidequest-verify-owner-${process.pid}-${randomUUID()}.jsonl`), nonce: randomUUID() });
 }
 
@@ -434,6 +435,16 @@ function spawnVerifier(shell: ShellCommand, run: VerifierRun): SpawnOutcome {
     });
   } finally {
     fs.closeSync(log);
+  }
+}
+
+// The channel lives exactly as long as one spawn, whether the spawn returns or throws.
+function spawnVerifierAndReport(shell: ShellCommand, run: VerifierRun): Readonly<{ outcome: SpawnOutcome; report: VerifierReport }> {
+  try {
+    const outcome = spawnVerifier(shell, run);
+    return { outcome, report: verifierReport(run) };
+  } finally {
+    if (run.ownerChannel) fs.rmSync(run.ownerChannel.reportPath, { force: true });
   }
 }
 
@@ -531,13 +542,11 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
   let outcome: SpawnOutcome;
   let report: VerifierReport;
   try {
-    outcome = spawnVerifier(shell, run);
-    report = verifierReport(run);
+    ({ outcome, report } = spawnVerifierAndReport(shell, run));
   } catch (error: unknown) {
     return spawnFailureResult(run, shell, error);
   } finally {
     fs.rmSync(scriptPath, { force: true });
-    if (run.ownerChannel) fs.rmSync(run.ownerChannel.reportPath, { force: true });
   }
   const tail = outputTail(run.logPath, run.outputTailBytes);
   return abnormalVerifierResult(run, shell, outcome, tail, report) ?? exitCodeResult(run, shell, outcome, tail, report.exitCode);

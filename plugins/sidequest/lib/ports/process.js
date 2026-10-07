@@ -281,10 +281,11 @@ function verifierRun(requirement, command, options) {
     outputTailBytes: options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES,
     cwd: options.cwd,
     environment: verifierEnvironment(options.environment || process.env),
-    ownerChannel: requirement.environment === "shared" ? ownerChannel() : null
+    ownerChannel: ownerChannel(requirement)
   });
 }
-function ownerChannel() {
+function ownerChannel(requirement) {
+  if (requirement.environment !== "shared") return null;
   return Object.freeze({ reportPath: path.join(os.tmpdir(), `sidequest-verify-owner-${process.pid}-${randomUUID()}.jsonl`), nonce: randomUUID() });
 }
 function spawnFailureResult(run, shell, error) {
@@ -311,6 +312,14 @@ function spawnVerifier(shell, run) {
     });
   } finally {
     fs.closeSync(log);
+  }
+}
+function spawnVerifierAndReport(shell, run) {
+  try {
+    const outcome = spawnVerifier(shell, run);
+    return { outcome, report: verifierReport(run) };
+  } finally {
+    if (run.ownerChannel) fs.rmSync(run.ownerChannel.reportPath, { force: true });
   }
 }
 function authenticOwnerRecord(line, nonce) {
@@ -392,13 +401,11 @@ function runProcessVerification(requirement, options = {}) {
   let outcome;
   let report;
   try {
-    outcome = spawnVerifier(shell, run);
-    report = verifierReport(run);
+    ({ outcome, report } = spawnVerifierAndReport(shell, run));
   } catch (error) {
     return spawnFailureResult(run, shell, error);
   } finally {
     fs.rmSync(scriptPath, { force: true });
-    if (run.ownerChannel) fs.rmSync(run.ownerChannel.reportPath, { force: true });
   }
   const tail = outputTail(run.logPath, run.outputTailBytes);
   return abnormalVerifierResult(run, shell, outcome, tail, report) ?? exitCodeResult(run, shell, outcome, tail, report.exitCode);
