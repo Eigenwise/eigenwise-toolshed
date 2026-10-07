@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
+const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, parseLizardCsv, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
 const { SCANNED_SOURCE, unmeasuredDefinitionLines, withBodySpans } = require('../lib/crap-core.cjs');
@@ -47,13 +47,23 @@ function runner(current, base) {
   return ({ cwd }) => (path.basename(cwd).startsWith('quartermaster-crap-base-') ? base : current);
 }
 
-/** The gate resolves lizard itself; skip only when none of the three ways to reach it works here. */
-function lizardResolves() {
-  for (const [command, leading] of [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]]) {
+/** The gate resolves lizard itself, in this order; CI has no `lizard` on PATH and reaches PyPI's latest through pipx. */
+function firstWorkingLizardLauncher() {
+  return [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]].find(([command, leading]) => {
     const probe = spawnSync(command, [...leading, '--version'], { encoding: 'utf8' });
-    if (!probe.error && probe.status === 0) return true;
-  }
-  return false;
+    return !probe.error && probe.status === 0;
+  });
+}
+
+function lizardResolves() {
+  return Boolean(firstWorkingLizardLauncher());
+}
+
+/** The row the lizard the gate would use reports for `name`, so a test can expect what this lizard actually reads. */
+function observedLizardRow(projectDir, file, name) {
+  const [command, leading] = firstWorkingLizardLauncher();
+  const listing = spawnSync(command, [...leading, '--csv', file], { cwd: projectDir, encoding: 'utf8' });
+  return parseLizardCsv(listing.stdout).find((row) => row.name === name);
 }
 
 function phantomFixture() {
@@ -1971,27 +1981,51 @@ test('the real lizard backend leaves a function untouched when only the next fun
   assert.deepEqual([atLine(report, 1).function, atLine(report, 1).end], ['untouched', 4], 'lizard ended the row on line 6, the gate ends it with the body');
 });
 
-// lizard 1.24.0 reads a regex literal as code: an unbalanced `(` or `{` in one shifts every later row in the file up a line.
-test('the real lizard backend recovers a row a regex literal shifted onto a blank line, and exits 2 for one shifted onto a comment', (t) => {
+// lizard 1.24.0 reads a regex literal holding an unbalanced `(` as code and puts the next function after a doc comment one line high; 1.24.1 reads it.
+const SHIFTED_BELOW = ['function below(b) {', '  if (b) return 1;', '  return b;', '}', ''];
+const SHIFTED_PLAIN_SOURCE = ['const OPEN = /\\(/;', '', 'function plain(a) {', '  return a;', '}', '', ...SHIFTED_BELOW].join('\n');
+const SHIFTED_DOCUMENTED_SOURCE = ['const OPEN = /\\(/;', '', 'function plain(a) {', '  return a;', '}', '', '/**', ' * Doc.', ' */', ...SHIFTED_BELOW].join('\n');
+
+function editedShiftedProject(source) {
+  const projectDir = realLizardProject('shifted.js', source);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/shifted.js'), source.replace('return b;', 'return b + 1;'), 'utf8');
+  return projectDir;
+}
+
+test('a row shifted up onto a doc comment leaves the function\'s last changed line unmeasured and exits 2, and the row in place scores', () => {
+  const projectDir = editedShiftedProject(SHIFTED_DOCUMENTED_SOURCE);
+  const rowsWithBelowAt = (start) => () => csv([{ complexity: 1, name: 'plain', start: 3, end: 5 }, { complexity: 2, name: 'below', start, end: start + 3 }], 'src/shifted.js');
+
+  assert.throws(
+    () => crapReport({ projectDir, base: 'main', runLizard: rowsWithBelowAt(9) }),
+    (error) => error instanceof PrerequisiteError && /^changed lines are unmeasured at src\/shifted\.js:12$/.test(error.message) && /regex literal holding an unbalanced/.test(error.hint),
+    'lizard 1.24.0 says 9-12 for a function on 10-13; no row of its own measures line 12',
+  );
+  const report = crapReport({ projectDir, base: 'main', runLizard: rowsWithBelowAt(10) });
+  assert.deepEqual([atLine(report, 10).function, atLine(report, 10).crap], ['below', 6]);
+});
+
+test('the real lizard backend scores a function below a regex literal holding `(` where its lizard reads it, and exits 2 where that lizard shifts the row onto a comment', (t) => {
   if (!lizardResolves()) {
     t.skip('lizard does not resolve here');
     return;
   }
-  const below = ['function below(b) {', '  if (b) return 1;', '  return b;', '}', ''];
-  const plain = ['const OPEN = /\\(/;', '', 'function plain(a) {', '  return a;', '}', '', ...below].join('\n');
-  const projectDir = realLizardProject('shifted.js', plain);
-  commitBase(projectDir);
-  fs.writeFileSync(path.join(projectDir, 'src/shifted.js'), plain.replace('return b;', 'return b + 1;'), 'utf8');
-  const recovered = runCli([], projectDir);
-  assert.equal(recovered.status, 1, recovered.stderr);
-  assert.match(recovered.stdout, /^src\/shifted\.js:7 below cc=2 coverage=0% CRAP=6/m, 'lizard said 6-9; the row is widened back onto its signature');
+  const plain = runCli([], editedShiftedProject(SHIFTED_PLAIN_SOURCE));
+  assert.equal(plain.status, 1, plain.stderr);
+  assert.match(plain.stdout, /^src\/shifted\.js:7 below cc=2 coverage=0% CRAP=6/m);
 
-  const documented = ['const OPEN = /\\(/;', '', 'function plain(a) {', '  return a;', '}', '', '/**', ' * Doc.', ' */', ...below].join('\n');
-  const documentedDir = realLizardProject('shifted.js', documented);
-  commitBase(documentedDir);
-  fs.writeFileSync(path.join(documentedDir, 'src/shifted.js'), documented.replace('return b;', 'return b + 1;'), 'utf8');
-  const unmeasured = runCli([], documentedDir);
-  assert.equal(unmeasured.status, 2, unmeasured.stdout);
-  assert.match(unmeasured.stderr, /changed lines are unmeasured at src\/shifted\.js:12$/m, 'lizard said 9-12 for a function on 10-13; no row of its own measures line 12');
-  assert.match(unmeasured.stderr, /regex literal holding an unbalanced/);
+  const documentedDir = editedShiftedProject(SHIFTED_DOCUMENTED_SOURCE);
+  const row = observedLizardRow(documentedDir, 'src/shifted.js', 'below');
+  t.diagnostic(`this lizard reads below, on lines 10-13, as ${row.start}-${row.end}`);
+  const documented = runCli([], documentedDir);
+  if (row.start === 10) {
+    assert.equal(documented.status, 1, documented.stderr);
+    assert.match(documented.stdout, /^src\/shifted\.js:10 below cc=2 coverage=0% CRAP=6/m);
+    return;
+  }
+  assert.deepEqual([row.start, row.end], [9, 12], 'a lizard that misreads the regex literal puts the row exactly one line high');
+  assert.equal(documented.status, 2, documented.stdout);
+  assert.match(documented.stderr, /changed lines are unmeasured at src\/shifted\.js:12$/m);
+  assert.match(documented.stderr, /regex literal holding an unbalanced/);
 });
