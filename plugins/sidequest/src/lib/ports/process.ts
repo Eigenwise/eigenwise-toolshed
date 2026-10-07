@@ -14,7 +14,41 @@ export type ProcessVerificationOptions = Readonly<{
   logPath?: string;
   outputTailBytes?: number;
   environment?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }>;
+
+type OwnedPhaseResult = Readonly<{
+  status: number | null;
+  error: (Error & { code?: string }) | null;
+  timedOut: boolean;
+  cleanupError: string | null;
+  // Windows only: the job's own account of the members it closed over, or null when there is none.
+  jobClosedProcessIds?: readonly number[] | null;
+}>;
+
+type OwnedProcessTree = Readonly<{
+  runOwnedPhase(options: Readonly<{
+    command: string;
+    args: readonly string[];
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    timeoutMilliseconds: number;
+    signal?: AbortSignal | undefined;
+    forwardStdout(chunk: Buffer): void;
+    forwardStderr(chunk: Buffer): void;
+  }>): Promise<OwnedPhaseResult>;
+}>;
+
+// This module runs from src/lib/ports under tsx and from lib/ports once built, so a fixed `..` count
+// lands in a different directory for each; the owner is plain CommonJS shared with the test and build runners.
+function nearestPackageRoot(directory: string): string {
+  if (fs.existsSync(path.join(directory, 'package.json'))) return directory;
+  const parent = path.dirname(directory);
+  if (parent === directory) throw new Error(`no package.json at or above ${__dirname}`);
+  return nearestPackageRoot(parent);
+}
+
+const ownedProcessTree: OwnedProcessTree = require(path.join(nearestPackageRoot(__dirname), 'scripts', 'owned-process-tree.js'));
 
 export type VerificationProcessPort = Readonly<{
   run(requirement: VerificationRequirement, options?: ProcessVerificationOptions): VerificationResult;
@@ -31,6 +65,144 @@ type ShellDefinition = Readonly<{
 }>;
 
 type ShellCommand = ShellDefinition & Readonly<{ arguments: readonly string[] }>;
+
+type OwnedVerificationRun = Readonly<{
+  requirement: VerificationRequirement;
+  command: string;
+  scriptPath: string;
+  shell: ShellCommand;
+  cwd: string;
+  environment: NodeJS.ProcessEnv;
+  logPath: string;
+  timeoutMilliseconds: number;
+  outputTailBytes: number;
+}>;
+
+type AbnormalSettlement = Readonly<{ status: 'timeout' | 'could_not_run'; reason: string; timeoutMilliseconds?: number }>;
+
+function missingCommandResult(requirement: VerificationRequirement): VerificationResult {
+  return Object.freeze({
+    kind: requirement.kind,
+    status: 'could_not_run',
+    evidence: 'The required command verifier has no pinned command.',
+    command: null,
+    failureIdentities: Object.freeze(['could_not_run:missing-command']),
+  });
+}
+
+function verificationLimits(options: ProcessVerificationOptions) {
+  return {
+    logPath: options.logPath || defaultLogPath(),
+    timeoutMilliseconds: options.timeoutMilliseconds || DEFAULT_TIMEOUT_MILLISECONDS,
+    outputTailBytes: options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES,
+  };
+}
+
+function ownedVerificationRun(requirement: VerificationRequirement, command: string, options: ProcessVerificationOptions): OwnedVerificationRun {
+  const { scriptPath, shell } = temporaryScript(command);
+  return Object.freeze({
+    requirement,
+    command,
+    scriptPath,
+    shell,
+    cwd: options.cwd || process.cwd(),
+    environment: verifierEnvironment(options.environment || process.env),
+    ...verificationLimits(options),
+  });
+}
+
+const jobBrokerBoundary = 'Processes created through a broker (a service, COM activation, a daemon such as dockerd) are outside the job and are not tracked.';
+
+// POSIX phases report no job account, so only a Windows job names its members and its boundary.
+function treeEndedEvidence(jobClosedProcessIds: readonly number[] | undefined, outcome: string): string {
+  if (jobClosedProcessIds === undefined) return `The owned process tree was ended; ${outcome}`;
+  const ended = jobClosedProcessIds.length ? `processes ${jobClosedProcessIds.join(', ')}` : 'none were still running';
+  return `The Windows job owner ended every descendant that inherited the job (${ended}); ${outcome} ${jobBrokerBoundary}`;
+}
+
+// The text an executor reads when a capture fails: what the owner ended and anything that refused to
+// end. "none survived" is only ever the job's own account; a missing account stays unknown.
+function ownedTreeCleanupEvidence(phase: OwnedPhaseResult): string {
+  if (phase.jobClosedProcessIds === null) return phase.cleanupError ?? 'Survivor state unknown.';
+  return treeEndedEvidence(phase.jobClosedProcessIds, phase.cleanupError === null ? 'none survived.' : `cleanup refused: ${phase.cleanupError}`);
+}
+
+function abnormalSettlement(phase: OwnedPhaseResult, timeoutMilliseconds: number): AbnormalSettlement | null {
+  if (phase.timedOut) return { status: 'timeout', reason: `Verification timed out after ${timeoutMilliseconds}ms.`, timeoutMilliseconds };
+  if (phase.error?.code === 'ABORT_ERR') return { status: 'could_not_run', reason: 'Verification was cancelled.' };
+  if (phase.cleanupError !== null) return { status: 'could_not_run', reason: 'The verification command ended, but its process tree did not.' };
+  return null;
+}
+
+function toolchainMissingResult(run: OwnedVerificationRun, exitCode: number, tail: string): VerificationResult {
+  const missingCommand = missingCommandName(run.logPath);
+  const missingCommandEvidence = missingCommand ? `command ${JSON.stringify(missingCommand)}` : 'a command';
+  return failedResult(run.requirement, 'toolchain_missing', run.command, run.logPath, `The verification environment could not find ${missingCommandEvidence} while running ${JSON.stringify(run.command)} (exit code ${exitCode}).`, exitCode, tail, undefined, run.shell.label);
+}
+
+function reportedExitResult(run: OwnedVerificationRun, exitCode: number, tail: string): VerificationResult {
+  if (shellCannotParsePosixSyntax(run.logPath, exitCode, run.shell)) {
+    return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The ${run.shell.label} fallback could not parse POSIX syntax while running ${JSON.stringify(run.command)} (exit code ${exitCode}).`, exitCode, tail, undefined, run.shell.label);
+  }
+  if (commandNotFound(run.logPath, exitCode)) return toolchainMissingResult(run, exitCode, tail);
+  if (exitCode === 0) {
+    return Object.freeze({ kind: run.requirement.kind, status: 'passed', evidence: run.requirement.evidenceContract, command: run.command, logPath: run.logPath, exitCode, shell: run.shell.label });
+  }
+  return failedResult(run.requirement, 'failed_suite', run.command, run.logPath, `The required command exited ${exitCode}.`, exitCode, tail, undefined, run.shell.label);
+}
+
+function unreportedShellExitCode(phase: OwnedPhaseResult): number | null {
+  if (phase.status !== null) return phase.status;
+  return phase.error ? 2 : null;
+}
+
+function unreportedExitResult(run: OwnedVerificationRun, phase: OwnedPhaseResult, tail: string): VerificationResult {
+  const shellExitCode = unreportedShellExitCode(phase);
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, shellExitReason(run.shell, shellExitCode, phase.error || undefined), shellExitCode, tail, undefined, run.shell.label);
+}
+
+function ownedVerificationResult(run: OwnedVerificationRun, phase: OwnedPhaseResult): VerificationResult {
+  const tail = outputTail(run.logPath, run.outputTailBytes);
+  const abnormal = abnormalSettlement(phase, run.timeoutMilliseconds);
+  if (abnormal) {
+    return failedResult(run.requirement, abnormal.status, run.command, run.logPath, `${abnormal.reason} ${ownedTreeCleanupEvidence(phase)} Output log: ${run.logPath}`, 2, tail, abnormal.timeoutMilliseconds, run.shell.label);
+  }
+  const exitCode = markerExitCode(run.logPath);
+  return exitCode === null ? unreportedExitResult(run, phase, tail) : reportedExitResult(run, exitCode, tail);
+}
+
+/**
+ * Runs the verifier under scripts/owned-process-tree.js: a POSIX process group, or on Windows a
+ * kill-on-close Job Object, so the deadline or a caller abort ends every descendant that inherited
+ * the group or job before the result settles; a process created through a broker (a service, COM
+ * activation, a daemon) is outside both and is not tracked. runProcessVerification stays synchronous
+ * for callers that cannot await.
+ */
+export async function runOwnedProcessVerification(requirement: VerificationRequirement, options: ProcessVerificationOptions = {}): Promise<VerificationResult> {
+  const command = String(requirement.command || '').trim();
+  if (!command) return missingCommandResult(requirement);
+  const run = ownedVerificationRun(requirement, command, options);
+  const log = fs.openSync(run.logPath, 'w');
+  try {
+    const phase = await ownedProcessTree.runOwnedPhase({
+      command: run.shell.executable,
+      args: run.shell.arguments,
+      cwd: run.cwd,
+      env: run.environment,
+      timeoutMilliseconds: run.timeoutMilliseconds,
+      signal: options.signal,
+      forwardStdout: (chunk) => fs.writeSync(log, chunk),
+      forwardStderr: (chunk) => fs.writeSync(log, chunk),
+    });
+    return ownedVerificationResult(run, phase);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return failedResult(requirement, 'could_not_run', command, run.logPath, reason, 2, outputTail(run.logPath, run.outputTailBytes), undefined, run.shell.label);
+  } finally {
+    fs.closeSync(log);
+    fs.rmSync(run.scriptPath, { force: true });
+  }
+}
 
 function windowsPosixShell(): string | null {
   const programFilesDirectories = [process.env.ProgramW6432, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]

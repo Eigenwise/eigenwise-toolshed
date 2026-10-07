@@ -33,21 +33,25 @@ __export(db_exports, {
   SQLITE_BUSY_RETRY_DELAYS_MS: () => SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS: () => SQLITE_BUSY_TIMEOUT_MS,
   SQLITE_MIGRATION_BUSY_TIMEOUT_MS: () => SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+  WriteLockHeldError: () => WriteLockHeldError,
   assertWritable: () => assertWritable,
   countRows: () => countRows,
   deleteRow: () => deleteRow,
   getRow: () => getRow,
+  guardedWrite: () => guardedWrite,
   hasRow: () => hasRow,
   listRows: () => listRows,
   listRowsPage: () => listRowsPage,
   openDb: () => openDb,
   prepareCached: () => prepareCached,
   putRow: () => putRow,
+  refuseUnderGuardedWrite: () => refuseUnderGuardedWrite,
   selectRow: () => selectRow,
   selectRows: () => selectRows,
   txn: () => txn
 });
 module.exports = __toCommonJS(db_exports);
+var import_node_child_process = __toESM(require("node:child_process"));
 var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
@@ -698,6 +702,40 @@ function hasRow(database, table, key) {
   const spec = tableSpec(table);
   return retryWhenSqliteBusy(`checking ${table}`, () => prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== void 0);
 }
+class WriteLockHeldError extends Error {
+  code = "write_lock_held";
+  constructor(action) {
+    super(`Refused ${action}: this process holds the Sidequest SQLite write lock, and every board's writers wait on it. Do this before the write transaction begins, then re-check inside the transaction that nothing it read has changed.`);
+    this.name = "WriteLockHeldError";
+  }
+}
+let guardedWriteDepth = 0;
+function refuseUnderGuardedWrite(action) {
+  if (guardedWriteDepth > 0) throw new WriteLockHeldError(action);
+}
+function guardedWrite(write) {
+  guardedWriteDepth += 1;
+  try {
+    return write();
+  } finally {
+    guardedWriteDepth -= 1;
+  }
+}
+function refuseChildProcessesUnderGuardedWrite() {
+  for (const launcher of ["spawn", "spawnSync", "execSync", "execFileSync"]) {
+    const launch = import_node_child_process.default[launcher];
+    Object.defineProperty(import_node_child_process.default, launcher, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: function launchOutsideGuardedWrite(...args) {
+        refuseUnderGuardedWrite(`starting ${String(args[0])}`);
+        return Reflect.apply(launch, this, args);
+      }
+    });
+  }
+}
+refuseChildProcessesUnderGuardedWrite();
 function txn(database, fn, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
   const row = retryWhenSqliteBusy("checking schema version before a transaction", () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get(), timeoutMs);
   if (row) assertWritable(database);
@@ -726,16 +764,19 @@ function txn(database, fn, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
   SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS,
   SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+  WriteLockHeldError,
   assertWritable,
   countRows,
   deleteRow,
   getRow,
+  guardedWrite,
   hasRow,
   listRows,
   listRowsPage,
   openDb,
   prepareCached,
   putRow,
+  refuseUnderGuardedWrite,
   selectRow,
   selectRows,
   txn
