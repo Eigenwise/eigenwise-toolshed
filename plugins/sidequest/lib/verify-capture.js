@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { execFileSync } = require("./git-process.js");
-const { runProcessVerification, shellCommand } = require("./ports/process.js");
+const { runOwnedProcessVerification, shellCommand } = require("./ports/process.js");
 const { canonicalPath } = require("./kernel/worktree.js");
 const { crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1e3;
@@ -15,7 +15,7 @@ function captureRequirement(command) {
   return Object.freeze({ kind: "command", command, evidenceContract: "command output" });
 }
 async function runVerifyCapture(command, cwd = process.cwd(), timeoutMilliseconds, environment) {
-  const result = runProcessVerification(captureRequirement(command), {
+  const result = await runOwnedProcessVerification(captureRequirement(command), {
     cwd,
     ...timeoutMilliseconds === void 0 ? {} : { timeoutMilliseconds },
     ...environment === void 0 ? {} : { environment }

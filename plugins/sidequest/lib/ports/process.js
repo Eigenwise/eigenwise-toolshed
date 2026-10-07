@@ -19,6 +19,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var process_exports = {};
 __export(process_exports, {
   createProcessPort: () => createProcessPort,
+  runOwnedProcessVerification: () => runOwnedProcessVerification,
   runProcessVerification: () => runProcessVerification,
   shellCommand: () => shellCommand,
   verifierEnvironment: () => verifierEnvironment
@@ -29,9 +30,106 @@ const os = require("node:os");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const ownedProcessTree = require(path.join(__dirname, "..", "..", "scripts", "owned-process-tree.js"));
 const DEFAULT_TIMEOUT_MILLISECONDS = 10 * 60 * 1e3;
 const DEFAULT_OUTPUT_TAIL_BYTES = 16 * 1024;
 const COMMAND_NOT_FOUND_EXIT_CODES = /* @__PURE__ */ new Set([127, 9009]);
+function missingCommandResult(requirement) {
+  return Object.freeze({
+    kind: requirement.kind,
+    status: "could_not_run",
+    evidence: "The required command verifier has no pinned command.",
+    command: null,
+    failureIdentities: Object.freeze(["could_not_run:missing-command"])
+  });
+}
+function verificationLimits(options) {
+  return {
+    logPath: options.logPath || defaultLogPath(),
+    timeoutMilliseconds: options.timeoutMilliseconds || DEFAULT_TIMEOUT_MILLISECONDS,
+    outputTailBytes: options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES
+  };
+}
+function ownedVerificationRun(requirement, command, options) {
+  const { scriptPath, shell } = temporaryScript(command);
+  return Object.freeze({
+    requirement,
+    command,
+    scriptPath,
+    shell,
+    cwd: options.cwd || process.cwd(),
+    environment: verifierEnvironment(options.environment || process.env),
+    ...verificationLimits(options)
+  });
+}
+function ownedTreeCleanupEvidence(phase) {
+  if (phase.jobClosedProcessIds === null) return phase.cleanupError ?? "Survivor state unknown.";
+  const ended = phase.jobClosedProcessIds?.length ? `The Windows job owner ended processes ${phase.jobClosedProcessIds.join(", ")}` : "The owned process tree was ended";
+  return phase.cleanupError === null ? `${ended}; none survived.` : `${ended}; cleanup refused: ${phase.cleanupError}`;
+}
+function abnormalSettlement(phase, timeoutMilliseconds) {
+  if (phase.timedOut) return { status: "timeout", reason: `Verification timed out after ${timeoutMilliseconds}ms.`, timeoutMilliseconds };
+  if (phase.error?.code === "ABORT_ERR") return { status: "could_not_run", reason: "Verification was cancelled." };
+  if (phase.cleanupError !== null) return { status: "could_not_run", reason: "The verification command ended, but its process tree did not." };
+  return null;
+}
+function toolchainMissingResult(run, exitCode, tail) {
+  const missingCommand = missingCommandName(run.logPath);
+  const missingCommandEvidence = missingCommand ? `command ${JSON.stringify(missingCommand)}` : "a command";
+  return failedResult(run.requirement, "toolchain_missing", run.command, run.logPath, `The verification environment could not find ${missingCommandEvidence} while running ${JSON.stringify(run.command)} (exit code ${exitCode}).`, exitCode, tail, void 0, run.shell.label);
+}
+function reportedExitResult(run, exitCode, tail) {
+  if (shellCannotParsePosixSyntax(run.logPath, exitCode, run.shell)) {
+    return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The ${run.shell.label} fallback could not parse POSIX syntax while running ${JSON.stringify(run.command)} (exit code ${exitCode}).`, exitCode, tail, void 0, run.shell.label);
+  }
+  if (commandNotFound(run.logPath, exitCode)) return toolchainMissingResult(run, exitCode, tail);
+  if (exitCode === 0) {
+    return Object.freeze({ kind: run.requirement.kind, status: "passed", evidence: run.requirement.evidenceContract, command: run.command, logPath: run.logPath, exitCode, shell: run.shell.label });
+  }
+  return failedResult(run.requirement, "failed_suite", run.command, run.logPath, `The required command exited ${exitCode}.`, exitCode, tail, void 0, run.shell.label);
+}
+function unreportedShellExitCode(phase) {
+  if (phase.status !== null) return phase.status;
+  return phase.error ? 2 : null;
+}
+function unreportedExitResult(run, phase, tail) {
+  const shellExitCode = unreportedShellExitCode(phase);
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, shellExitReason(run.shell, shellExitCode, phase.error || void 0), shellExitCode, tail, void 0, run.shell.label);
+}
+function ownedVerificationResult(run, phase) {
+  const tail = outputTail(run.logPath, run.outputTailBytes);
+  const abnormal = abnormalSettlement(phase, run.timeoutMilliseconds);
+  if (abnormal) {
+    return failedResult(run.requirement, abnormal.status, run.command, run.logPath, `${abnormal.reason} ${ownedTreeCleanupEvidence(phase)} Output log: ${run.logPath}`, 2, tail, abnormal.timeoutMilliseconds, run.shell.label);
+  }
+  const exitCode = markerExitCode(run.logPath);
+  return exitCode === null ? unreportedExitResult(run, phase, tail) : reportedExitResult(run, exitCode, tail);
+}
+async function runOwnedProcessVerification(requirement, options = {}) {
+  const command = String(requirement.command || "").trim();
+  if (!command) return missingCommandResult(requirement);
+  const run = ownedVerificationRun(requirement, command, options);
+  const log = fs.openSync(run.logPath, "w");
+  try {
+    const phase = await ownedProcessTree.runOwnedPhase({
+      command: run.shell.executable,
+      args: run.shell.arguments,
+      cwd: run.cwd,
+      env: run.environment,
+      timeoutMilliseconds: run.timeoutMilliseconds,
+      signal: options.signal,
+      forwardStdout: (chunk) => fs.writeSync(log, chunk),
+      forwardStderr: (chunk) => fs.writeSync(log, chunk)
+    });
+    return ownedVerificationResult(run, phase);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return failedResult(requirement, "could_not_run", command, run.logPath, reason, 2, outputTail(run.logPath, run.outputTailBytes), void 0, run.shell.label);
+  } finally {
+    fs.closeSync(log);
+    fs.rmSync(run.scriptPath, { force: true });
+  }
+}
 function windowsPosixShell() {
   const programFilesDirectories = [process.env.ProgramW6432, process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter((directory) => Boolean(directory));
   const candidates = [...new Set(programFilesDirectories.map((directory) => path.join(directory, "Git", "bin", "sh.exe")))];
@@ -225,6 +323,7 @@ function createProcessPort() {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   createProcessPort,
+  runOwnedProcessVerification,
   runProcessVerification,
   shellCommand,
   verifierEnvironment
