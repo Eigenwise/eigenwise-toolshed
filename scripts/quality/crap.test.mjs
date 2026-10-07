@@ -727,3 +727,66 @@ test('under node --permission the sync transport is refused at the named pipe an
   assert.equal(permitted.status, 0, permitted.stderr);
   assert.equal(permitted.stdout, JSON.stringify(await collectFunctions(transportFixture, 'fixture.js')));
 });
+
+// SQ-3465: tsx maps an async arrow's start past `async (`, so the record has to land inside the
+// arrow's own span, never the enclosing callback's, which would take the child's coverage.
+const asyncArrowTestFile = [
+  "import assert from 'node:assert/strict';",
+  "import test from 'node:test';",
+  '',
+  'function fixture() {',
+  '  const values: number[] = [];',
+  '  return {',
+  '    values,',
+  '    cleanup: async () => {',
+  '      values.push(1);',
+  '      await Promise.resolve();',
+  '    },',
+  '  };',
+  '}',
+  '',
+  "test('async arrows run', async (): Promise<void> => {",
+  '  const values: number[] = [];',
+  '  const cleanup = async () => {',
+  '    values.push(1);',
+  '    await Promise.resolve();',
+  '  };',
+  '  const syncCleanup = () => {',
+  '    values.push(2);',
+  '  };',
+  '  const idle = async () => {',
+  '    values.push(3);',
+  '  };',
+  '  await cleanup();',
+  '  syncCleanup();',
+  '  const made = fixture();',
+  '  await made.cleanup();',
+  '  assert.deepEqual([...values, ...made.values], [1, 2, 1]);',
+  '  assert.equal(typeof idle, "function");',
+  '});',
+  '',
+].join('\n');
+
+test('a tsx-loaded test file scores an executed async arrow, assigned or a property, with its own coverage', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-async-'));
+  const coverageDirectory = path.join(fixtureRoot, 'coverage');
+  const sourcePath = path.join(fixtureRoot, 'async.test.ts');
+  await fs.writeFile(sourcePath, asyncArrowTestFile);
+  try {
+    const { NODE_TEST_CONTEXT, ...environment } = process.env;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'async.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
+    assert.equal(result.status, 0, result.stderr);
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
+    const rows = metrics.map((entry) => `${entry.line} ${entry.name} ${entry.coverage}`);
+    assert.deepEqual(rows, [
+      '4 fixture 1',
+      '8 cleanup 1',
+      '15 <anonymous> 1',
+      '17 cleanup 1',
+      '21 syncCleanup 1',
+      '24 idle 0',
+    ]);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
