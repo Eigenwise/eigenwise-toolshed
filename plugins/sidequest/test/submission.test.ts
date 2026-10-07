@@ -6952,3 +6952,55 @@ test('SQ-3424: a dirty worktree still refuses a shared-environment submit', asyn
     restore();
   }
 });
+
+test('SQ-3424: multi-ref delivery admits only an exact assembled wave, and a deferred pair gates as gate_deferred', async () => {
+  const restore = withSharedVerifyEnvironment();
+  const command = 'node -e "process.exit(0)"';
+  const first = dispatchedIsolatedCandidate('deferred wave member a', command, 'environment-lane-wave-a.js', 'environment-lane-wave-a');
+  const second = dispatchedIsolatedCandidate('deferred wave member b', command, 'environment-lane-wave-b.js', 'environment-lane-wave-b');
+  try {
+    assert.strictEqual((await first.submit()).ok, true);
+    assert.strictEqual((await second.submit()).ok, true);
+    assert.strictEqual(store.integrateSubmissionWave(slug, []).reason, 'wave_participants_required');
+    assert.strictEqual(store.integrateSubmissionWave(slug, [first.ticket.ref, 'SQ-999999']).reason, 'not_found');
+    const unassembled = store.integrateSubmissionWave(slug, [first.ticket.ref, second.ticket.ref]);
+    assert.strictEqual(unassembled.ok, false);
+    assert.strictEqual(unassembled.reason, 'assembled_wave_gate_required');
+
+    const assembled = store.assembleSubmissionWave(slug, [first.ticket.ref, second.ticket.ref], { waveId: 'environment-lane-pair' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.state, 'gate_deferred');
+    assert.strictEqual(store.getTicket(slug, second.ticket.ref).submission.wave.gate.state, 'gate_deferred');
+    const partial = store.integrateSubmissionWave(slug, [first.ticket.ref]);
+    assert.strictEqual(partial.reason, 'assembled_wave_gate_required');
+  } finally {
+    first.cleanup();
+    second.cleanup();
+    restore();
+  }
+});
+
+// Direct-claim submits with non-command verifiers, so the evidence-kind branches of the
+// submission verification stay exercised next to the deferred one.
+function directSubmitWithVerifier(title: string, file: string, verifier: Record<string, unknown>, verify: string) {
+  const ticket = addTicket(title, { files: [`lib/${file}`], ...verifier });
+  const commit = createCandidateCommit(file, `${title}\n`);
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'evidence-kind-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  return store.submitTicket(slug, ticket.ref, 'evidence-kind-worker', { commit, verify });
+}
+
+test('SQ-3424: manual and document verifiers still require evidence and never read as deferred', () => {
+  const manualMissing = directSubmitWithVerifier('manual verifier without evidence', 'evidence-manual-missing.js', { executorVerifyKind: 'manual', executorVerify: 'manual: read the candidate' }, '');
+  assert.strictEqual(manualMissing.reason, 'invalid_verify');
+  assert.strictEqual(manualMissing.message, 'manual verification requires evidence from the prepared verifier contract');
+  const manualGiven = directSubmitWithVerifier('manual verifier with evidence', 'evidence-manual-given.js', { executorVerifyKind: 'manual', executorVerify: 'manual: read the candidate' }, 'manual: read the candidate');
+  assert.strictEqual(manualGiven.ok, true, manualGiven.message);
+  assert.deepStrictEqual(manualGiven.ticket.submission.verificationResult, { kind: 'manual', status: 'manual', evidence: 'manual: read the candidate', command: null });
+  const documentMissing = directSubmitWithVerifier('document verifier without evidence', 'evidence-document-missing.js', { executorVerifyKind: 'document', executorVerify: 'rendered docs' }, '');
+  assert.strictEqual(documentMissing.reason, 'invalid_verify');
+  assert.strictEqual(documentMissing.message, 'required document verification evidence is missing');
+  const documentGiven = directSubmitWithVerifier('document verifier with evidence', 'evidence-document-given.js', { executorVerifyKind: 'document', executorVerify: 'rendered docs' }, 'rendered docs');
+  assert.strictEqual(documentGiven.ok, true, documentGiven.message);
+  assert.strictEqual(documentGiven.ticket.submission.verificationResult.status, 'passed');
+});

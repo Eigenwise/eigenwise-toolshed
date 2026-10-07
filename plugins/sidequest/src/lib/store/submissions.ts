@@ -2604,8 +2604,11 @@ function submittedEvidence(verify: unknown) {
   return String(verify || '').trim();
 }
 
-function submittedCandidate(candidateCommit: unknown) {
-  return { source: 'git', value: String(candidateCommit || '').trim().toLowerCase() };
+function captureIdentity(ticket: any, candidateCommit: unknown) {
+  return {
+    candidate: { source: 'git', value: String(candidateCommit || '').trim().toLowerCase() },
+    dispatchNonce: String(ticket.dispatchNonce || ''),
+  };
 }
 
 // The executor never runs an environment-bound verifier: the pinned command runs once, in the shared
@@ -2656,7 +2659,8 @@ function commandSubmissionVerification(ticket: any, requirement: any, evidence: 
       diagnostic: { code: 'invalid_verify', message: error, retryable: true },
     };
   }
-  return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, submittedCandidate(candidateCommit), String(ticket.dispatchNonce || ''), directCaptureInvocation);
+  const identity = captureIdentity(ticket, candidateCommit);
+  return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, identity.candidate, identity.dispatchNonce, directCaptureInvocation);
 }
 
 function evidenceSubmissionVerification(requirement: any, evidence: string) {
@@ -3698,6 +3702,11 @@ function verifyWaveGateCheckout(slug: any, waveId: string, requirement: any, che
 }
 
 
+function singletonWaveParticipant(wave: DeliverableWave, ref: string) {
+  const participants = Array.isArray(wave.participants) ? wave.participants : [];
+  return participants.length === 1 && participants[0] === ref;
+}
+
 function assembledWaveForDelivery(slug: any, ticket: any) {
   const wave = ticket?.submission?.wave;
   if (!gateDeliverable(wave)) {
@@ -3707,8 +3716,7 @@ function assembledWaveForDelivery(slug: any, ticket: any) {
       message: `${ticket?.ref || 'Submission'} requires a passing assembled-wave gate before delivery. Assemble its submitted candidate and run the project-defined gate first.`,
     };
   }
-  const participants = Array.isArray(wave.participants) ? wave.participants : [];
-  if (participants.length !== 1 || participants[0] !== ticket.ref) {
+  if (!singletonWaveParticipant(wave, ticket.ref)) {
     return {
       ok: false,
       reason: 'assembled_wave_delivery_required',

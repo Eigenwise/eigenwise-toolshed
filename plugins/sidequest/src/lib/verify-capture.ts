@@ -722,19 +722,23 @@ function unrecordedRefusal(reason: string, message: string): Readonly<{ refusal:
 // GH-373: executors retyped the briefing's base64 blob, and one wrong character ran a different
 // command. The ticket's pinned requirement is the same authority recordVerificationCapture compares
 // against, so loading it here leaves nothing to copy.
+function pinnedRequirementCommand(target: CaptureTarget, requirement: Readonly<{ command?: string; environment?: 'shared' }>): Readonly<{ command: string }> | Readonly<{ refusal: string }> {
+  const command = String(requirement.command || '').trim();
+  if (!command) return unrecordedRefusal('verification_capture_no_pinned_command', `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
+  // SQ-3424: an environment-bound command runs in the shared checkout at integrate, never in the executor's worktree.
+  if (requirement.environment === 'shared') {
+    return unrecordedRefusal('verification_capture_environment_lane', `${target.ticket}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`);
+  }
+  return Object.freeze({ command });
+}
+
 function pinnedTicketCommand(target: CaptureTarget): Readonly<{ command: string }> | Readonly<{ refusal: string }> {
   const project = captureProject(target);
   if (!project) return unrecordedRefusal('project_not_found', `No Sidequest board is registered for ${target.project}, so there is no pinned verify command to run for ${target.ticket}.`);
   const store = require('./store.js') as VerificationCaptureStore;
   const ticket = store.getTicket(project.slug, target.ticket);
   if (!ticket) return unrecordedRefusal('not_found', `Ticket ${target.ticket} does not exist on the board for ${target.project}.`);
-  const requirement = store.pinnedVerificationRequirement(ticket);
-  const command = String(requirement.command || '').trim();
-  if (!command) return unrecordedRefusal('verification_capture_no_pinned_command', `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
-  if (requirement.environment === 'shared') {
-    return unrecordedRefusal('verification_capture_environment_lane', `${target.ticket}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`);
-  }
-  return Object.freeze({ command });
+  return pinnedRequirementCommand(target, store.pinnedVerificationRequirement(ticket));
 }
 
 // A passed command that matches the pin changes nothing; one that differs is refused rather than
