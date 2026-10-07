@@ -1446,3 +1446,210 @@ test('GH-247: the gate verifier does not inherit the board process plugin-host v
     }
   }
 });
+
+// SQ-3425: the environment lane. A dispatch pins environment:'shared' onto the requirement; the fixture's
+// direct claim never gets a pin, so the row is written the way the legacy preflight test writes its row.
+function pinSharedEnvironment(slug: string, ref: string, command: string) {
+  const ticket = store.getTicket(slug, ref);
+  const requirement = { kind: 'command', command, evidenceContract: command, environment: 'shared' };
+  const lifecycleAttempt = { ...(ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt || {}), execution: 'dispatched', verificationRequirement: requirement };
+  ticket.lifecycleAttempt = lifecycleAttempt;
+  ticket.dispatch = { ...(ticket.dispatch || {}), verificationRequirement: requirement, lifecycleAttempt, terminalAt: new Date().toISOString() };
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: 0, ord: ticket.order, claim_by: ticket.claim?.by ?? null, data: ticket,
+  });
+}
+
+function forwardSlashes(target: string) {
+  return target.replace(/\\/g, '/');
+}
+
+function processAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: any) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function waitUntilDead(pid: number, budgetMilliseconds: number) {
+  const deadline = Date.now() + budgetMilliseconds;
+  while (processAlive(pid) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  return !processAlive(pid);
+}
+
+// Passes in the candidate worktree (the singleton gate), then on main spawns a grandchild sleeper, copies
+// the delivery lock, and hangs until the deadline ends its tree.
+function environmentVerifier(repo: string, evidenceDirectory: string) {
+  const pidFile = forwardSlashes(path.join(evidenceDirectory, 'grandchild.pid'));
+  const lockCopy = forwardSlashes(path.join(evidenceDirectory, 'lock.json'));
+  const envFile = forwardSlashes(path.join(evidenceDirectory, 'owned-phase.env'));
+  const lockFile = forwardSlashes(path.join(repo, '.git', 'sidequest-delivery.lock'));
+  return nodeVerify([
+    "const fs=require('node:fs');const {spawn,execFileSync}=require('node:child_process');",
+    `fs.writeFileSync('${envFile}', String(process.env.SIDEQUEST_OWNED_VERIFY_PHASE||''));`,
+    "if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()!=='main') process.exit(0);",
+    `fs.copyFileSync('${lockFile}', '${lockCopy}');`,
+    "const sleeper=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'ignore',windowsHide:true});",
+    `fs.writeFileSync('${pidFile}', String(sleeper.pid));`,
+    'setTimeout(()=>{},60000);',
+  ].join(''));
+}
+
+test('SQ-3425: CLI integrate on the environment lane ends the verifier tree at the deadline and rolls the delivery back', { timeout: 120_000 }, () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-evidence-'));
+  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-timeout', { timeoutMs: 2000 });
+  const verify = environmentVerifier(fixture.repo, evidenceDirectory);
+  pinSharedEnvironment(slug, ticket.ref, verify);
+  const before = head(fixture.repo);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null, result.stdout);
+  assert.equal(payload.verifyFailed.status, 'timeout', JSON.stringify(payload));
+  assert.equal(payload.verifyFailed.timeoutMilliseconds, 2000);
+  assert.equal(payload.verifyFailed.exitCode, 124, 'the recorded timeout carries the owned tree\'s exit code');
+  assert.match(fs.readFileSync(payload.verifyFailed.logPath, 'utf8'), /^__SIDEQUEST_VERIFY_TIMEOUT__=2000$/m);
+  assert.equal(head(fixture.repo), before, 'the timed-out delivery was rolled back');
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_timeout_post_merge');
+  assert.equal(fs.readFileSync(path.join(evidenceDirectory, 'owned-phase.env'), 'utf8'), '1', 'the lane ran under the owned tree');
+  const grandchild = Number(fs.readFileSync(path.join(evidenceDirectory, 'grandchild.pid'), 'utf8'));
+  assert.ok(grandchild > 0);
+  assert.equal(waitUntilDead(grandchild, 5000), true, `grandchild ${grandchild} outlived the deadline`);
+  const holder = JSON.parse(fs.readFileSync(path.join(evidenceDirectory, 'lock.json'), 'utf8'));
+  assert.equal(holder.ticket, ticket.ref);
+  assert.equal(holder.pinnedCommit, fixture.submitted);
+  assert.equal(holder.command, verify);
+  assert.equal(holder.logPath, payload.verifyFailed.logPath);
+  assert.ok(Number.isInteger(holder.pid) && holder.pid > 0);
+  assert.ok(typeof holder.token === 'string' && holder.token.length > 0);
+  assert.ok(!Number.isNaN(Date.parse(holder.startedAt)));
+  assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false, 'the lock was released');
+});
+
+test('SQ-3425: a default-board delivery runs its verifier outside the owned tree', () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-default-'));
+  const envFile = forwardSlashes(path.join(evidenceDirectory, 'owned-phase.env'));
+  const { slug, ticket, runCli } = deliveryTicket('environment-lane-default', {
+    verify: nodeVerify(`require('node:fs').writeFileSync('${envFile}', String(process.env.SIDEQUEST_OWNED_VERIFY_PHASE||''))`),
+  });
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+  assert.equal(fs.readFileSync(envFile, 'utf8'), '');
+});
+
+test('SQ-3425: a verifier whose log cannot be opened reports could_not_run with the spawn failure', () => {
+  const { runProcessVerification } = require('../lib/ports/process.js');
+  const logPath = path.join(os.tmpdir(), `sq-lane-missing-${process.pid}`, 'nested', 'verify.log');
+  const requirement = { kind: 'command', command: nodeVerify('process.exit(0)'), evidenceContract: 'exit 0', environment: 'shared' };
+
+  const result = runProcessVerification(requirement, { logPath, timeoutMilliseconds: 20_000 });
+
+  assert.equal(result.status, 'could_not_run');
+  assert.equal(result.logPath, logPath);
+  assert.match(result.evidence, /ENOENT/);
+  assert.equal(result.outputTail, null);
+  assert.deepEqual(result.failureIdentities, ['could_not_run:exit-2']);
+});
+
+function writeDeliveryLock(repo: string, holder: Record<string, unknown>) {
+  const lock = path.join(repo, '.git', 'sidequest-delivery.lock');
+  fs.writeFileSync(lock, JSON.stringify(holder));
+  return lock;
+}
+
+test('SQ-3425: delivery_in_progress names the holder, its commit and its log from the lock payload', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-holder');
+  const lock = writeDeliveryLock(fixture.repo, {
+    pid: process.pid, token: 'live-lane', ticket: 'SQ-77', pinnedCommit: 'abc1234', command: 'node -e 0',
+    logPath: '/evidence/SQ-77/lane.log', startedAt: '2026-10-07T10:00:00.000Z',
+  });
+  try {
+    const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'delivery_in_progress');
+    assert.equal(result.message, `Integration is already delivering SQ-77 (abc1234) into this checkout since 2026-10-07T10:00:00.000Z; log /evidence/SQ-77/lane.log. Retry ${ticket.ref} after it finishes.`);
+    assert.equal(result.holder.ticket, 'SQ-77');
+    assert.equal(result.holder.pid, process.pid);
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+});
+
+test('SQ-3425: a delivery lock left by a dead process is reclaimed', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-stale-lock');
+  const deadPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }));
+  assert.equal(waitUntilDead(deadPid, 5000), true);
+  writeDeliveryLock(fixture.repo, {
+    pid: deadPid, token: 'dead-lane', ticket: 'SQ-78', pinnedCommit: 'def5678', command: 'node -e 0',
+    logPath: '/evidence/SQ-78/lane.log', startedAt: '2026-10-07T10:00:00.000Z',
+  });
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.ok, true, result.message);
+  assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false);
+});
+
+test('SQ-3477: a replayed wave cherry-picks every participant onto the target without a merge commit', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-replay');
+  const before = head(fixture.repo);
+
+  const delivered = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'replay' });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.equal(delivered.integration.mode, 'replay');
+  assert.equal(execFileSync('git', ['rev-list', '--merges', `${before}..HEAD`], { cwd: fixture.repo, encoding: 'utf8' }).trim(), '');
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+});
+
+test('SQ-3477: a wave whose merge git refuses rolls the target back to its pre-delivery head', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-merge-refused');
+  const hook = path.join(fixture.repo, '.git', 'hooks', 'pre-merge-commit');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(result.reason, 'wave_delivery_failed', JSON.stringify(result));
+  assert.equal(result.before, before);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+});
+
+test('SQ-3477: a reader racing the lock-holder publication sees the acquired lease or the full holder, never a truncated lock', () => {
+  const { recordLockHolder } = require('../lib/store/locks.js');
+  const lockPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lock-holder-')), 'sidequest-delivery.lock');
+  const acquired = JSON.stringify({ pid: process.pid, token: 'lease-1' });
+  fs.writeFileSync(lockPath, acquired);
+  const holder = { ticket: 'SQ-1', pinnedCommit: 'abc123', command: 'npm test', logPath: 'verify.log', startedAt: '2026-10-07T00:00:00.000Z' };
+  const published = JSON.stringify({ ...holder, pid: process.pid, token: 'lease-1' });
+  const observed: string[] = [];
+  const racingFs = new Proxy(fs, {
+    get(target, name) {
+      const real = Reflect.get(target, name);
+      if (typeof real !== 'function') return real;
+      return (...args: unknown[]) => {
+        // A write in place truncates the lock before its bytes land; that empty instant is what a racing reader sees.
+        if (name === 'writeFileSync' && path.resolve(String(args[0])) === lockPath) observed.push('');
+        const result = real.apply(target, args);
+        observed.push(target.readFileSync(lockPath, 'utf8'));
+        return result;
+      };
+    },
+  });
+
+  assert.equal(recordLockHolder(racingFs, lockPath, { token: 'lease-1' }, holder), true);
+
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), published);
+  for (const content of observed) assert.ok(content === acquired || content === published, `a racing reader saw ${JSON.stringify(content)}`);
+  assert.deepEqual(fs.readdirSync(path.dirname(lockPath)), ['sidequest-delivery.lock']);
+});

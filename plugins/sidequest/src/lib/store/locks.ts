@@ -4,6 +4,29 @@ type TicketLockKey = { slug: string; id: string };
 type BusyTicketLock = { ok: false; reason: 'busy' };
 const LOCK_HELD_ELSEWHERE = Symbol('lock held elsewhere');
 
+// The whole lock file: {pid, token} plus whatever the holder recorded (a delivery lock names its
+// ticket, pinned commit, command, log and start time, SQ-3425). Unreadable or malformed reads as null.
+function readLockHolder(fs: any, lockPath?: any) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8').trim());
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_: any) {
+    return null;
+  }
+}
+
+// Names the holder on a lock this process already acquired. The pid and token stay as acquired, so
+// refresh, release and pid reclaim read the file exactly as before. The payload lands by rename: a
+// rewrite in place truncates first, and a reader racing it would see no owner at all.
+function recordLockHolder(fs: any, lockPath: any, lease: any, holder: any) {
+  const acquired = readLockHolder(fs, lockPath);
+  if (!acquired || acquired.token !== lease?.token) return false;
+  const pending = `${lockPath}.${acquired.token}.pending`;
+  fs.writeFileSync(pending, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
+  fs.renameSync(pending, lockPath);
+  return true;
+}
+
 function createLocks(dependencies: any) {
   const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {} } = dependencies;
 
@@ -27,15 +50,10 @@ function createLocks(dependencies: any) {
   }
 
   function readLockOwner(lockPath?: any) {
-    try {
-      const content = fs.readFileSync(lockPath, 'utf8').trim();
-      const parsed = JSON.parse(content);
-      const pid = Number(parsed?.pid);
-      const token = typeof parsed?.token === 'string' ? parsed.token : null;
-      return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
-    } catch (_: any) {
-      return null;
-    }
+    const parsed = readLockHolder(fs, lockPath);
+    const pid = Number(parsed?.pid);
+    const token = typeof parsed?.token === 'string' ? parsed.token : null;
+    return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
   }
 
   function lockOwnerIsAlive(owner?: any) {
@@ -186,4 +204,4 @@ function createLocks(dependencies: any) {
   };
 }
 
-module.exports = { createLocks };
+module.exports = { createLocks, readLockHolder, recordLockHolder };

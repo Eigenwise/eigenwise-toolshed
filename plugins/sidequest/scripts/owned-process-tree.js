@@ -895,10 +895,69 @@ function runOwnedPhase(rawOptions) {
   return platformUsesProcessGroups ? runSupervisedPhase(options) : runJobOwnedPhase(options);
 }
 
+const ownedVerifyTimeoutExitCode = 124;
+const ownedVerifyTimeoutMarker = '__SIDEQUEST_VERIFY_TIMEOUT__';
+
+// The Windows leaf handle ends only the shell: its children silently break away from libuv's job
+// object, so a docker client or browser under the shell outlives it. taskkill /T walks the parent
+// chain, but only while the root is still alive, so the sweep runs before the leaf is terminated.
+function sweepWindowsTree(rootPid) {
+  if (spawnSync('taskkill', ['/pid', String(rootPid), '/t', '/f'], { stdio: 'ignore', windowsHide: true }).status === 0) return;
+  process.stderr.write(`\ntaskkill /T found no live tree under pid ${rootPid}; a descendant that outlived its root may still be running.\n`);
+}
+
+/**
+ * Runs one verifier shell as an owned phase for a synchronous caller: the deadline ends the
+ * whole tree (process group on POSIX, taskkill tree on Windows), the output is forwarded to
+ * stdout/stderr, and a timeout is reported with a marker line and exit code 124 so the caller
+ * can tell it from the verifier's own exit.
+ */
+function ownedVerifyExitCode(result, timedOut, timeoutMilliseconds) {
+  if (timedOut) {
+    process.stderr.write(`\n${ownedVerifyTimeoutMarker}=${timeoutMilliseconds}\n`);
+    return ownedVerifyTimeoutExitCode;
+  }
+  if (result.error) {
+    process.stderr.write(`${result.error.message}\n`);
+    return 2;
+  }
+  return result.status ?? 2;
+}
+
+async function runOwnedVerifyPhase(spec) {
+  let sweepTimer = null;
+  let deadlineReached = false;
+  const result = await runOwnedPhase({
+    command: spec.command,
+    args: spec.args,
+    cwd: spec.cwd,
+    env: { ...process.env, SIDEQUEST_OWNED_VERIFY_PHASE: '1' },
+    timeoutMilliseconds: platformUsesProcessGroups ? spec.timeoutMilliseconds : null,
+    onPhaseStarted({ phasePid }) {
+      if (platformUsesProcessGroups) return;
+      // A deadline is a timeout even when the sweep finds no tree: a root that exited early can leave a
+      // descendant holding the output open past it, and that must never pass as the verifier's own exit.
+      sweepTimer = setTimeout(() => {
+        deadlineReached = true;
+        sweepWindowsTree(phasePid);
+      }, spec.timeoutMilliseconds);
+    },
+  });
+  clearTimeout(sweepTimer);
+  return ownedVerifyExitCode(result, result.timedOut || deadlineReached, spec.timeoutMilliseconds);
+}
+
 module.exports = {
   compileJobOwner,
   classifyProcessState,
   isProcessTerminal,
+  ownedVerifyTimeoutExitCode,
+  ownedVerifyTimeoutMarker,
   runOwnedPhase,
   withJobEvidence,
+  runOwnedVerifyPhase,
 };
+
+if (require.main === module) {
+  runOwnedVerifyPhase(JSON.parse(process.argv[2])).then((exitCode) => { process.exitCode = exitCode; });
+}
