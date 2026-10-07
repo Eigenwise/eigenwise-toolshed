@@ -8,6 +8,7 @@ const { compareSemver } = require('../plugin-freshness.js');
 const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
 const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require('./composition-admission.js');
 import type { CompositionDispatch, CompositionTicket } from './composition-admission';
+import type { VerificationRequirement } from '../kernel/verification';
 
 type NativeCheckoutCreation = CompositionDispatch & {
   sessionId?: string | null; worktreeBindingSource?: string;
@@ -87,6 +88,34 @@ function requirementsMatch(left: any, right: any) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 
+function liveVerificationRequirement(state: any, ticket: any): VerificationRequirement | undefined {
+  return state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+}
+
+function applyLiveVerificationRequirement(state: any, ticket: any, requirement: VerificationRequirement) {
+  state.verificationRequirement = requirement;
+  const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
+  if (!attempt) return;
+  const refreshedAttempt = Object.freeze({ ...attempt, verificationRequirement: requirement });
+  state.lifecycleAttempt = refreshedAttempt;
+  ticket.lifecycleAttempt = refreshedAttempt;
+}
+
+function trimmedOrNull(value: unknown) {
+  return String(value || '').trim() || null;
+}
+
+function recordVerificationAmendment(ticket: any, amendment: any, previousRequirement: VerificationRequirement | undefined, nextRequirement: VerificationRequirement) {
+  const record = Object.freeze({
+    at: new Date().toISOString(),
+    by: trimmedOrNull(amendment?.by),
+    oldCommand: trimmedOrNull(previousRequirement?.command),
+    newCommand: trimmedOrNull(nextRequirement.command),
+  });
+  ticket.verificationAmendments = [...(Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments : []), record].slice(-20);
+  return record;
+}
+
 // Only an isolated command|suite dispatch defers its verifier to the shared checkout; a
 // board left at the default pins nothing, so its requirements stay byte-identical.
 function pinnedVerificationRequirement(ticket: any, projectPath: string, verifyEnvironment: unknown, sharedTree: boolean) {
@@ -105,24 +134,11 @@ function createDispatch(dependencies: any) {
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
-    const previousRequirement = state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+    const previousRequirement = liveVerificationRequirement(state, ticket);
     const nextRequirement = boardVerificationRequirement(slug, ticket, state.sharedTree === true);
     if (requirementsMatch(previousRequirement, nextRequirement)) return null;
-    state.verificationRequirement = nextRequirement;
-    const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
-    if (attempt) {
-      const refreshedAttempt = Object.freeze({ ...attempt, verificationRequirement: nextRequirement });
-      state.lifecycleAttempt = refreshedAttempt;
-      ticket.lifecycleAttempt = refreshedAttempt;
-    }
-    const record = Object.freeze({
-      at: new Date().toISOString(),
-      by: String(amendment?.by || '').trim() || null,
-      oldCommand: String(previousRequirement?.command || '').trim() || null,
-      newCommand: String(nextRequirement.command || '').trim() || null,
-    });
-    ticket.verificationAmendments = [...(Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments : []), record].slice(-20);
-    return record;
+    applyLiveVerificationRequirement(state, ticket, nextRequirement);
+    return recordVerificationAmendment(ticket, amendment, previousRequirement, nextRequirement);
   }
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
