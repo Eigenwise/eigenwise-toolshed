@@ -290,7 +290,9 @@ the ticket.
    queued ticket. A merge commit inside the submitted range is admissible when this reconstruction and
    scope admission pass. Scope admission is mechanical at queue read and again at delivery closure,
    against the immutable submit-time snapshot. Leave rejected submissions parked.
-6. **Assemble and deliver exact waves**, oldest compatible waves first. For every group, call
+6. **Assemble and deliver exact waves**, oldest compatible waves first. Preserve the real pinned
+   verifier and all immutable capture/candidate checks; assembled-tree proof is reusable only when
+   the runtime authorizes its exact tree, command, candidate, and capture identities. For every group, call
    `sidequest assemble-wave` with every intended participant and its project-defined gate evidence.
    A moved baseline, missing verifier, out-of-scope surface, or overlapping participant surface refuses
    assembly and reports the affected candidates without changing their submissions. Pass only the exact
@@ -303,14 +305,17 @@ the ticket.
    every participant and completes them as control-plane tickets. A conflict or failed delivery
    verification rolls back the delivery, leaves the wave parked, and requires a repair or refreshed
    assembly. This local completion does not wait for remote reachability.
-7. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
-   (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
-   plugins) so per-ticket-green but jointly-red seams are caught before versioning or the push.
+7. **Run one combined full merged-tree gate per wave** after delivery and before versioning,
+   including a singleton. Use the project's documented full gate covering the touched suites; combine
+   the wave's checks in that gate rather than adding a second seam suite or per-ticket full runs.
+   Preserve delivery's pinned verifier. A changed tree after rebase requires a fresh full gate.
 8. **Apply review at the sized depth**: consume each submission report and the delivery and
    merged-tree gate evidence. Do not inspect executor source or diffs as an orchestrator review.
-   A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
-   candidate when the oracle is weak, consumers remain materially unchecked, or the work is
-   high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
+   A deterministic oracle that covers the contract needs no bound review, at any wave size.
+   Bind a `review-audit` ticket to the exact candidate only for a contract-named seam the oracle
+   cannot exercise or a required high-stakes review. Multiple lenses need distinct named risks,
+   never merely multiple waves. Bind required candidate reviews before step 6; step 8 consumes
+   their terminal evidence, since a bound candidate cannot deliver while review is pending. A bound candidate
    cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes.
    Neither the candidate nor its bound review can ever be deleted, even with `force`; keep both
    immutable records instead of cancelling the review. This guard does not repair older orphaned
@@ -332,7 +337,7 @@ the ticket.
    published plugin left a fragment in `.release/unreleased/`, and that the window is the one you mean
    to ship: `node scripts/release/plan.mjs` then `node scripts/release/cut.mjs --prepare --dry-run`.
    A missing fragment is what `node scripts/release/note.mjs <REF> --plugins <name> --bump <level>
-   --commit <sha>` is for. If this or the seam/review gate fails, the locally delivered ticket is
+   --commit <sha>` is for. If this or the full/review gate fails, the locally delivered ticket is
    already done; record the failure and do not claim that it was pushed.
 10. **Push and confirm**: push the integration branch the dispatch recorded, from the registered
     checkout — never a new branch. Where that branch is protected (Toolshed: both `develop` and
@@ -357,7 +362,7 @@ the ticket.
 ## Integration failures fail closed
 
 A submission that conflicts or fails post-integration reverify before local delivery closure is never
-force-merged and never silently dropped. A seam, review, version, or push failure after local delivery
+force-merged and never silently dropped. A full gate, review, version, or push failure after local delivery
 is recorded against the already-done ticket; it must not be described as remotely reachable:
 
 - Before local delivery closure, leave its submission parked (do NOT `done`, do NOT clear it reflexively).

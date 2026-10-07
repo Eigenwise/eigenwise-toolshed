@@ -1,4 +1,5 @@
 "use strict";
+var import_composition_admission = require("./store/composition-admission");
 const {
   path,
   fs,
@@ -205,7 +206,14 @@ function rejectedRelatedReleaseFragments(slug, ticket) {
     return fragment ? [fragment] : [];
   });
 }
+function relatedSubmissionAdmission(slug, ticket, entryRef, rangeCommits) {
+  const source = store.getTicket(slug, entryRef);
+  if (source && (0, import_composition_admission.compositionIncludesSource)(ticket, source, rangeCommits)) return { ok: true };
+  return inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
+}
 function ticketCommitScope(slug, ticket) {
+  const compositionScope = (0, import_composition_admission.compositionSubmissionScope)(ticket);
+  if (compositionScope) return [...compositionScope];
   return [.../* @__PURE__ */ new Set([
     ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
     ...rejectedRelatedReleaseFragments(slug, ticket)
@@ -317,80 +325,139 @@ function submitWorktreeRefusal(slug, ticket, root, args) {
   const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
   return crossing ? { reason: "crossed_worktree_binding", message: crossedWorktreeRefusalMessage("submit", crossing) } : null;
 }
-function collectGitSubmissionFacts(options) {
-  const { slug, ticket, root, commit, gitRef, base } = options;
-  const dispatchTarget = ticket.dispatch && ticket.dispatch.integrationTarget;
-  let target = null;
-  let targetFailure = null;
+function sharedTreeSubmission(ticket) {
+  return ticket.dispatch?.sharedTree === true;
+}
+function recordedTargetName(target) {
+  return String(target.upstream || target.branch || "the recorded integration target");
+}
+function integrationTargetName(dispatchTarget) {
+  return dispatchTarget && typeof dispatchTarget === "object" ? recordedTargetName(dispatchTarget) : String(dispatchTarget || "the configured integration target");
+}
+function submissionTarget(slug, ticket) {
   try {
-    target = store.ticketIntegrationTarget(slug, ticket);
+    return { target: store.ticketIntegrationTarget(slug, ticket), targetFailure: null };
   } catch (error) {
-    const targetName = dispatchTarget && typeof dispatchTarget === "object" ? String(dispatchTarget.upstream || dispatchTarget.branch || "the recorded integration target") : String(dispatchTarget || "the configured integration target");
-    targetFailure = { code: "integration_target_unavailable", message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(error && error.message || String(error))}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true };
+    const targetName = integrationTargetName(ticket.dispatch?.integrationTarget);
+    const reason = error instanceof Error && error.message || String(error);
+    return { target: null, targetFailure: { code: "integration_target_unavailable", message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(reason)}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true } };
   }
+}
+function sharedTreeRangeBases(dispatchBase, boundaryCommits) {
+  return {
+    ...dispatchBase ? { dispatchBase } : {},
+    allowedBases: [...dispatchBase ? [dispatchBase] : [], ...boundaryCommits],
+    baseCandidates: boundaryCommits
+  };
+}
+function dispatchRangeBases(ticket, dispatchBase, boundaryCommits) {
+  if (sharedTreeSubmission(ticket)) return sharedTreeRangeBases(dispatchBase, boundaryCommits);
+  return dispatchBase ? { dispatchBase, allowedBases: [dispatchBase] } : { allowedBases: [] };
+}
+function boundaryAnnotatedRange(calculatedRange, approvedBoundaries) {
+  return calculatedRange && !calculatedRange.ok ? Object.assign({}, calculatedRange, { approvedBoundaries }) : calculatedRange;
+}
+function submissionRangeFacts(slug, ticket, root, candidate, target) {
   const dispatchBase = String(ticket.dispatch?.baseCommit || "").trim() || null;
   const approvedBoundaries = sharedTreeSubmissionBoundaries(slug, ticket);
   const boundaryCommits = approvedBoundaries.map((boundary) => boundary.commit);
   const calculatedRange = target ? commitScope.submissionRange(root, {
-    commit,
-    gitRef,
+    ...candidate,
     upstream: target.upstream,
     integrationTarget: target,
     integrationBranch: commitScope.integrationTargetRefs(target),
-    base,
-    ...ticket.dispatch?.sharedTree === true ? {
-      ...dispatchBase ? { dispatchBase } : {},
-      allowedBases: [...dispatchBase ? [dispatchBase] : [], ...boundaryCommits],
-      baseCandidates: boundaryCommits
-    } : dispatchBase ? { dispatchBase, allowedBases: [dispatchBase] } : { allowedBases: [] }
+    ...dispatchRangeBases(ticket, dispatchBase, boundaryCommits)
   }) : null;
-  const range = calculatedRange && !calculatedRange.ok ? Object.assign({}, calculatedRange, { approvedBoundaries }) : calculatedRange;
-  const scope = ticketCommitScope(slug, ticket);
+  return { approvedBoundaries, range: boundaryAnnotatedRange(calculatedRange, approvedBoundaries) };
+}
+function unavailableRangeDiagnostic(ticket, range, targetFailure, gitRef) {
+  return { code: range?.reason || "integration_target_unavailable", message: range ? submissionRangeFailureMessage(ticket, range, gitRef) : String(targetFailure?.message), retryable: true };
+}
+function recordPendingScopedWork(root, scope, range, surfaces, requirements) {
+  const pending = commitScope.scopedWorkPending(root, scope, { base: range.base });
+  if (!pending.ok) requirements.push({ code: pending.reason, message: `submit: could not inspect the declared scope in ${root}: ${pending.message || pending.reason}`, retryable: true });
+  else surfaces.pending = pending.working;
+}
+function outsideScopeDiagnostic(ticket, scopedRange) {
+  return {
+    code: String(scopedRange.reason),
+    message: scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${(scopedRange.outside ?? []).join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`,
+    retryable: true
+  };
+}
+function recordScopedRangeFacts(ticket, root, scope, range, surfaces, requirements) {
+  const scopedRange = commitScope.validatePaths(scope, surfaces.changed);
+  if (!scopedRange.ok) surfaces.diagnostic = outsideScopeDiagnostic(ticket, scopedRange);
+  const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || range.changedPaths);
+  if (missingFragment) requirements.push({ code: "missing_release_fragment", message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
+}
+function submissionSurfaces(ticket, root, scope, range, targetFailure, gitRef) {
   const requirements = targetFailure ? [targetFailure] : [];
-  const changed = range?.ok ? commitScope.candidatePaths(root, range.changedPaths, range.commit, range.upstreamCommit) : [];
-  const surfaces = { declared: scope, admitted: scope, changed, pending: [] };
   if (!range?.ok) {
-    surfaces.diagnostic = { code: range?.reason || "integration_target_unavailable", message: range ? submissionRangeFailureMessage(ticket, range, gitRef) : targetFailure.message, retryable: true };
-  } else {
-    const pending = commitScope.scopedWorkPending(root, scope, { base: range.base });
-    if (!pending.ok) {
-      requirements.push({ code: pending.reason, message: `submit: could not inspect the declared scope in ${root}: ${pending.message || pending.reason}`, retryable: true });
-    } else {
-      surfaces.pending = pending.working;
-    }
-    const scopedRange = commitScope.validatePaths(scope, changed);
-    if (!scopedRange.ok) {
-      surfaces.diagnostic = {
-        code: scopedRange.reason,
-        message: scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`,
-        retryable: true
-      };
-    }
-    const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || range.changedPaths);
-    if (missingFragment) requirements.push({ code: "missing_release_fragment", message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
+    const surfaces2 = { declared: scope, admitted: scope, changed: [], pending: [], diagnostic: unavailableRangeDiagnostic(ticket, range, targetFailure, gitRef) };
+    return { surfaces: surfaces2, requirements };
   }
-  const overlappingSubmissions = range?.ok && ticket.dispatch?.sharedTree !== true ? store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).filter((entry) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit) => range.commits.includes(entryCommit))) : [];
-  const refusedOverlap = overlappingSubmissions.map((entry) => ({ entry, admission: inheritedRejectedAdmission(slug, ticket, entry.ref, range.commits) })).find((overlap) => !overlap.admission.ok) || null;
-  const duplicate = range?.ok ? ticket.dispatch?.sharedTree === true ? approvedBoundaries.find((boundary) => range.commits.includes(boundary.commit)) || null : refusedOverlap?.entry || null : null;
+  const surfaces = { declared: scope, admitted: scope, changed: commitScope.candidatePaths(root, range.changedPaths, range.commit, range.upstreamCommit), pending: [] };
+  recordPendingScopedWork(root, scope, range, surfaces, requirements);
+  recordScopedRangeFacts(ticket, root, scope, range, surfaces, requirements);
+  return { surfaces, requirements };
+}
+function submittedCommits(entry) {
+  const commits = entry.submission.commits;
+  return Array.isArray(commits) && commits.length ? commits : [entry.submission.commit];
+}
+function overlappingSubmissions(slug, ticket, range) {
+  if (!range?.ok || sharedTreeSubmission(ticket)) return [];
+  return store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).filter((entry) => submittedCommits(entry).some((entryCommit) => range.commits.includes(entryCommit)));
+}
+function refusedSubmissionOverlap(slug, ticket, range) {
+  return overlappingSubmissions(slug, ticket, range).map((entry) => ({ entry, admission: relatedSubmissionAdmission(slug, ticket, entry.ref, range?.commits ?? []) })).find((overlap) => !overlap.admission.ok) || null;
+}
+function sharedTreeBoundaryDuplicate(range, approvedBoundaries) {
+  return approvedBoundaries.find((boundary) => range.commits.includes(boundary.commit)) || null;
+}
+function refusedOverlapEntry(overlap) {
+  return overlap?.entry || null;
+}
+function duplicateSubmission(ticket, range, approvedBoundaries, refusedOverlap) {
+  if (!range?.ok) return null;
+  return sharedTreeSubmission(ticket) ? sharedTreeBoundaryDuplicate(range, approvedBoundaries) : refusedOverlapEntry(refusedOverlap);
+}
+function duplicateSubmissionFacts(ticket, duplicate, refusedOverlap) {
+  if (!duplicate) return { identity: null };
+  return {
+    identity: duplicate.ref,
+    diagnostic: {
+      code: "duplicate_submission",
+      message: sharedTreeSubmission(ticket) ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.` : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${inheritedRejectedDuplicateGuidance(refusedOverlap?.admission?.reason)}`,
+      retryable: false
+    }
+  };
+}
+function admittedSubmissionScope(slug, ticket) {
+  return (0, import_composition_admission.compositionSubmissionScope)(ticket) ?? [.../* @__PURE__ */ new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])];
+}
+function submissionBaseline(range, surfaces) {
+  return range?.ok ? { candidateExists: true, containsCandidate: true } : { candidateExists: false, containsCandidate: false, diagnostic: surfaces.diagnostic };
+}
+function collectGitSubmissionFacts(options) {
+  const { slug, ticket, root, commit, gitRef, base } = options;
+  const { target, targetFailure } = submissionTarget(slug, ticket);
+  const { range, approvedBoundaries } = submissionRangeFacts(slug, ticket, root, { commit, gitRef, base }, target);
+  const scope = ticketCommitScope(slug, ticket);
+  const { surfaces, requirements } = submissionSurfaces(ticket, root, scope, range, targetFailure, gitRef);
+  const refusedOverlap = refusedSubmissionOverlap(slug, ticket, range);
+  const duplicate = duplicateSubmission(ticket, range, approvedBoundaries, refusedOverlap);
   return {
     target,
     range,
     scope,
     admissionFacts: {
-      // The stored-range check at integrate reads only this snapshot, so the rejected source fragment the range
-      // inherits has to be admitted here too, or integrate refuses what submit accepted (GH-277).
-      admittedScope: [.../* @__PURE__ */ new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
+      admittedScope: admittedSubmissionScope(slug, ticket),
       scope,
-      baseline: range?.ok ? { candidateExists: true, containsCandidate: true } : { candidateExists: false, containsCandidate: false, diagnostic: surfaces.diagnostic },
+      baseline: submissionBaseline(range, surfaces),
       surfaces,
-      duplicate: duplicate ? {
-        identity: duplicate.ref,
-        diagnostic: {
-          code: "duplicate_submission",
-          message: ticket.dispatch?.sharedTree === true ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.` : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${inheritedRejectedDuplicateGuidance(refusedOverlap?.admission?.reason)}`,
-          retryable: false
-        }
-      } : { identity: null },
+      duplicate: duplicateSubmissionFacts(ticket, duplicate, refusedOverlap),
       requirements
     }
   };
@@ -425,7 +492,7 @@ const tools = [
   },
   {
     name: "checkpoint",
-    description: "Record a verified live review candidate without releasing the claim or ending the dispatch. Use the returned checkpoint id in linked review findings.",
+    description: "Retain verified live candidate/evidence while claim and dispatch stay active. Advisory checkpoint only, not final acceptance; immutable reviewTarget binds after terminal submission.",
     inputSchema: {
       type: "object",
       properties: {
@@ -904,7 +971,7 @@ const tools = [
             review: { type: "boolean" }
           }
         },
-        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from this submission range. Set it equal to commit for a verified no-op submission." },
+        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from an ordinary submission range; equal to commit only for a verified ordinary no-op. An admitted composition must keep its original BASE and submit the full BASE..C range." },
         verify: { type: "string" },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },

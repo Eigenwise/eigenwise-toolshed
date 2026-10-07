@@ -64,6 +64,7 @@ const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
 const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
@@ -630,6 +631,8 @@ const {
   agentDispatchWorktrees,
   reconcileLaunchedDispatches,
 } = (dispatch = createDispatch({
+  withCompositionDispatchPreparation: (slug: string, ref: string, callback: () => unknown) => withCompositionDispatchPreparation(slug, ref, callback),
+  withCompositionGenerationLock: (slug: string, ref: string, callback: () => unknown) => withCompositionGenerationLock(slug, ref, callback),
   ARTIFACT_BASELINE_MAX_PATHS,
   normalizeCategoryId: (...args: any[]) => normalizeCategoryId(...args),
   projectRoutingEnabled,
@@ -895,7 +898,7 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
       continue;
     }
     const definitions = source.split(/\r?\n/).map((line: string, index: number) => {
-      const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+      const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
       const name = capturedTestName(match);
       return name ? { line: index + 1, name } : null;
     }).filter(Boolean) as Array<{ line: number; name: string }>;
@@ -925,7 +928,7 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
       }
       if (line.startsWith('+') && !line.startsWith('+++')) {
         changedInHunk = true;
-        const addedDefinition = line.match(/\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+        const addedDefinition = line.match(/(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
         const addedName = capturedTestName(addedDefinition);
         if (addedName) names.add(addedName);
         addNearestDefinition(newLine);
@@ -1274,6 +1277,12 @@ const {
   withTicketLock,
 });
 
+const { admitComposition, withCompositionDispatchPreparation, withCompositionGenerationLock } = createCompositionAdmissions({
+  getTicket, listTickets, submissionReviewRelation, readMeta,
+  withTicketLock, putTicket, createComment, invalidateStoreCaches,
+  dispatchTokenDigest: (nonce: string) => dispatchTokenDigest(nonce),
+});
+
 const { correctAcceptedReviewVerdict } = createReviewCorrections({
   getTicket, pendingSubmission: pendingSubmissionForTickets, isReadOnlyExecutor, submissionReviewRelation,
   withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
@@ -1430,6 +1439,7 @@ const {
   verifyCommandErrors,
   verifyCommandError,
   withTicketLock,
+  withCompositionGenerationLock,
 });
 
 let refreshingRoutingProfileSeeds = false;
@@ -2107,7 +2117,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   by = String(by || 'agent');
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  const result = withTicketLock(slug, found.id, () => {
+  const result = withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
     // A bound candidate is frozen for its review: reclaiming it would let the
@@ -2301,13 +2311,18 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
   });
-  if (result.reason !== 'busy' || opts.force) return result;
-  const t = getTicket(slug, found.id);
-  const held = t && t.claim;
-  if (held && held.by && held.by !== by && !claimReclaimable(t)) {
-    return { ok: false, reason: 'claimed', ticket: t, claim: held };
-  }
-  return result;
+  return lockedClaimOutcome(slug, found.id, by, result, opts.force);
+}
+
+function heldByAnotherLiveClaimant(ticket: { claim?: { by?: string } | null } | null, by: string): boolean {
+  const claimant = ticket?.claim?.by;
+  return Boolean(claimant) && claimant !== by && !claimReclaimable(ticket);
+}
+
+function lockedClaimOutcome<Result extends { reason?: string }>(slug: string, ticketId: string, by: string, result: Result, force?: boolean) {
+  if (result.reason !== 'busy' || force) return result;
+  const ticket = getTicket(slug, ticketId);
+  return heldByAnotherLiveClaimant(ticket, by) ? { ok: false, reason: 'claimed', ticket, claim: ticket.claim } : result;
 }
 
 function nullableText(value?: any) {
@@ -3929,6 +3944,7 @@ module.exports = {
   appendExperimentEntry,
   applyExperimentVerdict,
   correctAcceptedReviewVerdict,
+  admitComposition,
   appendOverturnLine,
   experimentPacket,
   listTickets,

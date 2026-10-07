@@ -1001,6 +1001,7 @@ var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "verifyKind",
   "attestationArtifact",
   "verifyCwd",
+  "admitComposition",
   "executorVerify",
   "executorVerifyKind",
   "executorAttestationArtifact",
@@ -1009,7 +1010,7 @@ var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
 var MAIN_THREAD_MUTATIONS = {
   mcp__plugin_sidequest_board__update: {
     matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
-    denial: "sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread."
+    denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
   },
   mcp__plugin_sidequest_board__remove: {
     matches: (input) => input.force === true,

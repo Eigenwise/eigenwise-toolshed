@@ -6283,7 +6283,7 @@ test('mutations queue FIFO per board without blocking another board', async () =
   }
 });
 
-test('correction is queued as a board mutation and tools list stays within 25400 bytes', async () => {
+test('correction is queued as a board mutation and tools list stays within the payload budget', async () => {
   const verdict = mcp.TOOLS.find((candidate: { name: string }) => candidate.name === 'verdict');
   const original = verdict.handler;
   const started: string[] = [];
@@ -6302,7 +6302,7 @@ test('correction is queued as a board mutation and tools list stays within 25400
     await Promise.all([first, second]);
     assert.deepEqual(started, ['first-correction', 'second-correction']);
     const response = await mcp.handleRequest({ jsonrpc: '2.0', id: 9321, method: 'tools/list' });
-    assert.ok(Buffer.byteLength(JSON.stringify(response.result.tools), 'utf8') <= 25400);
+    assert.ok(Buffer.byteLength(JSON.stringify(response.result.tools), 'utf8') <= mcp.MCP_TOOLS_LIST_MAX_BYTES);
   } finally {
     releaseFirst();
     await Promise.allSettled([first, second]);
