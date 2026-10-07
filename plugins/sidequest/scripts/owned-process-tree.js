@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const { addAbortListener } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -122,21 +123,20 @@ function createBoundedOutputCollector(retainedOutputBytes, forward) {
   };
 }
 
-function normalizeOptions(options) {
-  return {
-    command: options.command,
-    args: options.args ?? [],
-    cwd: options.cwd,
-    env: options.env,
-    timeoutMilliseconds: options.timeoutMilliseconds ?? null,
-    retainedOutputBytes: options.retainedOutputBytes ?? defaultRetainedOutputBytes,
-    terminationGraceMilliseconds: options.terminationGraceMilliseconds ?? defaultTerminationGraceMilliseconds,
-    cleanupDrainMilliseconds: options.cleanupDrainMilliseconds ?? defaultCleanupDrainMilliseconds,
-    supervisorModulePath: options.supervisorModulePath ?? defaultSupervisorModulePath,
-    forwardStdout: options.forwardStdout ?? ((chunk) => process.stdout.write(chunk)),
-    forwardStderr: options.forwardStderr ?? ((chunk) => process.stderr.write(chunk)),
-    onPhaseStarted: options.onPhaseStarted ?? (() => {}),
+function normalizeOptions(rawOptions) {
+  const options = {
+    args: [],
+    timeoutMilliseconds: null,
+    retainedOutputBytes: defaultRetainedOutputBytes,
+    terminationGraceMilliseconds: defaultTerminationGraceMilliseconds,
+    cleanupDrainMilliseconds: defaultCleanupDrainMilliseconds,
+    supervisorModulePath: defaultSupervisorModulePath,
+    forwardStdout: (chunk) => process.stdout.write(chunk),
+    forwardStderr: (chunk) => process.stderr.write(chunk),
+    onPhaseStarted: () => {},
   };
+  for (const name of Object.keys(options)) options[name] = rawOptions[name] ?? options[name];
+  return { ...options, command: rawOptions.command, cwd: rawOptions.cwd, env: rawOptions.env, signal: rawOptions.signal };
 }
 
 function restoreReportedError(message) {
@@ -541,12 +541,11 @@ function runSupervisedPhase(options) {
 }
 
 /**
- * Windows binds the subtree for us. libuv assigns every non-detached child to a job object
- * carrying kill-on-close whose only handle belongs to that child, so ending the root
- * through the live handle we already hold closes the job and takes its descendants with
- * it, measured at roughly 9ms with no helper process and no process id to get wrong.
+ * Windows termination uses the retained ChildProcess handle. Observing its exit proves
+ * only this owned leaf is terminal, not that arbitrary descendants have been cleaned up.
  */
-function runDirectlyOwnedPhase(options) {
+async function runDirectlyOwnedPhase(options) {
+  options.signal?.throwIfAborted();
   return new Promise((resolve) => {
     const startedAt = performance.now();
     const stdout = createBoundedOutputCollector(options.retainedOutputBytes, options.forwardStdout);
@@ -558,6 +557,7 @@ function runDirectlyOwnedPhase(options) {
       windowsHide: true,
     });
 
+    const phasePid = child.pid ?? null;
     let settled = false;
     let timedOut = false;
     let childExited = false;
@@ -573,8 +573,11 @@ function runDirectlyOwnedPhase(options) {
     let killEscalationTimer = null;
     let settleDeadlineTimer = null;
 
+    let unexpectedSignalErrorCode = null;
+    let abortListener = null;
+
     function sweepOnParentExit() {
-      if (!childExited) child.kill();
+      signalOwnedLeaf('SIGKILL');
     }
 
     process.once('exit', sweepOnParentExit);
@@ -586,6 +589,7 @@ function runDirectlyOwnedPhase(options) {
       clearTimeout(killEscalationTimer);
       clearTimeout(settleDeadlineTimer);
       process.removeListener('exit', sweepOnParentExit);
+      abortListener?.[Symbol.dispose]();
       child.stdout?.destroy();
       child.stderr?.destroy();
       child.unref();
@@ -599,10 +603,10 @@ function runDirectlyOwnedPhase(options) {
         durationMilliseconds: performance.now() - startedAt,
         terminationLatencyMilliseconds:
           terminationRequestedAt !== null && childExitedAt !== null ? childExitedAt - terminationRequestedAt : null,
-        ownerPid: child.pid ?? null,
+        ownerPid: phasePid,
         ownedGroupId: null,
-        phasePid: child.pid ?? null,
-        unexpectedSignalErrorCode: null,
+        phasePid,
+        unexpectedSignalErrorCode,
         stdout: stdout.tail(),
         stderr: stderr.tail(),
         stdoutBytes: stdout.totalBytes(),
@@ -631,19 +635,31 @@ function runDirectlyOwnedPhase(options) {
       if (options.timeoutMilliseconds === null || deadlineTimer !== null) return;
       deadlineTimer = setTimeout(() => {
         timedOut = true;
-        terminateOwnedTree();
+        terminateOwnedLeaf();
       }, options.timeoutMilliseconds);
     }
 
-    function terminateOwnedTree() {
-      if (terminationRequestedAt !== null) return;
+    function signalOwnedLeaf(signal) {
+      if (childExited || child.kill(signal)) return;
+      cleanupError = `The owned phase leaf ${child.pid} could not be sent ${signal}; exit has not been observed.`;
+    }
+
+    function terminateOwnedLeaf() {
+      if (terminationRequestedAt !== null || childExited) return;
       terminationRequestedAt = performance.now();
       clearTimeout(deadlineTimer);
-      child.kill();
-      killEscalationTimer = setTimeout(() => {
-        if (!childExited) child.kill('SIGKILL');
-      }, options.terminationGraceMilliseconds);
+      signalOwnedLeaf('SIGTERM');
+      killEscalationTimer = setTimeout(() => signalOwnedLeaf('SIGKILL'), options.terminationGraceMilliseconds);
       armSettleDeadline(options.terminationGraceMilliseconds + options.cleanupDrainMilliseconds);
+    }
+
+    function cancelOwnedLeaf() {
+      if (child.exitCode !== null || child.signalCode !== null || settled) return;
+      spawnError = Object.assign(new Error('The owned phase was aborted.', { cause: options.signal.reason }), {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      });
+      terminateOwnedLeaf();
     }
 
     child.stdout.on('data', (chunk) => stdout.append(chunk));
@@ -657,11 +673,17 @@ function runDirectlyOwnedPhase(options) {
       settleWhenDrained();
     });
 
-    child.once('error', (error) => {
+    child.on('error', (error) => {
       spawnError = error;
-      childExited = true;
-      openStreamCount = 0;
-      settle();
+      if (child.pid === undefined) {
+        childExited = true;
+        openStreamCount = 0;
+        settle();
+        return;
+      }
+      unexpectedSignalErrorCode = error.code ?? null;
+      cleanupError = `The owned phase leaf ${child.pid} reported an error before exit: ${error.message}.`;
+      terminateOwnedLeaf();
     });
 
     child.once('exit', (status, signal) => {
@@ -675,20 +697,26 @@ function runDirectlyOwnedPhase(options) {
     });
 
     child.once('spawn', () => {
-      if (typeof child.pid === 'number') {
+      try {
         options.onPhaseStarted({ ownerPid: child.pid, ownedGroupId: null, phasePid: child.pid });
+      } catch (error) {
+        spawnError = error instanceof Error ? error : new Error(String(error));
+        terminateOwnedLeaf();
       }
-      armDeadline();
+      if (terminationRequestedAt === null) armDeadline();
     });
+
+    if (options.signal) abortListener = addAbortListener(options.signal, cancelOwnedLeaf);
   });
 }
 
 /**
- * Runs one gate phase as a tree this process owns and settles within
- * `timeoutMilliseconds + terminationGraceMilliseconds + cleanupDrainMilliseconds`, with
- * `cleanupError` set when the platform failed to end the tree. `timedOut` means the
- * deadline ended the phase: it is a failure on its own, whatever status or signal the root
- * managed to deliver on the way out.
+ * POSIX phases own the inherited process group; Windows phases own only the direct leaf.
+ * Settlement is bounded by the deadline, termination grace and output-drain windows.
+ * A cleanupError reports failure, never proof of terminality. A timedOut phase fails
+ * regardless of its eventual status. Windows accepts a caller AbortSignal: pre-aborted
+ * input rejects before spawn; later cancellation returns ABORT_ERR after exit or explicit
+ * cleanup failure. The signal does not change the POSIX supervision contract.
  */
 function runOwnedPhase(rawOptions) {
   const options = normalizeOptions(rawOptions);

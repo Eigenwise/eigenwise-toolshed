@@ -71,7 +71,7 @@ const COMMAND_FLAGS = {
   "native-agent": ["prompt", "shared-tree", "unverified-transport", "session", "dir", "name"],
   models: ["full"],
   route: ["ticket"],
-  "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
+  "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
   projects: ["archived"],
   routing: ["enabled", "disabled"],
   "archive-board": [],
@@ -138,18 +138,31 @@ const MUTATING_COMMANDS = /* @__PURE__ */ new Set([
   "global-fallback",
   "global_fallback"
 ]);
+const BOARD_CONFIG_MUTATING_OPTIONS = ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"];
+function namedEntitySubcommandMutates(positional) {
+  return positional.length > 0 && !["list", "ls", "get", "show"].includes(String(positional[0]).toLowerCase());
+}
+function nativeAgentSubcommandMutates(positional) {
+  return positional[0] !== "cleanup";
+}
+function boardConfigOptionsMutate(_positional, opts) {
+  return BOARD_CONFIG_MUTATING_OPTIONS.some((key) => Object.hasOwn(opts, key));
+}
+const SUBCOMMAND_MUTATES = {
+  claims: (positional) => positional[0] === "sweep",
+  "native-agent": nativeAgentSubcommandMutates,
+  native_agent: nativeAgentSubcommandMutates,
+  profile: namedEntitySubcommandMutates,
+  profiles: namedEntitySubcommandMutates,
+  category: namedEntitySubcommandMutates,
+  categories: namedEntitySubcommandMutates,
+  story: (positional) => ["add", "update", "edit", "log", "rotate"].includes(String(positional[0]).toLowerCase()),
+  "board-config": boardConfigOptionsMutate,
+  board_config: boardConfigOptionsMutate
+};
 function commandMutates(command, opts, positional) {
   if (MUTATING_COMMANDS.has(command)) return true;
-  if (command === "claims") return positional[0] === "sweep";
-  if (command === "native-agent" || command === "native_agent") return positional[0] !== "cleanup";
-  if (command === "profile" || command === "profiles" || command === "category" || command === "categories") {
-    return positional.length > 0 && !["list", "ls", "get", "show"].includes(String(positional[0]).toLowerCase());
-  }
-  if (command === "story") return ["add", "update", "edit", "log", "rotate"].includes(String(positional[0] || "").toLowerCase());
-  if (command === "board-config" || command === "board_config") {
-    return ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"].some((key) => Object.hasOwn(opts, key));
-  }
-  return false;
+  return SUBCOMMAND_MUTATES[command]?.(positional, opts) ?? false;
 }
 function mutationProjectPath(projectArg) {
   const project = projectArg == null ? "" : String(projectArg).trim();
@@ -296,7 +309,7 @@ const HELP_COMMANDS = {
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment isolated|shared] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",
@@ -378,7 +391,7 @@ Usage:
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force] [--token-file path] [--effort level] [--direct --reason "why this is inline-safe"]   atomically take a ticket (category-routed executor claims require a prepared token file and exact executor; direct is an inline-safe exception)
-  sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
+  sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record an advisory checkpoint while claim and dispatch stay active; no final acceptance
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--verify "typed evidence"] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-interaction-commit <sha>] [--delivery-method reset|working-tree|manual] [--delivery-revision <sha>] [--resolved-path <path>] [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish and requires a matching delivered wave. --recovery-evidence retires an unclaimed attempt, bound or not, and closes the ticket in the same call: at once from the session that prepared the dispatch, otherwise only past the shared retirement deadline; inside it another session gets the same countdown "sidequest dispatch --recovery-evidence" prints, naming the instant and the runtime signal it measured from. For overlapping reviewed candidates with different pinned verifiers, compose their exact candidate refs in the registered target, run every pinned verifier and the full composed gate, then use --delivery-commit <immutable-candidate> --delivery-method manual without --integration. A pending candidate with --delivery-commit is checked for its pinned content and merged-tree verification; otherwise use --abandon-submission to record its discard; a reviewed interaction must descend from the delivered source, stay inside submitted candidate paths (renaming a submitted path stays inside), and pass the merged-tree gate; a non-reachable submitted candidate needs --delivery-method plus matching content in the integration working tree, or --delivery-revision <landed sha> when it was rebased or squash-merged before landing, where every submitted path must be identical there, a candidate deletion absent there, or reverse-apply cleanly, and every remaining path must be named with a repeated --resolved-path; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
@@ -494,10 +507,12 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment <isolated|shared>] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
     --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.
+    --verify-environment shared pins the command or suite verifier of each new isolated dispatch to run in the
+    shared checkout at integrate instead of in the executor's worktree; in-flight dispatches keep their pin.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.

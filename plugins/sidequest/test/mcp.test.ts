@@ -1155,8 +1155,8 @@ test('MCP accepts curated natural aliases and names each accepted mapping', asyn
 
 test('add accepts every ticket field update accepts, built from one schema (GH-424)', async () => {
   const properties = (name: string) => Object.keys((mcp.toolDescriptors() as any[]).find((tool) => tool.name === name).inputSchema.properties);
-  // ref, status, and by describe an existing ticket, so they stay update-only; the rest of update must file at creation.
-  const missingOnAdd = properties('update').filter((field) => !['ref', 'status', 'by'].includes(field) && !properties('add').includes(field));
+  // ref, status, and by describe an existing ticket, and admitComposition is a separate main-only action, so they stay update-only; the rest of update must file at creation.
+  const missingOnAdd = properties('update').filter((field) => !['ref', 'status', 'by', 'admitComposition'].includes(field) && !properties('add').includes(field));
   assert.deepEqual(missingOnAdd, [], 'a field valid on update must be valid on add');
 
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-add-parity-'))).slug;
@@ -6288,7 +6288,7 @@ test('mutations queue FIFO per board without blocking another board', async () =
   }
 });
 
-test('correction is queued as a board mutation and tools list stays within 25400 bytes', async () => {
+test('correction is queued as a board mutation and tools list stays within the payload budget', async () => {
   const verdict = mcp.TOOLS.find((candidate: { name: string }) => candidate.name === 'verdict');
   const original = verdict.handler;
   const started: string[] = [];
@@ -6307,7 +6307,7 @@ test('correction is queued as a board mutation and tools list stays within 25400
     await Promise.all([first, second]);
     assert.deepEqual(started, ['first-correction', 'second-correction']);
     const response = await mcp.handleRequest({ jsonrpc: '2.0', id: 9321, method: 'tools/list' });
-    assert.ok(Buffer.byteLength(JSON.stringify(response.result.tools), 'utf8') <= 25400);
+    assert.ok(Buffer.byteLength(JSON.stringify(response.result.tools), 'utf8') <= mcp.MCP_TOOLS_LIST_MAX_BYTES);
   } finally {
     releaseFirst();
     await Promise.allSettled([first, second]);

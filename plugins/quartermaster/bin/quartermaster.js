@@ -37,7 +37,7 @@ Usage:
   quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>] [--blocked]
   quartermaster enable-auto-allowlist [--project <path>]
   quartermaster crap [--project <path>] [--lcov <path>] [--complexity <lizard.csv>]
-                     [--coverage-command "<cmd>"] [--json]
+                     [--coverage-command "<cmd>"] [--cc-only] [--json]
 
 Everything prints JSON except crap, which prints one line per offender plus a summary unless --json.
 Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
@@ -47,7 +47,15 @@ the candidate list, since a hook denial is not the same signal as a real approva
 crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, base), needs
 lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and checks only changed or new functions
 at the fixed CRAP threshold ${DEFAULT_MAX}. It exits 0 pass, 1 functions at or above ${DEFAULT_MAX},
-2 unverified measurement (lizard or coverage missing, or coverage command failed).
+2 unverified measurement (lizard or coverage missing, coverage command failed, or a changed line that
+no function row of its own measures, a nested function lizard dropped included).
+CRAP is never below cc, so a changed or new function with cc ${DEFAULT_MAX} or more fails at any coverage:
+split it, more tests cannot fix it. crap --cc-only checks exactly that and nothing else: lizard only, no
+coverage command, no lcov, same changed-function selection, same exit codes, done in seconds. Use it
+while splitting functions, then run the full gate once. It rejects --lcov and --coverage-command.
+When the default or chosen local base branch has an upstream it is behind, crap warns on stderr (it never
+fails for it): already-merged work reads as changed against a stale base. Pass --base <base>@{upstream},
+or fetch and fast-forward the base.
 crap measures .tsx and .jsx with lizard's TypeScript reader, not its TSX one, on both sides of the base
 comparison, because the TSX reader loses brace balance on ordinary JSX and folds the functions below a
 tag into it. Every offender line for those files names its measurement (source=lizard-typescript), and
@@ -206,6 +214,18 @@ function parseArgs(argv) {
   return options;
 }
 
+// parseArgs and main are legacy switch parsers the CRAP gate fails at any coverage once edited, so
+// the one flag added since is lifted off argv ahead of them and read back by the crap command alone.
+const CC_ONLY_FLAG = '--cc-only';
+
+function argvWithoutCcOnly(argv) {
+  return argv.filter((argument) => argument !== CC_ONLY_FLAG);
+}
+
+function ccOnlyRequested() {
+  return process.argv.includes(CC_ONLY_FLAG);
+}
+
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -241,6 +261,24 @@ function runDecisionsRemove(options) {
   printJson(removeDecision(options.id));
 }
 
+function exitOnCrapPrerequisite(error) {
+  if (!(error instanceof PrerequisiteError)) throw error;
+  process.stderr.write(`quartermaster crap: ${error.message}\n`);
+  if (error.hint) process.stderr.write(`${error.hint}\n`);
+  process.exitCode = 2;
+}
+
+function printCrapReport(report, options) {
+  process.stderr.write(`quartermaster crap: measured ${report.root}\n`);
+  for (const warning of report.warnings) process.stderr.write(`quartermaster crap: warning: ${warning}\n`);
+  if (report.usedDeprecatedRatchet) {
+    process.stderr.write('quartermaster crap: --ratchet and the config key "ratchet" are deprecated, use --base or "base" instead\n');
+  }
+  if (options.json) printJson(report);
+  else process.stdout.write(formatReport(report));
+  process.exitCode = report.failures.length ? 1 : 0;
+}
+
 function runCrap(options) {
   let report;
   try {
@@ -254,21 +292,13 @@ function runCrap(options) {
       lcov: options.lcov,
       complexity: options.complexity,
       coverageCommand: options.coverageCommand,
+      ccOnly: ccOnlyRequested(),
     });
   } catch (error) {
-    if (!(error instanceof PrerequisiteError)) throw error;
-    process.stderr.write(`quartermaster crap: ${error.message}\n`);
-    if (error.hint) process.stderr.write(`${error.hint}\n`);
-    process.exitCode = 2;
+    exitOnCrapPrerequisite(error);
     return;
   }
-  process.stderr.write(`quartermaster crap: measured ${report.root}\n`);
-  if (report.usedDeprecatedRatchet) {
-    process.stderr.write('quartermaster crap: --ratchet and the config key "ratchet" are deprecated, use --base or "base" instead\n');
-  }
-  if (options.json) printJson(report);
-  else process.stdout.write(formatReport(report));
-  process.exitCode = report.failures.length ? 1 : 0;
+  printCrapReport(report, options);
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -345,10 +375,10 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-  main().catch((error) => {
+  main(argvWithoutCcOnly(process.argv.slice(2))).catch((error) => {
     process.stderr.write(`quartermaster failed: ${error.message}\n`);
     process.exitCode = 1;
   });
 }
 
-module.exports = { main, parseArgs, USAGE };
+module.exports = { argvWithoutCcOnly, main, parseArgs, USAGE };

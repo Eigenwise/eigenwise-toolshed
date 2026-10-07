@@ -97,3 +97,16 @@ test('kernel export surface does not claim inline eligibility authority', () => 
   assert.equal('inlineEligibility' in kernel, false);
   assert.match(kernel.transitionAttempt({ state: 'closed' }, 'claim').code, /invalid_transition/);
 });
+
+// SQ-3424: an environment-bound verifier runs at delivery, so submit admits the deferred result
+// without ever reading it as accepted.
+test('SQ-3424: kernel admits a deferred verification at submit without accepting it', () => {
+  const deferred = { kind: 'command', status: 'deferred', evidence: 'Deferred to the environment lane: npm test runs in the shared checkout at delivery, against the merged tree.', command: 'npm test' };
+  assert.equal(kernel.verificationAccepted(deferred), false);
+  assert.equal(kernel.verificationOutcome(deferred), 'verification_deferred');
+  const decision = submission.decideSubmissionAdmission({
+    ...admissionFacts('git', 'a'.repeat(40)),
+    verification: { result: deferred, expectedEvidence: null },
+  });
+  assert.deepEqual(decision, { ok: true, diagnostics: [] });
+});

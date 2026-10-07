@@ -87,7 +87,7 @@ const ARTIFACT_LIFECYCLE_MARKER = '[sidequest-artifact-mode]';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 75;
 const EXECUTOR_CONTRADICTION_RULE = 'Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.';
 
 // Earlier releases generated stable executors in this directory. The migration
@@ -877,6 +877,15 @@ function briefingCommentBody(comments?: any) {
   ].join('\n\n');
 }
 
+function configuredQualityGateBody(projectPath?: string, slug?: string) {
+  const project = projectPath || store.readMeta(slug)?.path;
+  if (!project) return 'Configured quality gate: none.';
+  const configPath = path.join(project, '.claude', 'quartermaster', 'crap.json');
+  if (!fs.existsSync(configPath)) return 'Configured quality gate: none.';
+  const { command = 'node "<quartermaster plugin root>/bin/quartermaster.js" crap', max = 'gate-owned', threshold = max, base = 'gate-selected default' } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}`;
+}
+
 function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?: any, executor?: any, closeout?: any, worktreeIdentity?: any, readOnlyScratchSpace?: any, worktreeSync?: any) {
   const claimCall = [
     'mcp__plugin_sidequest_board__claim({',
@@ -1151,7 +1160,8 @@ function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any, projectPath
   if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
   }
-  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath);
+  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath)
+    .replace('## Executor briefing', '## Executor briefing\n\n' + configuredQualityGateBody(projectPath, slug));
 }
 
 function ticketIsolation(ticket?: any, sharedTree?: any) {

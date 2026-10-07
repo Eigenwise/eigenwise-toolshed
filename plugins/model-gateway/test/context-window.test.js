@@ -481,7 +481,7 @@ test('Codex sentry returns one client-distinguishable context-overflow 413', asy
   assert.equal(overflow.status, 413);
   const error = JSON.parse(overflow.body).error;
   assert.equal(error.type, 'request_too_large');
-  assert.match(error.message, /^Prompt is too long for the Codex context window; compact and retry\. \(101 tokens > 100 tokens\)$/);
+  assert.match(error.message, /^Prompt is too long for the Codex context window; compact and retry\. \(101 tokens > 100 tokens\) \[model-gateway: phase first_turn, refused by gateway_sentry;/);
   assert.equal(forwarded, 1);
 });
 
@@ -511,9 +511,12 @@ test('Grok sentry returns a client-distinguishable context-overflow 413', async 
   assert.equal((await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders)).status, 200);
   const overflow = await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders);
   assert.equal(overflow.status, 413);
-  assert.deepEqual(JSON.parse(overflow.body).error, {
-    type: 'request_too_large',
-    message: 'Prompt is too long for the Grok context window; compact and retry. (101 tokens > 100 tokens)',
+  const error = JSON.parse(overflow.body).error;
+  assert.equal(error.type, 'request_too_large');
+  assert.ok(error.message.startsWith('Prompt is too long for the Grok context window; compact and retry. (101 tokens > 100 tokens) [model-gateway:'), error.message);
+  assert.deepEqual(error.overflow, {
+    phase: 'first_turn', refused_by: 'gateway_sentry', request_bytes: Buffer.byteLength(grokBody),
+    tokens: 101, tokens_from: 'previous_turn_usage', limit_tokens: 100,
   });
   assert.equal(forwarded, 1);
 });
@@ -814,7 +817,7 @@ test('an old-proxy context error is normalized to HTTP 413 request_too_large', a
   assert.equal(parsed.error.type, 'request_too_large');
 });
 
-test('an upstream 413 with parseable token counts passes through untouched', async (t) => {
+test('an upstream 413 with parseable token counts keeps them and only appends diagnostics', async (t) => {
   const upstreamBody = JSON.stringify({
     type: 'error',
     error: { type: 'request_too_large', message: 'input is too large (935012 tokens > 920000 tokens)' },
@@ -851,9 +854,13 @@ test('an upstream 413 with parseable token counts passes through untouched', asy
     messages: [{ role: 'user', content: 'oversized' }],
   }));
   assert.equal(response.status, 413);
-  assert.equal(response.body, upstreamBody);
   const parsed = JSON.parse(response.body);
+  assert.equal(parsed.type, 'error');
   assert.equal(parsed.error.type, 'request_too_large');
+  assert.ok(parsed.error.message.startsWith('input is too large (935012 tokens > 920000 tokens) [model-gateway:'), parsed.error.message);
+  assert.equal(parsed.error.message.match(/tokens\s*>\s*\d+ tokens/g).length, 1);
+  assert.equal(parsed.error.overflow.tokens, 935012);
+  assert.equal(parsed.error.overflow.limit_tokens, 920000);
 });
 
 test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', async (t) => {
@@ -1607,7 +1614,7 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| 967000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
@@ -1655,10 +1662,10 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       encoding: 'utf8',
     });
     assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| 292000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| 292000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
-    assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; compacts near 292000/);
-    assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; native window 325000; exact compaction trigger unverified \(native engine headroom applies\)/);
+    assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -1685,7 +1692,7 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| synthetic-413 \| 115000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| unverified \(native engine headroom\) \| synthetic-413 \| 115000 \(cap\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

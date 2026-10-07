@@ -5,8 +5,11 @@ import type { Diagnostic } from './index.js';
 export const VERIFICATION_KINDS = ['suite', 'command', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'] as const;
 export type VerificationKind = (typeof VERIFICATION_KINDS)[number];
 
-export const VERIFICATION_STATUSES = ['passed', 'failed_suite', 'toolchain_missing', 'could_not_run', 'timeout', 'manual', 'attestation', 'skipped', 'failed_check'] as const;
+export const VERIFICATION_STATUSES = ['passed', 'failed_suite', 'toolchain_missing', 'could_not_run', 'timeout', 'manual', 'attestation', 'skipped', 'failed_check', 'deferred'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
+
+export const VERIFICATION_ENVIRONMENTS = ['isolated', 'shared'] as const;
+export type VerificationEnvironment = (typeof VERIFICATION_ENVIRONMENTS)[number];
 
 export type VerificationSuite = Readonly<{
   name: string;
@@ -21,6 +24,7 @@ export type VerificationRequirement = Readonly<{
   command?: string;
   suite?: VerificationSuite;
   artifact?: string;
+  environment?: 'shared';
 }>;
 
 export type VerificationWaiver = Readonly<{

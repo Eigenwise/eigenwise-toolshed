@@ -69,7 +69,7 @@ node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
 node bin/quartermaster.js enable-auto-allowlist [--project <path>]
-node bin/quartermaster.js crap [--project <path>] [--max 6] [--base <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
+node bin/quartermaster.js crap [--project <path>] [--max 6] [--base <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--cc-only] [--json]
 ```
 
 Everything prints JSON except `crap`. Node standard library only, no dependencies, cross-platform.
@@ -89,9 +89,13 @@ Settings come from `.claude/quartermaster/crap.json`, and flags override it:
 }
 ```
 
-Without `base` every function has to stay under `max`. With it, functions in files changed against `git merge-base HEAD <base>` may not get worse than they were, new functions still have to clear `max`, and the summary reports how many pre-existing functions are already at or above it. `--ratchet` and the config key `ratchet` still work as a deprecated alias for `--base`/`base`; using either prints a one-line warning.
+Every changed or new function has to stay under the ceiling (6; 6 fails), and unchanged functions are not gated. A function counts as changed when it differs from its copy at `git merge-base HEAD <base>`; `base` defaults to the local `develop`, `main`, or `master`. With no base (none of those branches exists, or `base` is `HEAD`) every function is gated. `--ratchet` and the config key `ratchet` still work as a deprecated alias for `--base`/`base`; using either prints a one-line warning.
 
-Exit codes: 0 the gate passed, 1 the gate failed, 2 a prerequisite is missing (lizard is not resolvable, there is no lcov file, or the coverage command failed). Quartermaster looks for `lizard` on PATH, then `uvx lizard`, then `pipx run lizard`; it never installs it, it prints the install hint (`uv tool install lizard`, `pipx install lizard`, or `pip install lizard`).
+CRAP is never below cc, so a changed function with cc 6 or more fails at any coverage. The failure line says so (`cc 6 or more fails at any coverage`): split the function, because more tests cannot fix it. `--cc-only` checks exactly that and nothing else. It runs lizard only, with no coverage command and no lcov, applies the same changed-function selection and base, and fails each changed function with cc 6 or more (`cc=<n> fails at any coverage (CRAP is never below cc)`). It exits 1 on a failure and 2 on a missing prerequisite, like the full gate, and takes seconds. Use it while splitting functions, then run the full gate once. It rejects `--lcov` and `--coverage-command`.
+
+The default base is the local branch, never `origin/<branch>`, because a fork's origin can be stale. A local base that lags its upstream makes work already merged there read as changed, so when `git rev-list --count <base>..<base>@{upstream}` is above zero, `crap` prints a one-line warning on stderr naming how many commits the base is behind. Pass `--base <base>@{upstream}`, or fetch and fast-forward the base. The warning never fails the gate.
+
+Exit codes: 0 the gate passed, 1 the gate failed, 2 a prerequisite or measurement is missing (lizard is not resolvable, there is no lcov file, the coverage command failed, or a changed line lies in a function no lizard row of its own measures, a nested function lizard dropped included; the gate corrects the spans lizard misreads and fails closed on what it cannot place). Quartermaster looks for `lizard` on PATH, then `uvx lizard`, then `pipx run lizard`; it never installs it, it prints the install hint (`uv tool install lizard`, `pipx install lizard`, or `pip install lizard`).
 
 ## Configuration
 
@@ -115,4 +119,4 @@ Environment variables are optional:
 
 ## Support
 
-Optional support is available through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Quartermaster's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.

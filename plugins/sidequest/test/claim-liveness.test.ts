@@ -188,6 +188,24 @@ test('a long claim does not let a second executor take the ticket', () => {
   assert.strictEqual(store.readyTickets(slug).some((entry?: any) => entry.ref === ticket.ref), false, 'live work never returns to the ready pool');
 });
 
+// The ticket lock is a file owned by this live pid, so the stranger's claim waits out its bounded
+// acquisition. The answer must name the live claimant rather than a retryable busy.
+test('a claim that cannot take the ticket lock still names the live claimant', () => {
+  const ticket = addRouted('locked live claim');
+  const prepared = claimRouted(ticket, 'lock-holder-executor');
+  const before = JSON.stringify(store.getTicket(slug, ticket.ref));
+  const lock = path.join(store.projectDir(slug), 'tickets', `.${ticket.id}.lock`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'claim-liveness-held-ticket-lock' }), { flag: 'wx' });
+  try {
+    const stranger = store.claimTicket(slug, ticket.ref, 'locked-out-executor', { token: prepared.token, executor: prepared.ticket.dispatchExecutor, source: 'mcp' });
+    assert.strictEqual(stranger.reason, 'claimed');
+    assert.strictEqual(stranger.claim.by, 'lock-holder-executor');
+  } finally {
+    fs.unlinkSync(lock);
+  }
+  assert.strictEqual(JSON.stringify(store.getTicket(slug, ticket.ref)), before);
+});
+
 test('a quiet long-running executor and an executor between turns survive the sweep', () => {
   const quiet = addRouted('quiet but alive');
   claimRouted(quiet, 'quiet-executor');

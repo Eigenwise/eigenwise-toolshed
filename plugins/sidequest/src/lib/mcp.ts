@@ -67,7 +67,15 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24300 for groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route
 // that closes a candidate rebased or squash-merged before it landed: +980 bytes compacted, measured on the
 // wave-3 tree with SQ-3118 and GH-222 already in, so the 2.5KB reserve still holds.
-const MCP_TOOLS_LIST_MAX_BYTES = 25400;
+// Raised from 25400 for update.admitComposition (SQ-3331): +1675 bytes compacted, all of it schema structure,
+// since compactSchema strips its descriptions and update's served description is empty. Trimming other tools
+// could not recover it without dropping callable constraints or pinned contract text, so the 2.5KB reserve holds.
+// Raised from 27075 for board_config.verifyEnvironment (SQ-3423): +235 bytes compacted, 67 for the key and its
+// enum plus 168 for the served description, since compactSchema strips the authored one. Measured at 24797
+// payload bytes on the W1 tree, so the 2.5KB reserve holds.
+// Raised from 27300 for the GH-424 add/update schema parity merged with develop: measured at 24828 payload
+// bytes on the merged tree, so 27330 keeps the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 27330;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -329,6 +337,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears.' },
+  board_config: { verifyEnvironment: 'shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated).' },
   dispatch: {
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
     recoveryEvidence: 'Unverified; preparer retires now, else latest signal grace; bound name only.',

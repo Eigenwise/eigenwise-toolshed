@@ -64,7 +64,11 @@ panel.
 
 Before dispatching a substantial or ambiguous feature, put one visible, pinned contract on the story,
 a planning ticket, or the ticket descriptions. It is the handoff from planning to execution, not a
-second design process. Pin:
+second design process. For substantial or safety-sensitive work, first check architecture and feasibility
+before expensive implementation or tests: use the preflight in
+`../sidequest/references/ticket-authoring.md`. Consume evidence from the project's configured quality gate, if any, through its dedicated owner,
+check genuine native baseline/candidate ownership and the oracle's real deadline/resource fit. Small
+deterministic fixes keep one owner and a focused check; no mandatory planning panel. Pin:
 
 - **Outcome and explicit non-goals**, so later work has a boundary to cut against.
 - **Smallest authority and intervention**, the actual call flow and source of truth that decide behavior.
@@ -93,7 +97,7 @@ or three bounded proposals only when the approach is genuinely contested.
 3. One question round for what they could not, or none.
 4. Design: write the contract, or run a panel and merge the winner.
 5. Story plus the complete backlog for every planned wave, filed before anything dispatches.
-6. Dispatch each ready wave in full, go quiet, re-plan between waves.
+6. Dispatch each ready wave in full, keep routine supervision quiet, allow declared live advice, and re-plan between waves.
 7. Review at the sized depth, integrate by oracle, publish, close out.
 
 Track these with the task tools so the user can see where the feature is.
@@ -202,7 +206,10 @@ Whatever the route, a contract that makes fan-out safe pins:
 - **Dependency order**, so `ready` partitions the backlog into waves by itself.
 - **The exact scoped verify command per piece**, runnable and deterministic. The integrator runs the full merged-tree gate once per wave.
 - **Shared runtime resources**: fixed ports, servers, databases, fixture paths. Worktrees isolate
-  files, not runtime, so two tickets sharing a port serialize even inside one wave.
+  files, not runtime. Name the shared resource and current holder; serialize commands using it,
+  not entire tickets. Non-owners continue independent read/edit/commit work, record readiness, and
+  end the turn retaining their claim until the parent explicitly hands off. Heavy commands use
+  at most two workers, finite owned deadlines, and descendant cleanup, within the two-core heavy budget.
 
 Present the chosen approach and its main trade-off in a few lines. Ask for approval only when the
 choice is expensive to reverse: a schema or migration, a public API, a user-visible default, a new
@@ -251,18 +258,35 @@ Flag the tickets that deserve `highStakes: true` now: data loss, auth, money, th
 irreversible migration. That flag is what pulls deeper verification and a required review pass into
 the ticket instead of relying on you to remember at the end.
 
+Size implementation plus final verification to fit comfortably before 75 tool rounds; otherwise
+split along actual cohesive boundaries before dispatch. A resource pause does not automatically
+release/restart an executor or prove death.
+
 ## 6. Run the waves
 
 Fresh `dispatch <ref>` per ticket, every spawn field passed through unchanged, all of it in one
 message so the wave actually runs in parallel. Dispatch everything whose dependencies are met.
 Same-file overlap across isolated worktrees deserves a look, not automatic serialization.
 
-Then stop touching it. No pulses, no comment reads, no worktree peeks between dispatch and submission.
-Each peek costs a full-context turn at the top model rate and returns nothing you can act on, since a
-half-finished executor's state is not a decision point. Executors report on their own, and
-`changes --since` is the read when you do need one. Steer instead of restarting: answer scope
+Then leave routine supervision quiet: no pulses, comment reads or arbitrary worktree peeks between
+dispatch and submission. Explicitly assigned builders and readonly advisors may collaborate directly
+through available native messaging and inspect authorized source snapshots under
+`../sidequest/references/readonly-guidance.md`. Advice stays advisory; final `review-audit` acceptance
+still binds the terminal immutable submission. Preauthorize ordinary implementation/check/measurement
+steps within the contract, with one producer owning capture and submit. Pause only the blocked step;
+continue unaffected source work. Relay real scope/resource/authority decisions, not routine checkpoint
+or acknowledgement loops. Executors report on their own, and `changes --since` is the read when needed.
+Steer instead of restarting: answer scope
 requests, use `SendMessage` for what a message can fix, and never stop-then-redispatch work that is
-still moving.
+still moving. For resource transfers, require the actual owner's acknowledgement that its owned
+heavy command and descendants ended, then a parent `SendMessage` naming the next holder. A terminal
+submit/done/release suffices when it really ends owned work; an authenticated explicit mid-claim
+return is valid too. Never infer availability from elapsed time, process counts, failed sends,
+model labels, or absence.
+
+Comment `since` is exclusive and only a read cursor. Include the exact instruction/comment in a
+handoff or direct bounded inclusive/all-comments recovery; advance the processed cursor only after
+consuming instructions, not merely observing a watermark.
 
 When a confirmed blocker falls within the user's delegated work, dispatch its existing ticket once
 ready. If preparation is needed, start that preparation rather than ending with a status report. If
@@ -286,7 +310,9 @@ Note it, and cut thinner slices next time.
 ## 7. Review at the sized depth, then integrate
 
 The floor is always the same: read the submission report, deliver the range, and run the merged-tree
-full gate once for the wave. On green, finish the publish transaction under the publish lock.
+full gate once for the wave before versioning. Preserve the real pinned delivery verifier; reuse
+assembled-tree proof only under the runtime's exact authority checks. A changed tree after rebase
+needs a fresh gate. On green, finish the publish transaction under the publish lock.
 
 How much review sits on top of that floor scales with the work:
 
@@ -294,7 +320,9 @@ How much review sits on top of that floor scales with the work:
   deterministic verify buys nothing.
 - **Named uncertainty or safety-sensitive seam**: add a `review-audit` only when the done-oracle
   cannot exercise a stated seam, such as a consumer the wave did not test. The contract names the
-  seam and the review mandate. A safety-sensitive contract can make that review required.
+  seam and the review mandate. A required high-stakes review also applies. Multiple lenses need
+  distinct named risks, never merely multiple waves. Bind required candidate reviews before delivery
+  and preserve the immutable candidate and source-review guards.
 
 Give reviewers an adversarial mandate: try to break the named seam, identify the failing input or
 broken consumer, and record evidence. Review verifies the pinned contract and its oracle, never silently

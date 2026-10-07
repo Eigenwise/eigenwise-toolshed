@@ -149,12 +149,12 @@ handing off implementation. Draw from three sources, in this order:
     not-a-codebase.
   - **CRAP gate**: propose it for every codebase, including one short explanation: it scores each
     function's branching complexity and test coverage together, so big untested functions stand out.
-    Quartermaster starts at 6, which means every function stays small or tested. Show the detected
+    The gate is opt-in; an unconfigured project runs its tests and continues. Show the detected
     stack's LCOV recipe from [references/crap-gate.md](references/crap-gate.md), the proposed
     `.claude/quartermaster/crap.json`, the derived `.claude/live-rules/rules/crap-gate.md`, and the
-    threshold choice. New projects apply 6 to every function. Existing projects ratchet against the
-    default branch while applying 6 to new functions, and show the current count at or above 6 before
-    asking whether the user wants another ceiling.
+    exact gate command and its cost (the analyzer, LCOV setup, and coverage execution). Only write
+    the config and live rule after approval. The gate owns the threshold; keep numbers out of
+    executor and orchestrator instructions.
 
 Before putting a named plugin or external recommendation in the plan, keep the local catalog first and
 use it as the source for installed state. Research only candidates that would lead to an install or

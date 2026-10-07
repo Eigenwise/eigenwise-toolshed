@@ -394,4 +394,6 @@ const tools = [
     }
   }
 ];
+const { installCompositionUpdate } = require("./mcp-composition-admission");
+installCompositionUpdate(tools.find((tool) => tool.name === "update"));
 module.exports = { tools };

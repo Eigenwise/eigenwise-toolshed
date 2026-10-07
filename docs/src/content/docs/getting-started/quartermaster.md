@@ -52,15 +52,21 @@ Setup installs the approved plugins and writes the approved project files, then 
 
 ### Keep complex code tested
 
-Setup proposes a CRAP gate for a codebase. CRAP combines a function's branching complexity and test
-coverage, so a large function with little coverage gets a high score. The fixed threshold is 6, and
-6 fails. It checks every new or modified function, while untouched legacy functions stay out of scope.
+The quality gate is optional. Run `/quartermaster:setup` and approve its CRAP gate proposal to turn
+it on. CRAP combines a function's branching complexity and test coverage, so a large function with
+little coverage gets a high score. The gate owns its threshold and checks new or modified functions;
+untouched legacy functions stay out of scope. Without a configured gate, run your tests and continue.
 
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 
 ```text
 node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
+
+A function with complexity 6 or more fails at any coverage, so the failure line says to split it
+rather than add tests. Add `--cc-only` to check just that: it needs only lizard, runs no coverage
+command, and finishes in seconds. If your local `develop`, `main` or `master` is behind its upstream,
+the gate warns on stderr and suggests `--base <branch>@{upstream}`.
 
 The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
 the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
@@ -71,7 +77,9 @@ fresh coverage exits 2 instead of scoring stale results.
 It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
-file that has function-like source tokens. Follow the printed hint, then run the gate again.
+file that has function-like source tokens. It also covers a changed line inside a function lizard
+misread so badly that no row of its own measures it, a nested function lizard dropped included, even
+after the gate corrects lizard's spans from the source. Follow the printed hint, then run the gate again.
 
 React files get one extra step. lizard's TSX reader miscounts ordinary JSX badly enough to score a
 component for code that is not in it, so the gate measures `.tsx` and `.jsx` with lizard's TypeScript
@@ -133,6 +141,33 @@ Raw transcript files are never loaded into model context, and the resupply skill
 Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial and no hook block, and it never covers a destructive command such as `rm` or `git push --force`. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. It vetoes several other classes of rule that would be too broad however often approved: a shell control keyword or subshell opener (`for`, `if`, `{`); a compound command whose separator or redirection (`;`, `&`, `|`, `<`, `>`) proves the rest of the command was cut off the fingerprint; a `cd` target, other argument, or command substitution (`$VAR`, `$(...)`, a backtick) that only resolves at runtime; a wrapper (`nohup`, `timeout`, `nice`, `setsid`, `stdbuf`, `command`, `builtin`, `watch`, `script`, `chroot`), an interpreter, or `source`/`.` that runs caller-supplied code; and a version-pinned plugin cache path or per-session scratchpad path that goes stale on its own. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting.
 
 The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation records the user's own no to a proposal actually shown to them, and it does not return in that project; an accepted one is checked in a later pass. A finding the skill itself decides to skip, rather than one the user turned down, is left unrecorded or marked deferred instead of rejected.
+
+### Native Claude Code mod recommendations
+
+Resupply can recommend a native mod when repeated-work evidence points to a useful status entry,
+band, pane, or toast that native features, installed extensions, or an existing skill do not already
+cover. It reuses the same bounded aggregate and host-extension route. A workflow already covered by
+a skill stays there. Before proposing a mod, Claude checks the current host's `plugin-authoring`
+skill and generated types for the exact event, API, and data it needs. Missing support stays
+unverified; a completed turn does not prove you are away.
+
+Each proposal names the evidence window and limits, user benefit, exact on-screen behavior and
+project/session scope, proposed change, runtime owner, and setup and ongoing usage/model-call costs.
+Time savings are labeled measured only with comparable timed evidence, otherwise inferred or not
+quantified. Quartermaster owns assessment, approved setup, and bounded acceptance checks. Runtime
+behavior stays with its owner: orchestration, recurring rules, scoring, mapping, and telemetry keep
+their own owners. A missing runtime owner calls for a separate package.
+
+Approving resupply or improving its skill does not approve building or loading any recommended mod,
+settings/hooks/permissions changes, deletion, publication, or paid actions. Each item needs its own
+approval. Native hot reload is your decision, and setup stays pending until activation and a live
+check of the approved behavior on your surface. Approvals and rejections use the existing decision
+ledger and stable fingerprints; declining hot reload leaves an approved setup pending. UI-only mods
+can lack attribution, so a later pass cannot infer non-use from that alone.
+
+A proposed **Away Mode** is user-invoked, with explicit task scopes, time and usage/model-call
+budgets, concurrency limits, and stop conditions. It uses existing permissions and its runtime owner.
+It grants no automatic idle work, permission changes, or paid/publishing/deletion authority.
 
 ## How the loop closes
 

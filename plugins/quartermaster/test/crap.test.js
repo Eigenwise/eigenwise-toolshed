@@ -7,10 +7,10 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
+const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, parseLizardCsv, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
-const { withBodySpans } = require('../lib/crap-core.cjs');
+const { SCANNED_SOURCE, unmeasuredDefinitionLines, withBodySpans } = require('../lib/crap-core.cjs');
 
 function fixtureProject(files) {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-'));
@@ -47,13 +47,23 @@ function runner(current, base) {
   return ({ cwd }) => (path.basename(cwd).startsWith('quartermaster-crap-base-') ? base : current);
 }
 
-/** The gate resolves lizard itself; skip only when none of the three ways to reach it works here. */
-function lizardResolves() {
-  for (const [command, leading] of [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]]) {
+/** The gate resolves lizard itself, in this order; CI has no `lizard` on PATH and reaches PyPI's latest through pipx. */
+function firstWorkingLizardLauncher() {
+  return [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]].find(([command, leading]) => {
     const probe = spawnSync(command, [...leading, '--version'], { encoding: 'utf8' });
-    if (!probe.error && probe.status === 0) return true;
-  }
-  return false;
+    return !probe.error && probe.status === 0;
+  });
+}
+
+function lizardResolves() {
+  return Boolean(firstWorkingLizardLauncher());
+}
+
+/** The row the lizard the gate would use reports for `name`, so a test can expect what this lizard actually reads. */
+function observedLizardRow(projectDir, file, name) {
+  const [command, leading] = firstWorkingLizardLauncher();
+  const listing = spawnSync(command, [...leading, '--csv', file], { cwd: projectDir, encoding: 'utf8' });
+  return parseLizardCsv(listing.stdout).find((row) => row.name === name);
 }
 
 function phantomFixture() {
@@ -88,12 +98,13 @@ function makeStale(filePath) {
   fs.utimesSync(filePath, dayAgo, dayAgo);
 }
 
-test('sameRealDir resolves a symlinked alias the way native realpath does, unlike plain realpathSync', () => {
+test('sameRealDir resolves a directory alias the way native realpath does, unlike plain realpathSync', () => {
   // A symlink alias stands in for a Windows 8.3 short name, and the non-native realpathSync is stubbed to
   // leave its input unresolved the way it leaves short names unexpanded on Windows.
   const realDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-real-'));
   const aliasDirPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-alias-')), 'alias');
-  fs.symlinkSync(realDirPath, aliasDirPath, 'dir');
+  // Windows junctions exercise the same directory-alias resolution without requiring symlink privilege.
+  fs.symlinkSync(realDirPath, aliasDirPath, process.platform === 'win32' ? 'junction' : 'dir');
 
   const originalRealpathSync = fs.realpathSync;
   const stubbedRealpathSync = (target) => target;
@@ -138,7 +149,155 @@ test('gates only new or modified functions at the strict threshold', () => {
 
   assert.deepEqual(report.failures.map((entry) => entry.function), ['run']);
   assert.equal(report.checked, 3);
-  assert.equal(formatReport(report), 'src/app.js:4 run cc=6 coverage=100% CRAP=6\nCRAP gate failed: 1 of 3 changed or new functions at or above 6\n');
+  assert.equal(formatReport(report), 'src/app.js:4 run cc=6 coverage=100% CRAP=6 - cc 6 or more fails at any coverage (CRAP is never below cc): split the function, more tests will not help\nCRAP gate failed: 1 of 3 changed or new functions at or above 6\n');
+});
+
+test('the full gate gives the split-it note only to a failure whose cc alone reaches the ceiling', () => {
+  const projectDir = fixtureProject({
+    'src/app.js': 'function tangled(value) { return value; }\nfunction untested(value) { return value; }\n',
+    'coverage/lcov.info': lcov([[1, 1], [2, 0]]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function tangled(value) { return value + 1; }\nfunction untested(value) { return value + 1; }\n', 'utf8');
+
+  const report = crapReport({
+    projectDir,
+    base: 'main',
+    runLizard: () => csv([{ complexity: 7, name: 'tangled', start: 1, end: 1 }, { complexity: 3, name: 'untested', start: 2, end: 2 }]),
+  });
+
+  const lines = formatReport(report).split('\n');
+  assert.equal(lines[0], 'src/app.js:2 untested cc=3 coverage=0% CRAP=12', 'a low-cc function is failed by coverage, so more tests do help it');
+  assert.match(lines[1], /^src\/app\.js:1 tangled cc=7 coverage=100% CRAP=7 - cc 6 or more fails at any coverage/);
+});
+
+/** The coverage command leaves a marker file the moment it is spawned, so its absence proves it never ran. */
+function ccOnlyFixture() {
+  const stub = coverageStub(["fs.writeFileSync(path.join(__dirname, 'spawned'), 'yes');", 'process.exit(0);']);
+  const projectDir = fixtureProject({
+    'src/app.js': 'function keep(value) { return value; }\nfunction grow(value) { return value; }\n',
+    '.claude/quartermaster/crap.json': JSON.stringify({ coverageCommand: stub.command, base: 'main' }),
+  });
+  commitBase(projectDir);
+  return { projectDir, spawnedMarker: path.join(stub.dir, 'spawned') };
+}
+
+function changeGrow(projectDir) {
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function keep(value) { return value; }\nfunction grow(value) { return value + 1; }\n', 'utf8');
+}
+
+test('--cc-only passes changed functions under six, ignores an unchanged function over it, and spawns no coverage command', () => {
+  const { projectDir, spawnedMarker } = ccOnlyFixture();
+  changeGrow(projectDir);
+
+  const report = crapReport({
+    projectDir,
+    ccOnly: true,
+    runLizard: () => csv([{ complexity: 40, name: 'keep', start: 1, end: 1 }, { complexity: 5, name: 'grow', start: 2, end: 2 }]),
+  });
+
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.checked, 1, 'only grow changed; keep is over the ceiling but untouched');
+  assert.equal(fs.existsSync(spawnedMarker), false, 'the configured coverage command must not be spawned');
+  assert.equal(formatReport(report), 'CRAP gate (cc-only, no coverage) passed: 0 of 1 changed or new functions at or above 6\n');
+});
+
+test('--cc-only fails a changed function at cc six with the note, with no lcov on disk and no coverage command run', () => {
+  const { projectDir, spawnedMarker } = ccOnlyFixture();
+  changeGrow(projectDir);
+
+  const report = crapReport({
+    projectDir,
+    ccOnly: true,
+    runLizard: () => csv([{ complexity: 2, name: 'keep', start: 1, end: 1 }, { complexity: 6, name: 'grow', start: 2, end: 2 }]),
+  });
+
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['grow']);
+  assert.equal(fs.existsSync(spawnedMarker), false, 'the configured coverage command must not be spawned');
+  assert.equal(formatReport(report), 'src/app.js:2 grow cc=6 fails at any coverage (CRAP is never below cc)\nCRAP gate (cc-only, no coverage) failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+test('the CLI --cc-only exits 1 on a cc six failure, 0 when the changed code is under it, and 2 beside a coverage flag', (t) => {
+  // The base revision's functions come from the real lizard, because --complexity only replaces today's rows.
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const { projectDir, spawnedMarker } = ccOnlyFixture();
+  changeGrow(projectDir);
+  const withCsv = (complexity) => {
+    fs.writeFileSync(path.join(projectDir, 'complexity.csv'), csv([{ complexity: 1, name: 'keep', start: 1, end: 1 }, { complexity, name: 'grow', start: 2, end: 2 }]), 'utf8');
+    return runCli(['--cc-only', '--complexity', 'complexity.csv'], projectDir);
+  };
+
+  const failing = withCsv(9);
+  assert.equal(failing.status, 1, failing.stderr);
+  assert.match(failing.stdout, /grow cc=9 fails at any coverage \(CRAP is never below cc\)/);
+
+  const passing = withCsv(5);
+  assert.equal(passing.status, 0, passing.stderr);
+
+  const conflicting = runCli(['--cc-only', '--complexity', 'complexity.csv', '--lcov', 'coverage/lcov.info'], projectDir);
+  assert.equal(conflicting.status, 2, conflicting.stderr);
+  assert.match(conflicting.stderr, /--cc-only runs no coverage/);
+  assert.equal(fs.existsSync(spawnedMarker), false, 'no run of the three spawned the coverage command');
+});
+
+test('--cc-only is lifted off argv before the legacy parser sees it, so parseArgs stays untouched and --help still documents it', () => {
+  const { argvWithoutCcOnly, parseArgs, USAGE } = require(CLI);
+  assert.throws(() => parseArgs(['crap', '--cc-only']), /Unknown argument: --cc-only/);
+  assert.deepEqual(argvWithoutCcOnly(['crap', '--cc-only', '--json']), ['crap', '--json']);
+  const parsed = parseArgs(argvWithoutCcOnly(['crap', '--cc-only', '--json']));
+  assert.equal(parsed.command, 'crap');
+  assert.equal(parsed.json, true);
+  assert.equal('ccOnly' in parsed, false, 'the legacy options object never learns the flag');
+  assert.ok(USAGE.includes('[--coverage-command "<cmd>"] [--cc-only] [--json]'), 'usage line lists --cc-only');
+  assert.ok(USAGE.includes('crap --cc-only checks exactly that and nothing else'), 'help explains --cc-only');
+  const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0, help.stderr);
+  assert.equal(help.stdout, USAGE);
+});
+
+/** A clone whose local main tracks origin/main, with `originAhead` extra commits fetched but not merged. */
+function cloneBehindOrigin(originAhead) {
+  const origin = fixtureProject({
+    'complexity.csv': csv([{ complexity: 1, name: 'subject', start: 1, end: 1 }]),
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  commitBase(origin);
+  const clone = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-clone-')), 'work');
+  gitIn(origin, ['clone', origin, clone]);
+  for (let count = 1; count <= originAhead; count += 1) {
+    gitIn(origin, ['commit', '--allow-empty', '-m', `ahead ${count}`]);
+  }
+  gitIn(clone, ['fetch', 'origin']);
+  return clone;
+}
+
+test('a local base behind its upstream warns on stderr with the way out, and an up-to-date base prints nothing', () => {
+  const behind = runCli(['--complexity', 'complexity.csv'], cloneBehindOrigin(2));
+  assert.equal(behind.status, 0, behind.stderr);
+  assert.match(behind.stderr, /warning: local base main is 2 commits behind its upstream/);
+  assert.match(behind.stderr, /--base main@\{upstream\}, or fetch and fast-forward main/);
+
+  const single = runCli(['--complexity', 'complexity.csv'], cloneBehindOrigin(1));
+  assert.match(single.stderr, /local base main is 1 commit behind/);
+
+  const current = runCli(['--complexity', 'complexity.csv'], cloneBehindOrigin(0));
+  assert.equal(current.status, 0, current.stderr);
+  assert.doesNotMatch(current.stderr, /behind/);
+});
+
+test('naming the upstream as the base, or a base with no upstream, never warns', () => {
+  const clone = cloneBehindOrigin(2);
+  const viaUpstream = runCli(['--complexity', 'complexity.csv', '--base', 'main@{upstream}'], clone);
+  assert.equal(viaUpstream.status, 0, viaUpstream.stderr);
+  assert.doesNotMatch(viaUpstream.stderr, /behind/);
+
+  gitIn(clone, ['branch', '--unset-upstream', 'main']);
+  const noUpstream = runCli(['--complexity', 'complexity.csv'], clone);
+  assert.equal(noUpstream.status, 0, noUpstream.stderr);
+  assert.doesNotMatch(noUpstream.stderr, /behind/);
 });
 
 test('accepts a modified function whose score falls below six', () => {
@@ -232,7 +391,7 @@ test('a byte-identical copy of an over-ceiling function is new code and fails', 
 
   assert.deepEqual(report.failures.map((entry) => entry.line), [6], 'the original copy keeps the only baseline row there was');
   assert.equal(report.checked, 1);
-  assert.equal(formatReport(report), 'src/util.js:6 helper cc=10 coverage=100% CRAP=10\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+  assert.equal(formatReport(report), 'src/util.js:6 helper cc=10 coverage=100% CRAP=10 - cc 6 or more fails at any coverage (CRAP is never below cc): split the function, more tests will not help\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
 });
 
 test('a third same-named function over the ceiling is new code the baseline cannot account for', () => {
@@ -272,7 +431,7 @@ test('a third same-named function over the ceiling is new code the baseline cann
   assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.crap}`), ['10:7']);
   assert.equal(report.checked, 2, 'the rewritten second and the added third are judged; the untouched first is not');
   assert.equal(atLine(report, 1).crap, 10, 'the untouched first copy is over the ceiling and out of the gate');
-  assert.equal(formatReport(report), 'src/app.js:10 run cc=7 coverage=100% CRAP=7\nCRAP gate failed: 1 of 2 changed or new functions at or above 6\n');
+  assert.equal(formatReport(report), 'src/app.js:10 run cc=7 coverage=100% CRAP=7 - cc 6 or more fails at any coverage (CRAP is never below cc): split the function, more tests will not help\nCRAP gate failed: 1 of 2 changed or new functions at or above 6\n');
 });
 
 test('a byte-identical arrow keeps its baseline row after neighbours push it down the file', () => {
@@ -772,7 +931,7 @@ test('an uncovered function lizard truncated at its signature fails on the compl
   const route = report.functions.find((entry) => entry.function === 'route');
   assert.deepEqual([route.cc, route.coverage, route.crap], [9, 0, 90]);
   assert.deepEqual(report.failures.map((entry) => entry.function), ['route']);
-  assert.match(formatReport(report), /route cc=9 coverage=0% CRAP=90\nCRAP gate failed/);
+  assert.match(formatReport(report), /route cc=9 coverage=0% CRAP=90 - cc 6 or more fails at any coverage[^\n]*\nCRAP gate failed/);
 });
 
 test('a widened body counts its own branches and leaves each nested function to its own row', () => {
@@ -854,7 +1013,7 @@ test('the real lizard backend fails the uncovered route its reader cuts off at a
   const result = runCli([], projectDir);
 
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stdout, /src\/route\.js:1 route cc=9 coverage=0% CRAP=90\n/);
+  assert.match(result.stdout, /src\/route\.js:1 route cc=9 coverage=0% CRAP=90 - cc 6 or more fails at any coverage[^\n]*\n/);
   assert.match(result.stdout, /CRAP gate failed/);
 });
 
@@ -893,7 +1052,7 @@ test('the TypeScript reader measures the real .tsx bytes under a name that only 
     fixtureProject({
       'src/sale.tsx': source,
       'src/total.ts': 'export const total = (values: number[]) => values.length;\n',
-      'coverage/lcov.info': `${lcov([[17, 1]], 'src/sale.tsx')}${lcov([[1, 1]], 'src/total.ts')}`,
+      'coverage/lcov.info': `${lcov([[17, 1], [25, 1], [28, 1]], 'src/sale.tsx')}${lcov([[1, 1]], 'src/total.ts')}`,
     }),
   );
   const copies = [];
@@ -903,7 +1062,9 @@ test('the TypeScript reader measures the real .tsx bytes under a name that only 
     }
     // The scratch tree is gone by the time crapReport returns, so read it while lizard would have.
     for (const name of fs.readdirSync(cwd)) copies.push({ name, text: fs.readFileSync(path.join(cwd, name), 'utf8') });
-    return csv([{ complexity: 1, name: 'SaleField', start: 16, end: 20 }], `./${copies[0].name}`);
+    // The rows lizard 1.24.0's TypeScript reader reports for the fixture.
+    const rows = [{ complexity: 1, name: 'SaleField', start: 16, end: 20 }, { complexity: 2, name: 'packsLabel', start: 25, end: 25 }, { complexity: 3, name: 'SaleTotals', start: 27, end: 31 }];
+    return csv(rows, `./${copies[0].name}`);
   };
 
   const report = crapReport({ projectDir, runLizard });
@@ -912,7 +1073,7 @@ test('the TypeScript reader measures the real .tsx bytes under a name that only 
   assert.equal(copies[0].text, source, 'the copy is the real file byte for byte');
   assert.deepEqual(
     report.functions.map((entry) => `${entry.file}:${entry.line} cc=${entry.cc} ${entry.source}`).sort(),
-    ['src/sale.tsx:16 cc=1 lizard-typescript', 'src/total.ts:1 cc=1 lizard'],
+    ['src/sale.tsx:16 cc=1 lizard-typescript', 'src/sale.tsx:25 cc=2 lizard-typescript', 'src/sale.tsx:27 cc=3 lizard-typescript', 'src/total.ts:1 cc=1 lizard'],
     'the substitute row comes back under the real .tsx path, and the .ts row is the default reader\'s own',
   );
 });
@@ -946,4 +1107,925 @@ test('an untouched component in a changed .tsx keeps its baseline row, because t
   assert.deepEqual(report.failures, [], 'SaleTotals is untouched, so its uncovered line is not this change\'s to gate');
   assert.equal(report.checked, 1, 'only packsLabel changed');
   assert.deepEqual(reads, ['.tsx', '.ts', '.tsx', '.ts'], 'the working tree and the base revision each get a TypeScript-reader pass');
+});
+
+// lizard 1.24.0 reports no row at all for a `function`, method or constructor whose parameter list holds a
+// call (`a = f(), b`); it reports only `plain`, `arrow` and `wrapper` for this source.
+const DROPPED_SOURCE = [
+  'function plain(x) {',
+  '  return x ? 1 : 2;',
+  '}',
+  'function load(path = resolve(), opts) {',
+  '  if (!path) return null;',
+  '  if (opts && opts.fresh) return read(path);',
+  '  return cached(path);',
+  '}',
+  'class Store {',
+  '  constructor(private db = open(), name: string) {',
+  '    if (db) this.db = db;',
+  '  }',
+  '  async fetch<T>(key = keyOf(), fallback?: T): Promise<T | undefined> {',
+  '    return this.db.get(key) ?? fallback;',
+  '  }',
+  '}',
+  'const arrow = (a = f(), b) => {',
+  '  if (a) return b;',
+  '  return 0;',
+  '};',
+  'function wrapper(items) {',
+  '  if (check(items.map((item) => item.id))) {',
+  '    return items.filter(pick(1)) ? 1 : 0;',
+  '  }',
+  '  return cond ? run(step()) : { done: true };',
+  '}',
+  'class Derived extends mixin(Base(1)) {',
+  '  method() {}',
+  '}',
+  '',
+].join('\n');
+
+const DROPPED_LIZARD_ROWS = [
+  { name: 'plain', complexity: 2, start: 1, end: 3 },
+  { name: 'arrow', complexity: 2, start: 17, end: 20 },
+  { name: 'wrapper', complexity: 5, start: 21, end: 26 },
+];
+
+function scannedRows(source, rows = DROPPED_LIZARD_ROWS, extraFiles = []) {
+  const entries = rows.map((row) => ({ file: 'src/dropped.ts', ordinal: 0, ...row }));
+  return withBodySpans(entries, () => source, extraFiles)
+    .filter((entry) => entry.source === SCANNED_SOURCE)
+    .map((entry) => `${entry.name}@${entry.start}-${entry.end} cc=${entry.complexity} ordinal=${entry.ordinal}`);
+}
+
+test('a function lizard dropped altogether gets a row read from its source, and calls, conditions and arrows get none', () => {
+  assert.deepEqual(scannedRows(DROPPED_SOURCE), [
+    'load@4-8 cc=4 ordinal=0',
+    'constructor@10-12 cc=2 ordinal=0',
+    'fetch@13-15 cc=2 ordinal=0',
+    // No parameter list holds a call here: lizard loses a plain function after a dropped one, so it is read too.
+    'method@28-28 cc=1 ordinal=0',
+  ]);
+});
+
+test('a file with no function lizard dropped is left as lizard measured it, plain functions without a row included', () => {
+  const source = 'function plain(x) {\n  return x ? 1 : 2;\n}\nconst tag = (x) => `${x}`;\nif (check(items.map((item) => item.id))) {\n  run(step());\n}\n';
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), []);
+});
+
+test('a plain function lizard lost after a dropped one is read from its source', () => {
+  // lizard 1.24.0 reports nothing for this file: it loses `later` too once `current` is dropped.
+  const source = [
+    'function current(cache, now = Date.now()) {',
+    '  return now - cache >= 0 && now - cache < 5;',
+    '}',
+    'function later(query) {',
+    '  return query;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['current@1-3 cc=2 ordinal=0', 'later@4-6 cc=1 ordinal=0']);
+});
+
+test('a dropped function counts the branches of its own parameter defaults and leaves a nested function to its own row', () => {
+  const source = [
+    'function pick(a = f() || g(), b = h() ? 1 : 2) {',
+    '  const inner = (x) => x ? 1 : 2;',
+    '  if (a) return inner(b);',
+    '  return b;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['pick@1-5 cc=4 ordinal=0']);
+});
+
+test('a dropped function whose line holds a lizard row of its own name keeps that row, and a same-named one takes the next ordinal', () => {
+  const source = [
+    'function twice(a = f()) {',
+    '  if (a) return 1;',
+    '  return 0;',
+    '}',
+    'function twice(b = g()) {',
+    '  if (b) return 2;',
+    '  return 0;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'twice', complexity: 2, start: 1, end: 4 }]), ['twice@5-8 cc=2 ordinal=1']);
+});
+
+test('a dropped function that starts on the line of another function\'s lizard row still gets a row of its own', () => {
+  // The owner's review input (sameLine): lizard 1.24.0 reports only `outer`, at line 1 with cc 1.
+  const source = [
+    'export function outer(q) { return function inner(a = f()) {',
+    '  if (!a) return 0;',
+    '  return q && a ? 2 : 3;',
+    '}; }',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'outer', complexity: 1, start: 1, end: 1 }]), ['inner@1-4 cc=4 ordinal=0']);
+});
+
+test('a definition lizard reports as (anonymous) on its line has that row and gets no second one from the source', () => {
+  // The owner's review input (arrowType): lizard names a function with an arrow-typed parameter "(anonymous)".
+  const source = [
+    'function f<T>(work: () => T, t = 5) {',
+    '  if (t > 1 && t < 9) return work();',
+    '  return t ? work() : work();',
+    '}',
+    '',
+  ].join('\n');
+  const rows = [{ file: 'src/dropped.ts', ordinal: 0, name: '(anonymous)', complexity: 4, start: 1, end: 4 }];
+
+  assert.deepEqual(scannedRows(source, rows), []);
+  assert.equal(withBodySpans(rows, () => source).length, 1);
+});
+
+for (const [label, callback] of [['function', 'function (x) { return x; }'], ['arrow', '(x) => x']]) {
+  test(`a named function lizard dropped is not hidden by a ${label} callback's (anonymous) row on its first line`, () => {
+    const source = [
+      `export function outer(a = f(), b) { const pick = list.find(${callback});`,
+      '  if (a) return 1;',
+      '  if (b) return 2;',
+      '  if (a && b) return 3;',
+      '  return a ? 4 : 5;',
+      '}',
+      '',
+    ].join('\n');
+    const rows = [{ name: '(anonymous)', complexity: 1, start: 1, end: 1 }];
+
+    assert.deepEqual(scannedRows(source, rows), ['outer@1-6 cc=6 ordinal=0']);
+  });
+}
+
+const CALL_FIRST_DEFAULT_BODY = ['  if (a) return 1;', '  if (b) return 2;', '  if (a && b) return 3;', '  return a ? 4 : 5;', '}', ''];
+const CALL_FIRST_DEFAULT_HEAD = 'export function retry(now = Date.now(), work = () => {}) {';
+
+test('a default arrow in the parameter list and a callback on the same line leave the dropped function its own row', () => {
+  // The owner's round-four input (callFirstDefault): lizard 1.24.0 gives `work` and (anonymous), both on line 1, and no row for `retry`.
+  const source = [`${CALL_FIRST_DEFAULT_HEAD} const pick = list.find((x) => x);`, ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const rows = [{ name: 'work', complexity: 1, start: 1, end: 1 }, { name: '(anonymous)', complexity: 1, start: 1, end: 1 }];
+
+  assert.deepEqual(scannedRows(source, rows), ['retry@1-6 cc=6 ordinal=0']);
+});
+
+test('the same function with its callback on the next line keeps its row too', () => {
+  const source = [CALL_FIRST_DEFAULT_HEAD, '  const pick = list.find((x) => x);', ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const rows = [{ name: 'work', complexity: 1, start: 1, end: 1 }, { name: '(anonymous)', complexity: 1, start: 2, end: 2 }];
+
+  assert.deepEqual(scannedRows(source, rows), ['retry@1-7 cc=6 ordinal=0']);
+});
+
+test('the real lizard backend does not let a default arrow and a same-line callback hide an uncovered function from the gate', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const source = [`${CALL_FIRST_DEFAULT_HEAD} const pick = list.find((x) => x);`, ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const projectDir = fs.realpathSync.native(
+    droppedProject(source, [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0]], { '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }) }),
+  );
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^src\/load\.js:1 retry cc=6 coverage=0% CRAP=42 source=source-scan - cc 6 or more fails at any coverage/m);
+});
+
+test('a regex whose character class holds a slash is one literal, so the function around it still gets its row', () => {
+  // The owner's review input: `[\\/]` is the usual path-separator class. `/\\+/g` is the control without a class.
+  const source = [
+    'export function normalize(p = cwd()) {',
+    '  if (!p) return null;',
+    "  return p.split(/[\\\\/]+/).join('/') || '.';",
+    '}',
+    'export function control(p = cwd()) {',
+    '  if (!p) return null;',
+    "  return p.split(/\\\\+/g).join('/') || '.';",
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['normalize@1-4 cc=3 ordinal=0', 'control@5-8 cc=3 ordinal=0']);
+});
+
+test('a dropped function expression is named after the variable or property it is assigned to, as lizard names it', () => {
+  const source = [
+    'const load = function (path = resolve()) {',
+    '  return path ? 1 : 0;',
+    '};',
+    'const handlers = {',
+    '  save: async function (data = serialize()) {',
+    '    return data || null;',
+    '  },',
+    '};',
+    'register(function* (steps = plan()) {',
+    '  yield steps && steps.next;',
+    '});',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['load@1-3 cc=2 ordinal=0', 'save@5-7 cc=2 ordinal=0', '(anonymous)@9-11 cc=2 ordinal=0']);
+});
+
+test('a dropped generator or generic method is read from its source, and a getter lizard names `get size` keeps its own row', () => {
+  const source = [
+    'class Box {',
+    '  get size() {',
+    '    return this.items ? this.items.length : 0;',
+    '  }',
+    '  *entries<T>(pick = (value: T) => value) {',
+    '    return pick > (this.limit || 0) ? 1 : 0;',
+    '  }',
+    '}',
+    'function* walk(root = tree()) {',
+    '  if (root) yield root;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'get size', complexity: 2, start: 2, end: 4 }]), ['entries@5-7 cc=3 ordinal=0', 'walk@9-11 cc=2 ordinal=0']);
+});
+
+test('a file lizard gave no row at all is scanned when it is named, and only then', () => {
+  const source = 'export function only(path = resolve(), flag) {\n  if (flag) return path;\n  return null;\n}\n';
+
+  assert.deepEqual(scannedRows(source, []), []);
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['only@1-4 cc=2 ordinal=0']);
+});
+
+function droppedProject(source, lcovLines, extraFiles = {}) {
+  const projectDir = fixtureProject({ 'README.md': 'base\n', ...extraFiles });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/load.js'), source, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov(lcovLines, 'src/load.js'), 'utf8');
+  track(projectDir);
+  return projectDir;
+}
+
+const LOAD_SOURCE = [
+  'function load(path = resolve(), opts) {',
+  '  if (!path) return null;',
+  '  if (opts && opts.fresh) return read(path);',
+  '  return cached(path);',
+  '}',
+  '',
+].join('\n');
+
+test('an uncovered function lizard dropped fails the gate instead of passing unseen, even when it is the file\'s only function', () => {
+  const projectDir = droppedProject(LOAD_SOURCE, [[2, 0], [3, 0], [4, 0]]);
+
+  // lizard returns nothing for this file, which used to exit 2 with "reported zero functions".
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  const load = report.functions.find((entry) => entry.function === 'load');
+  assert.deepEqual([load.cc, load.coverage, load.crap, load.source], [4, 0, 20, 'source-scan']);
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['load']);
+  assert.match(formatReport(report), /src\/load\.js:1 load cc=4 coverage=0% CRAP=20 source=source-scan\nCRAP gate failed/);
+});
+
+test('a covered function lizard dropped passes, and a file with another function it cannot see stays unverified', () => {
+  const covered = droppedProject(LOAD_SOURCE, [[2, 1], [3, 1], [4, 1]]);
+  assert.deepEqual(crapReport({ projectDir: covered, ratchet: 'main', runLizard: () => '' }).failures, []);
+
+  const withHiddenArrow = droppedProject(`${LOAD_SOURCE}const tag = (x) => \`\${x}\`;\n`, [[2, 1], [3, 1], [4, 1]]);
+  assert.throws(
+    () => crapReport({ projectDir: withHiddenArrow, ratchet: 'main', runLizard: () => '' }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/load\.js/.test(error.message),
+  );
+});
+
+test('an edit to a function lizard dropped counts as a change against the base revision, and an untouched one does not', () => {
+  const twoFunctions = `${LOAD_SOURCE}function other(a = f(), b) {\n  if (a) return b;\n  return 0;\n}\n`;
+  const projectDir = fixtureProject({ 'src/load.js': twoFunctions, 'coverage/lcov.info': lcov([[2, 0], [3, 0], [4, 0], [7, 0], [8, 0]], 'src/load.js') });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/load.js'), twoFunctions.replace('return cached(path);', 'return cached(path) || null;'), 'utf8');
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  assert.equal(report.checked, 1, 'only load changed; other is the same function it was in the base revision');
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['load']);
+});
+
+// The owner's review inputs (pathSep, paysFor). lizard 1.24.0 reports no row for either file, and the
+// `name(...) {` token pattern cannot see `root`, whose parameter list holds a call.
+const PATH_SEP_SOURCE = [
+  'export class Paths {',
+  '  root(dir = process.cwd()) {',
+  '    return dir;',
+  '  }',
+  '}',
+  'export function normalize(p = cwd()) {',
+  '  if (!p) return null;',
+  "  return p.split(/[\\\\/]+/).join('/') || '.';",
+  '}',
+  '',
+].join('\n');
+
+test('an uncovered function holding a path-separator regex is scored, not passed unseen beside a scanned method', () => {
+  const projectDir = droppedProject(PATH_SEP_SOURCE, [[2, 0], [3, 0], [4, 0], [6, 0], [7, 0], [8, 0], [9, 0]]);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  assert.deepEqual(report.failures.map((entry) => [entry.function, entry.cc, entry.crap]), [['normalize', 3, 12]]);
+});
+
+// `1)` in the JSX text closes a group the source scan never saw open, so it cannot find where `Steps` ends.
+const PAYS_FOR_SOURCE = PATH_SEP_SOURCE.split('export function')[0] + [
+  'export function Steps(items = load()) {',
+  '  if (!items) return null;',
+  '  if (items.length && items.ready) return <ol><li>1) Open</li></ol>;',
+  '  return null;',
+  '}',
+  '',
+].join('\n');
+
+test('a scanned method cannot stand in for a function the source scan could not read elsewhere in the file', () => {
+  assert.deepEqual(scannedRows(PAYS_FOR_SOURCE, [], ['src/dropped.ts']), ['root@2-4 cc=1 ordinal=0']);
+  const projectDir = droppedProject(PAYS_FOR_SOURCE, [[2, 0], [3, 0], [4, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0]]);
+
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => '' }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/load\.js/.test(error.message),
+  );
+});
+
+test('the real lizard backend does not let a default-call parameter hide an uncovered function from the gate', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = fs.realpathSync.native(
+    droppedProject(`function plain(x) {\n  return x ? 1 : 2;\n}\n${LOAD_SOURCE}`, [[2, 1], [6, 0], [7, 0], [8, 0]], {
+      '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    }),
+  );
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^src\/load\.js:4 load cc=4 coverage=0% CRAP=20 source=source-scan$/m);
+});
+
+// GitHub issue #471: lizard 1.24.0 loses its place at a template literal nested in another one's `${...}`.
+// For this source it reports only `header@1-14` at cc 4, swallowing `later` and `evenLater`.
+const NESTED_TEMPLATE_SOURCE = [
+  'const header = (id: string, secret: string): string => {',
+  '  const value = `Basic ${btoa(`${id}:${secret}`)}`;',
+  '  if (!value) return "";',
+  '  return value;',
+  '};',
+  '',
+  'function later(a: number): number {',
+  '  if (a > 1) return 1;',
+  '  return 2;',
+  '}',
+  '',
+  'function evenLater(b: string): string {',
+  '  return b.length > 2 ? "long" : "short";',
+  '}',
+  '',
+].join('\n');
+
+function spanRows(source, rows, file = 'src/nested.ts') {
+  return withBodySpans(rows.map((row) => ({ file, ordinal: 0, ...row })), () => source, [file])
+    .map((entry) => `${entry.name}@${entry.start}-${entry.end} cc=${entry.complexity}${entry.source ? ` ${entry.source}` : ''}`);
+}
+
+test('a row lizard ran past its function\'s end is clamped to the body and recounted, and the functions it swallowed get rows', () => {
+  assert.deepEqual(spanRows(NESTED_TEMPLATE_SOURCE, [{ name: 'header', complexity: 4, start: 1, end: 14 }]), [
+    'header@1-5 cc=2',
+    'later@7-10 cc=2 source-scan',
+    'evenLater@12-14 cc=2 source-scan',
+  ]);
+  // The control without the nesting, as lizard reads it: `later` ends on the next token's line, which is no overrun,
+  // and the gate ends the row with the body so `evenLater`'s signature line is never `later`'s.
+  const control = NESTED_TEMPLATE_SOURCE.replace('`Basic ${btoa(`${id}:${secret}`)}`', '"Basic " + btoa(id + ":" + secret)');
+  const controlRows = [{ name: 'header', complexity: 2, start: 1, end: 5 }, { name: 'later', complexity: 2, start: 7, end: 12 }, { name: 'evenLater', complexity: 2, start: 12, end: 14 }];
+  assert.deepEqual(spanRows(control, controlRows), ['header@1-5 cc=2', 'later@7-10 cc=2', 'evenLater@12-14 cc=2']);
+});
+
+/** A project on `main` holding `src/<name>` with every line uncovered, measured by the real lizard under a base config. */
+function realLizardProject(name, source) {
+  const lineCount = source.split('\n').length;
+  return fs.realpathSync.native(fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    [`src/${name}`]: source,
+    'coverage/lcov.info': lcov(Array.from({ length: lineCount }, (_, index) => [index + 1, 0]), `src/${name}`),
+  }));
+}
+
+test('the real lizard backend charges an edit below a nested template literal to the function it is in', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('nested.ts', NESTED_TEMPLATE_SOURCE);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/nested.ts'), NESTED_TEMPLATE_SOURCE.replace('"long"', '"longer"'), 'utf8');
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/nested.ts:12 evenLater cc=2 coverage=0% CRAP=6 source=source-scan\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+  const report = JSON.parse(runCli(['--json'], projectDir).stdout);
+  assert.equal(report.functions.find((entry) => entry.function === 'header').cc, 2, 'header counts its own branch and none of the functions lizard swallowed');
+});
+
+// GitHub issue #471's wrong pass: the nested template sits in the last statement, so lizard ends the row
+// near the right line but reports no function after it.
+const DROPPED_AFTER_TEMPLATE_SOURCE = [
+  'const callSql = (fn: string, names: readonly string[]): string => {',
+  '  const call = `public.${fn}(${names.map((name, i) => `${name} => $${i + 1}`).join(", ")})`;',
+  '  return `select ${call}`;',
+  '};',
+  '',
+  'export function later(a: number): number {',
+  '  if (a > 1) return 1;',
+  '  return 2;',
+  '}',
+  '',
+  'export function evenLater(b: string): string {',
+  '  return b.length > 2 ? "long" : "short";',
+  '}',
+  '',
+].join('\n');
+
+const RISKY_SOURCE = [
+  'export function risky(n: number): number {',
+  ...[1, 2, 3, 4, 5, 6].map((value) => `  if (n === ${value}) return ${value};`),
+  '  return 0;',
+  '}',
+  '',
+].join('\n');
+
+test('the real lizard backend fails a new function lizard dropped after a nested template literal instead of passing 0 of 0', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = fs.realpathSync.native(fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ sources: ['src'], max: 6, base: 'main' }),
+    'src/sql.ts': DROPPED_AFTER_TEMPLATE_SOURCE,
+  }));
+  commitBase(projectDir);
+  gitIn(projectDir, ['checkout', '-b', 'feature']);
+  fs.appendFileSync(path.join(projectDir, 'src/sql.ts'), RISKY_SOURCE, 'utf8');
+  gitIn(projectDir, ['commit', '-am', 'add risky']);
+  const lineCount = `${DROPPED_AFTER_TEMPLATE_SOURCE}${RISKY_SOURCE}`.split('\n').length;
+  fs.writeFileSync(path.join(projectDir, 'lcov.info'), lcov(Array.from({ length: lineCount }, (_, index) => [index + 1, 0]), 'src/sql.ts'), 'utf8');
+
+  const result = runCli(['--lcov', 'lcov.info', '--coverage-command', coverageStub([]).command], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^src\/sql\.ts:14 risky cc=7 coverage=0% CRAP=56 source=source-scan - cc 6 or more fails at any coverage[^\n]*\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n$/);
+});
+
+// GitHub issue #476, reduced: lizard's TypeScript reader ends RootLayout at line 9, inside its JSX, at cc 3.
+const LAYOUT_SOURCE = [
+  'import { buildScript, seq } from "./script";',
+  '',
+  'export default function RootLayout({ children, guard }: { children: React.ReactNode; guard: boolean }) {',
+  '  const theme = guard ? "dark" : "light";',
+  '  return (',
+  '    <html lang="en">',
+  '      <head>',
+  '        {guard ? (',
+  '          <script dangerouslySetInnerHTML={{ __html: buildScript(seq()) }} />',
+  '        ) : null}',
+  '      </head>',
+  '      <body className={theme}>',
+  '        {children}',
+  '        {guard && <footer>end</footer>}',
+  '      </body>',
+  '    </html>',
+  '  );',
+  '}',
+  '',
+].join('\n');
+
+test('the real lizard backend scores an edit below where its TypeScript reader ends a .tsx component against the component', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('layout.tsx', LAYOUT_SOURCE);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/layout.tsx'), LAYOUT_SOURCE.replace('<footer>end</footer>', '<footer>the end</footer>'), 'utf8');
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/layout.tsx:3 RootLayout cc=4 coverage=0% CRAP=20 source=lizard-typescript\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+test('JSX text the source scan cannot read keeps lizard\'s short row, and an edit below it exits 2 as unmeasured', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  // The apostrophe opens a string that hides the `{`, so the scan cannot trust where any body ends.
+  const source = LAYOUT_SOURCE.replace('{guard && <footer>end</footer>}', "<p>It's {guard ? 'on' : 'off'}</p>");
+  const projectDir = realLizardProject('layout.tsx', source);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/layout.tsx'), source.replace("'off'", "'gone'"), 'utf8');
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 2, result.stdout);
+  assert.match(result.stderr, /changed lines are unmeasured at src\/layout\.tsx:14\n/);
+});
+
+// GitHub issue #477: for an arrow whose `=>` ends a line, lizard reports `(anonymous)@6-6`, the body's first line.
+const MULTI_LINE_ARROW_SOURCE = [
+  'const wrap = (name) => (fn) => fn;',
+  'const keyset = (...parts) => parts.join(",");',
+  '',
+  'export const repo = {',
+  '  listX: wrap("repo.listX")(() =>',
+  '    keyset(',
+  '      "a",',
+  '      "b",',
+  '    ),',
+  '  ),',
+  '};',
+  '',
+].join('\n');
+
+test('a row lizard starts on an arrow\'s body line restarts at the arrow and ends with its body', () => {
+  const rows = [{ name: 'wrap', complexity: 1, start: 1, end: 1 }, { name: 'keyset', complexity: 1, start: 2, end: 2 }, { name: '(anonymous)', complexity: 1, start: 6, end: 6 }];
+
+  // Line 10 closes `wrap(...)(`, not the arrow, whose V8 function range is lines 5-9.
+  assert.deepEqual(spanRows(MULTI_LINE_ARROW_SOURCE, rows, 'src/repo.mjs'), ['wrap@1-1 cc=1', 'keyset@2-2 cc=1', '(anonymous)@5-9 cc=1']);
+});
+
+test('the real lizard backend charges an edit inside a multi-line arrow to that arrow and scores it without a DA record on lizard\'s line', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = fs.realpathSync.native(fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    'src/repo.mjs': MULTI_LINE_ARROW_SOURCE,
+    // The issue's coverage: no DA record on line 6, where lizard starts the arrow's row.
+    'coverage/lcov.info': lcov([1, 2, 4, 5, 7, 8, 9, 10].map((line) => [line, 1]), 'src/repo.mjs'),
+  }));
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/repo.mjs'), MULTI_LINE_ARROW_SOURCE.replace('"a",', '"x",').replace('"b",', '"y",'), 'utf8');
+
+  const result = runCli(['--json'], projectDir);
+
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.checked, 1, 'only the arrow changed');
+  assert.deepEqual([atLine(report, 5).function, atLine(report, 5).coverage], ['(anonymous)', 1]);
+});
+
+const UNROWED_ARROW_SOURCE = [
+  'export type Handler = (event: string) => void;',
+  'export interface Props { onPick: (id: string) => void }',
+  'export function a(x: number): number {',
+  '  return x ? 1 : 2;',
+  '}',
+  'export const b = (y: number): number => {',
+  '  if (y > 1) return 1;',
+  '  return 2;',
+  '};',
+  '',
+].join('\n');
+
+test('a changed line inside a definition no row spans exits 2 and names it, and a changed function type does not', () => {
+  const projectDir = fixtureProject({ 'src/app.ts': UNROWED_ARROW_SOURCE, 'coverage/lcov.info': lcov([[4, 1]], 'src/app.ts') });
+  commitBase(projectDir);
+  // A lizard that misread `b` so badly it gave it no row.
+  const runLizard = () => csv([{ complexity: 2, name: 'a', start: 3, end: 5 }], 'src/app.ts');
+  const typesOnly = UNROWED_ARROW_SOURCE.replace('(event: string)', '(name: string)').replace('(id: string)', '(key: string)');
+
+  fs.writeFileSync(path.join(projectDir, 'src/app.ts'), typesOnly, 'utf8');
+  assert.equal(crapReport({ projectDir, base: 'main', runLizard }).checked, 0);
+
+  fs.writeFileSync(path.join(projectDir, 'src/app.ts'), typesOnly.replace('y > 1', 'y > 2'), 'utf8');
+  assert.throws(
+    () => crapReport({ projectDir, base: 'main', runLizard }),
+    (error) => error instanceof PrerequisiteError && /^changed lines are unmeasured at src\/app\.ts:7$/.test(error.message),
+  );
+});
+
+test('the safety net reads a function type in a type alias, interface, annotation or type argument as no function', () => {
+  const source = [
+    'type Handler = (event: string) => void;',
+    'type Unwrap<T> = T extends (...args: any[]) => infer R ? R : never;',
+    'type Maybe = ((value: string) => void) | null;',
+    'interface Props { onPick?: (id: string) => void; render(row: (x: number) => string): void }',
+    'declare const table: Record<string, (key: string) => number>;',
+    'class Store { private listener: (next: number) => void; }',
+    'declare function run(options: { onProgress?: (done: number) => void }): void;',
+    'const real = (x: number) => x + 1;',
+    'register((y) => y, [(z) => z]);',
+    'export const api = { get: (id: string) => id };',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(unmeasuredDefinitionLines(source, []), [8, 9, 10]);
+});
+
+test('an arrow whose template literal body runs over several lines keeps the row lizard ended on its closing line', () => {
+  const source = ['const moves = list.map((move) => `create ${move.to}', 'delete ${move.from}', 'done`);', ''].join('\n');
+  const rows = [{ name: '(anonymous)', complexity: 1, start: 1, end: 3 }];
+
+  assert.deepEqual(spanRows(source, rows, 'src/moves.js'), ['(anonymous)@1-3 cc=1']);
+  assert.deepEqual(unmeasuredDefinitionLines(source, rows), []);
+});
+
+// GitHub issue #482: lizard 1.24.0 reads `s.pages < maxPages` as a type argument that only a `>`
+// further down closes. It ends `while` on line 17 and drops `later` and `evenLater`, so once its rows are
+// reconciled, `later` spans 11-14 here. With the operands swapped, lizard reads every function, and
+// `later` keeps its row to line 16, the line of the next token. The same untouched text then had no
+// base copy to pair with.
+const ITERATE_SOURCE = [
+  'export const run = (maxPages: number) =>',
+  '  Effect.iterate(initial, {',
+  '    while: (s) => s.done === "more" && s.pages < maxPages,',
+  '    body: (s) =>',
+  '      Effect.map(load(s), (data) => ({',
+  '        done: data.rowCount < PAGE_SIZE ? "complete" : "more",',
+  '        pages: s.pages + 1,',
+  '      })),',
+  '  });',
+  '',
+  'export function later(a: number): number {',
+  '  if (a > 1) return 1;',
+  '  return 2;',
+  '}',
+  '',
+  'export function evenLater(b: string): string {',
+  '  return b.length > 2 ? "long" : "short";',
+  '}',
+  '',
+].join('\n');
+const ITERATE_SWAPPED_SOURCE = ITERATE_SOURCE.replace('s.pages < maxPages', 'maxPages > s.pages').replace('data.rowCount < PAGE_SIZE', 'PAGE_SIZE > data.rowCount');
+// Only the second comparison is a `<`. lizard runs the inner arrow to line 16, the reconciliation clamps it
+// to 5-8, and `later` and `evenLater` come from the source scan.
+const ITERATE_INNER_LT_SOURCE = ITERATE_SWAPPED_SOURCE.replace('PAGE_SIZE > data.rowCount', 'data.rowCount < PAGE_SIZE');
+
+function writeIterate(projectDir, source) {
+  fs.writeFileSync(path.join(projectDir, 'src/iterate.ts'), source, 'utf8');
+}
+
+test('the real lizard backend charges an edit only to the functions holding its lines when lizard misread the base revision', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('iterate.ts', ITERATE_SOURCE);
+  commitBase(projectDir);
+  writeIterate(projectDir, ITERATE_SWAPPED_SOURCE);
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  // Lines 3 and 6 changed. `later`, `evenLater` and `body` hold neither line, whatever lizard read for the base.
+  assert.equal(result.stdout, 'src/iterate.ts:3 while cc=2 coverage=0% CRAP=6\nsrc/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nCRAP gate failed: 2 of 2 changed or new functions at or above 6\n');
+});
+
+test('the real lizard backend keeps an untouched function out when lizard misreads only the candidate, and charges an edit inside it to its reconciled row', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('iterate.ts', ITERATE_SWAPPED_SOURCE);
+  commitBase(projectDir);
+
+  // Swapping the first comparison back too would make lizard swallow the inner arrow, which gets no
+  // source-scan row, and line 6 would rightly exit 2 as unmeasured.
+  writeIterate(projectDir, ITERATE_INNER_LT_SOURCE);
+  const untouched = runCli([], projectDir);
+  assert.equal(untouched.status, 1, untouched.stderr);
+  assert.equal(untouched.stdout, 'src/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+
+  writeIterate(projectDir, ITERATE_INNER_LT_SOURCE.replace('  return 2;', '  return 3;'));
+  const edited = runCli([], projectDir);
+  assert.equal(edited.status, 1, edited.stderr);
+  assert.equal(edited.stdout, 'src/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nsrc/iterate.ts:11 later cc=2 coverage=0% CRAP=6 source=source-scan\nCRAP gate failed: 2 of 2 changed or new functions at or above 6\n');
+});
+
+test('the real lizard backend charges a deletion-only change to the function the removed line sat in', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  // The `>` on the added line closes lizard's type argument, so it reads the base revision whole.
+  const fullLine = '        full: data.rowCount > PAGE_SIZE,\n';
+  const projectDir = realLizardProject('iterate.ts', ITERATE_INNER_LT_SOURCE.replace('        pages:', `${fullLine}        pages:`));
+  commitBase(projectDir);
+  writeIterate(projectDir, ITERATE_INNER_LT_SOURCE);
+
+  const result = runCli([], projectDir);
+
+  // git reports the removal as `+6,0`, the line it followed. `later` holds no changed line.
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/iterate.ts:5 (anonymous) cc=2 coverage=0% CRAP=6\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+test('a copy pasted above its untouched twin is the new function, and an edited function is still changed', () => {
+  const other = ['function other(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const helper = ['function helper(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/util.js': [...other, '', ...helper, ''].join('\n'),
+    'coverage/lcov.info': lcov([2, 3, 7, 8, 12, 13].map((line) => [line, 1]), 'src/util.js'),
+  });
+  commitBase(projectDir);
+  const edited = other.map((line) => line.replace('n > 0', 'n > 1'));
+  fs.writeFileSync(path.join(projectDir, 'src/util.js'), [...helper, '', ...edited, '', ...helper, ''].join('\n'), 'utf8');
+
+  const report = crapReport({
+    projectDir,
+    base: 'main',
+    runLizard: runner(
+      csv([{ complexity: 10, name: 'helper', start: 1, end: 4 }, { complexity: 2, name: 'other', start: 6, end: 9 }, { complexity: 10, name: 'helper', start: 11, end: 14 }], 'src/util.js'),
+      csv([{ complexity: 2, name: 'other', start: 1, end: 4 }, { complexity: 10, name: 'helper', start: 6, end: 9 }], 'src/util.js'),
+    ),
+  });
+
+  // git reports lines 1-5 as added and the twin at 11-14 as unchanged, so the twin keeps the only baseline helper.
+  assert.deepEqual(report.failures.map((entry) => entry.line), [1]);
+  assert.equal(report.checked, 2, 'the paste and the edited other are judged; the untouched twin is not');
+});
+function gateOnChangedCard(after) {
+  const projectDir = fixtureProject({
+    'src/card.ts': 'export const card = { color: "red" };\n',
+    'coverage/lcov.info': lcov([]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/card.ts'), after, 'utf8');
+  return () => crapReport({ projectDir, ratchet: 'main', runLizard: () => csv([]) });
+}
+
+for (const [label, comment] of [
+  ['the word function', '// The height is a function of the widest label.'],
+  ['an arrow', '/* maps a => b */'],
+  ['a call followed by a brace', '// fits(width) { is how the old code read'],
+  ['a multi-line block comment', '/*\n * function (x) => y\n */'],
+]) {
+  test(`a comment with ${label} is not a function the gate must measure`, () => {
+    const report = gateOnChangedCard(`${comment}\nexport const card = { color: "blue" };\n`)();
+    assert.deepEqual(report.failures, []);
+    assert.equal(report.checked, 0);
+  });
+}
+
+for (const [label, literal] of [
+  ['function in a string', '"the function of a label"'],
+  ['an arrow in a string', "'a => b'"],
+  ['a call and brace in a template', '`fits(width) { and function`'],
+]) {
+  test(`${label} is not a function the gate must measure`, () => {
+    const report = gateOnChangedCard(`export const card = { label: ${literal} };\n`)();
+    assert.deepEqual(report.failures, []);
+    assert.equal(report.checked, 0);
+  });
+}
+
+test('an arrow inside a template literal expression is code and stays fail-closed when lizard misses it', () => {
+  assert.throws(
+    gateOnChangedCard('export const card = { label: `size ${[1].map((x) => x)}` };\n'),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/card\.ts/.test(error.message),
+  );
+});
+
+test('a real function after a comment that mentions function stays fail-closed when lizard misses it', () => {
+  assert.throws(
+    gateOnChangedCard('// not a function here\nexport function size(x) { return x; }\n'),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/card\.ts/.test(error.message),
+  );
+});
+
+test('a source file the JavaScript scan cannot read keeps counting raw function-like tokens', () => {
+  const projectDir = fixtureProject({ 'src/tool.py': 'x = 1\n', 'coverage/lcov.info': lcov([]) });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/tool.py'), "x = 'a => b'\n", 'utf8');
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => csv([]) }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/tool\.py/.test(error.message),
+  );
+});
+
+const NESTED_RISKY_SOURCE = (value) => [
+  'export function outer() {',
+  `  const value = ${value};`,
+  '  const risky = (n: number) => {',
+  ...[1, 2, 3, 4, 5, 6].map((branch) => `    if (n === ${branch}) return ${branch};`),
+  '    return 0;',
+  '  };',
+  '  return risky;',
+  '}',
+  'export function last(n: number): number {',
+  '  return n;',
+  '}',
+  '',
+].join('\n');
+
+test('a nested function lizard dropped is unmeasured however far the parent row reaches, and the parent keeps its own lines', () => {
+  const source = NESTED_RISKY_SOURCE('1');
+  const outerOnly = [{ name: 'outer', complexity: 1, start: 1, end: 13 }, { name: 'last', complexity: 1, start: 14, end: 16 }];
+  assert.deepEqual(unmeasuredDefinitionLines(source, outerOnly), [3, 4, 5, 6, 7, 8, 9, 10, 11], 'risky has no row of its own');
+  assert.deepEqual(unmeasuredDefinitionLines(source, [...outerOnly, { name: 'risky', complexity: 7, start: 3, end: 11 }]), []);
+  assert.deepEqual(unmeasuredDefinitionLines(source, [{ name: 'risky', complexity: 7, start: 3, end: 11 }, outerOnly[1]]), [1, 2, 12, 13], 'outer owns the lines outside risky');
+});
+
+test('the real lizard backend exits 2 for an edit inside a nested arrow it dropped after a nested template literal, instead of passing it under the parent row', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const nested = NESTED_RISKY_SOURCE('`Basic ${btoa(`${id}:${secret}`)}`');
+  const projectDir = realLizardProject('nested-arrow.ts', nested);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/nested-arrow.ts'), nested.replace('n === 1', 'n === 10'), 'utf8');
+
+  const result = runCli(['--json'], projectDir);
+  assert.equal(result.status, 2, result.stdout);
+  assert.match(result.stderr, /changed lines are unmeasured at src\/nested-arrow\.ts:4$/m);
+
+  // The control with a plain literal: lizard reads risky, and its six branches fail the gate.
+  const plain = NESTED_RISKY_SOURCE('1');
+  const controlDir = realLizardProject('nested-arrow.ts', plain);
+  commitBase(controlDir);
+  fs.writeFileSync(path.join(controlDir, 'src/nested-arrow.ts'), plain.replace('n === 1', 'n === 10'), 'utf8');
+  const control = runCli([], controlDir);
+  assert.equal(control.status, 1, control.stderr);
+  assert.match(control.stdout, /^src\/nested-arrow\.ts:3 risky cc=7 coverage=0% CRAP=56/m);
+});
+
+test('the real lizard backend leaves a function untouched when only the next function\'s signature changed', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const source = ['export function untouched(n: number): number {', '  if (n) return 1;', '  return 2;', '}', '', 'export function edited(n: number): number {', '  return n;', '}', ''].join('\n');
+  const projectDir = realLizardProject('neighbors.ts', source);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/neighbors.ts'), source.replace('edited(n: number)', 'edited(n: number = 0)'), 'utf8');
+
+  const result = runCli(['--json'], projectDir);
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.checked, 1, 'only edited changed');
+  assert.deepEqual([atLine(report, 1).function, atLine(report, 1).end], ['untouched', 4], 'lizard ended the row on line 6, the gate ends it with the body');
+});
+
+// lizard 1.24.0 reads a regex literal holding an unbalanced `(` as code and puts the next function after a doc comment one line high; 1.24.1 reads it.
+const SHIFTED_BELOW = ['function below(b) {', '  if (b) return 1;', '  return b;', '}', ''];
+const SHIFTED_PLAIN_SOURCE = ['const OPEN = /\\(/;', '', 'function plain(a) {', '  return a;', '}', '', ...SHIFTED_BELOW].join('\n');
+const SHIFTED_DOCUMENTED_SOURCE = ['const OPEN = /\\(/;', '', 'function plain(a) {', '  return a;', '}', '', '/**', ' * Doc.', ' */', ...SHIFTED_BELOW].join('\n');
+
+function editedShiftedProject(source) {
+  const projectDir = realLizardProject('shifted.js', source);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/shifted.js'), source.replace('return b;', 'return b + 1;'), 'utf8');
+  return projectDir;
+}
+
+test('a row shifted up onto a doc comment leaves the function\'s last changed line unmeasured and exits 2, and the row in place scores', () => {
+  const projectDir = editedShiftedProject(SHIFTED_DOCUMENTED_SOURCE);
+  const rowsWithBelowAt = (start) => () => csv([{ complexity: 1, name: 'plain', start: 3, end: 5 }, { complexity: 2, name: 'below', start, end: start + 3 }], 'src/shifted.js');
+
+  assert.throws(
+    () => crapReport({ projectDir, base: 'main', runLizard: rowsWithBelowAt(9) }),
+    (error) => error instanceof PrerequisiteError && /^changed lines are unmeasured at src\/shifted\.js:12$/.test(error.message) && /regex literal holding an unbalanced/.test(error.hint),
+    'lizard 1.24.0 says 9-12 for a function on 10-13; no row of its own measures line 12',
+  );
+  const report = crapReport({ projectDir, base: 'main', runLizard: rowsWithBelowAt(10) });
+  assert.deepEqual([atLine(report, 10).function, atLine(report, 10).crap], ['below', 6]);
+});
+
+test('the real lizard backend scores a function below a regex literal holding `(` where its lizard reads it, and exits 2 where that lizard shifts the row onto a comment', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const plain = runCli([], editedShiftedProject(SHIFTED_PLAIN_SOURCE));
+  assert.equal(plain.status, 1, plain.stderr);
+  assert.match(plain.stdout, /^src\/shifted\.js:7 below cc=2 coverage=0% CRAP=6/m);
+
+  const documentedDir = editedShiftedProject(SHIFTED_DOCUMENTED_SOURCE);
+  const row = observedLizardRow(documentedDir, 'src/shifted.js', 'below');
+  t.diagnostic(`this lizard reads below, on lines 10-13, as ${row.start}-${row.end}`);
+  const documented = runCli([], documentedDir);
+  if (row.start === 10) {
+    assert.equal(documented.status, 1, documented.stderr);
+    assert.match(documented.stdout, /^src\/shifted\.js:10 below cc=2 coverage=0% CRAP=6/m);
+    return;
+  }
+  assert.deepEqual([row.start, row.end], [9, 12], 'a lizard that misreads the regex literal puts the row exactly one line high');
+  assert.equal(documented.status, 2, documented.stdout);
+  assert.match(documented.stderr, /changed lines are unmeasured at src\/shifted\.js:12$/m);
+  assert.match(documented.stderr, /regex literal holding an unbalanced/);
 });

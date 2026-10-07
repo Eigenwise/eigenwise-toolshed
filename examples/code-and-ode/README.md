@@ -18,3 +18,7 @@ stays in sync.
 SessionStart supplies applicable rules to the main session and SubagentStart supplies them to native
 subagents. Later prompt or edit hooks inject a rule only when it newly applies or its hash changes,
 so unchanged guidance does not keep repeating.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of this Live Rules example. Donations are never required to use the files in this directory.

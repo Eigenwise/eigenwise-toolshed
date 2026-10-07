@@ -34,7 +34,11 @@ test('published guidance excludes retired instructions', () => {
   assert.match(executorTemplate, /useful edits, a scoped commit, or meaningful verification expose an interpretive or correctness concern, keep the claim and worktree alive/);
   assert.match(executorTemplate, /newly supplied token-gated briefing and live board state as authoritative over an inherited transcript that says the ticket is terminal/);
   assert.match(executorTemplate, /wait for corrected evidence or a decision through `SendMessage` so the same executor can continue/);
-  assert.match(skill, /For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding/);
+  assert.match(skill, /For work needing a decision, `SendMessage` the same agent\./);
+  assert.match(skill, /If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch\.agentId` or its exact original Agent-returned identifier/);
+  assert.match(skill, /never `claim\.by` or a guessed\/replacement address/);
+  assert.match(skill, /Missing\/mismatched identity stays continuation UNVERIFIED; preserve claim\/work/);
+  assert.match(skill, /A resume keeps claim, token-file path, and worktree binding/);
   assert.match(orchestration, /Correct the live worker before replacing it/);
   assert.match(skill, /Don't accept a green suite as proof of coverage; review execution evidence/);
   assert.match(executorTemplate, /Trace the actual call flow before implementing/);
@@ -50,7 +54,7 @@ test('published guidance excludes retired instructions', () => {
   assert.match(verifyDiscipline, /smallest meaningful\s+runnable regression/);
   assert.match(userStory, /Named uncertainty or safety-sensitive seam/);
   assert.match(ticketAuthoring, /do not invent a test count/);
-  assert.match(orchestration, /read each submit report, then run one combined full gate for the wave/);
+  assert.match(orchestration, /read each submit report, deliver the exact candidates through the real pinned\s+delivery verifier, then run one combined full gate/);
   assert.match(orchestration, /No TaskStop after terminal evidence/);
   assert.match(orchestration, /TaskStop rule is authoritative in\s+`SKILL\.md`/);
   assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
@@ -129,7 +133,7 @@ test('operating guidance uses live taxonomy and consistent recon boundaries', ()
 
 test('publishing consumes reports and oracles without an orchestrator diff review', () => {
   assert.match(publishing, /consume each submission report and the delivery and\s+merged-tree gate evidence/);
-  assert.match(publishing, /A deterministic singleton needs no bound review/);
+  assert.match(publishing, /A deterministic oracle that covers the contract needs no bound review, at any wave size/);
   assert.match(publishing, /Bind a `review-audit` ticket/);
   assert.match(publishing, /Do not inspect executor source or diffs/);
   assert.doesNotMatch(publishing, /Review the integrated diff/);
@@ -299,6 +303,161 @@ test("GH-339: TaskStop closeout guidance never names the executor's own launch, 
   );
   assert.doesNotMatch(normalBriefing, /TaskStop/);
   assert.doesNotMatch(normalBriefing, new RegExp(launchName));
+});
+
+test('wave publishing delivers before its single full gate and keeps exact proof authority', () => {
+  const deliveryStep = publishing.indexOf('6. **Assemble and deliver exact waves**');
+  const fullGateStep = publishing.indexOf('7. **Run one combined full merged-tree gate per wave**');
+  const versionStep = publishing.indexOf('9. **Validate the release window');
+  assert.ok(deliveryStep >= 0);
+  assert.ok(fullGateStep > deliveryStep);
+  assert.ok(versionStep > fullGateStep);
+  assert.match(publishing, /including a singleton/);
+  assert.match(publishing, /Preserve delivery's pinned verifier/);
+  assert.match(publishing, /changed tree after rebase requires a fresh full gate/);
+  assert.match(publishing, /runtime authorizes its exact tree, command, candidate, and capture identities/);
+  assert.doesNotMatch(publishing, /Seam check the batch|with 2\+ integrated commits/);
+  assert.doesNotMatch(orchestration, /full gate for the wave\. On\s+green, integrate|full gate for the wave, then\s+integrate/);
+  assert.match(userStory, /deliver the range, and run the merged-tree\s+full gate once for the wave before versioning/);
+  assert.match(verifyDiscipline, /clean-candidate capture/);
+  assert.match(verifyDiscipline, /full gate after integration and before versioning/);
+});
+
+test('candidate review admission names an untested risk and precedes delivery', () => {
+  assert.match(publishing, /only for a contract-named seam the oracle\s+cannot exercise or a required high-stakes review/);
+  assert.match(publishing, /Multiple lenses need distinct named risks/);
+  assert.match(publishing, /Bind required candidate reviews before step 6/);
+  assert.match(publishing, /immutable terminal dispatch identities for the submitted source and\s+completed review/);
+  assert.match(publishing, /candidate_review_locked/);
+  assert.doesNotMatch(publishing, /when the oracle is weak|consumers remain materially unchecked|lenses for high-stakes or multi-wave/);
+  assert.match(orchestration, /wave count alone adds no review/);
+  assert.match(userStory, /distinct named risks, never merely multiple waves/);
+});
+
+test('all shipped executor profiles budget final verification before the continuation boundary', () => {
+  const sources = agentsync.bundledExecutorSources() as Map<string, string>;
+  assert.equal(sources.size, 13);
+  assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
+  assert.equal(sources.size, 12);
+  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 75);
+  for (const [filename, source] of sources) {
+    assert.match(source, /Size implementation plus final verification to fit comfortably before 75 tool rounds/, filename);
+    assert.match(source, /Around 75 tool rounds/, filename);
+    assert.match(source, /split along actual cohesive boundaries before dispatch/, filename);
+    assert.doesNotMatch(source, /Around 100 tool rounds/, filename);
+  }
+  assert.doesNotMatch(orchestration, /100-tool-round|around 100 tool rounds/);
+});
+
+test('heavy resource handoffs preserve independent work and require the actual owner return', () => {
+  const sources = agentsync.bundledExecutorSources() as Map<string, string>;
+  assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
+  assert.equal(sources.size, 12);
+  for (const [filename, source] of sources) {
+    assert.match(source, /Serialize heavy commands on the parent-named shared resource, not entire tickets/, filename);
+    assert.match(source, /continue independent reading, editing, and scoped commits/, filename);
+    assert.match(source, /readiness and end the turn retaining your claim/, filename);
+    assert.match(source, /actual owner must acknowledge that its owned heavy command and\s+descendants ended before the parent hands off/, filename);
+    assert.match(source, /authenticated explicit mid-claim return is valid too/, filename);
+    assert.match(source, /at most two\s+workers, finite owned deadlines, and descendant cleanup/, filename);
+    assert.match(source, /Never infer availability\s+from elapsed time, process counts, failed sends, model labels, or absence/, filename);
+  }
+  assert.doesNotMatch(orchestration, /Serialize tickets that\s+share one/);
+  assert.match(orchestration, /parent `SendMessage` naming the resource and next holder/);
+  assert.match(userStory, /serialize commands using it,\s+not entire tickets/);
+});
+
+test('exclusive comment watermarks never stand in for processed instructions', () => {
+  for (const source of [executorTemplate, orchestration, userStory]) {
+    assert.match(source, /`since` is exclusive and only a read cursor/);
+    assert.match(source, /exact instruction\/comment/);
+    assert.match(source, /bounded\s+inclusive\/all-comments\s+recovery/);
+    assert.match(source, /(?:Advance|advance)[\s\S]{0,80}processed cursor only after[\s\S]{0,40}consuming/i);
+  }
+});
+
+test('measured quality reuses compatible candidate coverage through the local owner', () => {
+  for (const source of [executorTemplate, verifyDiscipline]) {
+    assert.match(source, /existing local quality owner/);
+    assert.match(source, /(?:scan measured complexity early|early measured complexity scan)/);
+    assert.match(source, /same checked bytes/);
+    assert.match(source, /actual runner supports it/);
+    assert.match(source, /For a configured gate, missing analyzer or coverage\s+stays UNVERIFIED/);
+    assert.match(source, /Never substitute tracked\s+Lizard\/proportional attribution, pin `quality:crap` as authority/);
+    assert.match(source, /rerun a full suite merely[\s\S]{0,60}already captured compatible coverage/);
+    assert.match(source, /untouched legacy\s+functions (?:outside|are outside) scope/);
+  }
+});
+
+test('adaptive preflight checks feasibility before cost and keeps deterministic fixes lightweight', () => {
+  assert.match(skill, /before expensive implementation or tests/);
+  assert.match(ticketAuthoring, /shared authority and callers/);
+  assert.match(ticketAuthoring, /touched-function complexity and measurement/);
+  assert.match(ticketAuthoring, /native baseline\/candidate ownership/);
+  assert.match(ticketAuthoring, /actual timeout\/resource fit/);
+  assert.match(ticketAuthoring, /observed behavior, callers and real coverage\/source identity/);
+  assert.match(ticketAuthoring, /Inspect transitive\s+test-file imports/);
+  assert.match(ticketAuthoring, /`--test-name-pattern` does not stop top-level imports/);
+  assert.match(ticketAuthoring, /Never fabricate a passing\s+capture or accept a timed-out command because later log text says green/);
+  assert.match(ticketAuthoring, /Quartermaster owns setup only, never scoring or recurring audits/);
+  assert.match(skill, /Small\s+deterministic fixes keep one owner and a focused check/);
+  assert.match(userStory, /no mandatory planning panel/);
+  assert.match(readonlyGuidance, /named architectural risk or contested approach worth the cost/);
+});
+
+test('live advice is an authorized readonly snapshot role, never premature candidate acceptance', () => {
+  assert.match(readonlyGuidance, /authorized source paths\/snapshot, inspection limits and\s+budget/);
+  assert.match(readonlyGuidance, /communicate directly through available native\s+messaging to their authentic host identities/);
+  assert.match(readonlyGuidance, /actual inspected file hashes/);
+  assert.match(readonlyGuidance, /An advisor has no write, acceptance, release or resource-transfer authority/);
+  assert.match(readonlyGuidance, /report the missing capability/);
+  assert.match(readonlyGuidance, /immutable `reviewTarget`/);
+  assert.match(readonlyGuidance, /Reuse byte-identical inspected material; check the settled delta, unresolved findings and authentic/);
+  assert.match(orchestration, /Formal final acceptance starts only after terminal submission and immutable binding/);
+  assert.doesNotMatch(orchestration, /A clean review lets the implementation executor submit/);
+  assert.doesNotMatch(readonlyGuidance, /Never review a working tree, a live claim/);
+  for (const [filename, source] of agentsync.bundledExecutorSources()) {
+    if (filename === 'sidequest-diagnostic-probe.md') continue;
+    assert.match(source, /Only an orchestrator-assigned bounded readonly advisory role/, filename);
+    assert.match(source, /Never review your own work or candidate\./, filename);
+    assert.match(source, /terminal immutable candidate/, filename);
+  }
+});
+
+test('continuous execution freezes trustworthy measurement and pauses only the blocked step', () => {
+  assert.match(ticketAuthoring, /Preauthorize those steps, pause only the genuinely blocked step/);
+  assert.match(ticketAuthoring, /continue unaffected source work/);
+  assert.match(executorTemplate, /One producer owns patch/);
+  assert.match(executorTemplate, /not routine checkpoint\/ack loops/);
+  assert.match(verifyDiscipline, /freeze its inputs and validate source, coverage and executed\/source-map byte identity/);
+  assert.match(verifyDiscipline, /Keep source fixed throughout an immutable capture/);
+  assert.match(verifyDiscipline, /Focused real coverage may run separately from the normal final gate/);
+  assert.match(verifyDiscipline, /never fabricate passing receipts or weaken standards/);
+  assert.match(verifyDiscipline, /without a duplicate suite merely for reviewer identity/);
+});
+
+test('all twelve executors discover optional gates without a shipped quality mandate', () => {
+  const executors = [...agentsync.bundledExecutorSources()].filter(([filename]) => filename !== 'sidequest-diagnostic-probe.md');
+  assert.equal(executors.length, 12);
+  for (const [filename, source] of executors) {
+    assert.equal(fs.readFileSync(path.join(ROOT, 'agents', filename), 'utf8'), source, filename);
+    assert.match(source, /configured quality gate when the briefing names one/);
+    assert.match(source, /unmeasured bodies stay unmeasured, no averages/);
+    assert.match(source, /no quality gate is\s+configured for this project; Quartermaster setup can add one/);
+    assert.match(source, /Absence alone never holds,\s+parks or marks work UNVERIFIED/);
+    assert.doesNotMatch(source, /strictly below (?:CRAP )?\d|must score CRAP|coverage (?:of |>=? )?\d+%/);
+  }
+});
+
+test('orchestrators hold missing measurement only for a configured gate', () => {
+  for (const source of [userStory, orchestration, publishing, ticketAuthoring]) {
+    assert.match(source, /project's configured quality gate, if any/);
+    assert.doesNotMatch(source, /strictly below (?:CRAP )?\d|must score CRAP/);
+  }
+  for (const source of [orchestration, publishing]) {
+    assert.match(source, /only when a gate is configured/);
+    assert.match(source, /gate absence alone never holds, parks or marks work UNVERIFIED/);
+  }
 });
 
 export {};

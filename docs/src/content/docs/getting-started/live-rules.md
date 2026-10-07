@@ -1,6 +1,6 @@
 ---
-title: Live Rules setup
-description: Add project rules that Claude Code injects when they apply.
+title: Live Rules for Claude Code
+description: Apply project rules when they match a prompt or edit in Claude Code.
 ---
 
 Live Rules keeps project instructions in front of Claude Code when they apply to a prompt or edit. Use it for conventions, guardrails, and reminders that should follow the project instead of relying on memory.
@@ -27,6 +27,10 @@ New workspaces use atomic storage. Claude creates one Markdown file under `.clau
 SessionStart injects the rules that apply at startup. Native subagents (Explore, general-purpose, custom agents) get those same startup rules once at SubagentStart, since they never submit a prompt of their own. During the session, a rule is injected again only when it newly matches or its content/hash changes and has not been seen in that session. Unchanged rules do not repeat on every prompt or edit. A rule change takes effect on the next prompt or relevant edit, with no restart.
 
 Existing projects may still use the legacy `.claude/live-rules.md` format. It is for migration or an explicit `LIVE_RULES_PATH` override, not the default for new rules. On SessionStart, the plugin automatically converts the default legacy file into atomic storage, verifies that the rules match, and removes the old file. An explicit `LIVE_RULES_PATH` file is preserved. If verification fails, the old file stays in place. Review and commit the resulting rule files and manifest so your team gets the same guidance.
+
+## Try the example
+
+The [code-and-ode example](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/examples/code-and-ode) has one committed project rule that asks Claude to write code in the Poetry of Code spirit. Open the example directory in Claude Code after installing Live Rules, then reload plugins or start a new session to load its rule. Its README shows where the rule and generated manifest live and explains when the rule is supplied to a session.
 
 ## Daily use
 
