@@ -382,7 +382,7 @@ test('measured quality reuses compatible candidate coverage through the local ow
     assert.match(source, /(?:scan measured complexity early|early measured complexity scan)/);
     assert.match(source, /same checked bytes/);
     assert.match(source, /actual runner supports it/);
-    assert.match(source, /Missing analyzer or coverage\s+stays UNVERIFIED/);
+    assert.match(source, /For a configured gate, missing analyzer or coverage\s+stays UNVERIFIED/);
     assert.match(source, /Never substitute tracked\s+Lizard\/proportional attribution, pin `quality:crap` as authority/);
     assert.match(source, /rerun a full suite merely[\s\S]{0,60}already captured compatible coverage/);
     assert.match(source, /untouched legacy\s+functions (?:outside|are outside) scope/);
@@ -434,6 +434,30 @@ test('continuous execution freezes trustworthy measurement and pauses only the b
   assert.match(verifyDiscipline, /Focused real coverage may run separately from the normal final gate/);
   assert.match(verifyDiscipline, /never fabricate passing receipts or weaken standards/);
   assert.match(verifyDiscipline, /without a duplicate suite merely for reviewer identity/);
+});
+
+test('all twelve executors discover optional gates without a shipped quality mandate', () => {
+  const executors = [...agentsync.bundledExecutorSources()].filter(([filename]) => filename !== 'sidequest-diagnostic-probe.md');
+  assert.equal(executors.length, 12);
+  for (const [filename, source] of executors) {
+    assert.equal(fs.readFileSync(path.join(ROOT, 'agents', filename), 'utf8'), source, filename);
+    assert.match(source, /configured quality gate when the briefing names one/);
+    assert.match(source, /unmeasured bodies stay unmeasured, no averages/);
+    assert.match(source, /no quality gate is\s+configured for this project; Quartermaster setup can add one/);
+    assert.match(source, /Absence alone never holds,\s+parks or marks work UNVERIFIED/);
+    assert.doesNotMatch(source, /strictly below (?:CRAP )?\d|must score CRAP|coverage (?:of |>=? )?\d+%/);
+  }
+});
+
+test('orchestrators hold missing measurement only for a configured gate', () => {
+  for (const source of [userStory, orchestration, publishing, ticketAuthoring]) {
+    assert.match(source, /project's configured quality gate, if any/);
+    assert.doesNotMatch(source, /strictly below (?:CRAP )?\d|must score CRAP/);
+  }
+  for (const source of [orchestration, publishing]) {
+    assert.match(source, /only when a gate is configured/);
+    assert.match(source, /gate absence alone never holds, parks or marks work UNVERIFIED/);
+  }
 });
 
 export {};

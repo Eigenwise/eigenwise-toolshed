@@ -114,3 +114,17 @@ test('guides host-capability recommendations without assuming a universal catalo
     assert.equal(Object.hasOwn(evaluation, 'expected_behavior'), false);
   }
 });
+
+
+test('resupply offers an optional gate and ties requirements to a named user rule', () => {
+  const resupply = readSkill('resupply');
+  const proposal = resupply.slice(resupply.indexOf('#### 4a.'), resupply.indexOf('#### 4b.'));
+  assert.match(proposal, /offer an optional CRAP gate/);
+  assert.match(proposal, /State the cost: a complexity analyzer, stack-specific LCOV setup, and a coverage run/);
+  assert.ok(proposal.includes('node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap'));
+  const requirements = proposal.split('\n').filter((line) => /\brequires\b/.test(line));
+  assert.equal(requirements.length, 1);
+  assert.match(requirements[0], /user-injected rule requires the gate, name that rule in one line/);
+  assert.doesNotMatch(proposal, /apply 6|starts at 6|violation of|your own rule requires it/);
+  assert.match(readSkill('setup'), /gate is opt-in/);
+});

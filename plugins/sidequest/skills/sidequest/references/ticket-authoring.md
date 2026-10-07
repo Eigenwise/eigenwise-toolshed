@@ -27,16 +27,16 @@ then use one ticket.
 
 For substantial or safety-sensitive changes, do a short architecture/feasibility preflight before
 expensive implementation or tests. Trace shared authority and callers, choose the smallest existing
-seam, and consume the dedicated quality owner's real touched-function complexity and measurement
-support. Check genuine native baseline/candidate ownership, protected state and dirty prerequisites,
-the runnable done-oracle, and its actual timeout/resource fit. Missing measurement stays UNVERIFIED;
+seam, and check the project's configured quality gate, if any. When configured, consume the dedicated
+quality owner's real touched-function complexity and measurement support. Check genuine native baseline/candidate ownership, protected state and dirty prerequisites,
+the runnable done-oracle, and its actual timeout/resource fit. Missing measurement stays UNVERIFIED only for a configured gate;
 Quartermaster owns setup only, never scoring or recurring audits. Leave untouched legacy code outside
 measurement scope and preserve standards.
 
 Choose verifiers by observed behavior, callers and real coverage/source identity. Inspect transitive
 test-file imports before choosing files or names: `--test-name-pattern` does not stop top-level imports
 from registering other suites. A narrow selection can avoid unrelated fan-out while preserving full
-measured coverage for touched functions and required final acceptance. Never fabricate a passing
+measured coverage for touched functions when the project's configured quality gate calls for it, and required final acceptance. Never fabricate a passing
 capture or accept a timed-out command because later log text says green; preserve deadlines and
 protected assertions.
 

@@ -277,6 +277,20 @@ agree).
   names that time. It lifts by itself then, or sooner on a completed successful Codex response,
   and a later rejected request can latch it again. Sidequest consumes a cached catalog and can lag
   this state by up to five minutes.
+- **HTTP 413 `request_too_large` / "Prompt is too long"**: every context overflow the gateway answers
+  keeps the real token counts first (Claude Code parses `(N tokens > M tokens)` to size compaction),
+  then appends `[model-gateway: phase …, refused by …; request … bytes, … tokens, limit … tokens; recovery: …]`
+  and an `error.overflow` object with `phase`, `refused_by` (`gateway_sentry` or `upstream`),
+  `request_bytes`, `tokens`, `tokens_from` (`upstream` or `previous_turn_usage`) and `limit_tokens`.
+  The `codex_gateway.route` span carries the same values as `overflow_*` attributes, never prompt
+  text. The phase is read from the request shape: `first_turn` (no prior assistant turn, so nothing
+  to compact: shrink the first prompt, such as a dispatched subagent's briefing, or route to a
+  larger-window model), `continuation` (compact and retry), `compaction` (the summary request itself
+  is too big: drop older turns, start fresh, or use a larger window), or `UNVERIFIED`. A side request
+  with no prior turn reads as `first_turn`, and its recovery is the same. `tokens UNVERIFIED` means
+  upstream gave no count and this agent had no earlier turn on that model; the counts shown in
+  parentheses are then a placeholder for Claude Code's parser. The sentry tracks usage per session
+  and agent, so one agent crossing the trigger never refuses another agent's request.
 - **Codex turn with no output**: claude-code-proxy answers a Codex turn that completed with no
   text, tool call, or thinking as a 503 "Codex completed without producing output". The shim
   answers it as an empty `end_turn` instead, so the session ends the turn rather than retrying
