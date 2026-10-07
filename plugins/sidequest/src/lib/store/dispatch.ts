@@ -87,14 +87,26 @@ function requirementsMatch(left: any, right: any) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 
+// Only an isolated command|suite dispatch defers its verifier to the shared checkout; a
+// board left at the default pins nothing, so its requirements stay byte-identical.
+function pinnedVerificationRequirement(ticket: any, projectPath: string, verifyEnvironment: unknown, sharedTree: boolean) {
+  const requirement = preparedVerificationRequirement(ticket, projectPath);
+  const deferred = !sharedTree && verifyEnvironment === 'shared' && ['command', 'suite'].includes(requirement.kind);
+  return deferred ? Object.freeze({ ...requirement, environment: 'shared' as const }) : requirement;
+}
+
 function createDispatch(dependencies: any) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+
+  function boardVerificationRequirement(slug: string, ticket: any, sharedTree: boolean) {
+    return pinnedVerificationRequirement(ticket, String(readMeta(slug)?.path || ''), boardConfig(slug)?.verifyEnvironment, sharedTree);
+  }
 
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
     const previousRequirement = state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-    const nextRequirement = preparedVerificationRequirement(ticket, String(readMeta(slug)?.path || ''));
+    const nextRequirement = boardVerificationRequirement(slug, ticket, state.sharedTree === true);
     if (requirementsMatch(previousRequirement, nextRequirement)) return null;
     state.verificationRequirement = nextRequirement;
     const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
@@ -2292,7 +2304,7 @@ function workingTreeDeliveryRequested(t: StoredRecord, sharedTree: boolean, effe
 
 function deliveryVerification(slug: string, t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]) {
   const workingTreeDelivery = workingTreeDeliveryRequested(t, sharedTree, effectiveFiles);
-  const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
+  const verificationRequirement = boardVerificationRequirement(slug, t, sharedTree);
   if (workingTreeDelivery && verificationRequirement.kind === 'review') {
     throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
   }
