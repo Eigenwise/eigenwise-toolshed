@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { fileURLToPath } from 'node:url';
-import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, parserTransport, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
 const { crapScore, parseLizardCsv } = crapCore;
 
@@ -446,4 +446,59 @@ test('the CLI captures a fixture suite and reports passing and failing changed f
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
+});
+
+const transportFixture = [
+  'function outer(values) {',
+  '  const double = (value) => value * 2;',
+  '  function inner() { return values.map(double); }',
+  '  return inner();',
+  '}',
+  'const config = { build() { return 1; }, get size() { return 2; } };',
+  'class Shape {',
+  '  constructor(width) { this.width = width; }',
+  '  get area() { return this.width ** 2; }',
+  '  area() { return 0; }',
+  '  static of(width) { return new Shape(width); }',
+  '}',
+  'module.exports = function assigned() { return () => outer([1]); };',
+  '',
+].join('\n');
+
+function collectUnderReadOnlyPermission(transport) {
+  const script = "const { collectFunctions } = await import(process.env.CRAP_OWNER_URL); process.stdout.write(JSON.stringify(await collectFunctions(process.env.CRAP_FIXTURE, 'fixture.js')));";
+  const environment = { ...process.env, CRAP_OWNER_URL: pathToFileURL(path.join(qualityDirectory, 'crap.mjs')).href, CRAP_FIXTURE: transportFixture, CRAP_PARSER_TRANSPORT: transport };
+  delete environment.NODE_V8_COVERAGE;
+  return spawnSync(process.execPath, ['--permission', '--allow-fs-read=*', '--allow-child-process', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60000, env: environment });
+}
+
+test('the async parser transport yields byte-identical rows to the sync default', async () => {
+  const syncRows = await collectFunctions(transportFixture, 'fixture.js');
+  const asyncRows = await collectFunctions(transportFixture, 'fixture.js', { transport: 'async' });
+  assert.equal(JSON.stringify(asyncRows), JSON.stringify(syncRows));
+  assert.deepEqual(syncRows.filter((row) => row.name === 'area').map((row) => row.identity), ['<root>/GetAccessor:area#0', '<root>/MethodDeclaration:area#0']);
+  assert.equal(syncRows.length, 11);
+});
+
+test('the parser transport comes from the option, then the environment, and rejects unknown names', () => {
+  assert.throws(() => parserTransport('bogus'), /Unknown TypeScript parser transport "bogus"; use sync or async/);
+  const previous = process.env.CRAP_PARSER_TRANSPORT;
+  process.env.CRAP_PARSER_TRANSPORT = 'async';
+  try {
+    assert.equal(parserTransport(), parserTransport('async'));
+    assert.notEqual(parserTransport('sync'), parserTransport('async'));
+  } finally {
+    if (previous === undefined) delete process.env.CRAP_PARSER_TRANSPORT;
+    else process.env.CRAP_PARSER_TRANSPORT = previous;
+  }
+});
+
+test('under node --permission the sync transport is refused at the named pipe and the async transport matches an unrestricted run', async () => {
+  const refused = collectUnderReadOnlyPermission('sync');
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /SyncRpcChannel: timed out connecting to named pipe/);
+
+  const permitted = collectUnderReadOnlyPermission('async');
+  assert.equal(permitted.status, 0, permitted.stderr);
+  assert.equal(permitted.stdout, JSON.stringify(await collectFunctions(transportFixture, 'fixture.js')));
 });
