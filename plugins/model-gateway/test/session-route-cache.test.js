@@ -11,7 +11,7 @@ const test = require('node:test');
 const { spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
-const { DispatchSessionRouteCache } = require(CLI);
+const { DispatchSessionRouteCache } = require('../lib/request-worker.js');
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -82,7 +82,7 @@ function agentMetadata(sessionId) {
 test('dispatch session route cache expires entries after their idle TTL', () => {
   let now = 0;
   const cache = new DispatchSessionRouteCache({ ttlMs: 100, maxSessions: 2, now: () => now });
-  const route = { model: 'gpt-5.6-sol', effort: 'xhigh' };
+  const route = { model: 'gpt-5.6-sol', effort: 'xhigh', ticket: null };
 
   cache.set('session-a', route);
   now = 50;
@@ -95,9 +95,9 @@ test('dispatch session route cache expires entries after their idle TTL', () => 
 
 test('dispatch session route cache evicts the least recently used session', () => {
   const cache = new DispatchSessionRouteCache({ ttlMs: 1000, maxSessions: 2 });
-  const routeA = { model: 'gpt-5.6-sol', effort: 'xhigh' };
-  const routeB = { model: 'gpt-5.6-terra', effort: 'high' };
-  const routeC = { model: 'gpt-5.6-luna', effort: 'low' };
+  const routeA = { model: 'gpt-5.6-sol', effort: 'xhigh', ticket: null };
+  const routeB = { model: 'gpt-5.6-terra', effort: 'high', ticket: null };
+  const routeC = { model: 'gpt-5.6-luna', effort: 'low', ticket: null };
 
   cache.set('session-a', routeA);
   cache.set('session-b', routeB);

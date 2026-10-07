@@ -7,13 +7,14 @@ import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, parserTransport, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
+import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, changedPathContext, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, noAnalyzerMetric, parserTransport, readCoverage, remapRecords, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
-const { crapScore, parseLizardCsv } = crapCore;
+const { crapScore } = crapCore;
 
 function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed', relativePath = 'plugins/example/lib/subject.js' }) {
   return {
     identity: `<root>/FunctionDeclaration:${name}#0`,
+    parent: '<root>',
     name,
     fingerprint,
     relativePath,
@@ -25,13 +26,43 @@ function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed
 }
 
 function baselineOf(entries) {
-  return async () => new Map(entries);
+  return async () => entries.map(([identity, fingerprint]) => ({ identity, parent: '<root>', fingerprint }));
 }
 
 test('collects stable identities and source fingerprints', async () => {
   const functions = await collectFunctions('function outer() { return () => 1; }', 'fixture.ts');
   assert.deepEqual(functions.map((entry) => entry.name), ['outer', '<anonymous>']);
   assert.ok(functions.every((entry) => entry.fingerprint.length === 64));
+});
+
+const workerBefore = 'function runWorker(items) {\n  const forward = (item) => item.id;\n  return items.map(forward);\n}\n';
+
+async function changedFunctionNames(before, after) {
+  const metrics = (await collectFunctions(after, 'worker.js')).map((descriptor) => ({ ...descriptor, relativePath: 'worker.js' }));
+  return (await changedMetricsAgainstBase(metrics, ['worker.js'], 'base-sha', () => collectFunctions(before, 'worker.js'))).map((metric) => metric.name);
+}
+
+test('an enclosing function is fingerprinted over its own text, so editing a nested arrow touches only the arrow', async () => {
+  assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('item.id', 'item.id ?? item.ref')), ['forward']);
+  assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('items.map(forward)', 'items.flatMap(forward)')), ['runWorker']);
+});
+
+async function changedLines(before, after) {
+  const metrics = (await collectFunctions(after, 'suite.js')).map((descriptor) => ({ ...descriptor, relativePath: 'suite.js' }));
+  return (await changedMetricsAgainstBase(metrics, ['suite.js'], 'base-sha', () => collectFunctions(before, 'suite.js'))).map((metric) => metric.line);
+}
+
+const testCase = (title, assertion = 'equal') => `test('${title}', () => {\n  assert.${assertion}(run('${title}', (value) => value + 1), 1);\n});\n`;
+const suiteBefore = ['first', 'second', 'third', 'fourth'].map((title) => testCase(title)).join('');
+const suiteWithInsertion = suiteBefore.replace(testCase('third'), testCase('inserted') + testCase('third'));
+
+test('inserting or deleting a test callback leaves every later unchanged callback out of the changed set', async () => {
+  assert.deepEqual(await changedLines(suiteBefore, suiteWithInsertion), [7, 8]);
+  assert.deepEqual(await changedLines(suiteBefore, suiteBefore.replace(testCase('second'), '')), []);
+});
+
+test('a later callback whose own text changed is still scored beside an insertion, and its unchanged nested arrow is not', async () => {
+  assert.deepEqual(await changedLines(suiteBefore, suiteWithInsertion.replace(testCase('fourth'), testCase('fourth', 'notEqual'))), [7, 8, 13]);
 });
 
 test('strictly fails a new function with a CRAP score of six', async () => {
@@ -56,7 +87,7 @@ test('leaves an unchanged over-ceiling function out of the failure list', async 
 });
 
 test('keeps changed unverified functions in the result set', async () => {
-  const unverified = { ...metric({ complexity: 1, coverage: 1 }), unverified: 'lizard could not measure this function' };
+  const unverified = { ...metric({ complexity: 1, coverage: 1 }), unverified: 'the functions beside it in plugins/example/lib/subject.js do not line up with the source, so its coverage cannot be paired' };
   const changedMetrics = await changedMetricsAgainstBase(
     [unverified],
     ['plugins/example/lib/subject.js'],
@@ -101,31 +132,63 @@ test('fails a changed over-ceiling function without a delta ratchet', async () =
   assert.match(failures[0], /subject cc=7 coverage=50\.00%/);
 });
 
-test('skips generated Sidequest build output', () => {
+test('scores JavaScript and TypeScript wherever it lives, skipping generated Sidequest build output and other languages', () => {
   const sidequestRoot = path.join(process.cwd(), 'plugins', 'sidequest');
   assert.equal(isScoredSource(path.join(sidequestRoot, 'src', 'lib', 'mcp-collaboration.ts')), true);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'scripts', 'owned-process-tree.js')), true);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'test', 'store.test.ts')), true);
+  assert.equal(isScoredSource(path.join(process.cwd(), 'scripts', 'quality', 'crap.mjs')), true);
   assert.equal(isScoredSource(path.join(sidequestRoot, 'lib', 'mcp-collaboration.js')), false);
   assert.equal(isScoredSource(path.join(sidequestRoot, 'hooks', 'session-start.js')), false);
   assert.equal(isScoredSource(path.join(sidequestRoot, 'bin', 'sidequest.js')), false);
+  assert.equal(isScoredSource(path.join(process.cwd(), 'scripts', 'windows-job-owner.cs')), false);
+  assert.equal(isScoredSource(path.join(process.cwd(), 'scripts', 'quality', 'README.md')), false);
 });
 
-test('reports an unmeasurable Lizard descriptor without throwing', () => {
-  const descriptor = { line: 174, name: '<anonymous>' };
-  assert.equal(lizardMetric(descriptor, []), null);
-  assert.equal(lizardMetric(descriptor, [{ start: 174, name: '(anonymous)', complexity: 3 }]), 3);
-  assert.equal(parseLizardCsv('').length, 0);
+test('a changed range sorts into scored sources, one no-analyzer row per other-language source, and skipped files', () => {
+  const entries = ['plugins/sidequest/src/lib/store.ts', 'plugins/sidequest/lib/store.js', 'plugins/sidequest/scripts/owned-process-tree.js', 'plugins/sidequest/test/store.test.ts', 'scripts/quality/crap.mjs', 'scripts/windows-job-owner.cs', 'docs/src/content/docs/index.md'].map((changedPath) => ({ path: changedPath, baselinePath: changedPath }));
+  const context = changedPathContext('base-sha', entries);
+  assert.deepEqual(context.changedPaths, ['plugins/sidequest/src/lib/store.ts', 'plugins/sidequest/scripts/owned-process-tree.js', 'plugins/sidequest/test/store.test.ts', 'scripts/quality/crap.mjs']);
+  assert.equal(context.allChangedPaths.length, 7);
+  assert.deepEqual(context.unanalyzed, [{ relativePath: 'scripts/windows-job-owner.cs', line: 1, name: 'windows-job-owner.cs', unverified: 'this gate has no analyzer for .cs sources' }]);
+  assert.equal(noAnalyzerMetric('docs/src/content/docs/index.md'), null);
 });
 
-test('keeps unmeasurable source functions in the metric list', async () => {
+const knownComplexities = [
+  ['function ifElseIfChain(value) { if (value === 1) return 1; else if (value === 2) return 2; else return 3; }', { ifElseIfChain: 3 }],
+  ['function switchWithDefault(value) { switch (value) { case 1: return 1; case 2: return 2; default: return 3; } }', { switchWithDefault: 3 }],
+  ['function tryCatch() { try { return 1; } catch (error) { return 2; } finally { return 3; } }', { tryCatch: 2 }],
+  ['function shortCircuit(a, b, c, d) { return (a && b) || (c ?? d); }', { shortCircuit: 4 }],
+  ['function ternary(value) { return value ? 1 : 0; }', { ternary: 2 }],
+  ['function everyLoop(items) { for (const item of items) {} for (const key in items) {} for (let index = 0; index < 1; index += 1) {} while (false) {} do {} while (false); }', { everyLoop: 6 }],
+  ['function outer(items) { return items.filter((item) => item ? item.ok && item.ready : false); }', { outer: 1, '<anonymous>': 3 }],
+];
+
+test('counts cyclomatic complexity from the AST: 1 plus each if, loop, case, catch, conditional and short-circuit operator, nested functions excluded', async () => {
+  for (const [source, expected] of knownComplexities) {
+    const functions = await collectFunctions(source, 'fixture.ts');
+    assert.deepEqual(Object.fromEntries(functions.map((entry) => [entry.name, entry.complexity])), expected, source);
+  }
+});
+
+// lizard 1.24.0 --csv on this fixture: one row, first 1-2, and no row for second.
+test('measures both siblings where Lizard loses brace tracking: a template literal nested inside another template literal\'s ${} substitution', async () => {
+  const source = 'function first(a) { return `x${`y${a}`}z`; }\nfunction second(a) { return a ? 1 : 0; }\n';
+  const functions = await collectFunctions(source, 'fixture.ts');
+  assert.deepEqual(functions.map((entry) => [entry.name, entry.line, entry.complexity]), [['first', 1, 1], ['second', 2, 2]]);
+});
+
+test('scores a source function from its AST complexity and mapped coverage', async () => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-source-metrics-'));
   const sourcePath = path.join(temporaryDirectory, 'fixture.js');
-  const sourceText = 'function subject() { return 1; }';
+  const sourceText = 'function subject(value) { return value ? 1 : 0; }';
   await fs.writeFile(sourcePath, sourceText);
   try {
     const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [{ functionName: 'subject', ranges: [{ startOffset: 0, endOffset: sourceText.length, count: 1 }] }]]]);
-    const [metricResult] = await sourceMetrics(sourcePath, coverageScripts, []);
+    const [metricResult] = await sourceMetrics(sourcePath, coverageScripts);
     assert.equal(metricResult.name, 'subject');
-    assert.equal(metricResult.unverified, 'lizard could not measure this function');
+    assert.equal(metricResult.unverified, undefined);
+    assert.deepEqual([metricResult.complexity, metricResult.coverage, metricResult.crap], [2, 1, 2]);
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -260,8 +323,7 @@ test('scores an inline callback covered in one process and idle in another as co
     const idleProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 0)];
     const busyProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 3)];
     const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [...idleProcess, ...busyProcess]]]);
-    const lizardEntries = [{ start: 1, name: 'outer', complexity: 1 }, { start: 2, name: '(anonymous)', complexity: 2 }];
-    const metrics = await sourceMetrics(sourcePath, coverageScripts, lizardEntries);
+    const metrics = await sourceMetrics(sourcePath, coverageScripts);
     const closure = metrics.find((entry) => entry.name === '<anonymous>');
     assert.equal(closure.coverage, 1);
     assert.equal(closure.crap, 2);
@@ -323,14 +385,19 @@ async function suitesRunFor(changedPaths, status = 0) {
 
 test('a sidequest-only diff runs only the sidequest suite', async () => {
   const { suites, suiteSummary } = await suitesRunFor(['plugins/sidequest/src/lib/store.ts']);
-  assert.deepEqual(suites.map((suite) => suite.plugin), ['sidequest']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['sidequest']);
   assert.deepEqual(suites[0].args, ['run', 'test:full']);
   assert.equal(suiteSummary, 'sidequest');
 });
 
+test('a changed plugin script or test file runs that plugin suite', async () => {
+  const { suites } = await suitesRunFor(['plugins/sidequest/scripts/owned-process-tree.js', 'plugins/sidequest/test/store.test.ts']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['sidequest']);
+});
+
 test('a gateway plus observability diff runs both suites and nothing else', async () => {
   const { suites, suiteSummary } = await suitesRunFor(['plugins/model-gateway/lib/commands.js', 'plugins/observability/lib/store.js', 'plugins/model-gateway/lib/settings-wiring.js']);
-  assert.deepEqual(suites.map((suite) => suite.plugin), ['model-gateway', 'observability']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['model-gateway', 'observability']);
   assert.deepEqual(suites[0].args, ['run', 'test']);
   assert.deepEqual(suites[1].args.slice(0, 1), ['--test']);
   assert.equal(suiteSummary, 'model-gateway, observability');
@@ -338,15 +405,135 @@ test('a gateway plus observability diff runs both suites and nothing else', asyn
 
 test('a quartermaster hooks diff runs the quartermaster node --test suite', async () => {
   const { suites } = await suitesRunFor(['plugins/quartermaster/hooks/session-start-nudge.js']);
-  assert.deepEqual(suites.map((suite) => suite.plugin), ['quartermaster']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['quartermaster']);
   assert.equal(suites[0].args[0], '--test');
 });
 
-test('a diff outside the plugins runs no suite', async () => {
-  const { suites, suiteSummary } = await suitesRunFor(['docs/src/content/docs/contributing.md', 'plugins']);
+test('repository scripts run their documented node --test suites from the repository root', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['scripts/quality/crap.mjs', 'scripts/release/cut.mjs', 'docs/scripts/generate-reference.mjs', 'plugins/quartermaster/lib/catalog.js']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['quartermaster', 'scripts/quality', 'scripts/release', 'docs']);
+  assert.deepEqual(suites.slice(1).map((suite) => suite.args), [
+    ['--test', 'scripts/quality/*.test.mjs'],
+    ['--test', 'scripts/release/test/*.test.mjs'],
+    ['--test', 'docs/scripts/content.test.mjs'],
+  ]);
+  assert.ok(suites.slice(1).every((suite) => suite.cwd === process.cwd() && suite.command === process.execPath));
+  assert.equal(suiteSummary, 'quartermaster, scripts/quality, scripts/release, docs');
+});
+
+test('a diff with no suite behind it runs none and says so', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['docs/src/content/docs/contributing.md', 'plugins', 'scripts/windows-job-owner.cs']);
   assert.deepEqual(suites, []);
-  assert.equal(suiteSummary, 'none, no plugin changed');
+  assert.equal(suiteSummary, 'none, no suite covers the changed paths');
   assert.deepEqual(await selectSuites(['plugins/not-a-plugin/lib/a.js']), []);
+});
+
+test('a file no suite loaded is unverified with the child-process capture hint instead of scoring zero coverage', async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-unloaded-'));
+  const sourcePath = path.join(temporaryDirectory, 'spawned-only.js');
+  await fs.writeFile(sourcePath, 'function spawnedOnly(value) { return value ? 1 : 0; }\n');
+  try {
+    const [metricResult] = await sourceMetrics(sourcePath, new Map());
+    assert.match(metricResult.unverified, /^no suite loaded this file, so it has no coverage record/);
+    assert.match(metricResult.unverified, /NODE_V8_COVERAGE/);
+    assert.equal(metricResult.crap, undefined);
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('remaps V8 ranges through a source map and drops a record whose function range does not map', () => {
+  const toOriginal = (offset) => (offset >= 100 ? null : offset - 10);
+  const records = [
+    { functionName: 'kept', ranges: [{ startOffset: 10, endOffset: 50, count: 1 }, { startOffset: 20, endOffset: 120, count: 0 }] },
+    { functionName: 'lost', ranges: [{ startOffset: 100, endOffset: 150, count: 1 }] },
+  ];
+  assert.deepEqual(remapRecords(records, toOriginal), [{ functionName: 'kept', ranges: [{ startOffset: 0, endOffset: 40, count: 1 }] }]);
+});
+
+const typedTestFile = [
+  "import assert from 'node:assert/strict';",
+  "import test from 'node:test';",
+  '',
+  'export function add(left: number, right: number): number {',
+  '  return left > 0 ? left + right : right;',
+  '}',
+  '',
+  "test('adds', (): void => {",
+  '  assert.equal(add(1, 2), 3);',
+  '  assert.equal(add(0, 2), 2);',
+  '});',
+  '',
+].join('\n');
+
+test('a tsx-loaded TypeScript test file gets its callback and helper scored from source-mapped coverage', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-fixture-'));
+  const coverageDirectory = path.join(fixtureRoot, 'coverage');
+  const sourcePath = path.join(fixtureRoot, 'typed.test.ts');
+  await fs.writeFile(sourcePath, typedTestFile);
+  try {
+    const { NODE_TEST_CONTEXT, ...environment } = process.env;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'typed.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
+    assert.equal(result.status, 0, result.stderr);
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
+    const rows = Object.fromEntries(metrics.map((entry) => [entry.name, [entry.line, entry.complexity, entry.coverage, entry.unverified]]));
+    assert.deepEqual(rows, { add: [4, 2, 1, undefined], '<anonymous>': [8, 1, 1, undefined] });
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+// Each nested body below must run for the test to pass. V8 names the assigned hook "" and the
+// constructor after its class, esbuild drops a lone parameter's parentheses, and tsx's __name
+// wrapper leaves the property arrow no segment of its own, so their ranges start past the AST's.
+const nestedCallbackTestFile = [
+  "import assert from 'node:assert/strict';",
+  "import test from 'node:test';",
+  '',
+  'let hook: ((value: number) => void) | null = null;',
+  'class Recorder {',
+  '  seen: number[];',
+  '  constructor(...values: number[]) {',
+  '    this.seen = values;',
+  '  }',
+  '}',
+  '',
+  "test('nested callbacks run', (): void => {",
+  '  hook = (value) => {',
+  "    if (value > 1) throw new Error('boom');",
+  '  };',
+  '  const recorder = new Recorder(1, 2);',
+  '  assert.throws(() => hook?.(2), (error: Error) => /boom/.test(error.message));',
+  '  assert.ok(recorder.seen.some((value: number) => value > 1));',
+  '  const store = { size: () => recorder.seen.length };',
+  '  assert.equal(store.size(), 2);',
+  '});',
+  '',
+].join('\n');
+
+test('a tsx-loaded test file scores the nested callbacks that had to run with their executed coverage', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-nested-'));
+  const coverageDirectory = path.join(fixtureRoot, 'coverage');
+  const sourcePath = path.join(fixtureRoot, 'nested.test.ts');
+  await fs.writeFile(sourcePath, nestedCallbackTestFile);
+  try {
+    const { NODE_TEST_CONTEXT, ...environment } = process.env;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'nested.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
+    assert.equal(result.status, 0, result.stderr);
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
+    const rows = metrics.map((entry) => `${entry.line} ${entry.name} ${entry.coverage}`);
+    assert.deepEqual(rows, [
+      '7 constructor 1',
+      '12 <anonymous> 1',
+      '13 hook 1',
+      '17 <anonymous> 1',
+      '17 <anonymous> 1',
+      '18 <anonymous> 1',
+      '19 size 1',
+    ]);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test('a supplied coverage directory runs no suite', async () => {
@@ -365,7 +552,7 @@ test('a failing suite removes the coverage directory the earlier suites wrote in
   const previousTmpdir = process.env.TMPDIR;
   process.env.TMPDIR = temporaryRoot;
   const failOnLastSuite = (suite, coverageDirectory) => {
-    if (suite.plugin === 'observability') return { status: 3 };
+    if (suite.name === 'observability') return { status: 3 };
     fsSync.writeFileSync(path.join(coverageDirectory, 'coverage-1.json'), '{}');
     return { status: 0 };
   };
@@ -399,7 +586,8 @@ test('runs production CLI phases and its failing report outcome', async () => {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-production-cli-'));
   try {
     const result = await withCapturedProcessOutput(() => run({ base: 'HEAD', coverageDirectory, all: false }));
-    assert.deepEqual(result.changedMetrics, []);
+    // Uncommitted edits to this gate's own files are changed paths now, scored against the empty capture above.
+    assert.ok(result.changedMetrics.every((entry) => entry.relativePath.startsWith('scripts/quality/') && entry.unverified.startsWith('no suite loaded this file')), JSON.stringify(result.changedMetrics));
 
     const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: 'scripts/quality/crap.mjs' });
     const anotherFailingMetric = { ...failingMetric, identity: '<root>/FunctionDeclaration:anotherSubject#0', line: 2, name: 'anotherSubject' };
@@ -430,24 +618,61 @@ async function createCliFixture() {
   const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-cli-fixture-'));
   const qualityFixtureDirectory = path.join(fixtureRoot, 'scripts', 'quality');
   const pluginRoot = path.join(fixtureRoot, 'plugins', 'sidequest');
-  await fs.mkdir(path.join(pluginRoot, 'src'), { recursive: true });
+  await Promise.all(['src', 'scripts', 'test'].map((directory) => fs.mkdir(path.join(pluginRoot, directory), { recursive: true })));
   await fs.mkdir(path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib'), { recursive: true });
   await fs.mkdir(qualityFixtureDirectory, { recursive: true });
   await Promise.all([
     fs.copyFile(path.join(qualityDirectory, 'crap.mjs'), path.join(qualityFixtureDirectory, 'crap.mjs')),
     fs.copyFile(path.join(qualityDirectory, 'crap-core.cjs'), path.join(qualityFixtureDirectory, 'crap-core.cjs')),
     fs.copyFile(path.join(process.cwd(), 'plugins', 'quartermaster', 'lib', 'crap-core.cjs'), path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib', 'crap-core.cjs')),
-    fs.writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ type: 'module', scripts: { 'test:full': 'node test.mjs' } })),
+    fs.writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ type: 'module', scripts: { 'test:full': 'node --test test/subject.test.mjs' } })),
     fs.writeFile(path.join(pluginRoot, 'src', 'subject.js'), 'export function subject(value) {\n  return value;\n}\n'),
-    fs.writeFile(path.join(pluginRoot, 'test.mjs'), "import assert from 'node:assert/strict';\nimport { subject } from './src/subject.js';\nassert.equal(typeof subject, 'function');\nsubject(0);\n"),
+    fs.writeFile(path.join(pluginRoot, 'src', 'retired.js'), 'export function retired() {\n  return 0;\n}\n'),
+    fs.writeFile(path.join(pluginRoot, 'scripts', 'helper.js'), 'export function helper(value) {\n  return value;\n}\n'),
+    fs.writeFile(path.join(pluginRoot, 'test', 'subject.test.mjs'), fixtureTestFile('subject(0);')),
+    fs.writeFile(path.join(fixtureRoot, 'scripts', 'windows-job-owner.cs'), 'class JobOwner { }\n'),
   ]);
   runGitFixture(fixtureRoot, ['init', '-q']);
   return { fixtureRoot, base: commitFixture(fixtureRoot, 'initial') };
 }
 
+function fixtureTestFile(body) {
+  return `import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { helper } from '../scripts/helper.js';\nimport { subject } from '../src/subject.js';\n\ntest('subject', () => {\n  ${body}\n  assert.equal(helper(1), 1);\n  assert.equal(helper(-1), helper(-1));\n});\n`;
+}
+
 function runCliFixture(fixtureRoot, base) {
   return spawnSync(process.execPath, ['scripts/quality/crap.mjs', '--base', base], { cwd: fixtureRoot, encoding: 'utf8' });
 }
+
+test('the CLI scores a changed plugin script, test callback and src function with coverage, and reports a changed C# file once as having no analyzer', async () => {
+  const { fixtureRoot, base } = await createCliFixture();
+  const pluginRoot = path.join(fixtureRoot, 'plugins', 'sidequest');
+  try {
+    await Promise.all([
+      fs.writeFile(path.join(pluginRoot, 'src', 'subject.js'), passSubject),
+      fs.writeFile(path.join(pluginRoot, 'scripts', 'helper.js'), 'export function helper(value) {\n  return value > 0 ? value : 0;\n}\n'),
+      fs.writeFile(path.join(pluginRoot, 'test', 'subject.test.mjs'), fixtureTestFile("assert.equal(typeof subject(0), 'number');")),
+      fs.writeFile(path.join(fixtureRoot, 'scripts', 'windows-job-owner.cs'), 'class JobOwner { int Pid; }\n'),
+      fs.rm(path.join(pluginRoot, 'src', 'retired.js')),
+    ]);
+    const result = runCliFixture(fixtureRoot, base);
+    const rows = result.stdout.split('\n').filter((line) => /^(PASS|FAIL|UNVERIFIED) /.test(line));
+    assert.deepEqual(rows.map((row) => row.split(' ').slice(0, 3).join(' ')), [
+      'PASS plugins/sidequest/scripts/helper.js:1 helper',
+      'PASS plugins/sidequest/src/subject.js:1 subject',
+      'PASS plugins/sidequest/test/subject.test.mjs:6 <anonymous>',
+      'UNVERIFIED scripts/windows-job-owner.cs:1 windows-job-owner.cs',
+    ], result.stdout + result.stderr);
+    assert.match(rows[0], /cc=2 coverage=100\.00% CRAP=2\.0000/);
+    assert.match(rows[2], /cc=1 coverage=100\.00% CRAP=1\.0000/);
+    assert.match(rows[3], /this gate has no analyzer for \.cs sources; measurement is unverified\./);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /coverage suites: sidequest/);
+    assert.doesNotMatch(result.stdout + result.stderr, /retired/);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
 
 test('the CLI captures a fixture suite and reports passing and failing changed functions', async () => {
   const { fixtureRoot, base } = await createCliFixture();
@@ -521,4 +746,67 @@ test('under node --permission the sync transport is refused at the named pipe an
   const permitted = collectUnderReadOnlyPermission('async');
   assert.equal(permitted.status, 0, permitted.stderr);
   assert.equal(permitted.stdout, JSON.stringify(await collectFunctions(transportFixture, 'fixture.js')));
+});
+
+// SQ-3465: tsx maps an async arrow's start past `async (`, so the record has to land inside the
+// arrow's own span, never the enclosing callback's, which would take the child's coverage.
+const asyncArrowTestFile = [
+  "import assert from 'node:assert/strict';",
+  "import test from 'node:test';",
+  '',
+  'function fixture() {',
+  '  const values: number[] = [];',
+  '  return {',
+  '    values,',
+  '    cleanup: async () => {',
+  '      values.push(1);',
+  '      await Promise.resolve();',
+  '    },',
+  '  };',
+  '}',
+  '',
+  "test('async arrows run', async (): Promise<void> => {",
+  '  const values: number[] = [];',
+  '  const cleanup = async () => {',
+  '    values.push(1);',
+  '    await Promise.resolve();',
+  '  };',
+  '  const syncCleanup = () => {',
+  '    values.push(2);',
+  '  };',
+  '  const idle = async () => {',
+  '    values.push(3);',
+  '  };',
+  '  await cleanup();',
+  '  syncCleanup();',
+  '  const made = fixture();',
+  '  await made.cleanup();',
+  '  assert.deepEqual([...values, ...made.values], [1, 2, 1]);',
+  '  assert.equal(typeof idle, "function");',
+  '});',
+  '',
+].join('\n');
+
+test('a tsx-loaded test file scores an executed async arrow, assigned or a property, with its own coverage', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-async-'));
+  const coverageDirectory = path.join(fixtureRoot, 'coverage');
+  const sourcePath = path.join(fixtureRoot, 'async.test.ts');
+  await fs.writeFile(sourcePath, asyncArrowTestFile);
+  try {
+    const { NODE_TEST_CONTEXT, ...environment } = process.env;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'async.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
+    assert.equal(result.status, 0, result.stderr);
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
+    const rows = metrics.map((entry) => `${entry.line} ${entry.name} ${entry.coverage}`);
+    assert.deepEqual(rows, [
+      '4 fixture 1',
+      '8 cleanup 1',
+      '15 <anonymous> 1',
+      '17 cleanup 1',
+      '21 syncCleanup 1',
+      '24 idle 0',
+    ]);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 });

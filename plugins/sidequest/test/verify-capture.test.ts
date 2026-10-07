@@ -99,9 +99,10 @@ function commitHead(cwd: string): string {
 // these tests runs exactly this command.
 const ISOLATED_DISPATCH_VERIFY_COMMAND = 'git rev-parse HEAD';
 
-function setupIsolatedDispatch(agentId: string) {
+function setupIsolatedDispatch(agentId: string, boardConfig: Record<string, unknown> = {}) {
   const project = initGitRepo(`sq-verify-capture-worktree-fixture-${agentId}-`);
   const { slug } = store.ensureProject(project);
+  if (Object.keys(boardConfig).length) store.setBoardConfig(slug, boardConfig);
   const ticket = store.createTicket(slug, {
     title: `isolated worktree fixture ${agentId}`,
     category: 'codebase-exploration',
@@ -1008,5 +1009,21 @@ test('GH-373: the wrapper names a missing board or ticket, and keeps --base64 al
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(unregistered, { recursive: true, force: true });
+  }
+});
+
+// SQ-3424: on a shared verify environment the pinned command runs in the shared checkout at integrate,
+// so the wrapper refuses to run it in the executor's worktree and records nothing.
+test('SQ-3424: the wrapper refuses an environment-bound verifier and tells the executor to submit', async () => {
+  const fixture = setupIsolatedDispatch('environment-lane', { verifyEnvironment: 'shared' });
+  try {
+    assert.equal(fixture.ticket.dispatch.verificationRequirement.environment, 'shared');
+    const { status, output } = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(status, 2, output);
+    assert.match(output, /capture=unrecorded reason=verification_capture_environment_lane/);
+    assert.ok(output.includes(`${fixture.ticket.ref}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`), output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
   }
 });

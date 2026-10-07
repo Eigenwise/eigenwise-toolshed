@@ -27,12 +27,15 @@ high-stakes review. Multiple lenses need distinct named risks.
 
 ## Measured quality without duplicate suites
 
-Use the existing local quality owner. Where supported, run an early measured complexity scan before
+Run the project's configured quality gate when the briefing names one and report its per-function rows
+honestly: unmeasured bodies stay unmeasured, no averages. Use the existing local quality owner. Where supported, run an early measured complexity scan before
 expensive final coverage. Reuse fresh candidate-verifier coverage for the same checked bytes only when
-the actual runner supports it. Missing analyzer or coverage stays UNVERIFIED. Never substitute tracked
+the actual runner supports it. For a configured gate, missing analyzer or coverage stays UNVERIFIED. Never substitute tracked
 Lizard/proportional attribution, pin `quality:crap` as authority, or rerun a full suite merely for
-already captured compatible coverage. Tooling and reports stay local and uncommitted. Each new or
-modified function must score strictly below CRAP 6; untouched legacy functions are outside scope.
+already captured compatible coverage. Tooling and reports stay local and uncommitted; untouched legacy functions are outside scope.
+When none is configured, run the pinned verifier, state once "no quality gate is configured for this
+project; Quartermaster setup can add one", and continue. Absence alone never holds, parks or marks work
+UNVERIFIED. User rules injected by the host still apply.
 
 Before a long run, freeze its inputs and validate source, coverage and executed/source-map byte identity.
 Check native baseline/candidate ownership, clean-state prerequisites, finite deadline and actual
