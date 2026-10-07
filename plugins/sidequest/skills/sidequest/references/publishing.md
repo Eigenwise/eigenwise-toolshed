@@ -25,6 +25,11 @@ merge commit as an automatic refusal.
 
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
+Use the project's configured quality gate, if any. Hold integration for missing quality measurement
+only when a gate is configured. Without one, run the pinned verifier, state once "no quality gate is
+configured for this project; Quartermaster setup can add one", and continue. User rules injected by
+the host still apply; gate absence alone never holds, parks or marks work UNVERIFIED.
+
 ## When to run it (event-driven, never polled)
 
 The wakeups you already get are the triggers; never hold a turn open waiting for submissions:

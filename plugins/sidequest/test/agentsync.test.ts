@@ -32,6 +32,31 @@ const STABLE_EXECUTORS = [
   ]),
 ].sort();
 
+test('briefing discovers the project gate and reports none without inventing a requirement', () => {
+  const project = tmpDir();
+  const ticket = { ref: 'SQ-GATE', title: 'Gate discovery', category: {} };
+  const render = () => agentsync.renderTicketBriefing(ticket, 'gate-token', undefined, project);
+  assert.match(render(), /Configured quality gate: none\./);
+  const configDirectory = path.join(project, '.claude', 'quartermaster');
+  fs.mkdirSync(configDirectory, { recursive: true });
+  const gate = { command: 'node scripts/check-quality.js', threshold: 9, base: 'quality-baseline' };
+  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify(gate));
+  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(gate)));
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(project, 'quality gate discovery').slug;
+  assert.ok(agentsync.renderTicketBriefing(ticket, 'gate-token', slug).includes('Configured quality gate: ' + JSON.stringify(gate)));
+  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ coverageCommand: 'npm test' }));
+  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify({
+    command: 'node "<quartermaster plugin root>/bin/quartermaster.js" crap',
+    threshold: 'gate-owned', base: 'gate-selected default',
+  })));
+  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ max: 8, base: 'main' }));
+  assert.match(render(), /"threshold":8,"base":"main"/);
+  fs.writeFileSync(path.join(configDirectory, 'crap.json'), '{broken');
+  assert.throws(render, SyntaxError);
+  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token'), /Configured quality gate: none\./);
+});
+
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function git(dir: string, args: string[]) { return spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }); }
 function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) => file.endsWith('.md')).sort(); }

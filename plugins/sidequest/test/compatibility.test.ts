@@ -75,17 +75,16 @@ function configuredPath(command: string): string {
   return match[1]!.replace(/[\\/]/g, path.sep);
 }
 
+const UNSHIPPED_DIRECTORY_NAMES = new Set(['src', 'node_modules', 'test']);
+// cpSync skips everything under a rejected directory, so matching the directory itself is enough.
+const UNSHIPPED_DASHBOARD_PATHS = new Set(['app', 'e2e', 'test-results', 'index.html'].map((name) => path.join('dashboard', name)));
+
 function copyMarketplaceFiles(destination: string): void {
   fs.cpSync(ROOT, destination, {
     recursive: true,
     filter(source) {
       const relative = path.relative(ROOT, source);
-      if (!relative) return true;
-      const parts = relative.split(path.sep);
-      if (parts.includes('src') || parts.includes('node_modules') || parts.includes('test') || parts.includes('scripts')) return false;
-      if (parts[0] === 'dashboard' && (parts[1] === 'app' || parts[1] === 'e2e' || parts[1] === 'test' || parts[1] === 'test-results')) return false;
-      if (relative === path.join('dashboard', 'index.html')) return false;
-      return true;
+      return !UNSHIPPED_DASHBOARD_PATHS.has(relative) && !relative.split(path.sep).some((part) => UNSHIPPED_DIRECTORY_NAMES.has(part));
     },
   });
 }
