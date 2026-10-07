@@ -439,7 +439,7 @@ const tools = [
         delivery: { type: "string", description: "Default submission delivery mode. Defaults to merge." },
         integrationVerifyTimeoutMs: { type: "integer" },
         worktreeIsolation: { type: "boolean", description: "false runs executors in the shared checkout (default true)." },
-        verifyEnvironment: { type: "string", enum: ["isolated", "shared"], description: "Where an isolated dispatch runs its pinned command or suite verifier. isolated (default): the executor runs it in its worktree before submit. shared: the pinned verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch, so flipping it never changes an in-flight ticket." },
+        verifyEnvironment: { type: "string", enum: ["isolated", "shared"], description: "shared: the pinned verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)." },
         worktreeBase: { type: "string", enum: ["auto", "origin-main", "local-main"], description: "Isolated-worktree base." },
         notIntegratedSalvageAgeHours: { type: "integer", minimum: 168, description: "Default 168 hours." },
         worktreeRecoveryRetentionAgeHours: { type: "integer", minimum: 1, description: "Hours, default 336." },
