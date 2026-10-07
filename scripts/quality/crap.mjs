@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, fileURLToPath as fromFileUrl, pathToFileURL } from 'node:url';
 import crapCore from './crap-core.cjs';
 
-const { crapScore, parseLizardCsv } = crapCore;
+const { crapScore } = crapCore;
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sidequestRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
@@ -80,6 +80,35 @@ function functionKind(node) {
   return ast.SyntaxKind[node.kind];
 }
 
+const DECISION_KINDS = new Set([
+  ast.SyntaxKind.IfStatement,
+  ast.SyntaxKind.ForStatement,
+  ast.SyntaxKind.ForInStatement,
+  ast.SyntaxKind.ForOfStatement,
+  ast.SyntaxKind.WhileStatement,
+  ast.SyntaxKind.DoStatement,
+  ast.SyntaxKind.CaseClause,
+  ast.SyntaxKind.CatchClause,
+  ast.SyntaxKind.ConditionalExpression,
+]);
+const SHORT_CIRCUIT_OPERATORS = new Set([ast.SyntaxKind.AmpersandAmpersandToken, ast.SyntaxKind.BarBarToken, ast.SyntaxKind.QuestionQuestionToken]);
+
+function isDecision(node) {
+  return DECISION_KINDS.has(node.kind) || (ast.isBinaryExpression(node) && SHORT_CIRCUIT_OPERATORS.has(node.operatorToken.kind));
+}
+
+// A nested function is discovered as its own descriptor, so its decisions stay out of the enclosing count.
+export function cyclomaticComplexity(functionNode) {
+  let decisions = 0;
+  function countDecisions(node) {
+    if (ast.isFunctionLikeDeclaration(node)) return;
+    if (isDecision(node)) decisions += 1;
+    node.forEachChild(countDecisions);
+  }
+  functionNode.forEachChild(countDecisions);
+  return 1 + decisions;
+}
+
 export function parserTransport(requested = process.env.CRAP_PARSER_TRANSPORT || 'sync') {
   const ParserApi = PARSER_TRANSPORTS[requested];
   if (!ParserApi) throw new Error(`Unknown TypeScript parser transport "${requested}"; use sync or async.`);
@@ -109,7 +138,7 @@ export async function collectFunctions(text, fileName, { transport } = {}) {
         const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
         const start = node.getStart();
         const end = node.end;
-        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
+        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }
@@ -193,11 +222,6 @@ function namedRecords(descriptor, outputs) {
   return { records: outputs.flatMap((output) => output.records).filter((record) => record.functionName === descriptor.name && record.ranges[0]) };
 }
 
-export function lizardMetric(descriptor, lizardEntries) {
-  const expectedName = descriptor.name === '<anonymous>' ? '(anonymous)' : descriptor.name;
-  return lizardEntries.find((entry) => entry.start === descriptor.line && entry.name === expectedName)?.complexity ?? null;
-}
-
 function siblingIdentities(descriptors, parent) {
   return descriptors.filter((descriptor) => descriptor.parent === parent).map((descriptor) => descriptor.identity).join('\n');
 }
@@ -241,7 +265,7 @@ export async function builtOutput(outputPath, coverageScripts, needsFunctions) {
   };
 }
 
-export async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
+export async function sourceMetrics(sourcePath, coverageScripts) {
   const sourceText = await fs.readFile(sourcePath, 'utf8');
   const descriptors = await collectFunctions(sourceText, sourcePath);
   const relativePath = path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/');
@@ -258,13 +282,12 @@ export async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) 
       fingerprint: descriptor.fingerprint,
       line: descriptor.line,
       name: descriptor.name,
+      complexity: descriptor.complexity,
       relativePath,
     };
-    const complexity = lizardMetric(descriptor, lizardEntries);
-    if (complexity === null) return { ...metric, unverified: 'lizard could not measure this function' };
     const { coverage, unverified } = functionCoverage(descriptor, outputs);
     if (unverified) return { ...metric, unverified };
-    return { ...metric, coverage, complexity, crap: crapScore(complexity, coverage) };
+    return { ...metric, coverage, crap: crapScore(descriptor.complexity, coverage) };
   });
 }
 
@@ -412,11 +435,7 @@ function changedPathContext(base) {
 async function measureMetrics(changedPaths, coverageDirectory) {
   const coverageScripts = await readCoverage(coverageDirectory);
   const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
-  const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-  if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
-  const lizardRecords = parseLizardCsv(lizardResult.stdout || '');
-  const lizardByPath = Map.groupBy([...lizardRecords, ...sources.map((sourcePath) => ({ file: sourcePath }))], (entry) => normalizedPath(entry.file));
-  return (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)))))).flat();
+  return (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts)))).flat();
 }
 
 function metricStatus(metric) {
