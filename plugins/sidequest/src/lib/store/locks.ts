@@ -1,7 +1,11 @@
 'use strict';
 
+type TicketLockKey = { slug: string; id: string };
+type BusyTicketLock = { ok: false; reason: 'busy' };
+const LOCK_HELD_ELSEWHERE = Symbol('lock held elsewhere');
+
 function createLocks(dependencies: any) {
-  const { fs, path, ticketsDir, transaction } = dependencies;
+  const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {} } = dependencies;
 
   function ticketLockPath(slug?: any, id?: any) {
     return path.join(ticketsDir(slug), '.' + path.basename(String(id)) + '.lock');
@@ -65,37 +69,53 @@ function createLocks(dependencies: any) {
     return ownerTokenValue(ownerToken) != null && owner?.token === ownerTokenValue(ownerToken);
   }
 
+  // Every lock file (ticket, workers, notifications) can wait for seconds, so none is taken inside a guarded write:
+  // that waiter would hold the SQLite write lock while the lock's holder waits on SQLite (SQ-3449).
   function acquireLock(lockPath?: any, options: any = {}) {
+    refuseUnderGuardedWrite(`waiting on lock file ${path.basename(String(lockPath))}`);
     const STALE_LOCK_MS = 30000;
     const RETRY_MS = 10;
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      try {
-        const fd = fs.openSync(lockPath, 'wx');
-        try {
-          fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
-        } catch (_: any) {
-          fs.closeSync(fd);
-          try { fs.unlinkSync(lockPath); } catch (_: any) { /* ignore */ }
-          return false;
-        }
-        fs.closeSync(fd);
-        return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
-      } catch (error: any) {
-        if (!error || error.code !== 'EEXIST') return false;
-        if (lockCanBeReclaimed(lockPath)) {
-          try {
-            fs.unlinkSync(lockPath);
-          } catch (_: any) {
-            /* ignore */
-          }
-          continue;
-        }
-        busyWait(RETRY_MS);
-      }
+      const created = createLockFile(lockPath, ownerToken);
+      if (created !== LOCK_HELD_ELSEWHERE) return created;
+      if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
     }
     return false;
+  }
+
+  function createLockFile(lockPath: string, ownerToken: string) {
+    let fd: number;
+    try {
+      fd = fs.openSync(lockPath, 'wx');
+    } catch (error: any) {
+      return error?.code === 'EEXIST' ? LOCK_HELD_ELSEWHERE : false;
+    }
+    if (!writeLockOwner(lockPath, fd, ownerToken)) return false;
+    return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
+  }
+
+  function writeLockOwner(lockPath: string, fd: number, ownerToken: string): boolean {
+    try {
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
+    } catch (_: any) {
+      fs.closeSync(fd);
+      try { fs.unlinkSync(lockPath); } catch (_: any) { /* ignore */ }
+      return false;
+    }
+    fs.closeSync(fd);
+    return true;
+  }
+
+  function removeReclaimableLock(lockPath: string): boolean {
+    if (!lockCanBeReclaimed(lockPath)) return false;
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (_: any) {
+      /* ignore */
+    }
+    return true;
   }
 
   function refreshLock(lockPath?: any, ownerToken?: any) {
@@ -124,15 +144,33 @@ function createLocks(dependencies: any) {
     return { ok: false, reason: 'lock_owner_lost' };
   }
 
-  function withTicketLock(slug?: any, id?: any, fn?: any) {
-    const lock = ticketLockPath(slug, id);
-    const ownerToken = acquireLock(lock);
-    if (!ownerToken) return { ok: false, reason: 'busy' };
+  function orderedTicketLockPaths(keys: readonly TicketLockKey[]): string[] {
+    return [...new Set(keys.map((key) => ticketLockPath(key.slug, key.id)))].sort();
+  }
+
+  // Every ticket file lock is taken, in one path order, before anything opens the SQLite write lock. Taking a
+  // second file lock inside an open transaction ordered file(A) -> SQLite -> file(B) against plain writers'
+  // file(B) -> SQLite, and that ABBA spun a whole retry budget while holding every project's writers (SQ-3348).
+  function withTicketFileLocks<Result>(keys: readonly TicketLockKey[], fn: () => Result): Result | BusyTicketLock {
+    const held: Array<{ lockPath: string; owner: { token: string } }> = [];
     try {
-      return transaction(fn);
+      for (const lockPath of orderedTicketLockPaths(keys)) {
+        const owner = acquireLock(lockPath);
+        if (!owner) return { ok: false, reason: 'busy' };
+        held.push({ lockPath, owner });
+      }
+      return fn();
     } finally {
-      releaseLock(lock, ownerToken);
+      for (const { lockPath, owner } of held.reverse()) releaseLock(lockPath, owner);
     }
+  }
+
+  function withTicketLocks<Result>(keys: readonly TicketLockKey[], fn: () => Result): Result | BusyTicketLock {
+    return withTicketFileLocks(keys, () => transaction(fn));
+  }
+
+  function withTicketLock(slug?: any, id?: any, fn?: any) {
+    return withTicketLocks([{ slug, id }], fn);
   }
 
   return {
@@ -142,7 +180,9 @@ function createLocks(dependencies: any) {
     releaseLock,
     testClaimLockDelayMs,
     ticketLockPath,
+    withTicketFileLocks,
     withTicketLock,
+    withTicketLocks,
   };
 }
 
