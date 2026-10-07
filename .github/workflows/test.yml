@@ -53,18 +53,35 @@ jobs:
           printf 'GIT_CONFIG_SYSTEM=%s\n' "$config_path" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - id: matrix
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           node --input-type=module - >> "$GITHUB_OUTPUT" <<'NODE'
-          import { readManifest } from './scripts/release/lib/manifests.mjs';
+          import { selectAffectedPlugins } from './scripts/release/lib/affected-suites.mjs';
+          import { readFragments } from './scripts/release/lib/fragments.mjs';
+          import { createGit } from './scripts/release/lib/git.mjs';
+          import { checkManifest, readManifest } from './scripts/release/lib/manifests.mjs';
           import { createSuiteResolver } from './scripts/release/lib/suites.mjs';
           import { diskSource } from './scripts/release/lib/treesource.mjs';
           const root = process.cwd();
-          const manifest = readManifest(diskSource(root), root);
+          const source = diskSource(root);
+          const manifest = readManifest(source, root);
+          const errors = checkManifest(manifest);
+          if (errors.length) throw new Error(errors.join('\n'));
+          const fragments = readFragments(source, { knownPlugins: new Set(manifest.plugins.keys()) });
+          if (fragments.errors.length) throw new Error(fragments.errors.join('\n'));
+          const affected = new Set(selectAffectedPlugins({
+            git: createGit({ cwd: root }),
+            base: process.env.BASE_SHA,
+            head: process.env.GITHUB_SHA,
+            manifest,
+          }));
           const resolveSuite = createSuiteResolver(root);
           const suites = [...manifest.plugins.values()].map((plugin) => ({ plugin, suite: resolveSuite(plugin) }));
           const missing = suites.filter(({ suite }) => suite === null).map(({ plugin }) => plugin.name);
@@ -74,6 +91,7 @@ jobs:
             path: plugin.dir,
             setup: suite.setup ?? '',
             command: suite.command,
+            affected: affected.has(plugin.name),
             os,
           })));
           process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
@@ -107,7 +125,7 @@ jobs:
       # and silently validate our config against the wrong Collector.
       - name: Resolve pinned Collector version
         id: collector-version
-        if: matrix.name == 'observability'
+        if: matrix.name == 'observability' && matrix.affected
         shell: bash
         run: |
           set -euo pipefail
@@ -115,13 +133,13 @@ jobs:
           [ -n "$version" ] && [ "$version" != undefined ] || { echo "COLLECTOR_VERSION is not exported" >&2; exit 1; }
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Cache pinned OpenTelemetry Collector
-        if: matrix.name == 'observability'
+        if: matrix.name == 'observability' && matrix.affected
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/otelcol-contrib
           key: otelcol-contrib-${{ steps.collector-version.outputs.version }}-${{ matrix.os }}-amd64
       - name: Provision pinned OpenTelemetry Collector
-        if: matrix.name == 'observability'
+        if: matrix.name == 'observability' && matrix.affected
         shell: bash
         run: |
           set -euo pipefail
@@ -147,15 +165,11 @@ jobs:
       - name: Test affected plugin
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          AFFECTED: ${{ matrix.affected }}
           SETUP: ${{ matrix.setup }}
           COMMAND: ${{ matrix.command }}
         run: |
-          base="$BASE_SHA"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            base="$(git rev-parse HEAD^)"
-          fi
-          if git diff --quiet "$base" "$GITHUB_SHA" -- "${{ matrix.path }}" .claude-plugin/marketplace.json scripts/release .github/workflows; then
+          if [ "$AFFECTED" = "false" ]; then
             echo "${{ matrix.name }} is unaffected"
             exit 0
           fi
