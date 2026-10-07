@@ -464,6 +464,59 @@ test('a tsx-loaded TypeScript test file gets its callback and helper scored from
   }
 });
 
+// Each nested body below must run for the test to pass. V8 names the assigned hook "" and the
+// constructor after its class, esbuild drops a lone parameter's parentheses, and tsx's __name
+// wrapper leaves the property arrow no segment of its own, so their ranges start past the AST's.
+const nestedCallbackTestFile = [
+  "import assert from 'node:assert/strict';",
+  "import test from 'node:test';",
+  '',
+  'let hook: ((value: number) => void) | null = null;',
+  'class Recorder {',
+  '  seen: number[];',
+  '  constructor(...values: number[]) {',
+  '    this.seen = values;',
+  '  }',
+  '}',
+  '',
+  "test('nested callbacks run', (): void => {",
+  '  hook = (value) => {',
+  "    if (value > 1) throw new Error('boom');",
+  '  };',
+  '  const recorder = new Recorder(1, 2);',
+  '  assert.throws(() => hook?.(2), (error: Error) => /boom/.test(error.message));',
+  '  assert.ok(recorder.seen.some((value: number) => value > 1));',
+  '  const store = { size: () => recorder.seen.length };',
+  '  assert.equal(store.size(), 2);',
+  '});',
+  '',
+].join('\n');
+
+test('a tsx-loaded test file scores the nested callbacks that had to run with their executed coverage', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-nested-'));
+  const coverageDirectory = path.join(fixtureRoot, 'coverage');
+  const sourcePath = path.join(fixtureRoot, 'nested.test.ts');
+  await fs.writeFile(sourcePath, nestedCallbackTestFile);
+  try {
+    const { NODE_TEST_CONTEXT, ...environment } = process.env;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'nested.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
+    assert.equal(result.status, 0, result.stderr);
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
+    const rows = metrics.map((entry) => `${entry.line} ${entry.name} ${entry.coverage}`);
+    assert.deepEqual(rows, [
+      '7 constructor 1',
+      '12 <anonymous> 1',
+      '13 hook 1',
+      '17 <anonymous> 1',
+      '17 <anonymous> 1',
+      '18 <anonymous> 1',
+      '19 size 1',
+    ]);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('a supplied coverage directory runs no suite', async () => {
   const captured = await captureCoverage(['plugins/sidequest/src/a.ts'], '/tmp/supplied', () => assert.fail('no suite should run'));
   assert.deepEqual(captured, { coverageDirectory: '/tmp/supplied', suiteSummary: 'none, --coverage supplied' });

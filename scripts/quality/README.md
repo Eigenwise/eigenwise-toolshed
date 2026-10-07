@@ -27,6 +27,8 @@ An UNVERIFIED row fails the gate like a FAIL does, and says why:
 
 Sidequest's tests are `.ts` files run through `tsx`, which hands V8 transpiled text, so raw coverage offsets do not land in the `.ts` source. Node caches tsx's inline source map next to the coverage whenever `NODE_V8_COVERAGE` is set (`source-map-cache` in the report), and the gate maps each range back through it with `node:module`'s `SourceMap`. A map is applied only when its source is the script itself; the Sidequest build ships no map, so `src/*.ts` is paired with its `lib/*.js` output by name and position instead.
 
+A record on the scored file itself is paired by position, never by name: it belongs to the innermost function holding its (remapped) start, and the record ending nearest that function's end wins. V8 names an assigned hook or a property arrow `""` and a constructor after its class, and a remapped start can land past the AST's (esbuild drops a lone parameter's parentheses; tsx's `__name` wrapper leaves a zero-parameter arrow no mapping segment of its own), so a name or an exact start offset would leave a callback that ran at 0%.
+
 ## Complexity convention
 
 Complexity comes from the same TypeScript AST the runner uses to find functions (`typescript/unstable/ast`, for `.ts` and `.js` alike). A function starts at 1 and adds 1 for each:
