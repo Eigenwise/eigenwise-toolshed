@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, parserTransport, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
+import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, changedPathContext, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, noAnalyzerMetric, parserTransport, readCoverage, remapRecords, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
 const { crapScore } = crapCore;
 
@@ -31,6 +31,19 @@ test('collects stable identities and source fingerprints', async () => {
   const functions = await collectFunctions('function outer() { return () => 1; }', 'fixture.ts');
   assert.deepEqual(functions.map((entry) => entry.name), ['outer', '<anonymous>']);
   assert.ok(functions.every((entry) => entry.fingerprint.length === 64));
+});
+
+const workerBefore = 'function runWorker(items) {\n  const forward = (item) => item.id;\n  return items.map(forward);\n}\n';
+
+async function changedFunctionNames(before, after) {
+  const baseline = new Map((await collectFunctions(before, 'worker.js')).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
+  const metrics = (await collectFunctions(after, 'worker.js')).map((descriptor) => ({ ...descriptor, relativePath: 'worker.js' }));
+  return (await changedMetricsAgainstBase(metrics, ['worker.js'], 'base-sha', async () => baseline)).map((metric) => metric.name);
+}
+
+test('an enclosing function is fingerprinted over its own text, so editing a nested arrow touches only the arrow', async () => {
+  assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('item.id', 'item.id ?? item.ref')), ['forward']);
+  assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('items.map(forward)', 'items.flatMap(forward)')), ['runWorker']);
 });
 
 test('strictly fails a new function with a CRAP score of six', async () => {
@@ -100,12 +113,26 @@ test('fails a changed over-ceiling function without a delta ratchet', async () =
   assert.match(failures[0], /subject cc=7 coverage=50\.00%/);
 });
 
-test('skips generated Sidequest build output', () => {
+test('scores JavaScript and TypeScript wherever it lives, skipping generated Sidequest build output and other languages', () => {
   const sidequestRoot = path.join(process.cwd(), 'plugins', 'sidequest');
   assert.equal(isScoredSource(path.join(sidequestRoot, 'src', 'lib', 'mcp-collaboration.ts')), true);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'scripts', 'owned-process-tree.js')), true);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'test', 'store.test.ts')), true);
+  assert.equal(isScoredSource(path.join(process.cwd(), 'scripts', 'quality', 'crap.mjs')), true);
   assert.equal(isScoredSource(path.join(sidequestRoot, 'lib', 'mcp-collaboration.js')), false);
   assert.equal(isScoredSource(path.join(sidequestRoot, 'hooks', 'session-start.js')), false);
   assert.equal(isScoredSource(path.join(sidequestRoot, 'bin', 'sidequest.js')), false);
+  assert.equal(isScoredSource(path.join(process.cwd(), 'scripts', 'windows-job-owner.cs')), false);
+  assert.equal(isScoredSource(path.join(process.cwd(), 'scripts', 'quality', 'README.md')), false);
+});
+
+test('a changed range sorts into scored sources, one no-analyzer row per other-language source, and skipped files', () => {
+  const entries = ['plugins/sidequest/src/lib/store.ts', 'plugins/sidequest/lib/store.js', 'plugins/sidequest/scripts/owned-process-tree.js', 'plugins/sidequest/test/store.test.ts', 'scripts/quality/crap.mjs', 'scripts/windows-job-owner.cs', 'docs/src/content/docs/index.md'].map((changedPath) => ({ path: changedPath, baselinePath: changedPath }));
+  const context = changedPathContext('base-sha', entries);
+  assert.deepEqual(context.changedPaths, ['plugins/sidequest/src/lib/store.ts', 'plugins/sidequest/scripts/owned-process-tree.js', 'plugins/sidequest/test/store.test.ts', 'scripts/quality/crap.mjs']);
+  assert.equal(context.allChangedPaths.length, 7);
+  assert.deepEqual(context.unanalyzed, [{ relativePath: 'scripts/windows-job-owner.cs', line: 1, name: 'windows-job-owner.cs', unverified: 'this gate has no analyzer for .cs sources' }]);
+  assert.equal(noAnalyzerMetric('docs/src/content/docs/index.md'), null);
 });
 
 const knownComplexities = [
@@ -339,14 +366,19 @@ async function suitesRunFor(changedPaths, status = 0) {
 
 test('a sidequest-only diff runs only the sidequest suite', async () => {
   const { suites, suiteSummary } = await suitesRunFor(['plugins/sidequest/src/lib/store.ts']);
-  assert.deepEqual(suites.map((suite) => suite.plugin), ['sidequest']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['sidequest']);
   assert.deepEqual(suites[0].args, ['run', 'test:full']);
   assert.equal(suiteSummary, 'sidequest');
 });
 
+test('a changed plugin script or test file runs that plugin suite', async () => {
+  const { suites } = await suitesRunFor(['plugins/sidequest/scripts/owned-process-tree.js', 'plugins/sidequest/test/store.test.ts']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['sidequest']);
+});
+
 test('a gateway plus observability diff runs both suites and nothing else', async () => {
   const { suites, suiteSummary } = await suitesRunFor(['plugins/model-gateway/lib/commands.js', 'plugins/observability/lib/store.js', 'plugins/model-gateway/lib/settings-wiring.js']);
-  assert.deepEqual(suites.map((suite) => suite.plugin), ['model-gateway', 'observability']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['model-gateway', 'observability']);
   assert.deepEqual(suites[0].args, ['run', 'test']);
   assert.deepEqual(suites[1].args.slice(0, 1), ['--test']);
   assert.equal(suiteSummary, 'model-gateway, observability');
@@ -354,15 +386,82 @@ test('a gateway plus observability diff runs both suites and nothing else', asyn
 
 test('a quartermaster hooks diff runs the quartermaster node --test suite', async () => {
   const { suites } = await suitesRunFor(['plugins/quartermaster/hooks/session-start-nudge.js']);
-  assert.deepEqual(suites.map((suite) => suite.plugin), ['quartermaster']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['quartermaster']);
   assert.equal(suites[0].args[0], '--test');
 });
 
-test('a diff outside the plugins runs no suite', async () => {
-  const { suites, suiteSummary } = await suitesRunFor(['docs/src/content/docs/contributing.md', 'plugins']);
+test('repository scripts run their documented node --test suites from the repository root', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['scripts/quality/crap.mjs', 'scripts/release/cut.mjs', 'docs/scripts/generate-reference.mjs', 'plugins/quartermaster/lib/catalog.js']);
+  assert.deepEqual(suites.map((suite) => suite.name), ['quartermaster', 'scripts/quality', 'scripts/release', 'docs']);
+  assert.deepEqual(suites.slice(1).map((suite) => suite.args), [
+    ['--test', 'scripts/quality/*.test.mjs'],
+    ['--test', 'scripts/release/test/*.test.mjs'],
+    ['--test', 'docs/scripts/content.test.mjs'],
+  ]);
+  assert.ok(suites.slice(1).every((suite) => suite.cwd === process.cwd() && suite.command === process.execPath));
+  assert.equal(suiteSummary, 'quartermaster, scripts/quality, scripts/release, docs');
+});
+
+test('a diff with no suite behind it runs none and says so', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['docs/src/content/docs/contributing.md', 'plugins', 'scripts/windows-job-owner.cs']);
   assert.deepEqual(suites, []);
-  assert.equal(suiteSummary, 'none, no plugin changed');
+  assert.equal(suiteSummary, 'none, no suite covers the changed paths');
   assert.deepEqual(await selectSuites(['plugins/not-a-plugin/lib/a.js']), []);
+});
+
+test('a file no suite loaded is unverified with the child-process capture hint instead of scoring zero coverage', async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-unloaded-'));
+  const sourcePath = path.join(temporaryDirectory, 'spawned-only.js');
+  await fs.writeFile(sourcePath, 'function spawnedOnly(value) { return value ? 1 : 0; }\n');
+  try {
+    const [metricResult] = await sourceMetrics(sourcePath, new Map());
+    assert.match(metricResult.unverified, /^no suite loaded this file, so it has no coverage record/);
+    assert.match(metricResult.unverified, /NODE_V8_COVERAGE/);
+    assert.equal(metricResult.crap, undefined);
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('remaps V8 ranges through a source map and drops a record whose function range does not map', () => {
+  const toOriginal = (offset) => (offset >= 100 ? null : offset - 10);
+  const records = [
+    { functionName: 'kept', ranges: [{ startOffset: 10, endOffset: 50, count: 1 }, { startOffset: 20, endOffset: 120, count: 0 }] },
+    { functionName: 'lost', ranges: [{ startOffset: 100, endOffset: 150, count: 1 }] },
+  ];
+  assert.deepEqual(remapRecords(records, toOriginal), [{ functionName: 'kept', ranges: [{ startOffset: 0, endOffset: 40, count: 1 }] }]);
+});
+
+const typedTestFile = [
+  "import assert from 'node:assert/strict';",
+  "import test from 'node:test';",
+  '',
+  'export function add(left: number, right: number): number {',
+  '  return left > 0 ? left + right : right;',
+  '}',
+  '',
+  "test('adds', (): void => {",
+  '  assert.equal(add(1, 2), 3);',
+  '  assert.equal(add(0, 2), 2);',
+  '});',
+  '',
+].join('\n');
+
+test('a tsx-loaded TypeScript test file gets its callback and helper scored from source-mapped coverage', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-fixture-'));
+  const coverageDirectory = path.join(fixtureRoot, 'coverage');
+  const sourcePath = path.join(fixtureRoot, 'typed.test.ts');
+  await fs.writeFile(sourcePath, typedTestFile);
+  try {
+    const { NODE_TEST_CONTEXT, ...environment } = process.env;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'typed.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
+    assert.equal(result.status, 0, result.stderr);
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
+    const rows = Object.fromEntries(metrics.map((entry) => [entry.name, [entry.line, entry.complexity, entry.coverage, entry.unverified]]));
+    assert.deepEqual(rows, { add: [4, 2, 1, undefined], '<anonymous>': [8, 1, 1, undefined] });
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test('a supplied coverage directory runs no suite', async () => {
@@ -396,7 +495,8 @@ test('runs production CLI phases and its failing report outcome', async () => {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-production-cli-'));
   try {
     const result = await withCapturedProcessOutput(() => run({ base: 'HEAD', coverageDirectory, all: false }));
-    assert.deepEqual(result.changedMetrics, []);
+    // Uncommitted edits to this gate's own files are changed paths now, scored against the empty capture above.
+    assert.ok(result.changedMetrics.every((entry) => entry.relativePath.startsWith('scripts/quality/') && entry.unverified.startsWith('no suite loaded this file')), JSON.stringify(result.changedMetrics));
 
     const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: 'scripts/quality/crap.mjs' });
     const anotherFailingMetric = { ...failingMetric, identity: '<root>/FunctionDeclaration:anotherSubject#0', line: 2, name: 'anotherSubject' };
@@ -427,24 +527,61 @@ async function createCliFixture() {
   const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-cli-fixture-'));
   const qualityFixtureDirectory = path.join(fixtureRoot, 'scripts', 'quality');
   const pluginRoot = path.join(fixtureRoot, 'plugins', 'sidequest');
-  await fs.mkdir(path.join(pluginRoot, 'src'), { recursive: true });
+  await Promise.all(['src', 'scripts', 'test'].map((directory) => fs.mkdir(path.join(pluginRoot, directory), { recursive: true })));
   await fs.mkdir(path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib'), { recursive: true });
   await fs.mkdir(qualityFixtureDirectory, { recursive: true });
   await Promise.all([
     fs.copyFile(path.join(qualityDirectory, 'crap.mjs'), path.join(qualityFixtureDirectory, 'crap.mjs')),
     fs.copyFile(path.join(qualityDirectory, 'crap-core.cjs'), path.join(qualityFixtureDirectory, 'crap-core.cjs')),
     fs.copyFile(path.join(process.cwd(), 'plugins', 'quartermaster', 'lib', 'crap-core.cjs'), path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib', 'crap-core.cjs')),
-    fs.writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ type: 'module', scripts: { 'test:full': 'node test.mjs' } })),
+    fs.writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ type: 'module', scripts: { 'test:full': 'node --test test/subject.test.mjs' } })),
     fs.writeFile(path.join(pluginRoot, 'src', 'subject.js'), 'export function subject(value) {\n  return value;\n}\n'),
-    fs.writeFile(path.join(pluginRoot, 'test.mjs'), "import assert from 'node:assert/strict';\nimport { subject } from './src/subject.js';\nassert.equal(typeof subject, 'function');\nsubject(0);\n"),
+    fs.writeFile(path.join(pluginRoot, 'src', 'retired.js'), 'export function retired() {\n  return 0;\n}\n'),
+    fs.writeFile(path.join(pluginRoot, 'scripts', 'helper.js'), 'export function helper(value) {\n  return value;\n}\n'),
+    fs.writeFile(path.join(pluginRoot, 'test', 'subject.test.mjs'), fixtureTestFile('subject(0);')),
+    fs.writeFile(path.join(fixtureRoot, 'scripts', 'windows-job-owner.cs'), 'class JobOwner { }\n'),
   ]);
   runGitFixture(fixtureRoot, ['init', '-q']);
   return { fixtureRoot, base: commitFixture(fixtureRoot, 'initial') };
 }
 
+function fixtureTestFile(body) {
+  return `import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { helper } from '../scripts/helper.js';\nimport { subject } from '../src/subject.js';\n\ntest('subject', () => {\n  ${body}\n  assert.equal(helper(1), 1);\n  assert.equal(helper(-1), helper(-1));\n});\n`;
+}
+
 function runCliFixture(fixtureRoot, base) {
   return spawnSync(process.execPath, ['scripts/quality/crap.mjs', '--base', base], { cwd: fixtureRoot, encoding: 'utf8' });
 }
+
+test('the CLI scores a changed plugin script, test callback and src function with coverage, and reports a changed C# file once as having no analyzer', async () => {
+  const { fixtureRoot, base } = await createCliFixture();
+  const pluginRoot = path.join(fixtureRoot, 'plugins', 'sidequest');
+  try {
+    await Promise.all([
+      fs.writeFile(path.join(pluginRoot, 'src', 'subject.js'), passSubject),
+      fs.writeFile(path.join(pluginRoot, 'scripts', 'helper.js'), 'export function helper(value) {\n  return value > 0 ? value : 0;\n}\n'),
+      fs.writeFile(path.join(pluginRoot, 'test', 'subject.test.mjs'), fixtureTestFile("assert.equal(typeof subject(0), 'number');")),
+      fs.writeFile(path.join(fixtureRoot, 'scripts', 'windows-job-owner.cs'), 'class JobOwner { int Pid; }\n'),
+      fs.rm(path.join(pluginRoot, 'src', 'retired.js')),
+    ]);
+    const result = runCliFixture(fixtureRoot, base);
+    const rows = result.stdout.split('\n').filter((line) => /^(PASS|FAIL|UNVERIFIED) /.test(line));
+    assert.deepEqual(rows.map((row) => row.split(' ').slice(0, 3).join(' ')), [
+      'PASS plugins/sidequest/scripts/helper.js:1 helper',
+      'PASS plugins/sidequest/src/subject.js:1 subject',
+      'PASS plugins/sidequest/test/subject.test.mjs:6 <anonymous>',
+      'UNVERIFIED scripts/windows-job-owner.cs:1 windows-job-owner.cs',
+    ], result.stdout + result.stderr);
+    assert.match(rows[0], /cc=2 coverage=100\.00% CRAP=2\.0000/);
+    assert.match(rows[2], /cc=1 coverage=100\.00% CRAP=1\.0000/);
+    assert.match(rows[3], /this gate has no analyzer for \.cs sources; measurement is unverified\./);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /coverage suites: sidequest/);
+    assert.doesNotMatch(result.stdout + result.stderr, /retired/);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
 
 test('the CLI captures a fixture suite and reports passing and failing changed functions', async () => {
   const { fixtureRoot, base } = await createCliFixture();

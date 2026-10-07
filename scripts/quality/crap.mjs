@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import { createRequire, SourceMap } from 'node:module';
 import { fileURLToPath, fileURLToPath as fromFileUrl, pathToFileURL } from 'node:url';
 import crapCore from './crap-core.cjs';
 
@@ -19,9 +19,11 @@ const { createVirtualFileSystem } = await import(pathToFileURL(require.resolve('
 // The sync transport opens a Windows named pipe, which `node --permission --allow-fs-read=*` denies;
 // the async transport speaks JSON-RPC over the child's stdio and needs only --allow-child-process.
 const PARSER_TRANSPORTS = { sync: SyncParserApi, async: AsyncParserApi };
-const SOURCE_EXTENSIONS = new Set(['.js', '.ts']);
+const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']);
+const UNANALYZED_SOURCE_EXTENSIONS = new Set(['.cs', '.py', '.sh', '.ps1', '.svelte', '.tsx', '.jsx']);
 const THRESHOLD = 6;
 const SIDEQUEST_BUILD_OUTPUT_DIRECTORIES = new Set(['bin', 'hooks', 'lib']);
+const NO_COVERAGE_RECORD = 'no suite loaded this file, so it has no coverage record (a script only ever spawned as a child process is covered once the spawning test passes NODE_V8_COVERAGE through; see scripts/quality/README.md)';
 
 function parseArguments(argumentsList) {
   const options = { coverageDirectory: null, base: null, all: false };
@@ -35,34 +37,16 @@ function parseArguments(argumentsList) {
   return options;
 }
 
-async function filesBelow(directory) {
-  try {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    const nested = await Promise.all(entries.map(async (entry) => {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) return filesBelow(entryPath);
-      return entry.isFile() && SOURCE_EXTENSIONS.has(path.extname(entry.name)) ? [entryPath] : [];
-    }));
-    return nested.flat().sort();
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
 export function isScoredSource(sourcePath) {
+  if (!SOURCE_EXTENSIONS.has(path.extname(sourcePath))) return false;
   const [sidequestDirectory] = path.relative(sidequestRoot, sourcePath).replaceAll('\\', '/').split('/');
   return !SIDEQUEST_BUILD_OUTPUT_DIRECTORIES.has(sidequestDirectory);
 }
 
-async function sourcePaths() {
-  const pluginsDirectory = path.join(repositoryRoot, 'plugins');
-  const plugins = await fs.readdir(pluginsDirectory, { withFileTypes: true });
-  const sourceLists = await Promise.all(plugins.filter((entry) => entry.isDirectory()).flatMap((entry) => [
-    filesBelow(path.join(pluginsDirectory, entry.name, 'lib')),
-    filesBelow(path.join(pluginsDirectory, entry.name, 'src')),
-  ]));
-  return sourceLists.flat().filter(isScoredSource);
+export function noAnalyzerMetric(relativePath) {
+  const extension = path.extname(relativePath);
+  if (!UNANALYZED_SOURCE_EXTENSIONS.has(extension)) return null;
+  return { relativePath, line: 1, name: path.basename(relativePath), unverified: `this gate has no analyzer for ${extension} sources` };
 }
 
 function functionName(node) {
@@ -97,16 +81,31 @@ function isDecision(node) {
   return DECISION_KINDS.has(node.kind) || (ast.isBinaryExpression(node) && SHORT_CIRCUIT_OPERATORS.has(node.operatorToken.kind));
 }
 
-// A nested function is discovered as its own descriptor, so its decisions stay out of the enclosing count.
+// A nested function is discovered as its own descriptor, so both its decisions and its text stay
+// out of the enclosing function: the same walk feeds the complexity count and the fingerprint.
+function forEachOwnNode(functionNode, onOwnNode, onNestedFunction) {
+  function walk(node) {
+    if (ast.isFunctionLikeDeclaration(node)) return onNestedFunction(node);
+    onOwnNode(node);
+    node.forEachChild(walk);
+  }
+  functionNode.forEachChild(walk);
+}
+
 export function cyclomaticComplexity(functionNode) {
   let decisions = 0;
-  function countDecisions(node) {
-    if (ast.isFunctionLikeDeclaration(node)) return;
-    if (isDecision(node)) decisions += 1;
-    node.forEachChild(countDecisions);
-  }
-  functionNode.forEachChild(countDecisions);
+  forEachOwnNode(functionNode, (node) => { if (isDecision(node)) decisions += 1; }, () => {});
   return 1 + decisions;
+}
+
+export function ownText(functionNode, text) {
+  const pieces = [];
+  let cursor = functionNode.getStart();
+  forEachOwnNode(functionNode, () => {}, (nested) => {
+    pieces.push(text.slice(cursor, nested.getStart()));
+    cursor = nested.end;
+  });
+  return pieces.join('') + text.slice(cursor, functionNode.end);
 }
 
 export function parserTransport(requested = process.env.CRAP_PARSER_TRANSPORT || 'sync') {
@@ -116,7 +115,7 @@ export function parserTransport(requested = process.env.CRAP_PARSER_TRANSPORT ||
 }
 
 export async function collectFunctions(text, fileName, { transport } = {}) {
-  const virtualFile = fileName.endsWith('.js') ? '/source.js' : '/source.ts';
+  const virtualFile = /\.[cm]?js$/.test(fileName) ? '/source.js' : '/source.ts';
   const virtualFileSystem = createVirtualFileSystem({
     '/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }),
     [virtualFile]: text,
@@ -138,7 +137,7 @@ export async function collectFunctions(text, fileName, { transport } = {}) {
         const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
         const start = node.getStart();
         const end = node.end;
-        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
+        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text).replace(/\s+/g, ' ')).digest('hex') });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }
@@ -195,15 +194,60 @@ function mergeIntervals(intervals) {
   return merged;
 }
 
-async function readCoverage(coverageDirectory) {
+function lineStarts(lineLengths) {
+  const starts = [0];
+  for (const length of lineLengths) starts.push(starts.at(-1) + length + 1);
+  return starts;
+}
+
+function positionAt(starts, offset) {
+  let line = 0;
+  while (line + 1 < starts.length - 1 && starts[line + 1] <= offset) line += 1;
+  return { line, column: offset - starts[line] };
+}
+
+// tsx hands V8 transpiled text, so raw offsets land in the wrong place in the .ts source.
+// Node caches the inline source map beside the coverage whenever NODE_V8_COVERAGE is set,
+// and node:module decodes it; the delta past the found segment carries a range end through.
+export function originalOffsetMapper(cacheEntry, originalText) {
+  const sourceMap = new SourceMap(cacheEntry.data);
+  const generatedStarts = lineStarts(cacheEntry.lineLengths);
+  const originalStarts = lineStarts(originalText.split('\n').map((line) => line.length));
+  return (offset) => {
+    const { line, column } = positionAt(generatedStarts, offset);
+    const entry = sourceMap.findEntry(line, column);
+    if (entry.originalLine === undefined) return null;
+    return originalStarts[entry.originalLine] + entry.originalColumn + (column - entry.generatedColumn);
+  };
+}
+
+export function remapRecords(records, toOriginal) {
+  return records.flatMap((record) => {
+    const ranges = record.ranges.map((range) => ({ ...range, startOffset: toOriginal(range.startOffset), endOffset: toOriginal(range.endOffset) }));
+    if (ranges[0].startOffset === null || ranges[0].endOffset === null) return [];
+    return [{ ...record, ranges: ranges.filter((range) => range.startOffset !== null && range.endOffset !== null) }];
+  });
+}
+
+// Only a map whose source is the script itself (tsx transpiling in place) is applied here; the
+// Sidequest build ships no map, and its outputs are paired with src by builtOutput instead.
+async function originalRecords(script, cacheEntry) {
+  const scriptPath = pathFromCoverageUrl(script.url);
+  if (!cacheEntry || pathFromCoverageUrl(cacheEntry.data.sources?.[0]) !== scriptPath) return script.functions;
+  const originalText = cacheEntry.data.sourcesContent?.[0] ?? await fs.readFile(fromFileUrl(script.url), 'utf8');
+  return remapRecords(script.functions, originalOffsetMapper(cacheEntry, originalText));
+}
+
+async function reportRecordsByScriptPath(report) {
+  const sourceMapCache = report['source-map-cache'] ?? {};
+  return Promise.all((report.result ?? []).map(async (script) => [pathFromCoverageUrl(script.url), await originalRecords(script, sourceMapCache[script.url])]));
+}
+
+export async function readCoverage(coverageDirectory) {
   const reports = await Promise.all((await fs.readdir(coverageDirectory)).filter((file) => file.endsWith('.json')).map(async (file) => JSON.parse(await fs.readFile(path.join(coverageDirectory, file), 'utf8'))));
   const scripts = new Map();
-  for (const report of reports) {
-    for (const script of report.result ?? []) {
-      const scriptPath = pathFromCoverageUrl(script.url);
-      if (!scriptPath) continue;
-      scripts.set(scriptPath, [...(scripts.get(scriptPath) ?? []), ...script.functions]);
-    }
+  for (const [scriptPath, records] of (await Promise.all(reports.map(reportRecordsByScriptPath))).flat()) {
+    if (scriptPath) scripts.set(scriptPath, [...(scripts.get(scriptPath) ?? []), ...records]);
   }
   return scripts;
 }
@@ -271,11 +315,11 @@ export async function sourceMetrics(sourcePath, coverageScripts) {
   const relativePath = path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/');
   const source = { relativePath, descriptors, records: coverageScripts.get(normalizedPath(sourcePath)) ?? [] };
   const outputPaths = await outputPathsForSource(sourcePath);
-  if (!source.records.length && !outputPaths.length) throw new Error(`could not resolve coverage output for ${path.relative(repositoryRoot, sourcePath)}; measurement is unverified.`);
   // Parsing an output is a TypeScript API round trip, and only unnamed functions need it.
   const needsFunctions = descriptors.some((descriptor) => descriptor.name === '<anonymous>');
   const builtOutputs = await Promise.all(outputPaths.filter((outputPath) => outputPath !== sourcePath).map((outputPath) => builtOutput(outputPath, coverageScripts, needsFunctions)));
   const outputs = [source, ...builtOutputs.filter(Boolean)];
+  const loaded = outputs.some((output) => output.records.length);
   return descriptors.map((descriptor) => {
     const metric = {
       identity: descriptor.identity,
@@ -285,7 +329,7 @@ export async function sourceMetrics(sourcePath, coverageScripts) {
       complexity: descriptor.complexity,
       relativePath,
     };
-    const { coverage, unverified } = functionCoverage(descriptor, outputs);
+    const { coverage, unverified } = loaded ? functionCoverage(descriptor, outputs) : { unverified: NO_COVERAGE_RECORD };
     if (unverified) return { ...metric, unverified };
     return { ...metric, coverage, crap: crapScore(descriptor.complexity, coverage) };
   });
@@ -308,7 +352,7 @@ function mergeBase(base) {
 export function diffEntries(base, pathspec, cwd = repositoryRoot) {
   const args = ['diff', '--name-status', '-M', base];
   if (pathspec) args.push('--', pathspec);
-  return runGit(args, cwd).split('\n').filter(Boolean).map((line) => {
+  return runGit(args, cwd).split('\n').filter((line) => line && !line.startsWith('D')).map((line) => {
     const [status, ...fields] = line.split('\t');
     return status.startsWith('R') ? { path: fields[1], baselinePath: fields[0] } : { path: fields[0], baselinePath: fields[0] };
   });
@@ -372,7 +416,7 @@ export function emptyChangedFunctionWarning({ changedMetrics, workingTreeIsClean
   if (changedMetrics.length) return null;
   if (!allChangedPaths.length) return emptyDiffCaveat(baseWasExplicit, base);
   if (!changedPaths.length) {
-    return `CRAP gate result is out of scope, not vacuous: none of the ${allChangedPaths.length} changed path(s) fall under a scored root (plugins/*/lib, plugins/*/src): ${allChangedPaths.join(', ')}. Report CRAP as unverified or measure this change another way.`;
+    return `CRAP gate result is out of scope, not vacuous: none of the ${allChangedPaths.length} changed path(s) is a JavaScript or TypeScript source this gate scores: ${allChangedPaths.join(', ')}. Report CRAP as unverified or measure this change another way.`;
   }
   return workingTreeIsClean ? 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.' : null;
 }
@@ -389,29 +433,46 @@ async function optionalJson(filePath) {
   }
 }
 
+// Repository scripts outside the plugins, each with the documented command for its tests.
+const REPOSITORY_SUITES = [
+  { prefix: 'scripts/quality/', name: 'scripts/quality', args: ['--test', 'scripts/quality/*.test.mjs'] },
+  { prefix: 'scripts/release/', name: 'scripts/release', args: ['--test', 'scripts/release/test/*.test.mjs'] },
+  { prefix: 'docs/scripts/', name: 'docs', args: ['--test', 'docs/scripts/content.test.mjs'] },
+];
+
 async function suiteFor(plugin) {
   const pluginRoot = path.join(repositoryRoot, 'plugins', plugin);
   const { scripts = {} } = await optionalJson(path.join(pluginRoot, 'package.json'));
   const script = ['test:full', 'test'].find((name) => scripts[name]);
-  if (script) return { plugin, cwd: pluginRoot, command: NPM_COMMAND, args: ['run', script] };
+  if (script) return { name: plugin, cwd: pluginRoot, command: NPM_COMMAND, args: ['run', script] };
   const testFiles = await fs.readdir(path.join(pluginRoot, 'test')).catch(() => []);
-  return testFiles.some((file) => file.endsWith('.test.js')) ? { plugin, cwd: pluginRoot, command: process.execPath, args: NODE_TEST_ARGUMENTS } : null;
+  return testFiles.some((file) => file.endsWith('.test.js')) ? { name: plugin, cwd: pluginRoot, command: process.execPath, args: NODE_TEST_ARGUMENTS } : null;
+}
+
+function repositorySuites(changedPaths) {
+  return REPOSITORY_SUITES
+    .filter((suite) => changedPaths.some((changedPath) => changedPath.startsWith(suite.prefix)))
+    .map((suite) => ({ name: suite.name, cwd: repositoryRoot, command: process.execPath, args: suite.args }));
 }
 
 export async function selectSuites(changedPaths) {
   const plugins = new Set(changedPaths.map((changedPath) => /^plugins\/([^/]+)\//.exec(changedPath)?.[1]).filter(Boolean));
-  return (await Promise.all([...plugins].sort().map(suiteFor))).filter(Boolean);
+  const pluginSuites = (await Promise.all([...plugins].sort().map(suiteFor))).filter(Boolean);
+  return [...pluginSuites, ...repositorySuites(changedPaths)];
 }
 
+// node --test refuses to run files while NODE_TEST_CONTEXT says it is already inside a test, so
+// a gate started from a test (its own CLI fixture) must not hand that marker to the suites.
 function spawnSuite(suite, coverageDirectory) {
-  return spawnSync(suite.command, suite.args, { cwd: suite.cwd, env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
+  const { NODE_TEST_CONTEXT, ...environment } = process.env;
+  return spawnSync(suite.command, suite.args, { cwd: suite.cwd, env: { ...environment, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
 }
 
 async function runSuites(suites, runSuite) {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'toolshed-crap-'));
   for (const suite of suites) {
     const { status } = runSuite(suite, coverageDirectory);
-    if (status !== 0) throw new Error(`${suite.plugin} tests failed with exit ${status ?? 'signal'}`);
+    if (status !== 0) throw new Error(`${suite.name} tests failed with exit ${status ?? 'signal'}`);
   }
   return coverageDirectory;
 }
@@ -419,23 +480,22 @@ async function runSuites(suites, runSuite) {
 export async function captureCoverage(changedPaths, suppliedDirectory, runSuite = spawnSuite) {
   if (suppliedDirectory) return { coverageDirectory: suppliedDirectory, suiteSummary: 'none, --coverage supplied' };
   const suites = await selectSuites(changedPaths);
-  return { coverageDirectory: await runSuites(suites, runSuite), suiteSummary: suites.map((suite) => suite.plugin).join(', ') || 'none, no plugin changed' };
+  return { coverageDirectory: await runSuites(suites, runSuite), suiteSummary: suites.map((suite) => suite.name).join(', ') || 'none, no suite covers the changed paths' };
 }
 
-function changedPathContext(base) {
-  const allChangedEntries = diffEntries(base);
-  const changedEntries = diffEntries(base, 'plugins');
+export function changedPathContext(base, allChangedEntries = diffEntries(base)) {
+  const changedEntries = allChangedEntries.filter((entry) => isScoredSource(path.join(repositoryRoot, entry.path)));
   return {
     allChangedPaths: allChangedEntries.map((entry) => entry.path),
     changedEntries,
     changedPaths: changedEntries.map((entry) => entry.path),
+    unanalyzed: allChangedEntries.map((entry) => noAnalyzerMetric(entry.path)).filter(Boolean),
   };
 }
 
 async function measureMetrics(changedPaths, coverageDirectory) {
   const coverageScripts = await readCoverage(coverageDirectory);
-  const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
-  return (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts)))).flat();
+  return (await Promise.all(changedPaths.map((changedPath) => sourceMetrics(path.join(repositoryRoot, changedPath), coverageScripts)))).flat();
 }
 
 function metricStatus(metric) {
@@ -459,11 +519,11 @@ function writeGateResult({ base, changedMetrics, failures, unverified, suiteSumm
   process.stdout.write(`CRAP gate passed against ${base} (coverage suites: ${suiteSummary}): ${summary}\n`);
 }
 
-export async function reportMetrics({ allChangedPaths, base, baseWasExplicit, changedEntries, changedPaths, metrics, options, suiteSummary }) {
-  const changedMetrics = await changedMetricsAgainstBase(metrics, changedEntries, base);
+export async function reportMetrics({ allChangedPaths, base, baseWasExplicit, changedEntries, changedPaths, metrics, options, suiteSummary, unanalyzed = [] }) {
+  const changedMetrics = [...await changedMetricsAgainstBase(metrics, changedEntries, base), ...unanalyzed];
   const unverified = changedMetrics.filter((metric) => metric.unverified);
   const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
-  writeMetricRows(options.all ? metrics : changedMetrics);
+  writeMetricRows(options.all ? [...metrics, ...unanalyzed] : changedMetrics);
   const warning = emptyChangedFunctionWarning({
     changedMetrics,
     workingTreeIsClean: !runGit(['status', '--porcelain']),
