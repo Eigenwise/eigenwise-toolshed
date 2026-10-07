@@ -69,12 +69,14 @@ export type CompositionLockUse = Readonly<{
   refusal?: (root: CompositionTicket) => CompositionRefusal | undefined;
 }>;
 type CompositionLockRefusal = CompositionRefusal & { ticket?: CompositionTicket };
+type TicketLockKey = { slug: string; id: string };
 type Dependencies = {
   getTicket: (slug: string, ref: string) => CompositionTicket | null;
   listTickets: (slug: string) => readonly CompositionTicket[];
   submissionReviewRelation: (slug: string, ticket: CompositionTicket) => SourceRelation | null;
   readMeta: (slug: string) => { path: string };
-  withTicketLock: <Result>(slug: string, id: string, callback: () => Result) => Result | { ok: false; reason: 'busy' };
+  withTicketFileLocks: <Result>(keys: readonly TicketLockKey[], callback: () => Result) => Result | { ok: false; reason: 'busy' };
+  withTicketLocks: <Result>(keys: readonly TicketLockKey[], callback: () => Result) => Result | { ok: false; reason: 'busy' };
   putTicket: (slug: string, ticket: CompositionTicket) => void;
   createComment: (input: { by: string; body: string; kind: string; source: string }, at: string) => AdmissionComment;
   invalidateStoreCaches: () => void;
@@ -544,10 +546,12 @@ export function createCompositionAdmissions(dependencies: Dependencies) {
     return [...new Set(identities)].sort();
   }
 
+  function lockKeys(slug: string, identities: readonly string[]): TicketLockKey[] {
+    return identities.map(id => ({ slug, id }));
+  }
+
   function withCompositionLocks<Result>(slug: string, identities: readonly string[], callback: () => Result): Result | { ok: false; reason: 'busy' } {
-    const [identity, ...remaining] = identities;
-    if (!identity) return callback();
-    return dependencies.withTicketLock(slug, identity, () => withCompositionLocks(slug, remaining, callback));
+    return dependencies.withTicketLocks(lockKeys(slug, identities), callback);
   }
 
   function dispatchAdmissionRefusal(slug: string, root: CompositionTicket, locked: readonly string[]): Extract<CompositionAdmissionResult, { ok: false }> | undefined {
@@ -563,21 +567,31 @@ export function createCompositionAdmissions(dependencies: Dependencies) {
     return expectedRefusal(admission, observed) || proveCandidate(slug, root, admission, observed);
   }
 
-  function prepareUnderCompositionLocks<Result>(slug: string, ref: string, identities: readonly string[], callback: () => Result): Result {
+  function dispatchLockIdentities(slug: string, ref: string, root: CompositionTicket | null | undefined): readonly string[] {
+    return root?.compositionAdmission ? lockIdentities(slug, root, root.compositionAdmission) : [root?.id ?? ref];
+  }
+
+  // Re-read under the locks after the caller's generation snapshot: an admission adopted (or changed) while this
+  // dispatch waited for its locks names sources it does not hold, so the old lock set proves nothing about it.
+  function assertDispatchAdmissionHolds(slug: string, ref: string, identities: readonly string[]): void {
     dependencies.invalidateStoreCaches();
     const root = dependencies.getTicket(slug, ref);
     if (!root) throw new Error('Composition root disappeared while acquiring its locks.');
-    const refusal = dispatchAdmissionRefusal(slug, root, identities);
+    if (dispatchLockIdentities(slug, ref, root).join('\n') !== identities.join('\n')) {
+      throw new Error('prepare dispatch: admission_changed: Composition admission changed while this dispatch waited for its locks, so nothing was written. Dispatch again to take the current admission\'s source locks.');
+    }
+    const refusal = root.compositionAdmission ? dispatchAdmissionRefusal(slug, root, identities) : undefined;
     if (refusal) throw new Error(`prepare dispatch: ${refusal.reason}: ${refusal.message}`);
-    return callback();
   }
 
-  function withCompositionDispatchPreparation<Result>(slug: string, ref: string, callback: () => Result): Result | { ok: false; reason: 'busy' } {
-    const root = dependencies.getTicket(slug, ref);
-    if (!root?.compositionAdmission) return dependencies.withTicketLock(slug, root?.id ?? ref, callback);
-    const identities = lockIdentities(slug, root, root.compositionAdmission);
+  // Dispatch preparation runs git, so it holds only the file locks. The callback snapshots every locked ticket's
+  // generation before it calls assertAdmissionHolds, whose source observations and range proof come next, and its
+  // short write transaction rechecks that snapshot. A snapshot taken after the proof could not see a writer that
+  // landed between the observation and the snapshot.
+  function withCompositionDispatchPreparation<Result>(slug: string, ref: string, callback: (lockedIds: readonly string[], assertAdmissionHolds: () => void) => Result): Result | { ok: false; reason: 'busy' } {
+    const identities = dispatchLockIdentities(slug, ref, dependencies.getTicket(slug, ref));
     try {
-      return withCompositionLocks(slug, identities, () => prepareUnderCompositionLocks(slug, ref, identities, callback));
+      return dependencies.withTicketFileLocks(lockKeys(slug, identities), () => callback(identities, () => assertDispatchAdmissionHolds(slug, ref, identities)));
     } finally {
       dependencies.invalidateStoreCaches();
     }
@@ -630,7 +644,7 @@ export function createCompositionAdmissions(dependencies: Dependencies) {
 
   function withCompositionGenerationLock<Result>(slug: string, ref: string, callback: () => Result, use: CompositionLockUse = { boundary: 'active' }): Result | CompositionLockRefusal | { ok: false; reason: 'busy' } {
     const root = dependencies.getTicket(slug, ref);
-    if (!root?.compositionAdmission) return dependencies.withTicketLock(slug, root?.id ?? ref, callback);
+    if (!root?.compositionAdmission) return dependencies.withTicketLocks(lockKeys(slug, [root?.id ?? ref]), callback);
     const identities = lockIdentities(slug, root, root.compositionAdmission);
     try {
       return withCompositionLocks(slug, identities, () => useUnderCompositionLocks(slug, ref, identities, use, callback));

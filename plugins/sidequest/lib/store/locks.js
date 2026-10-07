@@ -1,6 +1,7 @@
 "use strict";
 function createLocks(dependencies) {
-  const { fs, path, ticketsDir, transaction } = dependencies;
+  const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {
+  } } = dependencies;
   function ticketLockPath(slug, id) {
     return path.join(ticketsDir(slug), "." + path.basename(String(id)) + ".lock");
   }
@@ -54,6 +55,7 @@ function createLocks(dependencies) {
     return ownerTokenValue(ownerToken) != null && owner?.token === ownerTokenValue(ownerToken);
   }
   function acquireLock(lockPath, options = {}) {
+    refuseUnderGuardedWrite(`waiting on lock file ${path.basename(String(lockPath))}`);
     const STALE_LOCK_MS = 3e4;
     const RETRY_MS = 10;
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
@@ -111,15 +113,27 @@ function createLocks(dependencies) {
     }
     return { ok: false, reason: "lock_owner_lost" };
   }
-  function withTicketLock(slug, id, fn) {
-    const lock = ticketLockPath(slug, id);
-    const ownerToken = acquireLock(lock);
-    if (!ownerToken) return { ok: false, reason: "busy" };
+  function orderedTicketLockPaths(keys) {
+    return [...new Set(keys.map((key) => ticketLockPath(key.slug, key.id)))].sort();
+  }
+  function withTicketFileLocks(keys, fn) {
+    const held = [];
     try {
-      return transaction(fn);
+      for (const lockPath of orderedTicketLockPaths(keys)) {
+        const owner = acquireLock(lockPath);
+        if (!owner) return { ok: false, reason: "busy" };
+        held.push({ lockPath, owner });
+      }
+      return fn();
     } finally {
-      releaseLock(lock, ownerToken);
+      for (const { lockPath, owner } of held.reverse()) releaseLock(lockPath, owner);
     }
+  }
+  function withTicketLocks(keys, fn) {
+    return withTicketFileLocks(keys, () => transaction(fn));
+  }
+  function withTicketLock(slug, id, fn) {
+    return withTicketLocks([{ slug, id }], fn);
   }
   return {
     acquireLock,
@@ -128,7 +142,9 @@ function createLocks(dependencies) {
     releaseLock,
     testClaimLockDelayMs,
     ticketLockPath,
-    withTicketLock
+    withTicketFileLocks,
+    withTicketLock,
+    withTicketLocks
   };
 }
 module.exports = { createLocks };

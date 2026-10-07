@@ -1,7 +1,10 @@
 'use strict';
 
+type TicketLockKey = { slug: string; id: string };
+type BusyTicketLock = { ok: false; reason: 'busy' };
+
 function createLocks(dependencies: any) {
-  const { fs, path, ticketsDir, transaction } = dependencies;
+  const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {} } = dependencies;
 
   function ticketLockPath(slug?: any, id?: any) {
     return path.join(ticketsDir(slug), '.' + path.basename(String(id)) + '.lock');
@@ -65,7 +68,10 @@ function createLocks(dependencies: any) {
     return ownerTokenValue(ownerToken) != null && owner?.token === ownerTokenValue(ownerToken);
   }
 
+  // Every lock file (ticket, workers, notifications) can wait for seconds, so none is taken inside a guarded write:
+  // that waiter would hold the SQLite write lock while the lock's holder waits on SQLite (SQ-3449).
   function acquireLock(lockPath?: any, options: any = {}) {
+    refuseUnderGuardedWrite(`waiting on lock file ${path.basename(String(lockPath))}`);
     const STALE_LOCK_MS = 30000;
     const RETRY_MS = 10;
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
@@ -124,15 +130,33 @@ function createLocks(dependencies: any) {
     return { ok: false, reason: 'lock_owner_lost' };
   }
 
-  function withTicketLock(slug?: any, id?: any, fn?: any) {
-    const lock = ticketLockPath(slug, id);
-    const ownerToken = acquireLock(lock);
-    if (!ownerToken) return { ok: false, reason: 'busy' };
+  function orderedTicketLockPaths(keys: readonly TicketLockKey[]): string[] {
+    return [...new Set(keys.map((key) => ticketLockPath(key.slug, key.id)))].sort();
+  }
+
+  // Every ticket file lock is taken, in one path order, before anything opens the SQLite write lock. Taking a
+  // second file lock inside an open transaction ordered file(A) -> SQLite -> file(B) against plain writers'
+  // file(B) -> SQLite, and that ABBA spun a whole retry budget while holding every project's writers (SQ-3348).
+  function withTicketFileLocks<Result>(keys: readonly TicketLockKey[], fn: () => Result): Result | BusyTicketLock {
+    const held: Array<{ lockPath: string; owner: { token: string } }> = [];
     try {
-      return transaction(fn);
+      for (const lockPath of orderedTicketLockPaths(keys)) {
+        const owner = acquireLock(lockPath);
+        if (!owner) return { ok: false, reason: 'busy' };
+        held.push({ lockPath, owner });
+      }
+      return fn();
     } finally {
-      releaseLock(lock, ownerToken);
+      for (const { lockPath, owner } of held.reverse()) releaseLock(lockPath, owner);
     }
+  }
+
+  function withTicketLocks<Result>(keys: readonly TicketLockKey[], fn: () => Result): Result | BusyTicketLock {
+    return withTicketFileLocks(keys, () => transaction(fn));
+  }
+
+  function withTicketLock(slug?: any, id?: any, fn?: any) {
+    return withTicketLocks([{ slug, id }], fn);
   }
 
   return {
@@ -142,7 +166,9 @@ function createLocks(dependencies: any) {
     releaseLock,
     testClaimLockDelayMs,
     ticketLockPath,
+    withTicketFileLocks,
     withTicketLock,
+    withTicketLocks,
   };
 }
 
