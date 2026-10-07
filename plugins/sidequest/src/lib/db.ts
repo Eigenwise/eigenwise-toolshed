@@ -1,3 +1,4 @@
+import childProcess from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -896,6 +897,51 @@ export function hasRow<N extends TableName>(database: DatabaseSync, table: N, ke
   const spec = tableSpec(table);
   return retryWhenSqliteBusy(`checking ${table}`, () => prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== undefined);
 }
+
+export class WriteLockHeldError extends Error {
+  readonly code = 'write_lock_held';
+
+  constructor(action: string) {
+    super(`Refused ${action}: this process holds the Sidequest SQLite write lock, and every board's writers wait on it. Do this before the write transaction begins, then re-check inside the transaction that nothing it read has changed.`);
+    this.name = 'WriteLockHeldError';
+  }
+}
+
+let guardedWriteDepth = 0;
+
+export function refuseUnderGuardedWrite(action: string): void {
+  if (guardedWriteDepth > 0) throw new WriteLockHeldError(action);
+}
+
+// One Git call inside a write transaction holds every board's writers past their busy budget (SQ-3348), and the
+// store has ~120 child-process call sites that cannot see whether a transaction is open. So the launchers refuse
+// from here. Only writes that were moved off Git run guarded; the rest of the store still spawns inside its
+// transactions and is follow-up work, so a global guard would break those paths rather than protect them.
+export function guardedWrite<T>(write: () => T): T {
+  guardedWriteDepth += 1;
+  try {
+    return write();
+  } finally {
+    guardedWriteDepth -= 1;
+  }
+}
+
+function refuseChildProcessesUnderGuardedWrite(): void {
+  for (const launcher of ['spawn', 'spawnSync', 'execSync', 'execFileSync'] as const) {
+    const launch: Function = childProcess[launcher];
+    Object.defineProperty(childProcess, launcher, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: function launchOutsideGuardedWrite(this: unknown, ...args: unknown[]): unknown {
+        refuseUnderGuardedWrite(`starting ${String(args[0])}`);
+        return Reflect.apply(launch, this, args);
+      },
+    });
+  }
+}
+
+refuseChildProcessesUnderGuardedWrite();
 
 export function txn<T>(database: DatabaseSync, fn: () => T, timeoutMs = SQLITE_BUSY_TIMEOUT_MS): T {
   const row = retryWhenSqliteBusy('checking schema version before a transaction', () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get(), timeoutMs);
