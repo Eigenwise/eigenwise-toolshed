@@ -8,6 +8,61 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.592.0 (2026-10-04)
+
+### Repository
+
+- Avoid unrelated full plugin suites for release metadata (SQ-3315) [`3b35b4f`](https://github.com/Eigenwise/eigenwise-toolshed/commit/3b35b4fc437fcc3646017602f940462b10bf0d64)
+
+## v3.591.0 (2026-10-04)
+
+### sidequest 5.7.0 → 5.7.1
+
+#### Fixes
+
+- Add a first saved-task checkpoint guide (SQ-3347) [`2451aac`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2451aac4d1947eed6d5669022df6d667f459e9fd)
+  Explain saving one real task and retrieving its recorded discussion in a new session; link the walkthrough from Sidequest's README. Documentation only, no new runtime or adoption claim.
+
+## v3.590.0 (2026-10-04)
+
+### Repository
+
+- Sync the held-executor guidance regression assertion (SQ-3296)
+
+### model-gateway 0.53.2 → 0.54.0
+
+#### Features
+
+- Configure direct Codex and Grok compaction maxima (SQ-3292)
+  Add opt-in positive whole-token compaction maxima for Codex and Grok without the legacy 85000 reserve. Keep caps, provider ceilings, existing defaults, and native Claude window synchronization. Report effective limits, ignored legacy environment values, and the crossing-turn billing caveat. Claude direct maxima remain unsupported until native semantics are proved.
+
+#### Fixes
+
+- Correct legacy Codex billing warning (SQ-3297)
+  Warn that crossing turns and compaction requests can exceed the 272k double-billing boundary even with a legacy cap. Preserve compaction thresholds, caps, defaults, and explicit maximum behavior.
+
+### sidequest 5.6.1 → 5.7.0
+
+#### Features
+
+- Fresh exact-composition admission (SQ-3282)
+  Add current main-attested adoption of an exact composition while preserving its original base, complete source ranges, fresh native checkout and independent review requirements.
+- Keep prefixed full-suite captures inside the shared slot (SQ-3293)
+  Serialize npm prefix and workspace full-suite commands, including quality:crap scheduling. Preserve exact capture identity and caller coverage propagation; quality authority and pinned verifiers stay unchanged.
+
+#### Fixes
+
+- Use authentic original-ID fallback for held executors (SQ-3284)
+- Remove duplicate verification and command-resource waits (SQ-3291)
+- Repair checkpoint-policy assertion and shorten repeated Sidequest guidance (SQ-3305) [`5f72bb9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5f72bb906123ec16ab5947af7e1f9a8f618a59f6)
+- Composition roots refuse live-claim recovery (SQ-3317)
+  Live-claim recovery (`dispatch` with `claimHolder`) on a claimed exact-composition root now refuses with `admission_consumed` before writing anything. It used to re-mint the dispatch nonce the consumed admission names, which left the root's next claim, capture and submit refused as `stale_generation` with no way to redispatch.
+- Add adaptive preflight and bounded live advice (SQ-3321)
+  Keep small fixes lightweight, check feasibility before expensive work, and allow authorized readonly advice while preserving terminal immutable review and genuine verification evidence.
+- Isolate composition fixtures from provider routing defaults (SQ-3330)
+- MCP tools/list budget admits the composition admission schema (SQ-3331)
+  The MCP `tools/list` payload cap goes from 25400 to 27075 bytes, which is exactly the 1675 bytes `update.admitComposition` adds. The full callable schema stays served, and the 2500-byte reserve doesn't change. The served payload is 24509 bytes, so the headroom is 2566. The descriptor golden now includes the schema too.
+
 ## v3.589.0 (2026-10-03)
 
 ### codebase-mapper 2.15.9 → 2.15.10

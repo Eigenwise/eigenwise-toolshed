@@ -66,7 +66,7 @@ Before dispatching a substantial or ambiguous feature, put one visible, pinned c
 a planning ticket, or the ticket descriptions. It is the handoff from planning to execution, not a
 second design process. For substantial or safety-sensitive work, first check architecture and feasibility
 before expensive implementation or tests: use the preflight in
-`../sidequest/references/ticket-authoring.md`. Consume measured-quality evidence from its dedicated owner,
+`../sidequest/references/ticket-authoring.md`. Consume evidence from the project's configured quality gate, if any, through its dedicated owner,
 check genuine native baseline/candidate ownership and the oracle's real deadline/resource fit. Small
 deterministic fixes keep one owner and a focused check; no mandatory planning panel. Pin:
 

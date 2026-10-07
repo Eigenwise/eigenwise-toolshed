@@ -22,6 +22,22 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 
 Each board belongs to one project folder. When you work in a Git repository, Sidequest creates its board the first time Claude uses the board there. A folder that is not a Git repository, such as a notes vault, gets a board only when you name it: ask Claude to add it by its absolute path, or pass `--project <absolute path>` on the command line. Sidequest never makes a board for a missing folder, a folder in your system temp directory, or anything under `~/.claude` (including Sidequest's own storage), and it tells you which rule refused the path. If a registered project's folder is later moved or deleted, the board stays and the projects list marks it as missing so you can archive it yourself.
 
+## Check your first saved task
+
+Start with one small task you actually need to finish. Ask Claude:
+
+> Save this as a Sidequest ticket. Record the result I want, the current progress, decisions, the last check and its result, and one concrete next action. Show me the ticket reference so I can find it again. Keep it on the backlog for now.
+
+Open the ticket and confirm those details are there. If the task has an executable check, record its exact command and last result; put prose acceptance criteria in the description or comments.
+
+Start a new Claude Code session in the same project, then ask:
+
+> Read Sidequest ticket SQ-N and its full recorded discussion. Tell me the saved next action before continuing.
+
+Replace `SQ-N` with the reference Claude gave you. Confirm the answer against the ticket, then ask Claude to continue that action. A detail that was never recorded needs to be supplied again.
+
+Once this save-and-read check works, use the story workflow below when the task needs planning or delegated implementation.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
@@ -51,6 +67,12 @@ command and descendants ended, then the parent explicitly hands the slot to the 
 terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
 and process counts cannot. No polling or automatic restart is needed.
 
+The gate's Windows direct-leaf runner accepts a caller `AbortSignal`. Pre-aborted input rejects
+before spawning; later cancellation and deadlines terminate through the retained `ChildProcess`.
+Successful cleanup waits for the child's actual exit. A bounded cleanup failure stays explicit and
+proves no termination. Leaf exit does not prove arbitrary descendants were cleaned up. POSIX
+process-group supervision is unchanged; this Windows signal option does not cancel a POSIX phase.
+
 Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
 only says where a read starts; the processed cursor advances after the instructions are consumed.
 
@@ -58,11 +80,20 @@ Tickets should fit implementation plus final verification comfortably before abo
 Larger work is split along cohesive boundaries. A Continuation checkpoint commits progress, records
 remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
 
-Quality uses the existing local owner: early measured complexity where supported, then trustworthy fresh
+Quality gates are optional. Run `/quartermaster:setup` and approve the gate proposal to turn one on
+through `.claude/quartermaster/crap.json` and a project live rule. Sidequest discovers the configured
+gate in the executor briefing; user-injected rules still apply. Without a gate, run the pinned verifier,
+state once "no quality gate is configured for this project; Quartermaster setup can add one", and continue.
+Gate absence never holds integration or marks work UNVERIFIED.
+
+A configured gate uses the existing local owner: early measured complexity where supported, then trustworthy fresh
 coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
-supported path rather than another full suite. Each new or modified function must score CRAP below 6;
-untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
-tooling and reports stay local and uncommitted. Before a long measurement run, freeze its inputs and
+supported path rather than another full suite. Report per-function rows honestly, with no averages;
+untouched legacy functions stay outside scope. Missing analyzer or coverage for a configured gate is UNVERIFIED, and measurement
+tooling and reports stay local and uncommitted. The repository's `scripts/quality/crap.mjs` parses with
+TypeScript's sync named-pipe API by default; `collectFunctions(text, file, { transport: 'async' })` or
+`CRAP_PARSER_TRANSPORT=async` switches to the stdio transport, which also runs under
+`node --permission --allow-fs-read=* --allow-child-process`. Before a long measurement run, freeze its inputs and
 check source/coverage identity, native ownership and deadline fit. Supported focused real coverage can
 run separately from the normal final gate. Source stays fixed during immutable capture; failed or
 unsupported measurement stays visible.
@@ -72,7 +103,7 @@ unsupported measurement stays visible.
 Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
 
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
-tests: shared authority and callers, the smallest existing seam, measured-quality support, genuine
+tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine
 native baseline/candidate ownership, a runnable check and its actual timeout/resource fit. Small
 deterministic fixes keep one owner and a focused check. A plan advisor is useful only for a named
 architectural risk or contested approach worth its cost. Quartermaster handles setup; the dedicated
