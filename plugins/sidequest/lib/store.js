@@ -2323,7 +2323,7 @@ function sameDoneCompletion(t, completion, by) {
   return completion.key === key && completion.by === by && completion.state === "done";
 }
 function completionCommentOf(t, completion) {
-  return Array.isArray(t.comments) && completion.commentId ? t.comments.find((entry) => entry.id === completion.commentId) || null : null;
+  return Array.isArray(t.comments) && completion?.commentId ? t.comments.find((entry) => entry.id === completion?.commentId) || null : null;
 }
 function releaseFacts(request, t) {
   const held = t.claim;
@@ -2374,7 +2374,7 @@ function submissionReopen(request, facts) {
   if (!request.opts.status || !pendingSubmission(t)) return { reopened: null };
   const reopenStatus = coerceStatus(request.opts.status, t.status);
   if (reopenStatus === "done") return { reopened: null };
-  if (request.opts.force) return { reopened: t.submission };
+  if (request.opts.force) return { reopened: t.submission ?? null };
   return { refusal: pendingSubmissionRefusal(t, facts.heldOwner, reopenStatus) };
 }
 function pendingSubmissionRefusal(t, heldOwner, reopenStatus) {
@@ -2383,7 +2383,7 @@ function pendingSubmissionRefusal(t, heldOwner, reopenStatus) {
     reason: "pending_submission",
     ticket: t,
     submission: t.submission,
-    message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
+    message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission?.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
   };
 }
 function releaseRefusal(request, facts) {
@@ -2535,7 +2535,8 @@ function changedClaimRefusal(request, facts) {
   return { ok: false, reason: "claim_changed", ticket: facts.t, claim: facts.held || null };
 }
 function claimMatches(held, expectedClaim) {
-  return Boolean(held?.by) && held.by === expectedClaim.by && held.at === expectedClaim.at;
+  if (!held?.by) return false;
+  return held.by === expectedClaim.by && held.at === expectedClaim.at;
 }
 function ownershipRefusal(request, facts) {
   if (facts.controlPlaneDone) return null;
@@ -2650,7 +2651,7 @@ function recordOracleRelease(request, closeout, now) {
   writeOracleExperimentRound(request.slug, closeout.t);
 }
 function releasedLifecycleAttempt(t, closesPendingSubmission) {
-  const lifecycleAlreadyTerminal = ["closed", "released"].includes(t.lifecycleAttempt?.state);
+  const lifecycleAlreadyTerminal = ["closed", "released"].includes(String(t.lifecycleAttempt?.state));
   return !closesPendingSubmission && t.lifecycleAttempt && !lifecycleAlreadyTerminal ? transitionAttempt(t.lifecycleAttempt, "release") : t.lifecycleAttempt;
 }
 function recordAttemptOrRefuse(t, attempt) {
@@ -2783,7 +2784,7 @@ function recordedIntegration(t, recordedDelivery2, integratedAt) {
   return Object.assign({
     outcome: "verified",
     mode: "recorded",
-    pinnedCommit: t.submission.commit,
+    pinnedCommit: t.submission?.commit,
     resultingHead: recordedDelivery2.commit,
     targetBranch: recordedDelivery2.target.branch,
     targetRef: recordedDelivery2.target.upstream,

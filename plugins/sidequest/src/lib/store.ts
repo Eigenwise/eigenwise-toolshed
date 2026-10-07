@@ -2420,14 +2420,81 @@ function readOnlyChangesOutsideArtifactRoots(slug: string, ticket: any, changedP
 
 // Release a claim. Only the owner or a reclaimable claim may release it.
 // force can reopen the owner's pending submission, never bypass ownership.
-// Tickets, their dispatch records and release options are untyped JSON throughout the store, as the StoredRecord
-// alias in store/dispatch.ts says; typing them only inside the release steps would be a partial schema.
-type StoredRecord = any;
-type ReleaseRequest = { slug: string; by: string; opts: StoredRecord; releaseComment: StoredRecord | null };
+// The release steps read these fields of the stored ticket, its dispatch record and the release options. The
+// records stay open JSON: other fields ride along untouched and come back in the result.
+type Attempt = import('./kernel/index').Attempt;
+type Diagnostic = import('./kernel/index').Diagnostic;
+type ReleaseClaim = { by?: string; at?: string };
+type ReleaseSubmission = { by?: string; commit?: string };
+type ReleaseDispatch = {
+  terminalAt?: string | null;
+  outcome?: string;
+  declaredFiles?: string[];
+  workingTreeDelivery?: boolean;
+  nonRepoOutput?: boolean;
+  readonly?: boolean;
+  executor?: string;
+  sharedTree?: boolean;
+  baseCommit?: string;
+  noOpRelease?: { by: string; at: string; claimAt: string | null };
+  failedClaimSurrender?: unknown;
+};
+type ReleaseComment = { id: string; source?: string; body?: string };
+type ReleaseRecord = { kind: string; reason: string | null; evidence: unknown; source: string; at: string };
+type ReleaseCompletion = { key?: string; by?: string; state?: string; claimAt?: string | null; at?: string; commentId?: string | null };
+type ReleaseTicket = {
+  id: string;
+  ref: string;
+  status: string;
+  files?: unknown;
+  claim?: ReleaseClaim | null;
+  comments?: ReleaseComment[];
+  submission?: ReleaseSubmission | null;
+  dispatchNonce?: string | null;
+  dispatchExecutor?: string | null;
+  release?: ReleaseRecord;
+  claimRelease?: unknown;
+  oracle?: { round?: number; ask?: string; verdict?: unknown } | null;
+  lifecycleAttempt?: Attempt;
+  completion?: ReleaseCompletion;
+  statusTransition?: { from: string; to: string; at: string };
+  workedBy?: unknown;
+  lastEventType?: string;
+  lastEventSource?: string;
+  updatedAt?: string;
+};
+type RecordedDelivery = { commit: string; target: { branch: string; upstream: string }; evidence: unknown; integration?: Record<string, unknown> };
+type ReleaseOptions = {
+  status?: string;
+  force?: boolean;
+  sessionId?: string;
+  source?: string;
+  releaseComment?: unknown;
+  completionAuthority?: symbol;
+  verify?: unknown;
+  completionProvenance?: Record<string, unknown>;
+  cleanDeclaredScope?: boolean;
+  expectedClaim?: ReleaseClaim;
+  oracle?: unknown;
+  releaseKind?: string;
+  releaseReason?: string;
+  releaseEvidence?: unknown;
+  failureShape?: string;
+  requireReleaseVerdict?: boolean;
+  claimRelease?: { kind?: string };
+  workedBy?: unknown;
+  completionComment?: { advisory?: unknown };
+  recordedDelivery?: RecordedDelivery;
+};
+type PreparedComment = Readonly<Record<string, unknown>>;
+type ReleaseResult = { ok: boolean; reason?: string; [detail: string]: unknown };
+type CompletionDelta = { ok: false; reason?: string } | { ok: true; committed: string[]; working: string[] };
+type ReleaseBlocker = { kind: string; reason: string; paths?: string[]; newlyChangedPaths?: string[]; preExistingPaths?: string[]; baselineRecorded?: boolean };
+type ReleaseRequest = { slug: string; by: string; opts: ReleaseOptions; releaseComment: PreparedComment | null };
 type ReleaseFacts = {
-  t: StoredRecord;
-  held: StoredRecord;
-  dispatch: StoredRecord;
+  t: ReleaseTicket;
+  held: ReleaseClaim | null | undefined;
+  dispatch: ReleaseDispatch | null;
   liveClaim: boolean;
   activeDispatch: boolean;
   active: boolean;
@@ -2443,12 +2510,12 @@ type ReleaseFacts = {
   terminalReadOnlyOracle: boolean;
 };
 type ReleaseCloseout = ReleaseFacts & {
-  reopenedSubmission: StoredRecord | null;
+  reopenedSubmission: ReleaseSubmission | null;
   oracleRelease: boolean;
   noOpRelease: boolean;
   releaseWorktreeFacts: ReturnType<typeof observeReleaseWorktreeFacts>;
 };
-type CompletionDeltaCheck = { refusal: StoredRecord } | { completionDelta: StoredRecord; sharedTreeCommittedScope: boolean };
+type CompletionDeltaCheck = { refusal: ReleaseResult } | { completionDelta: CompletionDelta | null; sharedTreeCommittedScope: boolean };
 
 // The checks and their Git run under the ticket file lock; only the write that follows holds the board's SQLite
 // write lock, and it first rechecks that nothing changed the ticket since the checks read it (SQ-3348).
@@ -2459,12 +2526,12 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   return withTicketFileLocks([{ slug, id: found.id }], () => lockedRelease(request, found.id));
 }
 
-function releaseRequest(slug: string, by: unknown, opts: StoredRecord): ReleaseRequest {
+function releaseRequest(slug: string, by: unknown, opts: ReleaseOptions): ReleaseRequest {
   const options = opts || {};
   return { slug, by: String(by || 'agent'), opts: options, releaseComment: preparedReleaseComment(options) };
 }
 
-function preparedReleaseComment(opts: StoredRecord): StoredRecord | null {
+function preparedReleaseComment(opts: ReleaseOptions): PreparedComment | null {
   if (!opts.releaseComment) return null;
   const comment = prepareComment(opts.releaseComment);
   if (!comment.ok) throw new Error(`release comment ${comment.reason}`);
@@ -2484,7 +2551,7 @@ function lockedRelease(request: ReleaseRequest, id: string) {
   return released;
 }
 
-function checkRelease(request: ReleaseRequest, t: StoredRecord): { result: StoredRecord } | { closeout: ReleaseCloseout } {
+function checkRelease(request: ReleaseRequest, t: ReleaseTicket): { result: ReleaseResult } | { closeout: ReleaseCloseout } {
   const finished = doneReleaseResult(request, t);
   if (finished) return { result: finished };
   const facts = releaseFacts(request, t);
@@ -2503,29 +2570,29 @@ function checkRelease(request: ReleaseRequest, t: StoredRecord): { result: Store
 // vacuously pass the ownership check below and opts.status would stomp the
 // ticket straight back to "todo", silently un-completing finished work.
 // Mirrors claimTicket's own "done" refusal just above.
-function doneReleaseResult(request: ReleaseRequest, t: StoredRecord) {
+function doneReleaseResult(request: ReleaseRequest, t: ReleaseTicket) {
   if (t.status !== 'done' || request.opts.force) return null;
   return repeatedDoneResult(request, t) || { ok: false, reason: 'done', ticket: t };
 }
 
-function repeatedDoneResult(request: ReleaseRequest, t: StoredRecord) {
+function repeatedDoneResult(request: ReleaseRequest, t: ReleaseTicket) {
   if (request.opts.status !== 'done' || !sameDoneCompletion(t, t.completion, request.by)) return null;
   return { ok: true, idempotent: true, ticket: t, comment: completionCommentOf(t, t.completion) };
 }
 
-function sameDoneCompletion(t: StoredRecord, completion: StoredRecord, by: string): boolean {
+function sameDoneCompletion(t: ReleaseTicket, completion: ReleaseCompletion | undefined, by: string): boolean {
   if (!completion) return false;
   const key = [t.id, completion.claimAt || completion.at, by, 'done'].join(':');
   return completion.key === key && completion.by === by && completion.state === 'done';
 }
 
-function completionCommentOf(t: StoredRecord, completion: StoredRecord): StoredRecord | null {
-  return Array.isArray(t.comments) && completion.commentId
-    ? t.comments.find((entry?: any) => entry.id === completion.commentId) || null
+function completionCommentOf(t: ReleaseTicket, completion: ReleaseCompletion | undefined): ReleaseComment | null {
+  return Array.isArray(t.comments) && completion?.commentId
+    ? t.comments.find((entry) => entry.id === completion?.commentId) || null
     : null;
 }
 
-function releaseFacts(request: ReleaseRequest, t: StoredRecord): ReleaseFacts {
+function releaseFacts(request: ReleaseRequest, t: ReleaseTicket): ReleaseFacts {
   const held = t.claim;
   const dispatch = dispatchState(t);
   // Held is held. Closeout never consults a clock: an executor that actually
@@ -2548,24 +2615,24 @@ function releaseFacts(request: ReleaseRequest, t: StoredRecord): ReleaseFacts {
   };
 }
 
-function dispatchStillActive(t: StoredRecord, dispatch: StoredRecord): boolean {
+function dispatchStillActive(t: ReleaseTicket, dispatch: ReleaseDispatch | null): boolean {
   return Boolean(t.dispatchNonce || (dispatch && !dispatch.terminalAt));
 }
 
-function declaredReleaseFiles(t: StoredRecord, dispatch: StoredRecord): string[] {
+function declaredReleaseFiles(t: ReleaseTicket, dispatch: ReleaseDispatch | null): string[] {
   return dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : normalizeFiles(t.files);
 }
 
-function releaseOwners(t: StoredRecord, held: StoredRecord) {
+function releaseOwners(t: ReleaseTicket, held: ReleaseClaim | null | undefined) {
   return { heldOwner: String(held?.by || '').trim(), submissionOwner: String(t.submission?.by || '').trim() };
 }
 
-function doneAuthority(opts: StoredRecord) {
+function doneAuthority(opts: ReleaseOptions) {
   const controlPlaneDone = opts.status === 'done' && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
   return { controlPlaneDone, executorDone: opts.status === 'done' && !controlPlaneDone };
 }
 
-function deliveryModes(t: StoredRecord, dispatch: StoredRecord, active: boolean) {
+function deliveryModes(t: ReleaseTicket, dispatch: ReleaseDispatch | null, active: boolean) {
   return {
     activeArtifactDispatch: sharedTreeArtifactMode(t) && active,
     activeWorkingTreeDelivery: dispatch?.workingTreeDelivery === true && active,
@@ -2576,7 +2643,7 @@ function deliveryModes(t: StoredRecord, dispatch: StoredRecord, active: boolean)
 // A dispatch executor can be read-only even when the ticket's category is
 // normally writable. Its recorded identity controls an active closeout and
 // the terminal oracle closeout that follows an already-released review.
-function readOnlyModes(t: StoredRecord, dispatch: StoredRecord, active: boolean) {
+function readOnlyModes(t: ReleaseTicket, dispatch: ReleaseDispatch | null, active: boolean) {
   const readonlyDispatch = dispatch?.readonly === true || isReadOnlyExecutor(dispatch?.executor);
   return { activeReadOnlyDispatch: readonlyDispatch && active, terminalReadOnlyOracle: readonlyDispatch && t.release?.kind === 'oracle' };
 }
@@ -2587,26 +2654,26 @@ function readOnlyModes(t: StoredRecord, dispatch: StoredRecord, active: boolean)
 // ticket looked reopened (SQ-1010). --force on a reopen means "reject the
 // submission", not "look past it" — clear it as part of the explicit
 // reopen instead of silently wedging the ticket again.
-function submissionReopen(request: ReleaseRequest, facts: ReleaseFacts): { refusal: StoredRecord } | { reopened: StoredRecord | null } {
+function submissionReopen(request: ReleaseRequest, facts: ReleaseFacts): { refusal: ReleaseResult } | { reopened: ReleaseSubmission | null } {
   const { t } = facts;
   if (!request.opts.status || !pendingSubmission(t)) return { reopened: null };
   const reopenStatus = coerceStatus(request.opts.status, t.status);
   if (reopenStatus === 'done') return { reopened: null };
-  if (request.opts.force) return { reopened: t.submission };
+  if (request.opts.force) return { reopened: t.submission ?? null };
   return { refusal: pendingSubmissionRefusal(t, facts.heldOwner, reopenStatus) };
 }
 
-function pendingSubmissionRefusal(t: StoredRecord, heldOwner: string, reopenStatus: string) {
+function pendingSubmissionRefusal(t: ReleaseTicket, heldOwner: string, reopenStatus: string) {
   return {
     ok: false,
     reason: 'pending_submission',
     ticket: t,
     submission: t.submission,
-    message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+    message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission?.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
   };
 }
 
-function releaseRefusal(request: ReleaseRequest, facts: ReleaseFacts): StoredRecord | null {
+function releaseRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
   const refusal = unclaimedActiveDispatchRefusal(request, facts)
     || executorDoneRefusal(request, facts)
     || changedClaimRefusal(request, facts)
@@ -2622,7 +2689,7 @@ function unclaimedActiveDispatchRefusal(request: ReleaseRequest, facts: ReleaseF
   return unclaimedDispatchRefusal(facts.t, facts.dispatch, request.by);
 }
 
-function unclaimedDispatchRefusal(t: StoredRecord, dispatch: StoredRecord, by: string) {
+function unclaimedDispatchRefusal(t: ReleaseTicket, dispatch: ReleaseDispatch | null, by: string) {
   const foundState = dispatch?.outcome || (t.dispatchNonce ? 'prepared' : 'unknown');
   return {
     ok: false,
@@ -2634,7 +2701,7 @@ function unclaimedDispatchRefusal(t: StoredRecord, dispatch: StoredRecord, by: s
 
 const NO_COMPLETION_DELTA: CompletionDeltaCheck = { completionDelta: null, sharedTreeCommittedScope: false };
 
-function executorDoneRefusal(request: ReleaseRequest, facts: ReleaseFacts): StoredRecord | null {
+function executorDoneRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
   if (!facts.executorDone) return null;
   const delta = facts.active ? reviewedCompletionDelta(request.slug, facts) : NO_COMPLETION_DELTA;
   if ('refusal' in delta) return delta.refusal;
@@ -2651,7 +2718,7 @@ function reviewedCompletionDelta(slug: string, facts: ReleaseFacts): CompletionD
   return scopedCompletionDelta(slug, facts, dispatchDelta(slug, facts.t));
 }
 
-function scopedCompletionDelta(slug: string, facts: ReleaseFacts, completionDelta: StoredRecord): CompletionDeltaCheck {
+function scopedCompletionDelta(slug: string, facts: ReleaseFacts, completionDelta: CompletionDelta): CompletionDeltaCheck {
   if (!completionDelta.ok || facts.activeArtifactDispatch) return { completionDelta, sharedTreeCommittedScope: false };
   const inDeclaredScope = (file: string) => commitScope.isInScope(file, facts.declaredFiles);
   const scopedCommitted = completionDelta.committed.filter(inDeclaredScope);
@@ -2669,7 +2736,7 @@ function readOnlyScopeRefusal(slug: string, facts: ReleaseFacts, scopedPaths: re
   return doneScopeViolation(facts.t, readOnlyChanges);
 }
 
-function doneScopeViolation(t: StoredRecord, readOnlyChanges: { artifactRoots: string[]; paths: string[] }) {
+function doneScopeViolation(t: ReleaseTicket, readOnlyChanges: { artifactRoots: string[]; paths: string[] }) {
   const paths = readOnlyChanges.paths.sort();
   return {
     ok: false,
@@ -2681,7 +2748,7 @@ function doneScopeViolation(t: StoredRecord, readOnlyChanges: { artifactRoots: s
   };
 }
 
-function deliveryCloseoutRefusal(request: ReleaseRequest, facts: ReleaseFacts, completionDelta: StoredRecord) {
+function deliveryCloseoutRefusal(request: ReleaseRequest, facts: ReleaseFacts, completionDelta: CompletionDelta | null) {
   return artifactScopeRefusal(request.slug, facts)
     || workingTreeDeliveryRefusal(request, facts, completionDelta)
     || claimReleasedRefusal(facts);
@@ -2693,7 +2760,7 @@ function artifactScopeRefusal(slug: string, facts: ReleaseFacts) {
   return scopeCheck.ok ? null : Object.assign({ ticket: facts.t }, scopeCheck);
 }
 
-function workingTreeDeliveryRefusal(request: ReleaseRequest, facts: ReleaseFacts, completionDelta: StoredRecord) {
+function workingTreeDeliveryRefusal(request: ReleaseRequest, facts: ReleaseFacts, completionDelta: CompletionDelta | null) {
   if (!facts.activeWorkingTreeDelivery) return null;
   const delivery = inspectedWorkingTreeDelivery(request.slug, facts.t, completionDelta);
   if (!delivery.ok) return Object.assign({ ticket: facts.t }, delivery);
@@ -2710,7 +2777,7 @@ function workingTreeDeliveryRefusal(request: ReleaseRequest, facts: ReleaseFacts
   return null;
 }
 
-function inspectedWorkingTreeDelivery(slug: string, t: StoredRecord, completionDelta: StoredRecord): StoredRecord {
+function inspectedWorkingTreeDelivery(slug: string, t: ReleaseTicket, completionDelta: CompletionDelta | null): WorkingTreeDeliveryCloseout | ReleaseResult {
   try {
     return workingTreeDeliveryCloseout(slug, t, completionDelta);
   } catch (error: any) {
@@ -2731,7 +2798,7 @@ function claimReleasedRefusal(facts: ReleaseFacts) {
   };
 }
 
-function scopeCloseoutRefusal(request: ReleaseRequest, facts: ReleaseFacts, delta: { completionDelta: StoredRecord; sharedTreeCommittedScope: boolean }) {
+function scopeCloseoutRefusal(request: ReleaseRequest, facts: ReleaseFacts, delta: { completionDelta: CompletionDelta | null; sharedTreeCommittedScope: boolean }) {
   const unusedReviewScope = boundReviewLeftScopeUnused(facts.dispatch, delta.completionDelta, facts.declaredFiles);
   return submissionRequiredRefusal(request, facts, delta.sharedTreeCommittedScope, unusedReviewScope)
     || completionTreeRefusal(request, facts, delta.completionDelta, unusedReviewScope);
@@ -2755,7 +2822,7 @@ function deliversOutsideRepository(facts: ReleaseFacts): boolean {
   return facts.activeArtifactDispatch || facts.activeWorkingTreeDelivery || facts.activeNonRepoOutput;
 }
 
-function submissionRequired(t: StoredRecord) {
+function submissionRequired(t: ReleaseTicket) {
   return {
     ok: false,
     reason: 'submission_required',
@@ -2764,14 +2831,14 @@ function submissionRequired(t: StoredRecord) {
   };
 }
 
-function completionTreeRefusal(request: ReleaseRequest, facts: ReleaseFacts, completionDelta: StoredRecord, unusedReviewScope: boolean) {
+function completionTreeRefusal(request: ReleaseRequest, facts: ReleaseFacts, completionDelta: CompletionDelta | null, unusedReviewScope: boolean) {
   if (!facts.active) return null;
   const completion = completionTreeCheck(request.slug, facts.t, { explicitNoOp: request.opts.cleanDeclaredScope === true || unusedReviewScope });
   if (!completion.ok) return Object.assign({ ticket: facts.t }, completion);
   return deltaUnavailableRefusal(facts, completionDelta);
 }
 
-function deltaUnavailableRefusal(facts: ReleaseFacts, completionDelta: StoredRecord) {
+function deltaUnavailableRefusal(facts: ReleaseFacts, completionDelta: CompletionDelta | null) {
   if (!sharedTreeDeltaUnreadable(facts.dispatch, completionDelta)) return null;
   return {
     ok: false,
@@ -2782,7 +2849,7 @@ function deltaUnavailableRefusal(facts: ReleaseFacts, completionDelta: StoredRec
 }
 
 // A shared-tree done is judged on the full delta since its base, so a delta that could not be read is never a pass.
-function sharedTreeDeltaUnreadable(dispatch: StoredRecord, completionDelta: StoredRecord): boolean {
+function sharedTreeDeltaUnreadable(dispatch: ReleaseDispatch | null, completionDelta: CompletionDelta | null): boolean {
   return !completionDelta?.ok && dispatch?.sharedTree === true && Boolean(dispatch?.baseCommit);
 }
 
@@ -2792,8 +2859,9 @@ function changedClaimRefusal(request: ReleaseRequest, facts: ReleaseFacts) {
   return { ok: false, reason: 'claim_changed', ticket: facts.t, claim: facts.held || null };
 }
 
-function claimMatches(held: StoredRecord, expectedClaim: StoredRecord): boolean {
-  return Boolean(held?.by) && held.by === expectedClaim.by && held.at === expectedClaim.at;
+function claimMatches(held: ReleaseClaim | null | undefined, expectedClaim: ReleaseClaim): boolean {
+  if (!held?.by) return false;
+  return held.by === expectedClaim.by && held.at === expectedClaim.at;
 }
 
 function ownershipRefusal(request: ReleaseRequest, facts: ReleaseFacts) {
@@ -2824,7 +2892,7 @@ function assertOracleAskMatchesKind(oracleRequested: unknown, oracleRelease: boo
   if (oracleRequested && !oracleRelease) throw new Error('oracle ask requires release kind oracle');
 }
 
-function assertOracleStatus(opts: StoredRecord, t: StoredRecord): void {
+function assertOracleStatus(opts: ReleaseOptions, t: ReleaseTicket): void {
   if (coerceStatus(opts.status || 'awaiting-oracle', t.status) !== 'awaiting-oracle') {
     throw new Error('oracle release must set the ticket to awaiting-oracle');
   }
@@ -2865,21 +2933,21 @@ function releaseBlockerRefusal(slug: string, facts: ReleaseFacts) {
   };
 }
 
-function releaseBlockerPaths(releaseBlocker: StoredRecord): { newlyChangedPaths: string[]; preExistingPaths: string[] } {
+function releaseBlockerPaths(releaseBlocker: ReleaseBlocker): { newlyChangedPaths: string[]; preExistingPaths: string[] } {
   return {
     newlyChangedPaths: releaseBlocker.newlyChangedPaths || releaseBlocker.paths || [],
     preExistingPaths: releaseBlocker.preExistingPaths || [],
   };
 }
 
-function releaseBlockerDetail(releaseBlocker: StoredRecord, paths: { newlyChangedPaths: string[]; preExistingPaths: string[] }): string {
+function releaseBlockerDetail(releaseBlocker: ReleaseBlocker, paths: { newlyChangedPaths: string[]; preExistingPaths: string[] }): string {
   const baselineDetail = releaseBlocker.baselineRecorded
     ? ` Pre-existing unchanged paths: ${paths.preExistingPaths.join(', ') || 'none'}.`
     : ' Pre-existing paths could not be distinguished because no dirty baseline was recorded.';
   return `${baselineDetail} Newly changed paths: ${paths.newlyChangedPaths.join(', ') || 'none'}.`;
 }
 
-function releaseCloseout(request: ReleaseRequest, facts: ReleaseFacts, reopenedSubmission: StoredRecord | null): ReleaseCloseout {
+function releaseCloseout(request: ReleaseRequest, facts: ReleaseFacts, reopenedSubmission: ReleaseSubmission | null): ReleaseCloseout {
   return {
     ...facts,
     reopenedSubmission,
@@ -2896,14 +2964,14 @@ function writeRelease(request: ReleaseRequest, closeout: ReleaseCloseout, genera
   return writeReleasedTicket(request, closeout, releaseComment, now);
 }
 
-function appendComment(t: StoredRecord, input: StoredRecord, now: string): StoredRecord {
+function appendComment(t: ReleaseTicket, input: PreparedComment, now: string): ReleaseComment {
   if (!Array.isArray(t.comments)) t.comments = [];
   const comment = createComment(input, now);
   t.comments.push(comment);
   return comment;
 }
 
-function writeReleasedTicket(request: ReleaseRequest, closeout: ReleaseCloseout, releaseComment: StoredRecord | null, now: string) {
+function writeReleasedTicket(request: ReleaseRequest, closeout: ReleaseCloseout, releaseComment: ReleaseComment | null, now: string) {
   const { t } = closeout;
   const previousStatus = t.status;
   if (closeout.oracleRelease) recordOracleRelease(request, closeout, now);
@@ -2920,7 +2988,7 @@ function writeReleasedTicket(request: ReleaseRequest, closeout: ReleaseCloseout,
   return releasedResult(request, closeout, comment);
 }
 
-function closesSubmission(opts: StoredRecord, t: StoredRecord): boolean {
+function closesSubmission(opts: ReleaseOptions, t: ReleaseTicket): boolean {
   return opts.status === 'done' && Boolean(pendingSubmission(t));
 }
 
@@ -2929,14 +2997,14 @@ function recordOracleRelease(request: ReleaseRequest, closeout: ReleaseCloseout,
   writeOracleExperimentRound(request.slug, closeout.t);
 }
 
-function releasedLifecycleAttempt(t: StoredRecord, closesPendingSubmission: boolean): StoredRecord {
-  const lifecycleAlreadyTerminal = ['closed', 'released'].includes(t.lifecycleAttempt?.state);
+function releasedLifecycleAttempt(t: ReleaseTicket, closesPendingSubmission: boolean): Attempt | Diagnostic | undefined {
+  const lifecycleAlreadyTerminal = ['closed', 'released'].includes(String(t.lifecycleAttempt?.state));
   return !closesPendingSubmission && t.lifecycleAttempt && !lifecycleAlreadyTerminal
     ? transitionAttempt(t.lifecycleAttempt, 'release')
     : t.lifecycleAttempt;
 }
 
-function recordAttemptOrRefuse(t: StoredRecord, attempt: StoredRecord) {
+function recordAttemptOrRefuse(t: ReleaseTicket, attempt: Attempt | Diagnostic | undefined) {
   if (!attempt) return null;
   const diagnostic = attemptDiagnostic(attempt);
   if (diagnostic) return { ok: false, reason: diagnostic.code, ticket: t, message: diagnostic.message };
@@ -2957,7 +3025,7 @@ function stampNoOpRelease(by: string, closeout: ReleaseCloseout, now: string): v
 
 // Provenance for a claim taken away from its holder rather than handed back,
 // so a later closeout attempt can be refused with an actionable recovery.
-function recordClaimRelease(request: ReleaseRequest, t: StoredRecord, now: string): void {
+function recordClaimRelease(request: ReleaseRequest, t: ReleaseTicket, now: string): void {
   if (!request.opts.claimRelease) return;
   t.claimRelease = Object.assign({ by: request.by, at: now, source: request.opts.source || 'store' }, request.opts.claimRelease);
 }
@@ -2972,20 +3040,20 @@ function releaseDispatchTerminal(request: ReleaseRequest, closeout: ReleaseClose
   t.dispatchExecutor = null;
 }
 
-function releaseTerminalOutcome(opts: StoredRecord, dispatch: StoredRecord): string {
+function releaseTerminalOutcome(opts: ReleaseOptions, dispatch: ReleaseDispatch | null): string | undefined {
   if (opts.status === 'done') return 'done';
   if (dispatch?.terminalAt) return dispatch.outcome;
   return opts.claimRelease?.kind === 'session_ended' ? 'died' : 'released';
 }
 
-function recordReleaseKind(opts: StoredRecord, closeout: ReleaseCloseout, now: string): StoredRecord | null {
+function recordReleaseKind(opts: ReleaseOptions, closeout: ReleaseCloseout, now: string): ReleaseRecord | null {
   const release = releaseRecord(opts, now);
   if (release) closeout.t.release = release;
   if (closeout.dispatch) delete closeout.dispatch.failedClaimSurrender;
   return release;
 }
 
-function releaseRecord(opts: StoredRecord, now: string): StoredRecord | null {
+function releaseRecord(opts: ReleaseOptions, now: string): ReleaseRecord | null {
   if (!opts.releaseKind) return null;
   return {
     kind: String(opts.releaseKind),
@@ -2996,13 +3064,13 @@ function releaseRecord(opts: StoredRecord, now: string): StoredRecord | null {
   };
 }
 
-function releaseReasonText(opts: StoredRecord): string | null {
+function releaseReasonText(opts: ReleaseOptions): string | null {
   return String(opts.releaseReason || '').trim() || null;
 }
 
 // The checkout facts were observed before BEGIN, so the terminal revision is captured from them and
 // setDispatchTerminal gets no slug, which keeps it from reading Git under the write lock.
-function terminateReleasedDispatch(request: ReleaseRequest, closeout: ReleaseCloseout, terminalOutcome: string, release: StoredRecord | null, now: string): void {
+function terminateReleasedDispatch(request: ReleaseRequest, closeout: ReleaseCloseout, terminalOutcome: string | undefined, release: ReleaseRecord | null, now: string): void {
   captureTerminalWorktreeRevision(request.slug, closeout.dispatch, now, closeout.releaseWorktreeFacts);
   setDispatchTerminal(closeout.t, terminalOutcome, request.opts.source || 'cli', {
     failureShape: request.opts.failureShape || release?.kind || 'unknown',
@@ -3021,7 +3089,7 @@ function applyReleasedStatus(request: ReleaseRequest, closeout: ReleaseCloseout,
   if (request.opts.workedBy) t.workedBy = request.opts.workedBy; // self-reported provenance stamp (done transition only)
 }
 
-function setReleasedStatus(opts: StoredRecord, closeout: ReleaseCloseout): void {
+function setReleasedStatus(opts: ReleaseOptions, closeout: ReleaseCloseout): void {
   if (opts.status) closeout.t.status = coerceStatus(opts.status, closeout.t.status);
   else if (closeout.oracleRelease) closeout.t.status = 'awaiting-oracle';
 }
@@ -3032,15 +3100,15 @@ function recordReleaseReworkEvents(request: ReleaseRequest, closeout: ReleaseClo
   if (closeout.reopenedSubmission) appendReworkEvent(t, 'submission_cleared', releaseReworkDetails(request, t, previousStatus, now));
 }
 
-function releasedBackToTodo(t: StoredRecord, previousStatus: string, held: StoredRecord): boolean {
+function releasedBackToTodo(t: ReleaseTicket, previousStatus: string, held: ReleaseClaim | null | undefined): boolean {
   return t.status === 'todo' && (previousStatus !== 'todo' || Boolean(held && held.by));
 }
 
-function releaseReworkDetails(request: ReleaseRequest, t: StoredRecord, previousStatus: string, now: string) {
+function releaseReworkDetails(request: ReleaseRequest, t: ReleaseTicket, previousStatus: string, now: string) {
   return { at: now, source: request.opts.source || 'cli', by: request.by, fromStatus: previousStatus, toStatus: t.status };
 }
 
-function recordDoneCompletion(request: ReleaseRequest, closeout: ReleaseCloseout, now: string): StoredRecord | null {
+function recordDoneCompletion(request: ReleaseRequest, closeout: ReleaseCloseout, now: string): ReleaseComment | null {
   const { t } = closeout;
   if (t.status !== 'done') return null;
   t.completion = doneCompletionRecord(request, closeout, now);
@@ -3064,14 +3132,14 @@ function doneCompletionRecord(request: ReleaseRequest, closeout: ReleaseCloseout
   };
 }
 
-function noOpCompletion(dispatch: StoredRecord) {
+function noOpCompletion(dispatch: ReleaseDispatch | null) {
   return dispatch?.noOpRelease ? { purpose: 'no-op', noOp: dispatch.noOpRelease } : {};
 }
 
 // Completing a submitted ticket is the publish transaction consuming the
 // submission — stamp it integrated (kept as provenance) so the ticket
 // leaves the ready-for-integration queue the moment it goes done.
-function stampIntegratedSubmission(opts: StoredRecord, t: StoredRecord, closesPendingSubmission: boolean) {
+function stampIntegratedSubmission(opts: ReleaseOptions, t: ReleaseTicket, closesPendingSubmission: boolean) {
   if (!closesPendingSubmission) return null;
   const attemptRefusal = recordAttemptOrRefuse(t, closedLifecycleAttempt(t.lifecycleAttempt));
   if (attemptRefusal) return attemptRefusal;
@@ -3083,17 +3151,17 @@ function stampIntegratedSubmission(opts: StoredRecord, t: StoredRecord, closesPe
   return null;
 }
 
-function closedLifecycleAttempt(attempt: StoredRecord): StoredRecord {
+function closedLifecycleAttempt(attempt: Attempt | undefined): Attempt | Diagnostic | undefined {
   const assembledAttempt = attempt?.state === 'submitted' ? transitionAttempt(attempt, 'assemble') : attempt;
   const integratedAttempt = assembledAttempt?.state === 'assembled' ? transitionAttempt(assembledAttempt, 'integrate') : assembledAttempt;
   return integratedAttempt?.state === 'integrated' ? transitionAttempt(integratedAttempt, 'close') : integratedAttempt;
 }
 
-function recordedIntegration(t: StoredRecord, recordedDelivery: StoredRecord, integratedAt: string) {
+function recordedIntegration(t: ReleaseTicket, recordedDelivery: RecordedDelivery, integratedAt: string) {
   return Object.assign({
     outcome: 'verified',
     mode: 'recorded',
-    pinnedCommit: t.submission.commit,
+    pinnedCommit: t.submission?.commit,
     resultingHead: recordedDelivery.commit,
     targetBranch: recordedDelivery.target.branch,
     targetRef: recordedDelivery.target.upstream,
@@ -3103,7 +3171,7 @@ function recordedIntegration(t: StoredRecord, recordedDelivery: StoredRecord, in
   }, recordedDelivery.integration || {});
 }
 
-function commitReleasedTicket(request: ReleaseRequest, closeout: ReleaseCloseout, comment: StoredRecord | null, now: string): void {
+function commitReleasedTicket(request: ReleaseRequest, closeout: ReleaseCloseout, comment: ReleaseComment | null, now: string): void {
   const { t } = closeout;
   stampReleaseEvent(request.opts, closeout, now);
   putTicket(request.slug, t);
@@ -3111,7 +3179,7 @@ function commitReleasedTicket(request: ReleaseRequest, closeout: ReleaseCloseout
   if (comment) queueEventNotification(request.slug, t, 'comment', comment.source, { commentBody: comment.body });
 }
 
-function stampReleaseEvent(opts: StoredRecord, closeout: ReleaseCloseout, now: string): void {
+function stampReleaseEvent(opts: ReleaseOptions, closeout: ReleaseCloseout, now: string): void {
   const { t } = closeout;
   if (closeout.dispatch) {
     stampDispatchEvent(t, opts.source || 'cli', now);
@@ -3122,7 +3190,7 @@ function stampReleaseEvent(opts: StoredRecord, closeout: ReleaseCloseout, now: s
   t.updatedAt = now;
 }
 
-function releasedResult(request: ReleaseRequest, closeout: ReleaseCloseout, comment: StoredRecord | null) {
+function releasedResult(request: ReleaseRequest, closeout: ReleaseCloseout, comment: ReleaseComment | null) {
   return {
     ok: true,
     ticket: closeout.t,
