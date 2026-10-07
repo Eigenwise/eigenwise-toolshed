@@ -13,8 +13,12 @@ const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sidequestRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
 const require = createRequire(path.join(sidequestRoot, 'package.json'));
 const ast = await import(pathToFileURL(require.resolve('typescript/unstable/ast')).href);
-const { API } = await import(pathToFileURL(require.resolve('typescript/unstable/sync')).href);
+const { API: SyncParserApi } = await import(pathToFileURL(require.resolve('typescript/unstable/sync')).href);
+const { API: AsyncParserApi } = await import(pathToFileURL(require.resolve('typescript/unstable/async')).href);
 const { createVirtualFileSystem } = await import(pathToFileURL(require.resolve('typescript/unstable/fs')).href);
+// The sync transport opens a Windows named pipe, which `node --permission --allow-fs-read=*` denies;
+// the async transport speaks JSON-RPC over the child's stdio and needs only --allow-child-process.
+const PARSER_TRANSPORTS = { sync: SyncParserApi, async: AsyncParserApi };
 const SOURCE_EXTENSIONS = new Set(['.js', '.ts']);
 const THRESHOLD = 6;
 const SIDEQUEST_BUILD_OUTPUT_DIRECTORIES = new Set(['bin', 'hooks', 'lib']);
@@ -76,16 +80,23 @@ function functionKind(node) {
   return ast.SyntaxKind[node.kind];
 }
 
-export async function collectFunctions(text, fileName) {
+export function parserTransport(requested = process.env.CRAP_PARSER_TRANSPORT || 'sync') {
+  const ParserApi = PARSER_TRANSPORTS[requested];
+  if (!ParserApi) throw new Error(`Unknown TypeScript parser transport "${requested}"; use sync or async.`);
+  return ParserApi;
+}
+
+export async function collectFunctions(text, fileName, { transport } = {}) {
   const virtualFile = fileName.endsWith('.js') ? '/source.js' : '/source.ts';
   const virtualFileSystem = createVirtualFileSystem({
     '/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }),
     [virtualFile]: text,
   });
-  const api = new API({ cwd: '/', fs: virtualFileSystem });
+  const ParserApi = parserTransport(transport);
+  const api = new ParserApi({ cwd: '/', fs: virtualFileSystem });
   try {
-    const snapshot = api.updateSnapshot({ openProject: '/tsconfig.json' });
-    const sourceFile = snapshot.getProject('/tsconfig.json').program.getSourceFile(virtualFile);
+    const snapshot = await api.updateSnapshot({ openProject: '/tsconfig.json' });
+    const sourceFile = await snapshot.getProject('/tsconfig.json').program.getSourceFile(virtualFile);
     if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}.`);
     const functions = [];
     const childCounts = new Map();
@@ -105,7 +116,7 @@ export async function collectFunctions(text, fileName) {
     visit(sourceFile);
     return functions;
   } finally {
-    api.close();
+    await api.close();
   }
 }
 
