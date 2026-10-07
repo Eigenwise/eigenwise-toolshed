@@ -1749,6 +1749,33 @@ test('integrate returns actionable post-merge verification failures', async () =
   }
 });
 
+test('SQ-3425: MCP integrate refuses an environment-bound submission and names the CLI lane', async () => {
+  const repo = committedRepo('sq-mcp-integrate-environment-lane-');
+  const project = store.ensureProject(repo).slug;
+  store.setBoardConfig(project, { integrationVerifyTimeoutMs: 180000 });
+  const ticket = store.createTicket(project, {
+    title: 'environment-bound delivery',
+    files: ['lib/lane.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for the environment lane refusal',
+    labels: ['direct-ok'],
+  });
+  const bound = store.getTicket(project, ticket.ref);
+  const requirement = { kind: 'command', command: 'npm run gate', evidenceContract: 'npm run gate', environment: 'shared' };
+  bound.dispatch = { verificationRequirement: requirement, lifecycleAttempt: { execution: 'dispatched', verificationRequirement: requirement } };
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: bound.id, project, ref: bound.ref, status: bound.status,
+    archived: 0, ord: bound.order, claim_by: null, data: bound,
+  });
+
+  const result = await callHandler('integrate', { project, ref: ticket.ref, by: 'payload-tester' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'environment_lane_requires_cli');
+  assert.equal(result.message, `integrate: ${ticket.ref}'s verifier is environment-bound and can run up to 180000 ms; inside the board server that stalls every executor's board calls. Run CLI integrate for ${ticket.ref} (\`sidequest integrate ${ticket.ref} --project ${JSON.stringify(repo)} --json\`) with Bash run_in_background and act on its completion notification. Container teardown stays in the project's verify command.`);
+});
+
 test('integrate compacts successful verification output', async () => {
   const repo = committedRepo('sq-mcp-integrate-verify-success-');
   gitAt(repo, ['config', 'user.name', 'Sidequest Test']);

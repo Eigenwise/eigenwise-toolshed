@@ -1169,3 +1169,38 @@ test('SQ-2195: a value that is not a process id is refused rather than answered 
   }
   assert.throws(() => requireProcessId(Number(''), 'an empty pid file'), /never reported a usable process id/);
 });
+
+// SQ-3425: the script's CLI entry runs one verifier shell for a synchronous caller (runProcessVerification).
+function runOwnedVerifyCli(spec: Record<string, unknown>) {
+  return spawnSync(process.execPath, [runnerModulePath, JSON.stringify(spec)], {
+    encoding: 'utf8',
+    env: process.env,
+    windowsHide: true,
+    timeout: PROBE_BUDGET_MILLISECONDS,
+  });
+}
+
+test('SQ-3425: the owned verify entry reports a deadline with its marker and exit 124 after ending the descendant', { timeout: 60_000 }, async () => {
+  const fixture = descendantFixture(SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS, false, 'spin');
+  const result = runOwnedVerifyCli({ command: process.execPath, args: fixture.args, cwd: workspace, timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS });
+
+  assert.equal(result.status, 124, result.stderr);
+  assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${SPAWN_ARMED_DEADLINE_MILLISECONDS}$`, 'm'));
+  await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the descendant of the owned verify entry');
+  assert.equal(fixture.markerWritten(), false);
+});
+
+test('SQ-3425: the owned verify entry forwards output and passes the verifier exit code through', () => {
+  const exited = runOwnedVerifyCli({ command: process.execPath, args: [exitWithScript, '17'], cwd: workspace, timeoutMilliseconds: 20_000 });
+  assert.equal(exited.status, 17, exited.stderr);
+  assert.equal(exited.stderr.includes('__SIDEQUEST_VERIFY_TIMEOUT__'), false);
+
+  const spoken = runOwnedVerifyCli({ command: process.execPath, args: [helloScript], cwd: workspace, timeoutMilliseconds: 20_000 });
+  assert.equal(spoken.status, 0, spoken.stderr);
+  assert.equal(spoken.stdout, 'phase stdout\n');
+  assert.equal(spoken.stderr, 'phase stderr\n');
+
+  const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
+  assert.equal(unspawned.status, 2, unspawned.stderr);
+  assert.match(unspawned.stderr, /ENOENT/);
+});
