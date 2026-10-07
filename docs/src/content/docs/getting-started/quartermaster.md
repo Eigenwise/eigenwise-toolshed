@@ -134,6 +134,33 @@ Automatic permission learning stays off until the project opts in with `enable-a
 
 The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation records the user's own no to a proposal actually shown to them, and it does not return in that project; an accepted one is checked in a later pass. A finding the skill itself decides to skip, rather than one the user turned down, is left unrecorded or marked deferred instead of rejected.
 
+### Native Claude Code mod recommendations
+
+Resupply can recommend a native mod when repeated-work evidence points to a useful status entry,
+band, pane, or toast that native features, installed extensions, or an existing skill do not already
+cover. It reuses the same bounded aggregate and host-extension route. A workflow already covered by
+a skill stays there. Before proposing a mod, Claude checks the current host's `plugin-authoring`
+skill and generated types for the exact event, API, and data it needs. Missing support stays
+unverified; a completed turn does not prove you are away.
+
+Each proposal names the evidence window and limits, user benefit, exact on-screen behavior and
+project/session scope, proposed change, runtime owner, and setup and ongoing usage/model-call costs.
+Time savings are labeled measured only with comparable timed evidence, otherwise inferred or not
+quantified. Quartermaster owns assessment, approved setup, and bounded acceptance checks. Runtime
+behavior stays with its owner: orchestration, recurring rules, scoring, mapping, and telemetry keep
+their own owners. A missing runtime owner calls for a separate package.
+
+Approving resupply or improving its skill does not approve building or loading any recommended mod,
+settings/hooks/permissions changes, deletion, publication, or paid actions. Each item needs its own
+approval. Native hot reload is your decision, and setup stays pending until activation and a live
+check of the approved behavior on your surface. Approvals and rejections use the existing decision
+ledger and stable fingerprints; declining hot reload leaves an approved setup pending. UI-only mods
+can lack attribution, so a later pass cannot infer non-use from that alone.
+
+A proposed **Away Mode** is user-invoked, with explicit task scopes, time and usage/model-call
+budgets, concurrency limits, and stop conditions. It uses existing permissions and its runtime owner.
+It grants no automatic idle work, permission changes, or paid/publishing/deletion authority.
+
 ## How the loop closes
 
 A SessionEnd hook tallies each session locally in one streamed pass. The due check also counts current-project transcript file metadata, without opening content, so active or uncleanly ended sessions refill the window. Once enough unreviewed session activity or friction accumulates, the SessionStart nudge records that an offer is due and a Stop hook holds one real pause open for Claude to offer a focused optimization round. It blocks once per session, ignores its own continuation, and uses a separate 24-hour cross-session offer cooldown. After an accepted resupply, the same 24-hour cooldown can reopen on twice the usual evidence after a four-hour floor. Declining preserves the evidence window, while each consecutive decline doubles the offer backoff until an accepted resupply resets it. Applied recommendations record their targets, and later checks compare the signal before and after. Recommendations still need separate approval unless standing permission covers their exact class.

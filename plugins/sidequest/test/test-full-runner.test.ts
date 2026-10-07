@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, ChildProcess, type SpawnOptions } from 'node:child_process';
+import { getEventListeners, once } from 'node:events';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import test, { after } from 'node:test';
+import test, { after, type TestContext } from 'node:test';
 
 type ProcessState = 'gone' | 'zombie' | 'live';
 
@@ -19,6 +20,7 @@ interface OwnedPhaseOptions {
   args?: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   timeoutMilliseconds?: number | null;
   retainedOutputBytes?: number;
   terminationGraceMilliseconds?: number;
@@ -285,6 +287,208 @@ function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boo
     markerWritten: () => fs.existsSync(markerPath),
   };
 }
+
+interface ObservedLeaf {
+  child: ChildProcess;
+  exited: boolean;
+}
+
+function observeDirectLeaves(context: TestContext) {
+  const runnerRequire = createRequire(__filename);
+  const childProcesses: typeof import('node:child_process') = runnerRequire('node:child_process');
+  const spawnLeaf = childProcesses.spawn;
+  const leaves: ObservedLeaf[] = [];
+  context.mock.method(childProcesses, 'spawn', (command: string, argumentsList: string[], options: SpawnOptions) => {
+    const child = spawnLeaf(command, argumentsList, options);
+    const leaf = { child, exited: false };
+    leaves.push(leaf);
+    child.once('exit', () => { leaf.exited = true; });
+    return child;
+  });
+  const cachedRunner = runnerRequire.cache[runnerModulePath];
+  delete runnerRequire.cache[runnerModulePath];
+  const directRunner: typeof ownedProcessTree = runnerRequire(runnerModulePath);
+  context.after(() => { runnerRequire.cache[runnerModulePath] = cachedRunner; });
+  return { runPhase: directRunner.runOwnedPhase, leaves };
+}
+
+function spawnedLeaf(leaves: ObservedLeaf[]): ObservedLeaf {
+  const leaf = leaves[0];
+  assert.ok(leaf, 'the phase spawned no leaf');
+  return leaf;
+}
+
+function assertLeafExited(leaf: ObservedLeaf, result: OwnedPhaseResult) {
+  assert.equal(leaf.exited, true, 'successful settlement preceded the retained child exit event');
+  assert.equal(result.cleanupError, null);
+  assert.equal(result.ownedGroupId, null);
+  assert.equal(result.phasePid, leaf.child.pid);
+}
+
+test('Windows pre-aborted caller input rejects without spawning a leaf', windowsOnly, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const reason = new Error('caller already cancelled');
+  await assert.rejects(runPhase(silently({
+    command: process.execPath,
+    args: [helloScript],
+    signal: AbortSignal.abort(reason),
+  })), (error: unknown) => error === reason);
+  assert.equal(leaves.length, 0, 'pre-aborted input spawned a child');
+});
+
+test('Windows caller cancellation waits for the retained leaf exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const result = await runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+    onPhaseStarted: () => controller.abort('caller cancelled'),
+  }));
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.error?.code, 'ABORT_ERR');
+  assert.equal(result.error?.cause, 'caller cancelled');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0, 'settlement retained the caller abort listener');
+  assert.equal(result.timedOut, false);
+  assert.equal(result.status, null);
+  assert.equal(result.signal, 'SIGTERM');
+});
+
+test('Windows cancellation immediately after spawn waits for real exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  controller.abort();
+  const result = await phase;
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.error?.code, 'ABORT_ERR');
+  assert.equal(result.timedOut, false);
+});
+
+test('Windows deadline settlement waits for the retained leaf exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const result = await runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    timeoutMilliseconds: 20,
+  }));
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.error, null);
+  assert.equal(result.status, null);
+  assert.equal(result.signal, 'SIGTERM');
+});
+
+test('Windows normal exit removes cancellation and preserves the reported result', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const killLeaf = context.mock.method(ChildProcess.prototype, 'kill');
+  const result = await runPhase(silently({
+    command: process.execPath,
+    args: [helloScript],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  assertLeafExited(spawnedLeaf(leaves), result);
+  controller.abort();
+  assert.equal(killLeaf.mock.callCount(), 0, 'cancellation signalled an already-exited child');
+  assert.equal(result.error, null);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'phase stdout\n');
+  assert.equal(result.stderr, 'phase stderr\n');
+});
+
+test('Windows cancellation racing an observed exit preserves normal completion', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [helloScript],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  spawnedLeaf(leaves).child.prependOnceListener('exit', () => controller.abort());
+  const result = await phase;
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.error, null, 'exit-racing cancellation replaced the terminal result');
+  assert.equal(result.status, 0);
+  assert.equal(result.timedOut, false);
+});
+
+test('Windows successful signal requests do not substitute for a real exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '100'],
+    timeoutMilliseconds: 20,
+    terminationGraceMilliseconds: 20,
+    cleanupDrainMilliseconds: 5000,
+  }));
+  context.mock.method(spawnedLeaf(leaves).child, 'kill', () => true);
+  const result = await phase;
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.status, 0);
+  assert.equal(result.signal, null);
+});
+
+test('Windows spawn failure is distinct from live-child termination failure', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const result = await runPhase(silently({
+    command: 'sidequest-no-such-leaf-sq3396',
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  controller.abort();
+  const unspawnedLeaf = spawnedLeaf(leaves);
+  assert.equal(unspawnedLeaf.child.pid, undefined);
+  assert.equal(unspawnedLeaf.exited, false);
+  assert.equal(result.error?.code, 'ENOENT');
+  assert.equal(result.cleanupError, null);
+  assert.equal(result.phasePid, null);
+});
+
+test('Windows termination errors cannot masquerade as child exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+    terminationGraceMilliseconds: 20,
+    cleanupDrainMilliseconds: 20,
+  }));
+  const leaf = spawnedLeaf(leaves);
+  const killLeaf = leaf.child.kill.bind(leaf.child);
+  context.mock.method(leaf.child, 'kill', () => {
+    leaf.child.emit('error', Object.assign(new Error('synthetic retained-handle refusal'), { code: 'EPERM' }));
+    return false;
+  });
+  try {
+    controller.abort();
+    const result = await phase;
+    assert.equal(leaf.exited, false, 'the live child error was counted as exit');
+    assert.match(result.cleanupError ?? '', /still alive/);
+    assert.equal(result.unexpectedSignalErrorCode, 'EPERM');
+    assert.equal(result.terminationLatencyMilliseconds, null);
+    assert.equal(result.status, null);
+  } finally {
+    leaf.child.ref();
+    const exited = once(leaf.child, 'exit');
+    killLeaf('SIGKILL');
+    await exited;
+  }
+  assert.equal(leaf.exited, true, 'fixture cleanup completed before the retained child exit event');
+});
 
 test('an owned phase reports its root status and forwards output with no control frames on its streams', async () => {
   const result = await runOwnedPhase(silently({ command: process.execPath, args: [helloScript], timeoutMilliseconds: 20_000 }));
