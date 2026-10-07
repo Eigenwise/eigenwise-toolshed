@@ -2292,6 +2292,14 @@
         "worktreeIsolation": {
           "type": "boolean"
         },
+        "verifyEnvironment": {
+          "type": "string",
+          "enum": [
+            "isolated",
+            "shared"
+          ],
+          "description": "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)."
+        },
         "worktreeBase": {
           "type": "string",
           "enum": [
