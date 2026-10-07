@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -357,6 +358,25 @@ test('a failing suite stops the capture and names its plugin', async () => {
   const { suites, error } = await suitesRunFor(['plugins/model-gateway/lib/a.js', 'plugins/observability/lib/a.js'], 1);
   assert.equal(suites.length, 1);
   assert.match(error.message, /model-gateway tests failed with exit 1/);
+});
+
+test('a failing suite removes the coverage directory the earlier suites wrote into and rethrows the same error', async () => {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-leak-test-'));
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = temporaryRoot;
+  const failOnLastSuite = (suite, coverageDirectory) => {
+    if (suite.plugin === 'observability') return { status: 3 };
+    fsSync.writeFileSync(path.join(coverageDirectory, 'coverage-1.json'), '{}');
+    return { status: 0 };
+  };
+  try {
+    await assert.rejects(captureCoverage(['plugins/model-gateway/lib/a.js', 'plugins/observability/lib/a.js'], null, failOnLastSuite), { message: 'observability tests failed with exit 3' });
+    assert.deepEqual((await fs.readdir(temporaryRoot)).filter((entry) => entry.startsWith('toolshed-crap-')), []);
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 async function withCapturedProcessOutput(action) {
