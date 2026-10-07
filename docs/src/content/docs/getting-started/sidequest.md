@@ -67,6 +67,12 @@ command and descendants ended, then the parent explicitly hands the slot to the 
 terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
 and process counts cannot. No polling or automatic restart is needed.
 
+The gate's Windows direct-leaf runner accepts a caller `AbortSignal`. Pre-aborted input rejects
+before spawning; later cancellation and deadlines terminate through the retained `ChildProcess`.
+Successful cleanup waits for the child's actual exit. A bounded cleanup failure stays explicit and
+proves no termination. Leaf exit does not prove arbitrary descendants were cleaned up. POSIX
+process-group supervision is unchanged; this Windows signal option does not cancel a POSIX phase.
+
 Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
 only says where a read starts; the processed cursor advances after the instructions are consumed.
 
