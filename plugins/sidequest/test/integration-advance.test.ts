@@ -1676,7 +1676,7 @@ test('SQ-3480: a reader holding the delivery lock open never aborts the delivery
 
   assert.equal(result.ok, true, result.message);
   assert.notEqual(reader.descriptor, null, 'the reader held the lock open while the holder was published');
-  const published = reader.observed.at(-1);
+  const published = String(reader.observed.at(-1));
   const holder = JSON.parse(published);
   assert.equal(holder.ticket, ticket.ref);
   assert.equal(holder.pinnedCommit, fixture.submitted);
