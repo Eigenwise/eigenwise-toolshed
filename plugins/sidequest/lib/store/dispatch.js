@@ -49,13 +49,21 @@ function preparedVerificationRequirement(ticket, projectPath) {
 function requirementsMatch(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
+function pinnedVerificationRequirement(ticket, projectPath, verifyEnvironment, sharedTree) {
+  const requirement = preparedVerificationRequirement(ticket, projectPath);
+  const deferred = !sharedTree && verifyEnvironment === "shared" && ["command", "suite"].includes(requirement.kind);
+  return deferred ? Object.freeze({ ...requirement, environment: "shared" }) : requirement;
+}
 function createDispatch(dependencies) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  function boardVerificationRequirement(slug, ticket, sharedTree) {
+    return pinnedVerificationRequirement(ticket, String(readMeta(slug)?.path || ""), boardConfig(slug)?.verifyEnvironment, sharedTree);
+  }
   function syncLiveDispatchVerification(slug, ticket, amendment) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
     const previousRequirement = state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-    const nextRequirement = preparedVerificationRequirement(ticket, String(readMeta(slug)?.path || ""));
+    const nextRequirement = boardVerificationRequirement(slug, ticket, state.sharedTree === true);
     if (requirementsMatch(previousRequirement, nextRequirement)) return null;
     state.verificationRequirement = nextRequirement;
     const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
@@ -1785,7 +1793,7 @@ function createDispatch(dependencies) {
   }
   function deliveryVerification(slug, t, sharedTree, effectiveFiles) {
     const workingTreeDelivery = workingTreeDeliveryRequested(t, sharedTree, effectiveFiles);
-    const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
+    const verificationRequirement2 = boardVerificationRequirement(slug, t, sharedTree);
     if (workingTreeDelivery && verificationRequirement2.kind === "review") {
       throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
     }

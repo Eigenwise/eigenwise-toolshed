@@ -18,6 +18,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var verification_exports = {};
 __export(verification_exports, {
+  VERIFICATION_ENVIRONMENTS: () => VERIFICATION_ENVIRONMENTS,
   VERIFICATION_KINDS: () => VERIFICATION_KINDS,
   VERIFICATION_STATUSES: () => VERIFICATION_STATUSES,
   captureVerificationResult: () => captureVerificationResult,
@@ -33,7 +34,8 @@ __export(verification_exports, {
 });
 module.exports = __toCommonJS(verification_exports);
 const VERIFICATION_KINDS = ["suite", "command", "document", "link", "schema", "manual", "attestation", "review", "custom"];
-const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check"];
+const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check", "deferred"];
+const VERIFICATION_ENVIRONMENTS = ["isolated", "shared"];
 function nonEmpty(value) {
   return String(value || "").trim();
 }
@@ -160,6 +162,7 @@ function captureVerificationResult(requirement, capture) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  VERIFICATION_ENVIRONMENTS,
   VERIFICATION_KINDS,
   VERIFICATION_STATUSES,
   captureVerificationResult,
