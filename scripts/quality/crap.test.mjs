@@ -6,9 +6,9 @@ import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, parserTransport, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
+import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, parserTransport, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
-const { crapScore, parseLizardCsv } = crapCore;
+const { crapScore } = crapCore;
 
 function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed', relativePath = 'plugins/example/lib/subject.js' }) {
   return {
@@ -55,7 +55,7 @@ test('leaves an unchanged over-ceiling function out of the failure list', async 
 });
 
 test('keeps changed unverified functions in the result set', async () => {
-  const unverified = { ...metric({ complexity: 1, coverage: 1 }), unverified: 'lizard could not measure this function' };
+  const unverified = { ...metric({ complexity: 1, coverage: 1 }), unverified: 'the functions beside it in plugins/example/lib/subject.js do not line up with the source, so its coverage cannot be paired' };
   const changedMetrics = await changedMetricsAgainstBase(
     [unverified],
     ['plugins/example/lib/subject.js'],
@@ -108,23 +108,41 @@ test('skips generated Sidequest build output', () => {
   assert.equal(isScoredSource(path.join(sidequestRoot, 'bin', 'sidequest.js')), false);
 });
 
-test('reports an unmeasurable Lizard descriptor without throwing', () => {
-  const descriptor = { line: 174, name: '<anonymous>' };
-  assert.equal(lizardMetric(descriptor, []), null);
-  assert.equal(lizardMetric(descriptor, [{ start: 174, name: '(anonymous)', complexity: 3 }]), 3);
-  assert.equal(parseLizardCsv('').length, 0);
+const knownComplexities = [
+  ['function ifElseIfChain(value) { if (value === 1) return 1; else if (value === 2) return 2; else return 3; }', { ifElseIfChain: 3 }],
+  ['function switchWithDefault(value) { switch (value) { case 1: return 1; case 2: return 2; default: return 3; } }', { switchWithDefault: 3 }],
+  ['function tryCatch() { try { return 1; } catch (error) { return 2; } finally { return 3; } }', { tryCatch: 2 }],
+  ['function shortCircuit(a, b, c, d) { return (a && b) || (c ?? d); }', { shortCircuit: 4 }],
+  ['function ternary(value) { return value ? 1 : 0; }', { ternary: 2 }],
+  ['function everyLoop(items) { for (const item of items) {} for (const key in items) {} for (let index = 0; index < 1; index += 1) {} while (false) {} do {} while (false); }', { everyLoop: 6 }],
+  ['function outer(items) { return items.filter((item) => item ? item.ok && item.ready : false); }', { outer: 1, '<anonymous>': 3 }],
+];
+
+test('counts cyclomatic complexity from the AST: 1 plus each if, loop, case, catch, conditional and short-circuit operator, nested functions excluded', async () => {
+  for (const [source, expected] of knownComplexities) {
+    const functions = await collectFunctions(source, 'fixture.ts');
+    assert.deepEqual(Object.fromEntries(functions.map((entry) => [entry.name, entry.complexity])), expected, source);
+  }
 });
 
-test('keeps unmeasurable source functions in the metric list', async () => {
+// lizard 1.24.0 --csv on this fixture: one row, first 1-2, and no row for second.
+test('measures both siblings where Lizard loses brace tracking: a template literal nested inside another template literal\'s ${} substitution', async () => {
+  const source = 'function first(a) { return `x${`y${a}`}z`; }\nfunction second(a) { return a ? 1 : 0; }\n';
+  const functions = await collectFunctions(source, 'fixture.ts');
+  assert.deepEqual(functions.map((entry) => [entry.name, entry.line, entry.complexity]), [['first', 1, 1], ['second', 2, 2]]);
+});
+
+test('scores a source function from its AST complexity and mapped coverage', async () => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-source-metrics-'));
   const sourcePath = path.join(temporaryDirectory, 'fixture.js');
-  const sourceText = 'function subject() { return 1; }';
+  const sourceText = 'function subject(value) { return value ? 1 : 0; }';
   await fs.writeFile(sourcePath, sourceText);
   try {
     const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [{ functionName: 'subject', ranges: [{ startOffset: 0, endOffset: sourceText.length, count: 1 }] }]]]);
-    const [metricResult] = await sourceMetrics(sourcePath, coverageScripts, []);
+    const [metricResult] = await sourceMetrics(sourcePath, coverageScripts);
     assert.equal(metricResult.name, 'subject');
-    assert.equal(metricResult.unverified, 'lizard could not measure this function');
+    assert.equal(metricResult.unverified, undefined);
+    assert.deepEqual([metricResult.complexity, metricResult.coverage, metricResult.crap], [2, 1, 2]);
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -259,8 +277,7 @@ test('scores an inline callback covered in one process and idle in another as co
     const idleProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 0)];
     const busyProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 3)];
     const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [...idleProcess, ...busyProcess]]]);
-    const lizardEntries = [{ start: 1, name: 'outer', complexity: 1 }, { start: 2, name: '(anonymous)', complexity: 2 }];
-    const metrics = await sourceMetrics(sourcePath, coverageScripts, lizardEntries);
+    const metrics = await sourceMetrics(sourcePath, coverageScripts);
     const closure = metrics.find((entry) => entry.name === '<anonymous>');
     assert.equal(closure.coverage, 1);
     assert.equal(closure.crap, 2);
