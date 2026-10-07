@@ -6873,6 +6873,21 @@ test('rework defaults an omitted by to the session id: it passes for the owner a
   assert.strictEqual(explicit.ok, true, 'an explicit by wins over the session default');
 });
 
+test('rework defaults an omitted by to the session the host switched to, not the startup environment (GH-424, GH-467)', async () => {
+  const owned = submittedCandidate('gh424 cleared session', 'gh424-cleared');
+  const sessionsDirectory = path.join(String(process.env.SIDEQUEST_CLAUDE_HOME), 'sessions');
+  const recordFile = path.join(sessionsDirectory, `${process.ppid}.json`);
+  fs.mkdirSync(sessionsDirectory, { recursive: true });
+  fs.writeFileSync(recordFile, JSON.stringify({ pid: process.ppid, sessionId: 'gh424-cleared' }));
+  try {
+    const defaulted = await reworkAsSession('gh424-startup', { ref: owned.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+    assert.strictEqual(defaulted.ok, true, defaulted.message);
+    assert.strictEqual(store.getTicket(slug, owned.ref).rejectedSubmissions[0].rejectedBy, 'gh424-cleared');
+  } finally {
+    fs.rmSync(recordFile, { force: true });
+  }
+});
+
 test('rework stores over-long review and reason as a comment and keeps a truncated summary with its id (GH-424)', async () => {
   const review = `review-${'r'.repeat(1500)}`;
   const reason = `reason-${'x'.repeat(5000)}`;

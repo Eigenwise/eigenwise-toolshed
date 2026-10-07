@@ -1,12 +1,17 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const { createHash, randomUUID } = require('node:crypto');
 const { addAbortListener } = require('node:events');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const platformUsesProcessGroups = process.platform !== 'win32';
 const defaultSupervisorModulePath = path.join(__dirname, 'owned-phase-supervisor.js');
+const windowsJobOwnerSourcePath = path.join(__dirname, 'windows-job-owner.cs');
+const jobOwnerCompileTimeoutMilliseconds = 120_000;
+const win32FileNotFoundCodes = new Set([2, 3]);
 const defaultTerminationGraceMilliseconds = 300;
 const defaultCleanupDrainMilliseconds = 500;
 const defaultRetainedOutputBytes = 64 * 1024;
@@ -541,8 +546,10 @@ function runSupervisedPhase(options) {
 }
 
 /**
- * Windows termination uses the retained ChildProcess handle. Observing its exit proves
- * only this owned leaf is terminal, not that arbitrary descendants have been cleaned up.
+ * The Windows leaf is the job owner from runJobOwnedPhase. Closing its stdin asks it to account
+ * for its job and exit, which closes the Job Object holding every descendant; the SIGKILL
+ * escalation on the retained ChildProcess handle covers an owner that does not, since its
+ * death closes the job just the same. Observing its exit proves only the leaf is terminal.
  */
 async function runDirectlyOwnedPhase(options) {
   options.signal?.throwIfAborted();
@@ -553,9 +560,11 @@ async function runDirectlyOwnedPhase(options) {
     const child = spawn(options.command, options.args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
+    // An exit request the owner can no longer read is moot: its exit event settles the phase.
+    child.stdin.on('error', () => {});
 
     const phasePid = child.pid ?? null;
     let settled = false;
@@ -590,6 +599,7 @@ async function runDirectlyOwnedPhase(options) {
       clearTimeout(settleDeadlineTimer);
       process.removeListener('exit', sweepOnParentExit);
       abortListener?.[Symbol.dispose]();
+      child.stdin?.destroy();
       child.stdout?.destroy();
       child.stderr?.destroy();
       child.unref();
@@ -644,11 +654,15 @@ async function runDirectlyOwnedPhase(options) {
       cleanupError = `The owned phase leaf ${child.pid} could not be sent ${signal}; exit has not been observed.`;
     }
 
+    function requestOwnedLeafExit() {
+      if (!childExited) child.stdin.end();
+    }
+
     function terminateOwnedLeaf() {
       if (terminationRequestedAt !== null || childExited) return;
       terminationRequestedAt = performance.now();
       clearTimeout(deadlineTimer);
-      signalOwnedLeaf('SIGTERM');
+      requestOwnedLeafExit();
       killEscalationTimer = setTimeout(() => signalOwnedLeaf('SIGKILL'), options.terminationGraceMilliseconds);
       armSettleDeadline(options.terminationGraceMilliseconds + options.cleanupDrainMilliseconds);
     }
@@ -710,21 +724,181 @@ async function runDirectlyOwnedPhase(options) {
   });
 }
 
+function frameworkCompilerPath() {
+  const windowsDirectory = process.env.SystemRoot || 'C:\\Windows';
+  const compiler = ['Framework64', 'Framework']
+    .map((framework) => path.join(windowsDirectory, 'Microsoft.NET', framework, 'v4.0.30319', 'csc.exe'))
+    .find((candidate) => fs.existsSync(candidate));
+  return compiler || null;
+}
+
+function compilerFailure(compile) {
+  return compile.error ? compile.error.message : `${compile.stdout}${compile.stderr}`.trim();
+}
+
+function jobOwnerUnavailable(reason) {
+  return Object.assign(new Error(`The Windows job owner is unavailable: ${reason}`), { code: 'JOB_OWNER_UNAVAILABLE' });
+}
+
+// A concurrent first use may already have published the same source's build; that copy serves.
+function publishJobOwner(stagingPath, ownerPath) {
+  try {
+    fs.renameSync(stagingPath, ownerPath);
+  } catch (error) {
+    fs.rmSync(stagingPath, { force: true });
+    if (!fs.existsSync(ownerPath)) throw error;
+  }
+}
+
+function compileJobOwner(ownerPath, compiler = frameworkCompilerPath()) {
+  if (compiler === null) throw jobOwnerUnavailable('the .NET Framework csc.exe that ships with Windows was not found.');
+  fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+  const stagingPath = `${ownerPath}.${process.pid}-${randomUUID()}.exe`;
+  const compile = spawnSync(compiler, ['/nologo', '/optimize+', '/target:exe', `/out:${stagingPath}`, windowsJobOwnerSourcePath], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: jobOwnerCompileTimeoutMilliseconds,
+  });
+  if (compile.status !== 0) {
+    fs.rmSync(stagingPath, { force: true });
+    throw jobOwnerUnavailable(`${compiler} could not compile ${windowsJobOwnerSourcePath}: ${compilerFailure(compile)}`);
+  }
+  publishJobOwner(stagingPath, ownerPath);
+}
+
+// Node has no Job Object API, so the owner is built from the plugin's own C# source on first use
+// and cached per user under the hash of that source.
+function windowsJobOwnerPath() {
+  const sourceDigest = createHash('sha256').update(fs.readFileSync(windowsJobOwnerSourcePath)).digest('hex').slice(0, 16);
+  const ownerPath = path.join(os.tmpdir(), 'sidequest-job-owner', sourceDigest, 'sidequest-job-owner.exe');
+  if (!fs.existsSync(ownerPath)) compileJobOwner(ownerPath);
+  return ownerPath;
+}
+
+// The owner can die or be read mid-write, so only a "members <count> <pid>... end" record whose
+// count matches its ids is the job's account; "members 0 end" is its word that nothing was left.
+function completeMemberIds([count, ...idsAndEnd]) {
+  const ids = idsAndEnd.slice(0, -1);
+  const wellFormed = idsAndEnd.at(-1) === 'end' && [count, ...ids].every((value) => /^\d+$/.test(value));
+  return wellFormed && ids.length === Number(count) ? ids.map(Number) : null;
+}
+
+const jobReportEvents = new Map([
+  ['members', (report, values) => {
+    report.closedMemberIds = completeMemberIds(values);
+    if (report.closedMemberIds === null) report.accountFailure = "the job owner's account of its job members was cut off or malformed";
+  }],
+  ['members-unknown', (report, [code]) => { report.accountFailure = `QueryInformationJobObject failed with Win32 error ${code}`; }],
+  ['requested', (report) => { report.endedOnRequest = true; }],
+  ['affinity', (report, [mask]) => { report.affinityMask = mask; }],
+  ['owner-error', (report, [code, ...message]) => { report.ownerError = { code: Number(code), message: message.join(' ') }; }],
+]);
+
+function readJobReport(reportPath) {
+  const report = { closedMemberIds: null, accountFailure: null, endedOnRequest: false, affinityMask: null, ownerError: null };
+  const text = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8') : '';
+  for (const line of text.split(/\r?\n/)) {
+    const [event, ...values] = line.split(' ');
+    jobReportEvents.get(event)?.(report, values);
+  }
+  return report;
+}
+
+// The owner's own exit code is not the phase's: a phase the owner could not run has no status or
+// pid, and a phase the owner ended on request has no status.
+function ownerReportedPhaseFields(report) {
+  if (report.endedOnRequest) return { status: null };
+  if (report.ownerError === null) return {};
+  const error = Object.assign(new Error(`The Windows job owner could not run the phase: ${report.ownerError.message}`), {
+    code: win32FileNotFoundCodes.has(report.ownerError.code) ? 'ENOENT' : 'JOB_OWNER_FAILED',
+  });
+  return { status: null, phasePid: null, error };
+}
+
+async function waitForJobMembersToEnd(processIds, budgetMilliseconds) {
+  const deadline = performance.now() + budgetMilliseconds;
+  let survivors = processIds.filter((processId) => !isProcessTerminal(processId));
+  while (survivors.length > 0 && performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    survivors = survivors.filter((processId) => !isProcessTerminal(processId));
+  }
+  return survivors;
+}
+
+function survivorCleanupError(cleanupError, survivingProcessIds) {
+  if (survivingProcessIds.length === 0) return cleanupError;
+  const survivors = `Job members ${survivingProcessIds.join(', ')} were still alive after the job owner closed its job.`;
+  return cleanupError === null ? survivors : `${cleanupError} ${survivors}`;
+}
+
+function unknownSurvivorsError(report, cleanupError) {
+  const unknown = `Survivor state unknown: ${report.accountFailure ?? 'the job owner left no account of its job members'}.`;
+  return cleanupError === null ? unknown : `${unknown} ${cleanupError}`;
+}
+
 /**
- * POSIX phases own the inherited process group; Windows phases own only the direct leaf.
+ * jobClosedProcessIds are the job's own account of the members still inside it as the owner
+ * closed it, which the job then killed; survivingProcessIds are any of those still alive once
+ * the drain window ran out. Both are null when no such account exists, which fails the phase
+ * rather than passing for an empty job.
+ */
+async function withJobEvidence(result, reportPath, budgetMilliseconds) {
+  const report = readJobReport(reportPath);
+  fs.rmSync(reportPath, { force: true });
+  const accounted = { ...result, ...ownerReportedPhaseFields(report), processorAffinityMask: report.affinityMask };
+  if (report.closedMemberIds === null) {
+    return { ...accounted, cleanupError: unknownSurvivorsError(report, result.cleanupError), jobClosedProcessIds: null, survivingProcessIds: null };
+  }
+  const survivingProcessIds = await waitForJobMembersToEnd(report.closedMemberIds, budgetMilliseconds);
+  return {
+    ...accounted,
+    cleanupError: survivorCleanupError(result.cleanupError, survivingProcessIds),
+    jobClosedProcessIds: report.closedMemberIds,
+    survivingProcessIds,
+  };
+}
+
+/**
+ * Windows phases run under the job owner, which joins its own kill-on-close job before it creates
+ * the phase, so the direct leaf runDirectlyOwnedPhase retains is the owner and its exit, for any
+ * reason, ends every descendant that inherited the job. A process created through a broker (a
+ * service, COM activation, a daemon such as dockerd) is outside the job and is not tracked.
+ */
+async function runJobOwnedPhase(options) {
+  const reportPath = path.join(os.tmpdir(), `sidequest-job-${process.pid}-${randomUUID()}.log`);
+  const result = await runDirectlyOwnedPhase({
+    ...options,
+    command: windowsJobOwnerPath(),
+    args: [options.command, ...options.args],
+    env: { ...(options.env ?? process.env), SIDEQUEST_JOB_OWNER_REPORT: reportPath },
+  });
+  return withJobEvidence(result, reportPath, options.cleanupDrainMilliseconds);
+}
+
+/**
+ * POSIX phases own the inherited process group; Windows phases own a Job Object that holds
+ * every descendant that inherited the job, reparented and detached ones included, and report the
+ * job's own account of its members in jobClosedProcessIds, survivingProcessIds (null when the
+ * account is missing, cut off or malformed, which is a cleanupError, never an empty job) and
+ * processorAffinityMask. Processes created through a broker (a service, COM activation, a daemon)
+ * are outside the job and are not tracked.
+ * SIDEQUEST_JOB_AFFINITY_MASK in the phase environment pins a Windows job to those processors.
  * Settlement is bounded by the deadline, termination grace and output-drain windows.
  * A cleanupError reports failure, never proof of terminality. A timedOut phase fails
  * regardless of its eventual status. Windows accepts a caller AbortSignal: pre-aborted
  * input rejects before spawn; later cancellation returns ABORT_ERR after exit or explicit
- * cleanup failure. The signal does not change the POSIX supervision contract.
+ * cleanup failure. A Windows host whose job owner cannot be built rejects with
+ * JOB_OWNER_UNAVAILABLE. The signal does not change the POSIX supervision contract.
  */
 function runOwnedPhase(rawOptions) {
   const options = normalizeOptions(rawOptions);
-  return platformUsesProcessGroups ? runSupervisedPhase(options) : runDirectlyOwnedPhase(options);
+  return platformUsesProcessGroups ? runSupervisedPhase(options) : runJobOwnedPhase(options);
 }
 
 module.exports = {
+  compileJobOwner,
   classifyProcessState,
   isProcessTerminal,
   runOwnedPhase,
+  withJobEvidence,
 };

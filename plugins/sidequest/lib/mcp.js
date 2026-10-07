@@ -1,7 +1,7 @@
 "use strict";
 const path = require("path");
 const store = require("./store");
-const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
+const { compactSchema, conciseDescription, resolveProject, runtimeSessionId, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
 const { sidequestMutationFreshness } = require("./plugin-freshness");
 const { tools: readTools } = require("./mcp-read");
 const { tools: ticketTools } = require("./mcp-tickets");
@@ -9,7 +9,7 @@ const { tools: lifecycleTools } = require("./mcp-lifecycle");
 const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 function boardMcpSessionId() {
-  return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+  return runtimeSessionId() || "";
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
@@ -238,7 +238,7 @@ function assertMutationFreshness(projectArg) {
 const CONTROL_PLANE_DEFAULT_BY = /* @__PURE__ */ new Set(["groomClose", "rework", "supersede_submission"]);
 function controlPlaneByArgs(tool, args) {
   if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || "").trim()) return args;
-  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+  const sessionId = runtimeSessionId();
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
 async function runTool(tool, rawArgs) {

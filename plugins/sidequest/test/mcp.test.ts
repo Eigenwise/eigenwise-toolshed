@@ -5056,6 +5056,60 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
   assert.equal(pulse.dispatch.agentId, 'native-mcp-session-agent');
 });
 
+// Claude Code rewrites sessions/<its pid>.json whenever /clear or /resume switches the session, while the
+// board server it spawned keeps the startup id in its environment (GH-467).
+async function withHostSessionRecord<T>(record: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+  const sessionsDirectory = path.join(String(process.env.SIDEQUEST_CLAUDE_HOME), 'sessions');
+  const recordFile = path.join(sessionsDirectory, `${process.ppid}.json`);
+  fs.mkdirSync(sessionsDirectory, { recursive: true });
+  fs.writeFileSync(recordFile, JSON.stringify(record));
+  try {
+    return await run();
+  } finally {
+    fs.rmSync(recordFile, { force: true });
+  }
+}
+
+test('GH-467: MCP dispatch after /clear records the session the host switched to, and the executor binds', async () => {
+  const slug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-cleared-session', name: 'MCP cleared session', route: { model: 'sonnet', effort: 'high' } });
+  const ticket = await callTool('add', { title: 'dispatch after clear', description: DISPATCH_DESCRIPTION, category: 'mcp-cleared-session' });
+  const startupSession = `gh467-startup-${process.pid}`;
+  const clearedSession = `gh467-cleared-${process.pid}`;
+
+  const dispatched = await withHostSessionRecord({ pid: process.ppid, sessionId: clearedSession }, () =>
+    callToolAsSession(startupSession, 'dispatch', { allowUnscoped: true, ref: ticket.ref, full: true }));
+
+  const state = store.getTicket(slug, ticket.ref).dispatch;
+  assert.equal(state.sessionId, clearedSession, 'dispatch records the current session, not the server startup environment');
+  assert.equal(state.preparedBy.sessionId, clearedSession);
+  const launched = runForceBypass({ session_id: clearedSession, cwd: PROJ, tool_name: 'Agent', tool_input: dispatched.spawn });
+  const agentName = launched.hookSpecificOutput.updatedInput.name;
+  assert.equal(store.bindDispatchAgent(clearedSession, dispatched.agent, 'gh467-cleared-agent', agentName).ok, true);
+});
+
+test('GH-467: the host session record only replaces the startup id when it is this server\'s parent and names a session', async () => {
+  const slug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-cleared-session', name: 'MCP cleared session', route: { model: 'sonnet', effort: 'high' } });
+  const startupSession = `gh467-resume-${process.pid}`;
+  const cases = [
+    { name: 'resumed session keeps its id', record: { pid: process.ppid, sessionId: startupSession }, expected: startupSession },
+    { name: 'another process record is ignored', record: { pid: process.ppid + 1, sessionId: 'gh467-foreign' }, expected: startupSession },
+    { name: 'a record without a session id is ignored', record: { pid: process.ppid, sessionId: '' }, expected: startupSession },
+  ];
+  const failures: string[] = [];
+  for (const { name, record, expected } of cases) {
+    try {
+      const ticket = await callTool('add', { title: `host record: ${name}`, description: DISPATCH_DESCRIPTION, category: 'mcp-cleared-session' });
+      await withHostSessionRecord(record, () => callToolAsSession(startupSession, 'dispatch', { allowUnscoped: true, ref: ticket.ref }));
+      assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, expected);
+    } catch (error) {
+      failures.push(`${name}: ${(error as Error).message}`);
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
 test('MCP dispatch refuses a caller session label without runtime identity', async () => {
   const slug = store.ensureProject(PROJ).slug;
   const ticket = await callTool('add', { title: 'missing runtime dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });

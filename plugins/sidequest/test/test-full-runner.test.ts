@@ -48,6 +48,7 @@ interface OwnedPhaseResult {
   stderr: string;
   stdoutBytes: number;
   stderrBytes: number;
+  jobClosedProcessIds?: number[] | null;
 }
 
 const runnerModulePath = path.join(__dirname, '..', 'scripts', 'owned-process-tree.js');
@@ -351,8 +352,10 @@ test('Windows caller cancellation waits for the retained leaf exit', { ...window
   assert.equal(result.error?.cause, 'caller cancelled');
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0, 'settlement retained the caller abort listener');
   assert.equal(result.timedOut, false);
+  // The job owner exits on request after accounting for its job, so the phase has no status or signal.
   assert.equal(result.status, null);
-  assert.equal(result.signal, 'SIGTERM');
+  assert.equal(result.signal, null);
+  assert.equal(result.jobClosedProcessIds?.length, 1, 'the job owner did not account for the sleeping phase');
 });
 
 test('Windows cancellation immediately after spawn waits for real exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
@@ -382,7 +385,7 @@ test('Windows deadline settlement waits for the retained leaf exit', { ...window
   assert.equal(result.timedOut, true);
   assert.equal(result.error, null);
   assert.equal(result.status, null);
-  assert.equal(result.signal, 'SIGTERM');
+  assert.equal(result.signal, null);
 });
 
 test('Windows normal exit removes cancellation and preserves the reported result', { ...windowsOnly, timeout: 20_000 }, async (context) => {
@@ -431,6 +434,8 @@ test('Windows successful signal requests do not substitute for a real exit', { .
     terminationGraceMilliseconds: 20,
     cleanupDrainMilliseconds: 5000,
   }));
+  // Neither the lost exit request nor the kill that claims success counts; only the owner's real exit does.
+  context.mock.method(spawnedLeaf(leaves).child.stdin!, 'end', () => spawnedLeaf(leaves).child.stdin);
   context.mock.method(spawnedLeaf(leaves).child, 'kill', () => true);
   const result = await phase;
   assertLeafExited(spawnedLeaf(leaves), result);
@@ -448,10 +453,12 @@ test('Windows spawn failure is distinct from live-child termination failure', { 
     timeoutMilliseconds: 10_000,
   }));
   controller.abort();
-  const unspawnedLeaf = spawnedLeaf(leaves);
-  assert.equal(unspawnedLeaf.child.pid, undefined);
-  assert.equal(unspawnedLeaf.exited, false);
+  // The retained leaf is the job owner, which did start; it is the phase command it could not.
+  const ownerLeaf = spawnedLeaf(leaves);
+  assert.equal(ownerLeaf.exited, true, 'settlement preceded the job owner exit');
+  assert.equal(result.ownerPid, ownerLeaf.child.pid);
   assert.equal(result.error?.code, 'ENOENT');
+  assert.equal(result.status, null);
   assert.equal(result.cleanupError, null);
   assert.equal(result.phasePid, null);
 });
@@ -469,6 +476,7 @@ test('Windows termination errors cannot masquerade as child exit', { ...windowsO
   }));
   const leaf = spawnedLeaf(leaves);
   const killLeaf = leaf.child.kill.bind(leaf.child);
+  context.mock.method(leaf.child.stdin!, 'end', () => leaf.child.stdin);
   context.mock.method(leaf.child, 'kill', () => {
     leaf.child.emit('error', Object.assign(new Error('synthetic retained-handle refusal'), { code: 'EPERM' }));
     return false;
