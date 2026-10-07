@@ -261,6 +261,17 @@ test('a capture whose owner left no account of its job says survivor state unkno
   fs.rmSync(result.logPath, { force: true });
 });
 
+test('a clean cache compiles the owner with the csc.exe that ships with Windows and publishes only the finished build', windowsOnly, () => {
+  const ownerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3456-fresh-compile-'));
+  const ownerPath = path.join(ownerDirectory, 'by-source-hash', 'sidequest-job-owner.exe');
+  try {
+    compileJobOwner(ownerPath);
+    assert.deepEqual(fs.readdirSync(path.dirname(ownerPath)), ['sidequest-job-owner.exe'], 'the staged build was not renamed into place alone');
+  } finally {
+    fs.rmSync(ownerDirectory, { recursive: true, force: true });
+  }
+});
+
 test('a host without the Windows csc.exe fails loudly instead of running unowned', () => {
   const ownerPath = path.join(os.tmpdir(), `sq-3434-missing-compiler-${process.pid}`, 'owner.exe');
   assert.throws(() => compileJobOwner(ownerPath, null), (error: Error & { code?: string }) => {
