@@ -775,9 +775,19 @@ function windowsJobOwnerPath() {
   return ownerPath;
 }
 
-// "members" with no ids is the job's own word that nothing was left inside it.
+// The owner can die or be read mid-write, so only a "members <count> <pid>... end" record whose
+// count matches its ids is the job's account; "members 0 end" is its word that nothing was left.
+function completeMemberIds([count, ...idsAndEnd]) {
+  const ids = idsAndEnd.slice(0, -1);
+  const wellFormed = idsAndEnd.at(-1) === 'end' && [count, ...ids].every((value) => /^\d+$/.test(value));
+  return wellFormed && ids.length === Number(count) ? ids.map(Number) : null;
+}
+
 const jobReportEvents = new Map([
-  ['members', (report, ids) => { report.closedMemberIds = ids.map(Number); }],
+  ['members', (report, values) => {
+    report.closedMemberIds = completeMemberIds(values);
+    if (report.closedMemberIds === null) report.accountFailure = "the job owner's account of its job members was cut off or malformed";
+  }],
   ['members-unknown', (report, [code]) => { report.accountFailure = `QueryInformationJobObject failed with Win32 error ${code}`; }],
   ['requested', (report) => { report.endedOnRequest = true; }],
   ['affinity', (report, [mask]) => { report.affinityMask = mask; }],
@@ -851,7 +861,8 @@ async function withJobEvidence(result, reportPath, budgetMilliseconds) {
 /**
  * Windows phases run under the job owner, which joins its own kill-on-close job before it creates
  * the phase, so the direct leaf runDirectlyOwnedPhase retains is the owner and its exit, for any
- * reason, ends every process the phase started.
+ * reason, ends every descendant that inherited the job. A process created through a broker (a
+ * service, COM activation, a daemon such as dockerd) is outside the job and is not tracked.
  */
 async function runJobOwnedPhase(options) {
   const reportPath = path.join(os.tmpdir(), `sidequest-job-${process.pid}-${randomUUID()}.log`);
@@ -866,9 +877,11 @@ async function runJobOwnedPhase(options) {
 
 /**
  * POSIX phases own the inherited process group; Windows phases own a Job Object that holds
- * every descendant, reparented and detached ones included, and report the job's own account of
- * its members in jobClosedProcessIds, survivingProcessIds (null when the account is missing,
- * which is a cleanupError, never an empty job) and processorAffinityMask.
+ * every descendant that inherited the job, reparented and detached ones included, and report the
+ * job's own account of its members in jobClosedProcessIds, survivingProcessIds (null when the
+ * account is missing, cut off or malformed, which is a cleanupError, never an empty job) and
+ * processorAffinityMask. Processes created through a broker (a service, COM activation, a daemon)
+ * are outside the job and are not tracked.
  * SIDEQUEST_JOB_AFFINITY_MASK in the phase environment pins a Windows job to those processors.
  * Settlement is bounded by the deadline, termination grace and output-drain windows.
  * A cleanupError reports failure, never proof of terminality. A timedOut phase fails
@@ -887,4 +900,5 @@ module.exports = {
   classifyProcessState,
   isProcessTerminal,
   runOwnedPhase,
+  withJobEvidence,
 };

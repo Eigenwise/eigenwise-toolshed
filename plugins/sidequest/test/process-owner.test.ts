@@ -13,7 +13,7 @@ const { execFileSync } = require('node:child_process');
 
 const { runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const { runProcessVerification, runOwnedProcessVerification } = require('../lib/ports/process.js');
-const { classifyProcessState, compileJobOwner } = require('../scripts/owned-process-tree.js');
+const { classifyProcessState, compileJobOwner, withJobEvidence } = require('../scripts/owned-process-tree.js');
 const store = require('../lib/store.js');
 
 const windowsOnly = process.platform === 'win32' ? {} : { skip: 'Windows Job Objects' };
@@ -21,6 +21,8 @@ const FIXTURE_DEADLINE_MILLISECONDS = 5000;
 const SETTLED_BUDGET_MILLISECONDS = 5000;
 // At most two processors for the fixture tree, enforced by the job and read back from inside it.
 const TWO_CORE_AFFINITY_MASK = '3';
+const BROKER_BOUNDARY = 'Processes created through a broker (a service, COM activation, a daemon such as dockerd) are outside the job and are not tracked.';
+const WINDOWS_JOB_ENDED_EVIDENCE = String.raw`The Windows job owner ended every descendant that inherited the job \(processes [\d, ]+\); none survived\. Processes created through a broker \(a service, COM activation, a daemon such as dockerd\) are outside the job and are not tracked\.`;
 
 function delay(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -144,13 +146,13 @@ test('a timed-out verify ends cmd, its node child and a detached grandchild, and
     assert.equal(classifyProcessState(sleeperPid), 'gone', 'the node sleeper outlived the settled capture');
     assert.equal(capture.status, 'timeout');
     assert.equal(capture.exitCode, 2);
-    assert.match(capture.reason, /^Verification timed out after 5000ms\. The Windows job owner ended processes [\d, ]+; none survived\. Output log: /);
+    assert.match(capture.reason, new RegExp(`^Verification timed out after 5000ms\\. ${WINDOWS_JOB_ENDED_EVIDENCE} Output log: `));
     assert.ok(capture.reason.endsWith(`Output log: ${capture.logPath}`), capture.reason);
     for (const processId of [sleeperPid, grandchild.pid]) {
       assert.ok(capture.reason.includes(String(processId)), `the cleanup evidence omits job member ${processId}: ${capture.reason}`);
     }
     // The command's cmd.exe ended with the job too: every member the job closed over is gone.
-    const memberIds = capture.reason.match(/ended processes ([\d, ]+);/)[1].split(', ').map(Number);
+    const memberIds = capture.reason.match(/\(processes ([\d, ]+)\);/)[1].split(', ').map(Number);
     assert.ok(memberIds.length >= 3, `expected cmd, the sleeper and the grandchild, got ${memberIds}`);
     for (const processId of memberIds) assert.equal(classifyProcessState(processId), 'gone', `job member ${processId} survived settlement`);
     assert.ok(grandchild.parallelism <= 2, `the job tree saw ${grandchild.parallelism} processors under a two-core affinity mask`);
@@ -196,7 +198,7 @@ test('caller cancellation ends the whole verify tree and reports it as a cancell
     const result = await running;
 
     assert.equal(result.status, 'could_not_run');
-    assert.match(result.evidence, /^Verification was cancelled\. The Windows job owner ended processes [\d, ]+; none survived\. Output log: /);
+    assert.match(result.evidence, new RegExp(`^Verification was cancelled\\. ${WINDOWS_JOB_ENDED_EVIDENCE} Output log: `));
     assert.equal(await stateAfterSettling(grandchild.pid), 'gone');
     assert.equal(await stateAfterSettling(await fixture.sleeperPid()), 'gone');
     fs.rmSync(result.logPath, { force: true });
@@ -259,6 +261,71 @@ test('a capture whose owner left no account of its job says survivor state unkno
   assert.match(result.evidence, /^Verification timed out after 1234ms\. Survivor state unknown: QueryInformationJobObject failed with Win32 error 6\. Output log: /);
   assert.doesNotMatch(result.evidence, /none survived/);
   fs.rmSync(result.logPath, { force: true });
+});
+
+// Settles a timed-out phase against a job owner report holding exactly this text.
+function jobEvidenceFromReport(text: string) {
+  const reportPath = path.join(os.tmpdir(), `sq-3469-job-report-${process.pid}-${Math.random().toString(16).slice(2)}.log`);
+  fs.writeFileSync(reportPath, text);
+  return withJobEvidence({ status: null, signal: null, error: null, timedOut: true, cleanupError: null }, reportPath, 0);
+}
+
+// An owner killed while writing its account, or read before it finished, leaves any prefix of it (SQ-3466).
+test('a members record cut off anywhere, or malformed, reports survivor state unknown, never an empty job', async () => {
+  const completeReport = 'affinity 3\nrequested\nmembers 3 4120 9984 10236 end\n';
+  const recordEnd = completeReport.indexOf(' end') + ' end'.length;
+  const reviewPrefix = await jobEvidenceFromReport('affinity 3\nrequested\nmembers');
+  assert.deepEqual(
+    { jobClosedProcessIds: reviewPrefix.jobClosedProcessIds, survivingProcessIds: reviewPrefix.survivingProcessIds, cleanupError: reviewPrefix.cleanupError },
+    { jobClosedProcessIds: null, survivingProcessIds: null, cleanupError: "Survivor state unknown: the job owner's account of its job members was cut off or malformed." },
+  );
+  const incompleteReports = [
+    ...Array.from({ length: recordEnd }, (_, length) => completeReport.slice(0, length)),
+    'members 2 4120 end\n',
+    'members 1 41x0 end\n',
+    'members x end\n',
+    'members 1  4120 end\n',
+    'members 0\n',
+  ];
+  const claimedAccounts = [];
+  for (const report of incompleteReports) {
+    const result = await jobEvidenceFromReport(report);
+    if (result.jobClosedProcessIds !== null || result.survivingProcessIds !== null || !/^Survivor state unknown: /.test(result.cleanupError)) {
+      claimedAccounts.push({ report, jobClosedProcessIds: result.jobClosedProcessIds, cleanupError: result.cleanupError });
+    }
+  }
+  assert.deepEqual(claimedAccounts, [], 'an incomplete members record was read as the job account');
+});
+
+test('a whole members record is the job account, an empty one included', async () => {
+  const listed = await jobEvidenceFromReport('affinity 3\nmembers 3 4120 9984 10236 end\n');
+  assert.deepEqual(listed.jobClosedProcessIds, [4120, 9984, 10236]);
+  const empty = await jobEvidenceFromReport('affinity 3\nrequested\nmembers 0 end\n');
+  assert.deepEqual(
+    { jobClosedProcessIds: empty.jobClosedProcessIds, survivingProcessIds: empty.survivingProcessIds, cleanupError: empty.cleanupError },
+    { jobClosedProcessIds: [], survivingProcessIds: [], cleanupError: null },
+  );
+});
+
+test('a failed capture names what the Windows job ended and the broker boundary it cannot see past', async (context: TestContext) => {
+  const ownedProcessTree = require('../scripts/owned-process-tree.js');
+  const phases = [
+    { jobClosedProcessIds: [], cleanupError: null },
+    { jobClosedProcessIds: [41], cleanupError: 'Job members 41 were still alive after the job owner closed its job.' },
+    { cleanupError: null },
+  ];
+  context.mock.method(ownedProcessTree, 'runOwnedPhase', async () => ({ status: null, signal: null, error: null, timedOut: true, ...phases.shift() }));
+  const evidence = [];
+  for (let run = 0; run < 3; run++) {
+    const result = await runOwnedProcessVerification({ kind: 'command', command: 'node --version', evidenceContract: 'command output' }, { timeoutMilliseconds: 1234 });
+    fs.rmSync(result.logPath, { force: true });
+    evidence.push(result.evidence.replace(` Output log: ${result.logPath}`, ''));
+  }
+  assert.deepEqual(evidence, [
+    `Verification timed out after 1234ms. The Windows job owner ended every descendant that inherited the job (none were still running); none survived. ${BROKER_BOUNDARY}`,
+    `Verification timed out after 1234ms. The Windows job owner ended every descendant that inherited the job (processes 41); cleanup refused: Job members 41 were still alive after the job owner closed its job. ${BROKER_BOUNDARY}`,
+    'Verification timed out after 1234ms. The owned process tree was ended; none survived.',
+  ]);
 });
 
 test('a clean cache compiles the owner with the csc.exe that ships with Windows and publishes only the finished build', windowsOnly, () => {

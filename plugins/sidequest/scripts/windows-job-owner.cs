@@ -7,18 +7,21 @@ using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
 // Runs the rest of its own command line inside a kill-on-close Job Object. The owner joins that job
-// itself before it creates the command, so the command and every process it starts, reparented and
-// detached ones included, are job members from their first instruction, and the job ends them all
-// when this owner exits or is terminated. owned-process-tree.js compiles this file on first use with
-// the .NET Framework csc.exe that ships with Windows.
+// itself before it creates the command, so the command and every descendant that inherited the job,
+// reparented and detached ones included, are job members from their first instruction, and the job
+// ends them all when this owner exits or is terminated. A process created through a broker (a service,
+// COM activation, a daemon such as dockerd) is outside the job and is not tracked.
+// owned-process-tree.js compiles this file on first use with the .NET Framework csc.exe that ships
+// with Windows.
 //
 // Standard input is the exit request: EOF on it makes the owner account for its job and exit, which
 // closes the job. The command itself reads NUL.
 // SIDEQUEST_JOB_OWNER_REPORT names a file that receives one line per event: "affinity <mask>",
-// "requested" when the owner exited on request before the command did, "members <pid> <pid> ..." for
-// the job's live processes other than this owner as the job closed (QueryInformationJobObject, so an
-// empty list is the job's own word), "members-unknown <win32 code>" when that query failed, and
-// "owner-error <win32 code> <message>".
+// "requested" when the owner exited on request before the command did, "members <count> <pid> ... end"
+// for the job's live processes other than this owner as the job closed (QueryInformationJobObject, so
+// "members 0 end" is the job's own word that it was empty; the count and the closing "end" let the
+// reader tell a whole record from one cut off mid-write), "members-unknown <win32 code>" when that
+// query failed, and "owner-error <win32 code> <message>".
 // SIDEQUEST_JOB_AFFINITY_MASK, when set to a nonzero mask, pins the whole job to those processors.
 static class SidequestJobOwner
 {
@@ -202,17 +205,20 @@ static class SidequestJobOwner
         return unchecked((int)exitCode);
     }
 
-    static string MemberIdsOtherThanOwner(IntPtr list)
+    static string MembersRecord(IntPtr list)
     {
         int ownProcessId = GetCurrentProcessId();
         StringBuilder ids = new StringBuilder();
+        int members = 0;
         int count = Marshal.ReadInt32(list, 4);
         for (int index = 0; index < count; index++)
         {
             long processId = Marshal.ReadIntPtr(list, ProcessIdListHeaderBytes + IntPtr.Size * index).ToInt64();
-            if (processId != ownProcessId) ids.Append(' ').Append(processId);
+            if (processId == ownProcessId) continue;
+            ids.Append(' ').Append(processId);
+            members++;
         }
-        return ids.ToString();
+        return "members " + members + ids + " end";
     }
 
     // The job's own account of who is still inside it. Closing the job then ends exactly those
@@ -221,7 +227,7 @@ static class SidequestJobOwner
     {
         if (job == IntPtr.Zero)
         {
-            Report("members");
+            Report("members 0 end");
             return;
         }
         for (int capacity = 64; ; capacity *= 2)
@@ -233,7 +239,7 @@ static class SidequestJobOwner
                 int returnedSize;
                 if (QueryInformationJobObject(job, BasicProcessIdList, list, size, out returnedSize))
                 {
-                    Report("members" + MemberIdsOtherThanOwner(list));
+                    Report(MembersRecord(list));
                     return;
                 }
                 int error = Marshal.GetLastWin32Error();

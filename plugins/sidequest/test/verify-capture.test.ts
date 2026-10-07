@@ -580,9 +580,9 @@ test('verify capture returns a timeout with partial output', async () => {
       { status: 'timeout', exitCode: 2 },
     );
     const cleanupEvidence = process.platform === 'win32'
-      ? 'The Windows job owner ended processes [\\d, ]+'
-      : 'The owned process tree was ended';
-    assert.match(capture.reason, new RegExp(`^Verification timed out after ${timeoutMilliseconds}ms\\. ${cleanupEvidence}; none survived\\. Output log: `));
+      ? 'The Windows job owner ended every descendant that inherited the job \\(processes [\\d, ]+\\); none survived\\. Processes created through a broker \\(a service, COM activation, a daemon such as dockerd\\) are outside the job and are not tracked\\.'
+      : 'The owned process tree was ended; none survived\\.';
+    assert.match(capture.reason, new RegExp(`^Verification timed out after ${timeoutMilliseconds}ms\\. ${cleanupEvidence} Output log: `));
     assert.ok(capture.reason.endsWith(capture.logPath), capture.reason);
     assert.match(fs.readFileSync(capture.logPath, 'utf8'), /partial-output/);
   } finally {

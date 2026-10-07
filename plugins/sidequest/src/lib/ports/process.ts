@@ -103,14 +103,20 @@ function ownedVerificationRun(requirement: VerificationRequirement, command: str
   });
 }
 
+const jobBrokerBoundary = 'Processes created through a broker (a service, COM activation, a daemon such as dockerd) are outside the job and are not tracked.';
+
+// POSIX phases report no job account, so only a Windows job names its members and its boundary.
+function treeEndedEvidence(jobClosedProcessIds: readonly number[] | undefined, outcome: string): string {
+  if (jobClosedProcessIds === undefined) return `The owned process tree was ended; ${outcome}`;
+  const ended = jobClosedProcessIds.length ? `processes ${jobClosedProcessIds.join(', ')}` : 'none were still running';
+  return `The Windows job owner ended every descendant that inherited the job (${ended}); ${outcome} ${jobBrokerBoundary}`;
+}
+
 // The text an executor reads when a capture fails: what the owner ended and anything that refused to
 // end. "none survived" is only ever the job's own account; a missing account stays unknown.
 function ownedTreeCleanupEvidence(phase: OwnedPhaseResult): string {
   if (phase.jobClosedProcessIds === null) return phase.cleanupError ?? 'Survivor state unknown.';
-  const ended = phase.jobClosedProcessIds?.length
-    ? `The Windows job owner ended processes ${phase.jobClosedProcessIds.join(', ')}`
-    : 'The owned process tree was ended';
-  return phase.cleanupError === null ? `${ended}; none survived.` : `${ended}; cleanup refused: ${phase.cleanupError}`;
+  return treeEndedEvidence(phase.jobClosedProcessIds, phase.cleanupError === null ? 'none survived.' : `cleanup refused: ${phase.cleanupError}`);
 }
 
 function abnormalSettlement(phase: OwnedPhaseResult, timeoutMilliseconds: number): AbnormalSettlement | null {
@@ -159,8 +165,10 @@ function ownedVerificationResult(run: OwnedVerificationRun, phase: OwnedPhaseRes
 
 /**
  * Runs the verifier under scripts/owned-process-tree.js: a POSIX process group, or on Windows a
- * kill-on-close Job Object, so the deadline or a caller abort ends every descendant before the
- * result settles. runProcessVerification stays synchronous for callers that cannot await.
+ * kill-on-close Job Object, so the deadline or a caller abort ends every descendant that inherited
+ * the group or job before the result settles; a process created through a broker (a service, COM
+ * activation, a daemon) is outside both and is not tracked. runProcessVerification stays synchronous
+ * for callers that cannot await.
  */
 export async function runOwnedProcessVerification(requirement: VerificationRequirement, options: ProcessVerificationOptions = {}): Promise<VerificationResult> {
   const command = String(requirement.command || '').trim();

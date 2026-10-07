@@ -62,10 +62,15 @@ function ownedVerificationRun(requirement, command, options) {
     ...verificationLimits(options)
   });
 }
+const jobBrokerBoundary = "Processes created through a broker (a service, COM activation, a daemon such as dockerd) are outside the job and are not tracked.";
+function treeEndedEvidence(jobClosedProcessIds, outcome) {
+  if (jobClosedProcessIds === void 0) return `The owned process tree was ended; ${outcome}`;
+  const ended = jobClosedProcessIds.length ? `processes ${jobClosedProcessIds.join(", ")}` : "none were still running";
+  return `The Windows job owner ended every descendant that inherited the job (${ended}); ${outcome} ${jobBrokerBoundary}`;
+}
 function ownedTreeCleanupEvidence(phase) {
   if (phase.jobClosedProcessIds === null) return phase.cleanupError ?? "Survivor state unknown.";
-  const ended = phase.jobClosedProcessIds?.length ? `The Windows job owner ended processes ${phase.jobClosedProcessIds.join(", ")}` : "The owned process tree was ended";
-  return phase.cleanupError === null ? `${ended}; none survived.` : `${ended}; cleanup refused: ${phase.cleanupError}`;
+  return treeEndedEvidence(phase.jobClosedProcessIds, phase.cleanupError === null ? "none survived." : `cleanup refused: ${phase.cleanupError}`);
 }
 function abnormalSettlement(phase, timeoutMilliseconds) {
   if (phase.timedOut) return { status: "timeout", reason: `Verification timed out after ${timeoutMilliseconds}ms.`, timeoutMilliseconds };
