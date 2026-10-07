@@ -78,7 +78,10 @@ Quality uses the existing local owner: early measured complexity where supported
 coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
 supported path rather than another full suite. Each new or modified function must score CRAP below 6;
 untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
-tooling and reports stay local and uncommitted. Before a long measurement run, freeze its inputs and
+tooling and reports stay local and uncommitted. The repository's `scripts/quality/crap.mjs` parses with
+TypeScript's sync named-pipe API by default; `collectFunctions(text, file, { transport: 'async' })` or
+`CRAP_PARSER_TRANSPORT=async` switches to the stdio transport, which also runs under
+`node --permission --allow-fs-read=* --allow-child-process`. Before a long measurement run, freeze its inputs and
 check source/coverage identity, native ownership and deadline fit. Supported focused real coverage can
 run separately from the normal final gate. Source stays fixed during immutable capture; failed or
 unsupported measurement stays visible.
