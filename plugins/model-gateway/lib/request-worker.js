@@ -2347,5 +2347,6 @@ function runWorker() {
 module.exports = {
   catalogReadiness, createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, getCodexReadiness,
   hasOpenAiRejectionEvidence, healthzCodexReadiness, listenOnUnixSocket, noteCodexUpstreamRejection, runWorker,
+  DispatchSessionRouteCache, dispatchRouteFromMessages,
   sharedProxyAndAuthCheck,
 };
