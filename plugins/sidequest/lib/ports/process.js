@@ -274,6 +274,7 @@ const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), "scri
 const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15e3;
 const OWNED_TREE_TIMEOUT_MARKER = /^__SIDEQUEST_VERIFY_TIMEOUT__=\d+$/m;
 const OWNED_TREE_CLEANUP_ERROR_MARKER = /^__SIDEQUEST_VERIFY_CLEANUP_ERROR__=(.+)$/m;
+const OWNED_TREE_DONE_MARKER = /^__SIDEQUEST_VERIFY_DONE__$/m;
 function verifierRun(requirement, command, options) {
   return Object.freeze({
     requirement,
@@ -322,11 +323,25 @@ function ownedTreeCleanupError(run) {
   if (!run.ownedTree) return null;
   return OWNED_TREE_CLEANUP_ERROR_MARKER.exec(fs.readFileSync(run.logPath, "utf8"))?.[1] ?? null;
 }
+function ownedTreeReported(run) {
+  return !run.ownedTree || OWNED_TREE_DONE_MARKER.test(fs.readFileSync(run.logPath, "utf8"));
+}
+function unreportedOwnerResult(run, shell, outcome, tail) {
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification owner ended without reporting. Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+}
+function cleanupErrorResult(run, shell, outcome, tail, cleanupError) {
+  const exitCode = markerExitCode(run.logPath);
+  if (exitCode === null || exitCode === 0) {
+    return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+  }
+  const verdict = exitCodeVerdict(run, shell, exitCode, tail);
+  return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
+}
 function abnormalVerifierResult(run, shell, outcome, tail) {
   if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
+  if (!ownedTreeReported(run)) return unreportedOwnerResult(run, shell, outcome, tail);
   const cleanupError = ownedTreeCleanupError(run);
-  if (cleanupError === null) return null;
-  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+  return cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, cleanupError);
 }
 function exitCodeResult(run, shell, outcome, tail) {
   const exitCode = markerExitCode(run.logPath);

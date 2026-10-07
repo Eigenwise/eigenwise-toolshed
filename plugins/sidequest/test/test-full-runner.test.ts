@@ -1197,7 +1197,7 @@ test('SQ-3425: the owned verify entry reports a deadline with its marker and exi
   const result = runOwnedVerifyCli({ command: process.execPath, args: fixture.args, cwd: workspace, timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS });
 
   assert.equal(result.status, 124, result.stderr);
-  assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${SPAWN_ARMED_DEADLINE_MILLISECONDS}$`, 'm'));
+  assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${SPAWN_ARMED_DEADLINE_MILLISECONDS}\\n\\n__SIDEQUEST_VERIFY_DONE__\\n$`, 'm'), 'the done marker follows the timeout marker');
   await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the descendant of the owned verify entry');
   assert.equal(fixture.markerWritten(), false);
 });
@@ -1210,7 +1210,7 @@ test('SQ-3425: the owned verify entry forwards output and passes the verifier ex
   const spoken = runOwnedVerifyCli({ command: process.execPath, args: [helloScript], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(spoken.status, 0, spoken.stderr);
   assert.equal(spoken.stdout, 'phase stdout\n');
-  assert.equal(spoken.stderr, 'phase stderr\n');
+  assert.equal(spoken.stderr, 'phase stderr\n\n__SIDEQUEST_VERIFY_DONE__\n', 'the done marker comes last');
 
   const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(unspawned.status, 2, unspawned.stderr);

@@ -380,6 +380,7 @@ const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), 'scri
 const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15_000;
 const OWNED_TREE_TIMEOUT_MARKER = /^__SIDEQUEST_VERIFY_TIMEOUT__=\d+$/m;
 const OWNED_TREE_CLEANUP_ERROR_MARKER = /^__SIDEQUEST_VERIFY_CLEANUP_ERROR__=(.+)$/m;
+const OWNED_TREE_DONE_MARKER = /^__SIDEQUEST_VERIFY_DONE__$/m;
 
 function verifierRun(requirement: VerificationRequirement, command: string, options: ProcessVerificationOptions): VerifierRun {
   return Object.freeze({
@@ -442,12 +443,31 @@ function ownedTreeCleanupError(run: VerifierRun): string | null {
   return OWNED_TREE_CLEANUP_ERROR_MARKER.exec(fs.readFileSync(run.logPath, 'utf8'))?.[1] ?? null;
 }
 
-// The verifier's own exit code passes nothing while its tree may still be running (SQ-3480).
+function ownedTreeReported(run: VerifierRun): boolean {
+  return !run.ownedTree || OWNED_TREE_DONE_MARKER.test(fs.readFileSync(run.logPath, 'utf8'));
+}
+
+function unreportedOwnerResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification owner ended without reporting. Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+}
+
+// A suite failure outranks the cleanup error, which joins its evidence; only a clean exit is masked by it.
+function cleanupErrorResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, cleanupError: string): VerificationResult {
+  const exitCode = markerExitCode(run.logPath);
+  if (exitCode === null || exitCode === 0) {
+    return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+  }
+  const verdict = exitCodeVerdict(run, shell, exitCode, tail);
+  return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
+}
+
+// The verifier's own exit code passes nothing while its tree may still be running (SQ-3480), or
+// when the owner died before it reported how the run ended (SQ-3484).
 function abnormalVerifierResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult | null {
   if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
+  if (!ownedTreeReported(run)) return unreportedOwnerResult(run, shell, outcome, tail);
   const cleanupError = ownedTreeCleanupError(run);
-  if (cleanupError === null) return null;
-  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+  return cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, cleanupError);
 }
 
 function exitCodeResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {

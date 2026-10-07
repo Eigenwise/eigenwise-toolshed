@@ -60,7 +60,9 @@ session or group) escapes the deadline and needs its own teardown in the verify 
 tree is the job owner's job, which holds detached descendants too; a process started through a service or
 broker (dockerd, for one) is outside it. A verifier that exits 0 but leaves the tree unaccounted for (a member
 still alive, or no account of the job's members) is recorded as `could_not_run` with the cleanup error, and the
-delivery rolls back.
+delivery rolls back. A verifier that exits non-zero is recorded as `failed_suite` with its own exit code even then,
+with the cleanup error added to the evidence. The run passes only when the tree's owner reports that it finished;
+an owner that dies first is recorded as `could_not_run`, whatever the verifier exited, and the delivery rolls back.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or

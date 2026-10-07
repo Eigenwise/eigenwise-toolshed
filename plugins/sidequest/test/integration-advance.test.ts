@@ -1708,3 +1708,54 @@ test('SQ-3480: a passing environment-lane verifier whose job owner leaves no mem
   assert.equal(head(fixture.repo), before, 'the unaccounted delivery was rolled back');
   assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
 });
+
+// The candidate gate passes untouched; on main the verifier tampers with the job owner's report, then exits.
+function jobOwnerReportTamperingVerifier(tamper: string, mainExitCode: number) {
+  return nodeVerify([
+    "const {execFileSync}=require('node:child_process');const fs=require('node:fs');const report=process.env.SIDEQUEST_JOB_OWNER_REPORT;",
+    `if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main'){${tamper}process.exit(${mainExitCode});}`,
+  ].join(''));
+}
+
+test('SQ-3484: an environment-lane owner that crashes after the verifier exits 0 is never accepted and rolls the delivery back', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-owner-crash-'));
+  const reportPathFile = forwardSlashes(path.join(evidenceDirectory, 'report.path'));
+  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-owner-crash');
+  // A directory in place of the report makes the owner's report read throw after the verifier exited 0.
+  pinSharedEnvironment(slug, ticket.ref, jobOwnerReportTamperingVerifier(`fs.writeFileSync('${reportPathFile}',report);fs.rmSync(report);fs.mkdirSync(report);`, 0));
+  const before = head(fixture.repo);
+
+  try {
+    const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.delivery, null, result.stdout);
+    assert.equal(payload.verifyFailed.status, 'could_not_run', JSON.stringify(payload));
+    assert.match(payload.verifyFailed.evidence, /^The verification owner ended without reporting\./);
+    const log = fs.readFileSync(payload.verifyFailed.logPath, 'utf8');
+    assert.match(log, /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
+    assert.doesNotMatch(log, /^__SIDEQUEST_VERIFY_DONE__$/m, 'the owner crashed before reporting');
+    assert.equal(head(fixture.repo), before, 'the unreported delivery was rolled back');
+    assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
+  } finally {
+    if (fs.existsSync(reportPathFile)) fs.rmSync(fs.readFileSync(reportPathFile, 'utf8'), { recursive: true, force: true });
+  }
+});
+
+test('SQ-3484: an environment-lane verifier exiting 7 with a cleanup error records the suite failure and keeps the cleanup text', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-failure-and-cleanup-error');
+  pinSharedEnvironment(slug, ticket.ref, jobOwnerReportTamperingVerifier('fs.rmSync(report);', 7));
+  const before = head(fixture.repo);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null, result.stdout);
+  assert.equal(payload.verifyFailed.status, 'failed_suite', JSON.stringify(payload));
+  assert.equal(payload.verifyFailed.exitCode, 7);
+  assert.match(payload.verifyFailed.evidence, /^The required command exited 7\. Its process tree did not end either: Survivor state unknown: the job owner left no account of its job members\./);
+  assert.equal(head(fixture.repo), before, 'the failed delivery was rolled back');
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_failed_suite_post_merge');
+});
