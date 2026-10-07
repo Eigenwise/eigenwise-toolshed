@@ -5,6 +5,11 @@ delegation rule (gather enough evidence with read-only tools or native `Explore`
 route implementation by default, batch small same-model tickets, and fan out over independent waves) lives
 in the main skill — this file is the detail on the bigger shapes.
 
+Use the project's configured quality gate, if any. Hold integration for missing quality measurement
+only when a gate is configured. Without one, run the pinned verifier, state once "no quality gate is
+configured for this project; Quartermaster setup can add one", and continue. User rules injected by
+the host still apply; gate absence alone never holds, parks or marks work UNVERIFIED.
+
 ## Contents
 
 - [Improvement authority](#improvement-authority) and [decomposition](#decomposition-in-depth)

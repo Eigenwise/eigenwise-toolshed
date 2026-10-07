@@ -2140,16 +2140,64 @@ function releaseWorktreeDependencyLinks(worktree: string, ticketOrDispatch: any,
 }
 
 function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, facts: any = {}): any {
+  const decision = unclaimedDispatchWorktreeReclaim(repository, dispatch, facts);
+  return decision && 'reclaim' in decision ? decision.reclaim() : decision;
+}
+
+type ReclaimableDispatch = {
+  worktree?: string | null;
+  sharedTree?: boolean;
+  claimedAt?: string | null;
+  boundAt?: string | null;
+  worktreeBindingSource?: string | null;
+  ref?: string | null;
+  baseCommit?: string | null;
+  agentId?: string | null;
+  terminalSource?: string | null;
+  terminalAt?: string | null;
+  worktreeObservedRevision?: string | null;
+  worktreeGitDirectory?: string | null;
+  worktreeCommonGitDirectory?: string | null;
+  worktreeCheckoutInstance?: string | null;
+};
+type RegisteredWorktreeEntry = { worktree: string; branch?: string; locked?: string };
+type ObservedCheckout = { gitDirectory: string; commonGitDirectory: string; revision: string; checkoutInstance: string };
+type ReclaimRefusal = { worktree: string; reclaimed: false; reason: string; message?: string; discardable?: true; retainedCheckout?: true };
+type TerminalReclaimLease = Readonly<Record<string, unknown>>;
+type CheckoutReclaim = { worktree: string; reclaim: () => ReturnType<typeof removeReclaimedWorktree> };
+
+// Decides from observation alone. A reclaimable checkout comes back with `reclaim`, the removal itself, so a
+// caller holding a write transaction can commit first and remove the checkout afterwards (SQ-3348).
+function unclaimedDispatchWorktreeReclaim(repository: string, dispatch: ReclaimableDispatch | null | undefined, facts: { checkpointCommit?: string | null } = {}): ReclaimRefusal | CheckoutReclaim | null {
+  const worktree = unclaimedIsolatedWorktree(dispatch);
+  if (!dispatch || !worktree) return null;
+  const entry = registeredWorktreeEntry(repository, worktree);
+  if (!entry) return { worktree, reclaimed: false, discardable: true, reason: 'not_registered' };
+  return terminalLifecycleRefusal(dispatch, entry) || leasedCheckoutReclaim(repository, worktree, entry, dispatch, facts);
+}
+
+function leasedCheckoutReclaim(repository: string, worktree: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, facts: { checkpointCommit?: string | null }): ReclaimRefusal | CheckoutReclaim {
+  const lease = terminalReclaimLease(repository, dispatch, entry);
+  return retainedContentRefusal(worktree, entry, dispatch, lease, facts)
+    || { worktree: entry.worktree, reclaim: () => removeReclaimedWorktree(repository, entry, dispatch, lease) };
+}
+
+function unclaimedIsolatedWorktree(dispatch: ReclaimableDispatch | null | undefined): string | null {
   const worktree = String(dispatch?.worktree || '').trim();
-  if (dispatch?.sharedTree !== false || dispatch?.claimedAt || !worktree) return null;
+  return dispatch?.sharedTree === false && !dispatch.claimedAt && worktree ? worktree : null;
+}
+
+function registeredWorktreeEntry(repository: string, worktree: string): RegisteredWorktreeEntry | undefined {
   const expected = canonicalPath(worktree);
-  const entries = parseWorktreeList(execFileSync('git', ['worktree', 'list', '--porcelain'], {
+  const entries: RegisteredWorktreeEntry[] = parseWorktreeList(execFileSync('git', ['worktree', 'list', '--porcelain'], {
     cwd: repository,
     encoding: 'utf8',
     windowsHide: true,
   }));
-  const entry = entries.find((candidate) => canonicalPath(candidate.worktree) === expected);
-  if (!entry) return { worktree, reclaimed: false, discardable: true, reason: 'not_registered' };
+  return entries.find((candidate) => canonicalPath(candidate.worktree) === expected);
+}
+
+function terminalLifecycleRefusal(dispatch: ReclaimableDispatch, entry: RegisteredWorktreeEntry): ReclaimRefusal | null {
   if (!dispatchHasTerminalLifecycleAuthority(dispatch)) {
     return {
       worktree: entry.worktree,
@@ -2158,67 +2206,94 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
       message: 'immutable recovery fact: cleanup requires a store-owned terminal dispatch transition.',
     };
   }
-  const incompleteCreation = !dispatchHasCompletedWorktreeCreation(dispatch);
-  if (incompleteCreation && dispatch?.worktreeBindingSource !== 'worktree-create') {
-    // A continuation attempt inherits a checkout an earlier attempt created, so an attempt that never bound a
-    // runtime owns nothing here: there is no checkout of its own to match, and the inherited one stays either
-    // way. Reporting that as a retry blocker locked the ticket until the claim grace elapsed (SQ-2537).
-    const retainedCheckout = !dispatch?.boundAt;
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      ...(retainedCheckout ? { retainedCheckout: true } : {}),
-      reason: 'lease_refused',
-      message: retainedCheckout
-        ? `this attempt never created a checkout of its own, so the retained checkout ${entry.worktree} stays with the attempt that did.`
-        : 'WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout.',
-    };
-  }
+  if (dispatchHasCompletedWorktreeCreation(dispatch) || dispatch.worktreeBindingSource === 'worktree-create') return null;
+  return incompleteCreationRefusal(dispatch, entry);
+}
+
+// A continuation attempt inherits a checkout an earlier attempt created, so an attempt that never bound a
+// runtime owns nothing here: there is no checkout of its own to match, and the inherited one stays either
+// way. Reporting that as a retry blocker locked the ticket until the claim grace elapsed (SQ-2537).
+function incompleteCreationRefusal(dispatch: ReclaimableDispatch, entry: RegisteredWorktreeEntry): ReclaimRefusal {
+  const retainedCheckout = !dispatch.boundAt;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    ...(retainedCheckout ? { retainedCheckout: true } : {}),
+    reason: 'lease_refused',
+    message: retainedCheckout
+      ? `this attempt never created a checkout of its own, so the retained checkout ${entry.worktree} stays with the attempt that did.`
+      : 'WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout.',
+  };
+}
+
+function observeCheckout(entry: RegisteredWorktreeEntry): ObservedCheckout {
   const resolveGitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);
-  const observedGitDirectory = resolveGitPath(execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim());
-  const observedCommonGitDirectory = resolveGitPath(execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim());
-  const observedRevision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim();
-  const observedCheckoutInstance = worktreeLease.checkoutInstanceIdentity(observedGitDirectory)
-    || worktreeLease.createCheckoutInstanceMarker(observedGitDirectory);
-  const lease = worktreeLease.createWorktreeLease({
+  const gitDirectory = resolveGitPath(execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim());
+  const commonGitDirectory = resolveGitPath(execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim());
+  const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim();
+  const checkoutInstance = worktreeLease.checkoutInstanceIdentity(gitDirectory) || worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+  return { gitDirectory, commonGitDirectory, revision, checkoutInstance };
+}
+
+// What the dispatch recorded when it bound the checkout; a fact it never recorded falls back to what is observed now.
+function boundCheckoutFacts(dispatch: ReclaimableDispatch, observed: ObservedCheckout) {
+  return {
+    boundRevision: dispatch.worktreeObservedRevision || observed.revision,
+    boundWorktree: dispatch.worktree,
+    boundGitDirectory: dispatch.worktreeGitDirectory || observed.gitDirectory,
+    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory || observed.commonGitDirectory,
+    boundCheckoutInstance: dispatch.worktreeCheckoutInstance || observed.checkoutInstance,
+  };
+}
+
+function terminalReclaimLease(repository: string, dispatch: ReclaimableDispatch, entry: RegisteredWorktreeEntry): TerminalReclaimLease {
+  const observed = observeCheckout(entry);
+  return worktreeLease.createWorktreeLease({
     repository,
-    gitDirectory: observedGitDirectory,
-    commonGitDirectory: observedCommonGitDirectory,
+    gitDirectory: observed.gitDirectory,
+    commonGitDirectory: observed.commonGitDirectory,
     dispatchRef: dispatch.ref || null,
     dispatchBaseline: dispatch.baseCommit || null,
-    observedRevision,
+    observedRevision: observed.revision,
     observedWorktree: entry.worktree,
-    boundRevision: dispatch.worktreeObservedRevision || observedRevision,
-    boundWorktree: dispatch.worktree,
-    boundGitDirectory: dispatch.worktreeGitDirectory || observedGitDirectory,
-    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory || observedCommonGitDirectory,
-    boundCheckoutInstance: dispatch.worktreeCheckoutInstance || observedCheckoutInstance,
+    ...boundCheckoutFacts(dispatch, observed),
     identity: { status: 'bound', agentId: dispatch.agentId || undefined, dispatchRef: dispatch.ref || undefined },
     phase: 'terminal',
     locked: Boolean(entry.locked),
     liveness: { status: 'terminal', evidence: `store transition ${dispatch.terminalSource} at ${dispatch.terminalAt}` },
     provisioning: 'host',
   });
+}
+
+function retainedContentRefusal(worktree: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease, facts: { checkpointCommit?: string | null }): ReclaimRefusal | null {
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, [entry.worktree]);
   if (!cleanup.allowed) return { worktree, reclaimed: false, reason: 'lease_refused', message: `immutable recovery fact: ${cleanup.reason}` };
+  return uncommittedContentRefusal(entry, dispatch) || checkpointRefusal(entry, facts) || baseAncestryRefusal(entry, dispatch);
+}
+
+function uncommittedContentRefusal(entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch): ReclaimRefusal | null {
   const atRisk = atRiskStatusEntriesSync(entry.worktree, dispatch);
-  if (atRisk.length) {
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      reason: 'dirty_worktree',
-      message: `immutable recovery fact: ${entry.worktree} holds uncommitted, untracked or ignored content (${atRisk[0]!.code} ${atRisk[0]!.path}).`,
-    };
-  }
+  if (!atRisk.length) return null;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: 'dirty_worktree',
+    message: `immutable recovery fact: ${entry.worktree} holds uncommitted, untracked or ignored content (${atRisk[0]!.code} ${atRisk[0]!.path}).`,
+  };
+}
+
+function checkpointRefusal(entry: RegisteredWorktreeEntry, facts: { checkpointCommit?: string | null }): ReclaimRefusal | null {
   const checkpointCommit = String(facts.checkpointCommit || '').trim();
-  if (checkpointCommit) {
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      reason: 'checkpointed_worktree',
-      message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}.`,
-    };
-  }
+  if (!checkpointCommit) return null;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: 'checkpointed_worktree',
+    message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}.`,
+  };
+}
+
+function baseAncestryRefusal(entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch): ReclaimRefusal | null {
   const baseCommit = String(dispatch.baseCommit || '').trim();
   if (!baseCommit) {
     return {
@@ -2233,39 +2308,113 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
     encoding: 'utf8',
     windowsHide: true,
   }).trim();
-  const headAtOrBeforeBase = spawnSync('git', ['merge-base', '--is-ancestor', head, baseCommit], {
-    cwd: entry.worktree,
+  return gitIsAncestor(entry.worktree, head, baseCommit) ? null : candidateCommitRefusal(entry, head, baseCommit);
+}
+
+function gitIsAncestor(worktree: string, ancestor: string, descendant: string): boolean {
+  return spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+    cwd: worktree,
     encoding: 'utf8',
     windowsHide: true,
   }).status === 0;
-  if (!headAtOrBeforeBase) {
-    const baseAtOrBeforeHead = spawnSync('git', ['merge-base', '--is-ancestor', baseCommit, head], {
-      cwd: entry.worktree,
-      encoding: 'utf8',
-      windowsHide: true,
-    }).status === 0;
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      reason: baseAtOrBeforeHead ? 'candidate_commit' : 'divergent_candidate',
-      message: baseAtOrBeforeHead
-        ? `immutable recovery fact: candidate commit ${head} descends from dispatch base ${baseCommit}.`
-        : `immutable recovery fact: worktree head ${head} and dispatch base ${baseCommit} diverge.`,
-    };
+}
+
+function candidateCommitRefusal(entry: RegisteredWorktreeEntry, head: string, baseCommit: string): ReclaimRefusal {
+  const baseAtOrBeforeHead = gitIsAncestor(entry.worktree, baseCommit, head);
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: baseAtOrBeforeHead ? 'candidate_commit' : 'divergent_candidate',
+    message: baseAtOrBeforeHead
+      ? `immutable recovery fact: candidate commit ${head} descends from dispatch base ${baseCommit}.`
+      : `immutable recovery fact: worktree head ${head} and dispatch base ${baseCommit} diverge.`,
+  };
+}
+
+// A commit could still land between those reads and the removal (SQ-3463). index.lock does not exclude it: git commit
+// writes the index and releases that lock before it moves the ref (SQ-3472). Every commit in the checkout, on a
+// branch or detached, locks the checkout's own HEAD.lock for its ref transaction, and so do checkout and switch, while
+// `git worktree remove` deletes a foreign HEAD.lock with the checkout's git directory (checked on git
+// 2.52.0.windows.1). A commit that wrote its index before this lock was taken fails at its ref update and leaves
+// the staged change, so the non-forced removal refuses the dirty checkout.
+function removeReclaimedWorktree(repository: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
+  const headLock = path.resolve(entry.worktree, execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim(), 'HEAD.lock');
+  if (!createdExclusively(headLock)) return commitInProgressRefusal(entry, headLock);
+  let outcome: ReturnType<typeof removeUnderHeadLock> | undefined;
+  try {
+    outcome = removeUnderHeadLock(repository, entry, dispatch, lease);
+    return outcome;
+  } finally {
+    if (!outcome?.reclaimed) nativeFs.rmSync(headLock, { force: true });
   }
-  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
-  if (!dependencyLinksReleased.ok) {
-    return {
-      worktree: entry.worktree,
-      reclaimed: false,
-      reason: dependencyLinksReleased.reason,
-      message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ''}.`,
-    };
+}
+
+function createdExclusively(file: string): boolean {
+  try {
+    nativeFs.writeFileSync(file, '', { flag: 'wx' });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
   }
-  execFileSync('git', ['worktree', 'remove', entry.worktree], { cwd: repository, windowsHide: true });
+}
+
+function commitInProgressRefusal(entry: RegisteredWorktreeEntry, headLock: string): ReclaimRefusal {
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: 'commit_in_progress',
+    message: `immutable recovery fact: ${headLock} exists, so a Git command is writing in ${entry.worktree}; the checkout and its branch were kept.`,
+  };
+}
+
+// The decision may have been made before a write transaction and its commit, and nothing in the ticket row changes
+// when the executor commits in its checkout. So the removal reads HEAD and the branch tip again first, and deletes the
+// branch only if it still points at that HEAD (SQ-3449).
+function removeUnderHeadLock(repository: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim();
   const branch = localBranchName(entry.branch);
-  if (branch) execFileSync('git', ['branch', '-D', '--', branch], { cwd: repository, windowsHide: true });
-  return { worktree: entry.worktree, branch, reclaimed: true };
+  const refusal = baseAncestryRefusal(entry, dispatch)
+    || movedBranchRefusal(repository, entry, branch, head)
+    || dependencyLinksRefusal(entry, dispatch, lease);
+  if (refusal) return refusal;
+  execFileSync('git', ['worktree', 'remove', entry.worktree], { cwd: repository, windowsHide: true });
+  const branchKept = keptBranchReason(repository, branch, head);
+  return { worktree: entry.worktree, branch, reclaimed: true, ...(branchKept ? { branchKept } : {}) };
+}
+
+function dependencyLinksRefusal(entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease) {
+  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
+  if (dependencyLinksReleased.ok) return null;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: dependencyLinksReleased.reason,
+    message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ''}.`,
+  };
+}
+
+function movedBranchRefusal(repository: string, entry: RegisteredWorktreeEntry, branch: string | null, head: string): ReclaimRefusal | null {
+  if (!branch) return null;
+  const tip = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repository, encoding: 'utf8', windowsHide: true }).stdout.trim();
+  if (!tip || tip === head) return null;
+  return {
+    worktree: entry.worktree,
+    reclaimed: false,
+    reason: 'live_branch',
+    message: `immutable recovery fact: branch ${branch} moved to ${tip} while its checkout ${entry.worktree} sits at ${head}.`,
+  };
+}
+
+// The checkout is already gone when this runs, so a failure here is reported as a kept branch, never as a kept checkout.
+function keptBranchReason(repository: string, branch: string | null, head: string): string | null {
+  if (!branch) return null;
+  try {
+    execFileSync('git', ['update-ref', '-d', `refs/heads/${branch}`, head], { cwd: repository, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 type RecoveryStoreName = 'quarantine';
@@ -2941,4 +3090,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, classifySweepCandidate, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, lateContentInMovedWorktree };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };

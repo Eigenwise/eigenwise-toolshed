@@ -1,7 +1,7 @@
 "use strict";
 const path = require("path");
 const store = require("./store");
-const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
+const { compactSchema, conciseDescription, resolveProject, runtimeSessionId, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
 const { sidequestMutationFreshness } = require("./plugin-freshness");
 const { tools: readTools } = require("./mcp-read");
 const { tools: ticketTools } = require("./mcp-tickets");
@@ -9,11 +9,11 @@ const { tools: lifecycleTools } = require("./mcp-lifecycle");
 const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 function boardMcpSessionId() {
-  return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+  return runtimeSessionId() || "";
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 27075;
+const MCP_TOOLS_LIST_MAX_BYTES = 27300;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -223,7 +223,7 @@ function assertMutationFreshness(projectArg) {
 }
 function groomCloseArgs(tool, args) {
   if (tool.name !== "groomClose" || String(args.by || "").trim()) return args;
-  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+  const sessionId = runtimeSessionId();
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
 async function runTool(tool, rawArgs) {
@@ -262,6 +262,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
+  board_config: { verifyEnvironment: "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."

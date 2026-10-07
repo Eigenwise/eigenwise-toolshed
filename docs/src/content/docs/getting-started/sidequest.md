@@ -67,6 +67,25 @@ command and descendants ended, then the parent explicitly hands the slot to the 
 terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
 and process counts cannot. No polling or automatic restart is needed.
 
+On Windows the pinned verify (the verify-capture wrapper), `test:full` and `build:check` run inside a
+Job Object. The first run builds a small owner from `scripts/windows-job-owner.cs` with the .NET
+Framework `csc.exe` that ships with Windows and caches it per user under the temp directory, keyed by
+the source hash, so later runs skip the compile. The owner joins its own job before it creates the
+verify command, so the command and every descendant that inherited the job, including ones reparented
+away from their parent or started detached, are job members from the instant they exist; a Python, cmd,
+pnpm, Turbo chain can't outlive the owner, and killing the owner at any point kills the tree. A process
+created through a broker (a service, COM activation, a daemon such as `dockerd` that `docker` asks to
+start a container) is outside the job and is not tracked. The deadline (600 s by
+default) or a caller `AbortSignal` asks the owner to exit, which reports the job's own list of live
+members and closes the job; an owner that does not exit in time is killed, which closes the job just the
+same. A pre-aborted signal starts nothing. The capture then fails as `timeout` or `could_not_run`, and
+its reason names the processes the job ended, any that refused to end, the broker boundary, and the
+output log path. When the owner left no account of its job, or one cut off mid-write or malformed, the
+reason says "survivor state unknown" rather than claiming none survived. A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
+instead of running the verify unowned. Set `SIDEQUEST_JOB_AFFINITY_MASK` (for example `3` for two
+cores) in the verify's environment to pin the whole job to those processors. POSIX keeps its
+process-group supervision unchanged; the signal option does not cancel a POSIX phase.
+
 Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
 only says where a read starts; the processed cursor advances after the instructions are consumed.
 
@@ -74,11 +93,20 @@ Tickets should fit implementation plus final verification comfortably before abo
 Larger work is split along cohesive boundaries. A Continuation checkpoint commits progress, records
 remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
 
-Quality uses the existing local owner: early measured complexity where supported, then trustworthy fresh
+Quality gates are optional. Run `/quartermaster:setup` and approve the gate proposal to turn one on
+through `.claude/quartermaster/crap.json` and a project live rule. Sidequest discovers the configured
+gate in the executor briefing; user-injected rules still apply. Without a gate, run the pinned verifier,
+state once "no quality gate is configured for this project; Quartermaster setup can add one", and continue.
+Gate absence never holds integration or marks work UNVERIFIED.
+
+A configured gate uses the existing local owner: early measured complexity where supported, then trustworthy fresh
 coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
-supported path rather than another full suite. Each new or modified function must score CRAP below 6;
-untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
-tooling and reports stay local and uncommitted. Before a long measurement run, freeze its inputs and
+supported path rather than another full suite. Report per-function rows honestly, with no averages;
+untouched legacy functions stay outside scope. Missing analyzer or coverage for a configured gate is UNVERIFIED, and measurement
+tooling and reports stay local and uncommitted. The repository's `scripts/quality/crap.mjs` parses with
+TypeScript's sync named-pipe API by default; `collectFunctions(text, file, { transport: 'async' })` or
+`CRAP_PARSER_TRANSPORT=async` switches to the stdio transport, which also runs under
+`node --permission --allow-fs-read=* --allow-child-process`. Before a long measurement run, freeze its inputs and
 check source/coverage identity, native ownership and deadline fit. Supported focused real coverage can
 run separately from the normal final gate. Source stays fixed during immutable capture; failed or
 unsupported measurement stays visible.
@@ -88,7 +116,7 @@ unsupported measurement stays visible.
 Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
 
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
-tests: shared authority and callers, the smallest existing seam, measured-quality support, genuine
+tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine
 native baseline/candidate ownership, a runnable check and its actual timeout/resource fit. Small
 deterministic fixes keep one owner and a focused check. A plan advisor is useful only for a named
 architectural risk or contested approach worth its cost. Quartermaster handles setup; the dedicated
@@ -275,7 +303,7 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 
 **Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Unknown versions, schema changes, and incompatible older loaded versions refuse dispatch until reload.
 
-**A plain Agent spawn is refused.** Sidequest denies generic Agents in favor of ticket executors, and the refusal says what it found. If it says the project has no install, dispatch would refuse too: run `claude plugin install sidequest@eigenwise-toolshed --scope project` from that project, then reload plugins. "No Board MCP server has recorded itself" or "has exited" (with its pid) means the board server really is gone for this session: run `/mcp` and reconnect `plugin:sidequest:board`, or restart Claude Code. A new session id from `/clear`, a resume, or compaction does not count, because the server records itself by process and project. If the liveness markers can't be read, the refusal says the state is unknown rather than down.
+**A plain Agent spawn is refused.** Sidequest denies generic Agents in favor of ticket executors, and the refusal says what it found. If it says the project has no install, dispatch would refuse too: run `claude plugin install sidequest@eigenwise-toolshed --scope project` from that project, then reload plugins. "No Board MCP server has recorded itself" or "has exited" (with its pid) means the board server really is gone for this session: run `/mcp` and reconnect `plugin:sidequest:board`, or restart Claude Code. A new session id from `/clear`, a resume, or compaction does not count, because the server records itself by process and project. The same server also follows the new id for dispatch and every other board call, reading it from the record Claude Code keeps for its own process, so you don't need to reload plugins after `/clear`. If the liveness markers can't be read, the refusal says the state is unknown rather than down.
 
 **A session gets no Sidequest briefing at start.** Only an orchestrator gets one: a session whose project has a registered board. A project with no board, or a session launched as a Sidequest executor (`--agent sidequest-exec-*` or `SIDEQUEST_AGENT`), gets no orchestrator block, though sweep and reload notices still show. The first board call registers the project, so the next session is briefed. `SIDEQUEST_NUDGE=off` still silences it everywhere.
 
@@ -284,6 +312,8 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 **Claude's Agent tool rejects `name` or `mode`.** Ask Claude to inspect the Agent schema it can see, then use Sidequest's reduced-schema dispatch only when those two fields are absent. Sidequest keeps the board label separately and refuses the first claim unless the host hook reports the real agent identity and a permission mode the executor can actually finish under, which is `auto` or `bypassPermissions`. A reduced-schema executor inherits the mode of the session that spawned it, so this is a fact about your host, not a setting to change: if it reports something else, use a host that reports one of those two instead of adding unsupported fields or editing your permissions.
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route. A refused dispatch leaves the ticket's current token working, so the executor that already holds it keeps running: Sidequest only replaces the token once the new dispatch is saved. For a non-Git project it also captures the filesystem snapshot before the final checks, and a project registration change rejects that capture rather than recording it. That snapshot is bounded by a path count, a byte total, and a wall clock, and it refuses with the limit it hit instead of hanging. The walk never counts `.git`, `node_modules`, `.next`, `dist`, `build`, `target`, `.venv`, `vendor`, or what the root `.gitignore` excludes, and a cap refusal names what it skipped and which top-level folders held the paths it did count. A deadline refusal names the file it was reading when the clock ran out, which is the whole diagnostic when a sync client or network share is the thing blocking. A board registered before its folder (or a parent) became a Git repository moves to the Git adapter on its next dispatch, and that dispatch's warnings say so. A third dispatch after two durable terminal no-commit rounds is blocked by default, on the theory that an unreadable environment reproduces the same failure every time; overriding it takes an explicit `allowRepeatFailure` (CLI `--allow-repeat-failure`), and taking that override is recorded on the ticket.
+
+**A dispatch or release says the ticket changed while it was reading checkouts.** Dispatch and release run their Git checks under the ticket's own lock, before they take the board database's write lock, so a slow `git status` in one project can't stall writes everywhere else. They then re-read the ticket and only write if nothing moved. If something did, nothing was written: read the ticket again and retry if it still applies. Those two writes also refuse to start a child process or wait on any lock file while they hold the write lock. If one ever tries, it fails with `WriteLockHeldError` and rolls back, which is a Sidequest bug to report rather than something to retry. A retired checkout is only removed after the new dispatch is saved, and right before removing it Sidequest checks again: if a commit landed in it or its branch moved since the dispatch looked, the checkout and branch stay. If the removal fails the dispatch still stands and its warnings name the checkout that was left in place; if the checkout went but deleting its branch failed, the warning says the branch was kept. The next dispatch checks it again.
 
 **An executor died before it ever claimed its ticket.** An API error at launch, a refused first claim, a failed or cancelled worktree setup, or an Agent call that came back without a claim all leave the same thing behind: a dispatch nobody holds. There's no claim to release and nothing for TaskStop to stop. Tell Claude what the host reported. The session that spawned the executor retires the dead attempt right away with that failure text as recovery evidence, then dispatches a fresh one or closes the ticket. A different session, say after a restart, can't see the failure, so it waits out the retirement deadline the refusal prints (15 minutes after the last sign of life, or the hour-long backstop while worktree setup never finished). If the stop hook already marked the attempt failed, the same request just prepares the replacement.
 
