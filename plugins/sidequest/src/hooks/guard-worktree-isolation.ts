@@ -161,6 +161,15 @@ function terminalRefusal(found: IsolationExpectation, target: string): string {
 // writing somewhere it was never sent. Inside a linked worktree it means the board cannot resolve a run
 // that IS where it belongs, and calling that a shared-checkout write pointed every reader at the wrong
 // fault while the real one, an unresolvable dispatch identity, went unnamed (SQ-2189).
+// Live dispatches that all carry another session id are what a board server that outlived /clear leaves
+// behind (GH-467): it recorded the dispatch under its startup id. Nothing the executor did causes that.
+function unmatchedWorktreeSummary(diagnosis: IdentityDiagnosis | null): string {
+  if (diagnosis && diagnosis.live > 0 && diagnosis.session === 0) {
+    return 'No live dispatch record carries this session id. The dispatch was likely recorded under an older one (a board server started before /clear), not an executor fault.';
+  }
+  return 'This isolated worktree matches no dispatch record, so it holds no write authority here.';
+}
+
 function unknownRefusal(target: string, repo: CheckoutLocation, diagnosis: IdentityDiagnosis | null, unboundRef: string | null = null): string {
   // Terse on purpose: the fact lines are byte-capped, and a prose version of these five counts is long
   // enough that the last and most diagnostic of them gets truncated away.
@@ -170,7 +179,7 @@ function unknownRefusal(target: string, repo: CheckoutLocation, diagnosis: Ident
   const unboundSummary = unboundRef
     ? `this executor's claim on ${unboundRef} is not bound to an agent id.`
     : repo.linked
-      ? 'This executor is in an isolated worktree the board cannot match to any dispatch record, so it holds no write authority here.'
+      ? unmatchedWorktreeSummary(diagnosis)
       : 'This executor has no active dispatch record for a shared-checkout write.';
   const recovery = unboundRef
     ? 'Claim through the Sidequest MCP hook so it can attach this runtime agent id. Redispatch alone does not bind this claim; stop and report this refusal.'
