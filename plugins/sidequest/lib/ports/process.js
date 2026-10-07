@@ -205,6 +205,9 @@ function verifierTimedOut(run, outcome) {
   if (processTimedOut(outcome.error)) return true;
   return run.ownedTree && OWNED_TREE_TIMEOUT_MARKER.test(fs.readFileSync(run.logPath, "utf8"));
 }
+function timeoutResult(run, shell, outcome, tail) {
+  return failedResult(run.requirement, "timeout", run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
+}
 function exitCodeResult(run, shell, outcome, tail) {
   const exitCode = markerExitCode(run.logPath);
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);
@@ -248,9 +251,7 @@ function runProcessVerification(requirement, options = {}) {
     fs.rmSync(scriptPath, { force: true });
   }
   const tail = outputTail(run.logPath, run.outputTailBytes);
-  if (verifierTimedOut(run, outcome)) {
-    return failedResult(requirement, "timeout", command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, 2, tail, run.timeoutMilliseconds, shell.label);
-  }
+  if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
   return exitCodeResult(run, shell, outcome, tail);
 }
 function createProcessPort() {

@@ -1513,6 +1513,7 @@ test('SQ-3425: CLI integrate on the environment lane ends the verifier tree at t
   assert.equal(payload.delivery, null, result.stdout);
   assert.equal(payload.verifyFailed.status, 'timeout', JSON.stringify(payload));
   assert.equal(payload.verifyFailed.timeoutMilliseconds, 2000);
+  assert.equal(payload.verifyFailed.exitCode, 124, 'the recorded timeout carries the owned tree\'s exit code');
   assert.match(fs.readFileSync(payload.verifyFailed.logPath, 'utf8'), /^__SIDEQUEST_VERIFY_TIMEOUT__=2000$/m);
   assert.equal(head(fixture.repo), before, 'the timed-out delivery was rolled back');
   assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_timeout_post_merge');
@@ -1595,4 +1596,60 @@ test('SQ-3425: a delivery lock left by a dead process is reclaimed', () => {
 
   assert.equal(result.ok, true, result.message);
   assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false);
+});
+
+test('SQ-3477: a replayed wave cherry-picks every participant onto the target without a merge commit', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-replay');
+  const before = head(fixture.repo);
+
+  const delivered = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'replay' });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.equal(delivered.integration.mode, 'replay');
+  assert.equal(execFileSync('git', ['rev-list', '--merges', `${before}..HEAD`], { cwd: fixture.repo, encoding: 'utf8' }).trim(), '');
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+});
+
+test('SQ-3477: a wave whose merge git refuses rolls the target back to its pre-delivery head', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-merge-refused');
+  const hook = path.join(fixture.repo, '.git', 'hooks', 'pre-merge-commit');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(result.reason, 'wave_delivery_failed', JSON.stringify(result));
+  assert.equal(result.before, before);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+});
+
+test('SQ-3477: a reader racing the lock-holder publication sees the acquired lease or the full holder, never a truncated lock', () => {
+  const { recordLockHolder } = require('../lib/store/locks.js');
+  const lockPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lock-holder-')), 'sidequest-delivery.lock');
+  const acquired = JSON.stringify({ pid: process.pid, token: 'lease-1' });
+  fs.writeFileSync(lockPath, acquired);
+  const holder = { ticket: 'SQ-1', pinnedCommit: 'abc123', command: 'npm test', logPath: 'verify.log', startedAt: '2026-10-07T00:00:00.000Z' };
+  const published = JSON.stringify({ ...holder, pid: process.pid, token: 'lease-1' });
+  const observed: string[] = [];
+  const racingFs = new Proxy(fs, {
+    get(target, name) {
+      const real = Reflect.get(target, name);
+      if (typeof real !== 'function') return real;
+      return (...args: unknown[]) => {
+        // A write in place truncates the lock before its bytes land; that empty instant is what a racing reader sees.
+        if (name === 'writeFileSync' && path.resolve(String(args[0])) === lockPath) observed.push('');
+        const result = real.apply(target, args);
+        observed.push(target.readFileSync(lockPath, 'utf8'));
+        return result;
+      };
+    },
+  });
+
+  assert.equal(recordLockHolder(racingFs, lockPath, { token: 'lease-1' }, holder), true);
+
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), published);
+  for (const content of observed) assert.ok(content === acquired || content === published, `a racing reader saw ${JSON.stringify(content)}`);
+  assert.deepEqual(fs.readdirSync(path.dirname(lockPath)), ['sidequest-delivery.lock']);
 });

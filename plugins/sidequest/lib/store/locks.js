@@ -10,7 +10,9 @@ function readLockHolder(fs, lockPath) {
 function recordLockHolder(fs, lockPath, lease, holder) {
   const acquired = readLockHolder(fs, lockPath);
   if (!acquired || acquired.token !== lease?.token) return false;
-  fs.writeFileSync(lockPath, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
+  const pending = `${lockPath}.${acquired.token}.pending`;
+  fs.writeFileSync(pending, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
+  fs.renameSync(pending, lockPath);
   return true;
 }
 function createLocks(dependencies) {

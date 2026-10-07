@@ -7541,3 +7541,48 @@ test('add and update carry verifyCwd to the ticket and refuse one outside the pr
   assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, '');
   await assert.rejects(callTool('update', { project, ref: added.ref, verifyCwd: '../outside' }), /verifyCwd must be a directory relative to the project root/);
 });
+
+test('SQ-3477: a two-participant source-revision wave needs the resulting revision and accepted evidence, then records both', async (context: any) => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-revision-wave-'));
+  const project = store.ensureProject(projectPath).slug;
+  context.after(store.registerSourceRevisionCapability(project, () => ({ candidateExists: true, containsCandidate: true })));
+  const refs: string[] = [];
+  for (const revision of [{ source: 'wiki', value: 'wiki-50', surface: 'wiki/a.md' }, { source: 'wiki', value: 'wiki-51', surface: 'wiki/b.md' }]) {
+    const ticket = store.createTicket(project, {
+      title: `publish ${revision.value}`,
+      files: [revision.surface],
+      complexity: 2,
+      complexityWhy: 'publish one pinned immutable source revision',
+      executorVerifyKind: 'attestation',
+      executorAttestationArtifact: revision.value,
+      labels: ['direct-ok'],
+    });
+    const by = `mcp-${revision.value}-worker`;
+    claimDispatchedTicket(project, ticket, by, true);
+    const submitted = await callTool('submit', {
+      project,
+      ref: ticket.ref,
+      by,
+      sourceRevision: { source: revision.source, value: revision.value, observedAt: '2026-08-14T00:00:00.000Z' },
+      changedSurfaces: [revision.surface],
+      projectCapabilities: { process: false, worktree: false, review: true },
+      verify: `attestation: ${revision.value} | review-accepted | reviewer approved the immutable revision`,
+      body: `Reviewed ${revision.value}.`,
+    });
+    assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+    refs.push(ticket.ref);
+  }
+  const verification = store.getTicket(project, refs[0]).submission.verificationResult;
+  const assembled = await callTool('integrate', { project, ref: refs.join(','), by: 'mcp-source-publisher', wave: { verification } });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+
+  const deliveryRevision = { source: 'wiki', value: 'wiki-52', observedAt: '2026-08-15T00:00:00.000Z' };
+  assert.equal(store.integrateSubmissionWave(project, refs, {}).reason, 'wave_delivery_revision_required');
+  assert.equal(store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: { ...verification, status: 'failed_suite' } }).reason, 'wave_delivery_verification_required');
+  const delivered = store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: verification });
+
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.integration.mode, 'source-revision');
+  assert.deepEqual(delivered.integration.participants, refs);
+  for (const ref of refs) assert.equal(store.getTicket(project, ref).submission.integration.sourceRevision.value, 'wiki-52');
+});

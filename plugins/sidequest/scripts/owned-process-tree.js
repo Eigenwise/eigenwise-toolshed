@@ -730,7 +730,8 @@ const ownedVerifyTimeoutMarker = '__SIDEQUEST_VERIFY_TIMEOUT__';
 // object, so a docker client or browser under the shell outlives it. taskkill /T walks the parent
 // chain, but only while the root is still alive, so the sweep runs before the leaf is terminated.
 function sweepWindowsTree(rootPid) {
-  return spawnSync('taskkill', ['/pid', String(rootPid), '/t', '/f'], { stdio: 'ignore', windowsHide: true }).status === 0;
+  if (spawnSync('taskkill', ['/pid', String(rootPid), '/t', '/f'], { stdio: 'ignore', windowsHide: true }).status === 0) return;
+  process.stderr.write(`\ntaskkill /T found no live tree under pid ${rootPid}; a descendant that outlived its root may still be running.\n`);
 }
 
 /**
@@ -739,8 +740,8 @@ function sweepWindowsTree(rootPid) {
  * stdout/stderr, and a timeout is reported with a marker line and exit code 124 so the caller
  * can tell it from the verifier's own exit.
  */
-function ownedVerifyExitCode(result, swept, timeoutMilliseconds) {
-  if (result.timedOut || swept) {
+function ownedVerifyExitCode(result, timedOut, timeoutMilliseconds) {
+  if (timedOut) {
     process.stderr.write(`\n${ownedVerifyTimeoutMarker}=${timeoutMilliseconds}\n`);
     return ownedVerifyTimeoutExitCode;
   }
@@ -753,7 +754,7 @@ function ownedVerifyExitCode(result, swept, timeoutMilliseconds) {
 
 async function runOwnedVerifyPhase(spec) {
   let sweepTimer = null;
-  let swept = false;
+  let deadlineReached = false;
   const result = await runOwnedPhase({
     command: spec.command,
     args: spec.args,
@@ -762,11 +763,16 @@ async function runOwnedVerifyPhase(spec) {
     timeoutMilliseconds: platformUsesProcessGroups ? spec.timeoutMilliseconds : null,
     onPhaseStarted({ phasePid }) {
       if (platformUsesProcessGroups) return;
-      sweepTimer = setTimeout(() => { swept = sweepWindowsTree(phasePid); }, spec.timeoutMilliseconds);
+      // A deadline is a timeout even when the sweep finds no tree: a root that exited early can leave a
+      // descendant holding the output open past it, and that must never pass as the verifier's own exit.
+      sweepTimer = setTimeout(() => {
+        deadlineReached = true;
+        sweepWindowsTree(phasePid);
+      }, spec.timeoutMilliseconds);
     },
   });
   clearTimeout(sweepTimer);
-  return ownedVerifyExitCode(result, swept, spec.timeoutMilliseconds);
+  return ownedVerifyExitCode(result, result.timedOut || deadlineReached, spec.timeoutMilliseconds);
 }
 
 module.exports = {

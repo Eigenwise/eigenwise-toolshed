@@ -319,6 +319,18 @@ function environmentLaneRefusal(slug: string, refs: string[], project: string) {
   };
 }
 
+// Wave assembly never runs the verifier, so only a delivery call meets the refusal.
+function refusingTheEnvironmentLane(integrate: ToolDefinition['handler']): ToolDefinition['handler'] {
+  return async (args) => {
+    if (Object.hasOwn(args, 'wave')) return integrate(args);
+    const { slug, meta } = resolveLifecycleProject(args.project, args, 'integrate');
+    requireBy(args, 'integrate');
+    const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
+    const refusal = environmentLaneRefusal(slug, refs, meta.path);
+    return refusal ? mutationAck(slug, combinedRefusal(store.getTicket(slug, refs[0]), [refusal])) : integrate(args);
+  };
+}
+
 function combinedRefusal(ticket: any, failures: Array<{ reason: string; message: string }>) {
   const primary = failures[0];
   if (!primary) throw new Error('combined refusal requires at least one failure');
@@ -1304,8 +1316,6 @@ const tools: ToolDefinition[] = [
       }
       const failures: Array<{ reason: string; message: string }> = [];
       const ticket = store.getTicket(slug, refs[0]!);
-      const environmentLane = environmentLaneRefusal(slug, refs, meta.path);
-      if (environmentLane) return mutationAck(slug, combinedRefusal(ticket, [environmentLane]));
       if (refs.length > 1) {
         const groupUsesGit = store.submissionUsesGit(ticket);
         if (groupUsesGit) {
@@ -1461,5 +1471,9 @@ const tools: ToolDefinition[] = [
     },
   },
 ];
+
+for (const tool of tools) {
+  if (tool.name === 'integrate') tool.handler = refusingTheEnvironmentLane(tool.handler);
+}
 
 module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };

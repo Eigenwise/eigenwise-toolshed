@@ -258,6 +258,12 @@ function verifierTimedOut(run: VerifierRun, outcome: SpawnOutcome): boolean {
   return run.ownedTree && OWNED_TREE_TIMEOUT_MARKER.test(fs.readFileSync(run.logPath, 'utf8'));
 }
 
+// A deadline the owned tree enforced exits 124, the code the CLI's timeout reports; only spawnSync's own
+// kill leaves no status, and that keeps the legacy 2.
+function timeoutResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
+  return failedResult(run.requirement, 'timeout', run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
+}
+
 function exitCodeResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
   const exitCode = markerExitCode(run.logPath);
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);
@@ -303,9 +309,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     fs.rmSync(scriptPath, { force: true });
   }
   const tail = outputTail(run.logPath, run.outputTailBytes);
-  if (verifierTimedOut(run, outcome)) {
-    return failedResult(requirement, 'timeout', command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, 2, tail, run.timeoutMilliseconds, shell.label);
-  }
+  if (verifierTimedOut(run, outcome)) return timeoutResult(run, shell, outcome, tail);
   return exitCodeResult(run, shell, outcome, tail);
 }
 

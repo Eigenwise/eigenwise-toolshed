@@ -53,6 +53,12 @@ gate per wave before versioning, including a singleton. A changed tree after reb
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
+A verifier pinned to a shared environment (`verifyEnvironment: shared`) delivers through CLI `sidequest integrate`, which
+runs it under an owned process tree: at the deadline the whole tree ends and the delivery rolls back with exit
+124. On POSIX that tree is the verifier's process group, so anything it starts with `setsid` (or another new
+session or group) escapes the deadline and needs its own teardown in the verify command. On Windows the
+deadline counts as a timeout even when the root already exited and `taskkill /T` finds nothing to end.
+
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or
 Claude take afterwards. When the project has an `origin` remote, Sidequest additionally reads

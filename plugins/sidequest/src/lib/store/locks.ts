@@ -12,11 +12,14 @@ function readLockHolder(fs: any, lockPath?: any) {
 }
 
 // Names the holder on a lock this process already acquired. The pid and token stay as acquired, so
-// refresh, release and pid reclaim read the file exactly as before.
+// refresh, release and pid reclaim read the file exactly as before. The payload lands by rename: a
+// rewrite in place truncates first, and a reader racing it would see no owner at all.
 function recordLockHolder(fs: any, lockPath: any, lease: any, holder: any) {
   const acquired = readLockHolder(fs, lockPath);
   if (!acquired || acquired.token !== lease?.token) return false;
-  fs.writeFileSync(lockPath, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
+  const pending = `${lockPath}.${acquired.token}.pending`;
+  fs.writeFileSync(pending, JSON.stringify({ ...holder, pid: acquired.pid, token: acquired.token }));
+  fs.renameSync(pending, lockPath);
   return true;
 }
 
