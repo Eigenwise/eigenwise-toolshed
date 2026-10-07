@@ -6817,3 +6817,138 @@ test('GH-378: submit never repoints another board\'s refs/sidequest/<ref> and na
   );
   assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`]), foreign, 'the foreign candidate ref is left in place');
 });
+
+// SQ-3424: on a board with verifyEnvironment: shared, an isolated dispatch pins environment: 'shared'
+// onto its command verifier. The executor cannot run that command in its worktree, so submit admits
+// the candidate as deferred, the wave gate records gate_deferred without provisioning anything, and
+// integrate's delivery gate is the one place the command runs.
+const { verificationAccepted, verificationOutcome } = require('../lib/kernel/verification.js');
+
+function dispatchedIsolatedCandidate(title: string, command: string, file: string, agentId: string) {
+  cleanBranch();
+  const ticket = addTicket(title, { category: 'submission.fixture', files: [`lib/${file}`], executorVerifyKind: 'command', executorVerify: command });
+  const sessionId = `environment-lane-session-${agentId}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  assert.strictEqual(prepared.ok, true, prepared.message);
+  const executor = prepared.ticket.dispatchExecutor;
+  const worktree = path.join(SIDEQUEST_HOME, 'environment-lane-worktrees', agentId);
+  assert.strictEqual(store.recordDispatchLaunch(slug, ticket.ref, { token: prepared.token, executor, sessionId, agentName: agentId }).ok, true);
+  assert.strictEqual(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  worktreeLease.createCheckoutInstanceMarker(path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue));
+  assert.strictEqual(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
+  assert.strictEqual(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
+  const by = `${agentId}-worker`;
+  const claimed = store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor, sessionId });
+  assert.strictEqual(claimed.ok, true, claimed.message);
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', file), `${title} candidate\n`);
+  execFileSync('git', ['add', `lib/${file}`], { cwd: worktree, windowsHide: true });
+  execFileSync('git', ['commit', '-q', '-m', `candidate ${file}`], { cwd: worktree, windowsHide: true });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  execFileSync('git', ['update-ref', `refs/sidequest/${ticket.ref}`, commit], { cwd: worktree, windowsHide: true });
+  const submit = () => callMcp('submit', { project: PROJECT_DIR, ref: ticket.ref, by, commit, worktree, verify: command, body: `${title}: focused checks ran; the pinned verifier is environment-bound.` });
+  const cleanup = () => execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  return { ticket, by, commit, worktree, submit, cleanup };
+}
+
+function withSharedVerifyEnvironment() {
+  store.setBoardConfig(slug, { verifyEnvironment: 'shared' });
+  return () => store.setBoardConfig(slug, { verifyEnvironment: 'isolated' });
+}
+
+test('SQ-3424: a shared-environment submit without a capture is admitted as deferred and never reads as accepted', async () => {
+  const restore = withSharedVerifyEnvironment();
+  const command = 'node -e "process.exit(0)"';
+  const fixture = dispatchedIsolatedCandidate('deferred shared-environment submit', command, 'environment-lane-deferred.js', 'environment-lane-deferred');
+  try {
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).dispatch.verificationRequirement.environment, 'shared');
+    const submitted = await fixture.submit();
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    const submission = store.getTicket(slug, fixture.ticket.ref).submission;
+    assert.strictEqual(submission.commit, fixture.commit);
+    assert.strictEqual(submission.verificationResult.status, 'deferred');
+    assert.strictEqual(submission.verificationResult.evidence, `Deferred to the environment lane: ${command} runs in the shared checkout at delivery, against the merged tree.`);
+    assert.strictEqual(submission.verificationResult.command, command);
+    assert.strictEqual(verificationAccepted(submission.verificationResult), false);
+    assert.strictEqual(verificationOutcome(submission.verificationResult), 'verification_deferred');
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).verificationCaptures, undefined);
+
+    const assembled = store.assembleSubmissionWave(slug, [fixture.ticket.ref], { waveId: 'environment-lane-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.state, 'gate_deferred');
+    assert.strictEqual(assembled.gate.verification.status, 'deferred');
+    const wave = store.getTicket(slug, fixture.ticket.ref).submission.wave;
+    assert.strictEqual(wave.state, 'gate_deferred');
+    assert.strictEqual(wave.gate.state, 'gate_deferred');
+    assert.strictEqual(wave.delivery, undefined);
+
+    const revision = { source: 'git', value: fixture.commit, observedAt: new Date().toISOString() };
+    const refused = store.recordSubmissionWaveDelivery(slug, [fixture.ticket.ref], revision, { kind: 'command', status: 'failed_suite', command, evidence: 'failed', failureIdentities: ['delivery-gate'] });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'deferred_gate_delivery_verification_required');
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.wave.delivery, undefined);
+
+    const delivered = integrateOnCurrentTestBranch(fixture.ticket.ref);
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    const integrated = store.getTicket(slug, fixture.ticket.ref);
+    assert.strictEqual(integrated.submission.integration.verify.status, 'passed');
+    assert.strictEqual(integrated.submission.integration.verify.command, command);
+    assert.strictEqual(integrated.submission.wave.gate.state, 'gate_deferred');
+    assert.strictEqual(integrated.submission.wave.delivery.state, 'delivered');
+  } finally {
+    fixture.cleanup();
+    restore();
+  }
+});
+
+test('SQ-3424: a deferred candidate whose delivery verification fails is not delivered', async () => {
+  const restore = withSharedVerifyEnvironment();
+  const command = 'node -e "process.exit(1)"';
+  const fixture = dispatchedIsolatedCandidate('failing shared-environment delivery', command, 'environment-lane-failing.js', 'environment-lane-failing');
+  try {
+    const submitted = await fixture.submit();
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.verificationResult.status, 'deferred');
+    const delivery = integrateOnCurrentTestBranch(fixture.ticket.ref);
+    assert.strictEqual(delivery.ok, false);
+    assert.match(String(delivery.reason), /^verification_failed_suite/);
+    assert.strictEqual(delivery.verify.status, 'failed_suite');
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.wave.delivery, undefined);
+  } finally {
+    fixture.cleanup();
+    restore();
+  }
+});
+
+test('SQ-3424: the same submit on a default board is still refused for the missing capture', async () => {
+  const command = 'node -e "process.exit(0)"';
+  const fixture = dispatchedIsolatedCandidate('isolated-environment submit', command, 'environment-lane-isolated.js', 'environment-lane-isolated');
+  try {
+    assert.strictEqual('environment' in store.getTicket(slug, fixture.ticket.ref).dispatch.verificationRequirement, false);
+    const refused = await fixture.submit();
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_required');
+    assert.match(refused.message, /No completed passed verification capture exists/);
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission, undefined);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('SQ-3424: a dirty worktree still refuses a shared-environment submit', async () => {
+  const restore = withSharedVerifyEnvironment();
+  const fixture = dispatchedIsolatedCandidate('dirty shared-environment submit', 'node -e "process.exit(0)"', 'environment-lane-dirty.js', 'environment-lane-dirty');
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, 'lib', 'environment-lane-dirty.js'), 'uncommitted change\n');
+    const refused = await fixture.submit();
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'dirty_scope');
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission, undefined);
+  } finally {
+    fixture.cleanup();
+    restore();
+  }
+});

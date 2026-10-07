@@ -83,33 +83,29 @@ function openWave(input) {
     declaredSurfaces: normalizedSurfaces(surfaces)
   });
 }
-function assembleWave(wave, candidates) {
-  const invalidated = [];
-  const byRef = new Map(candidates.map((candidate) => [candidate.ref, candidate]));
-  for (const participant of wave.participants) {
-    const candidate = byRef.get(participant.ref);
-    if (!candidate) {
-      invalidated.push(invalidation(participant.ref, "participant_missing", `${participant.ref} is not ready for the opened wave.`));
-      continue;
-    }
-    if (!sameBaseline(wave.baseline, candidate.baseline) && !candidate.baselineCompatible) {
-      invalidated.push(invalidation(candidate.ref, "baseline_moved", `${candidate.ref} was verified against ${candidate.baseline.revision.source}:${candidate.baseline.revision.value}, but this wave is pinned to ${wave.baseline.revision.source}:${wave.baseline.revision.value}.`));
-      continue;
-    }
-    if (!(0, import_verification.verificationAccepted)(candidate.verification)) {
-      invalidated.push(invalidation(candidate.ref, "verification_required", `${candidate.ref} has no accepted verifier evidence for the opened wave.`));
-      continue;
-    }
-    const outside = candidate.surfaces.filter((surface) => !(0, import_scope_match.isInScope)(surface, participant.declaredSurfaces));
-    if (outside.length) {
-      invalidated.push(invalidation(
-        candidate.ref,
-        "surface_overlap",
-        `${candidate.ref} changed surfaces outside its wave-declared surfaces: ${outside.join(", ")}.`,
-        outside
-      ));
-    }
+function verificationAdmitted(verification) {
+  return (0, import_verification.verificationAccepted)(verification) || verification.status === "deferred";
+}
+function baselineMoved(wave, candidate) {
+  return !sameBaseline(wave.baseline, candidate.baseline) && !candidate.baselineCompatible;
+}
+function participantInvalidation(wave, participant, candidate) {
+  if (!candidate) return invalidation(participant.ref, "participant_missing", `${participant.ref} is not ready for the opened wave.`);
+  if (baselineMoved(wave, candidate)) {
+    return invalidation(candidate.ref, "baseline_moved", `${candidate.ref} was verified against ${candidate.baseline.revision.source}:${candidate.baseline.revision.value}, but this wave is pinned to ${wave.baseline.revision.source}:${wave.baseline.revision.value}.`);
   }
+  if (!verificationAdmitted(candidate.verification)) {
+    return invalidation(candidate.ref, "verification_required", `${candidate.ref} has no accepted verifier evidence for the opened wave.`);
+  }
+  const outside = candidate.surfaces.filter((surface) => !(0, import_scope_match.isInScope)(surface, participant.declaredSurfaces));
+  if (outside.length) {
+    return invalidation(candidate.ref, "surface_overlap", `${candidate.ref} changed surfaces outside its wave-declared surfaces: ${outside.join(", ")}.`, outside);
+  }
+  return null;
+}
+function assembleWave(wave, candidates) {
+  const byRef = new Map(candidates.map((candidate) => [candidate.ref, candidate]));
+  const invalidated = wave.participants.map((participant) => participantInvalidation(wave, participant, byRef.get(participant.ref))).filter((entry) => entry !== null);
   const admitted = candidates.filter((candidate) => wave.participants.some((participant) => participant.ref === candidate.ref));
   if (invalidated.length) {
     const unique = new Map(invalidated.map((entry) => [entry.ref, entry]));
@@ -124,18 +120,22 @@ function recordAssembledWaveGate(assembly, verification) {
   return Object.freeze({
     assembly,
     verification,
-    state: (0, import_verification.verificationAccepted)(verification) ? "gate_passed" : "gate_failed"
+    state: verification.status === "deferred" ? "gate_deferred" : (0, import_verification.verificationAccepted)(verification) ? "gate_passed" : "gate_failed"
   });
 }
 function recordWaveDelivery(gate, revision, verification) {
-  if (gate.state !== "gate_passed") {
+  if (gate.state === "gate_failed") {
     return diagnostic("assembled_wave_gate_required", "Delivery requires a passing assembled-wave gate. Refresh the wave and reverify its candidates after fixing the gate.");
+  }
+  const accepted = (0, import_verification.verificationAccepted)(verification);
+  if (gate.state === "gate_deferred" && !accepted) {
+    return diagnostic("deferred_gate_delivery_verification_required", `The assembled-wave gate was deferred to the environment lane, so delivery requires accepted verification of the merged tree; the delivery verification returned ${verification.status}.`);
   }
   return Object.freeze({
     gate,
     revision: Object.freeze({ ...revision }),
     verification,
-    state: (0, import_verification.verificationAccepted)(verification) ? "delivered" : "delivery_failed"
+    state: accepted ? "delivered" : "delivery_failed"
   });
 }
 function dependentReleaseDecision(delivery, participant) {

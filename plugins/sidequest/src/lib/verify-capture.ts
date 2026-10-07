@@ -35,7 +35,7 @@ type VerificationCaptureStore = Readonly<{
   findProject(project: string): Readonly<{ ok: boolean; slug?: string; meta?: Readonly<{ path?: string }> }>;
   getTicket(slug: string, ticket: string): unknown;
   workingTreeDeliveryCandidate(slug: string, ticket: unknown): Readonly<{ candidate: Readonly<{ source: string; value: string }> }> | null;
-  pinnedVerificationRequirement(ticket: unknown): Readonly<{ command?: string }>;
+  pinnedVerificationRequirement(ticket: unknown): Readonly<{ command?: string; environment?: 'shared' }>;
   recordVerificationCapture(slug: string, ticket: string, capture: Readonly<Record<string, unknown>>): CaptureRecordResult;
   crossedWorktreeBinding(slug: string, ticket: unknown, actualWorktree: string): import('./refusal-guidance.js').CrossedWorktreeBinding | null;
 }>;
@@ -728,8 +728,12 @@ function pinnedTicketCommand(target: CaptureTarget): Readonly<{ command: string 
   const store = require('./store.js') as VerificationCaptureStore;
   const ticket = store.getTicket(project.slug, target.ticket);
   if (!ticket) return unrecordedRefusal('not_found', `Ticket ${target.ticket} does not exist on the board for ${target.project}.`);
-  const command = String(store.pinnedVerificationRequirement(ticket).command || '').trim();
+  const requirement = store.pinnedVerificationRequirement(ticket);
+  const command = String(requirement.command || '').trim();
   if (!command) return unrecordedRefusal('verification_capture_no_pinned_command', `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
+  if (requirement.environment === 'shared') {
+    return unrecordedRefusal('verification_capture_environment_lane', `${target.ticket}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`);
+  }
   return Object.freeze({ command });
 }
 

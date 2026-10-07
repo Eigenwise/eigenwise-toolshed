@@ -1784,9 +1784,17 @@ ${verify.outputTail}` : null
       releaseLock(lock, lockLease);
     }
   }
-  function exactAssembledWave(slug, refs) {
-    const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
-    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Delivery requires one or more assembled participant refs." };
+  const DELIVERABLE_GATE_STATES = ["gate_passed", "gate_deferred"];
+  function gateDeliverable(wave) {
+    return DELIVERABLE_GATE_STATES.includes(String(wave?.gate?.state));
+  }
+  function assembledWaveMatches(wave, tickets, participantRefs) {
+    const expectedParticipants = Array.isArray(wave?.participants) ? wave.participants.slice().sort() : [];
+    const requestedParticipants = participantRefs.slice().sort();
+    const waveId = wave?.id;
+    return gateDeliverable(wave) && expectedParticipants.length === requestedParticipants.length && expectedParticipants.every((ref, index) => ref === requestedParticipants[index]) && tickets.every((ticket) => ticket?.submission?.wave?.id === waveId && gateDeliverable(ticket.submission.wave));
+  }
+  function participantAdmissionRefusal(slug, participantRefs) {
     for (const ref of participantRefs) {
       const admission = validateIntegrationSubmission(slug, ref);
       if (!admission.ok) {
@@ -1797,11 +1805,16 @@ ${verify.outputTail}` : null
         };
       }
     }
+    return null;
+  }
+  function exactAssembledWave(slug, refs) {
+    const participantRefs = uniqueParticipantRefs(refs);
+    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Delivery requires one or more assembled participant refs." };
+    const refused = participantAdmissionRefusal(slug, participantRefs);
+    if (refused) return refused;
     const tickets = participantRefs.map((ref) => getTicket(slug, ref));
     const wave = tickets[0]?.submission.wave;
-    const expectedParticipants = Array.isArray(wave?.participants) ? wave.participants.slice().sort() : [];
-    const requestedParticipants = participantRefs.slice().sort();
-    if (!wave || wave.gate?.state !== "gate_passed" || expectedParticipants.length !== requestedParticipants.length || expectedParticipants.some((ref, index) => ref !== requestedParticipants[index]) || tickets.some((ticket) => ticket.submission.wave?.id !== wave.id || ticket.submission.wave?.gate?.state !== "gate_passed")) {
+    if (!assembledWaveMatches(wave, tickets, participantRefs)) {
       return {
         ok: false,
         reason: "assembled_wave_gate_required",
@@ -2174,57 +2187,74 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
+  function submittedEvidence(verify) {
+    return String(verify || "").trim();
+  }
+  function submittedCandidate(candidateCommit) {
+    return { source: "git", value: String(candidateCommit || "").trim().toLowerCase() };
+  }
+  function deferredVerification(requirement) {
+    return {
+      kind: requirement.kind,
+      status: "deferred",
+      evidence: `Deferred to the environment lane: ${requirement.command} runs in the shared checkout at delivery, against the merged tree.`,
+      command: requirement.command
+    };
+  }
+  function attestationSubmissionVerification(requirement, sourceRevision, evidence) {
+    const artifact = sourceRevision ? sourceRevision.value : requirement.artifact;
+    const error = attestationErrors(evidence, artifact)[0];
+    const result = error ? { kind: "attestation", status: "failed_check", evidence: error, failureIdentities: ["attestation:evidence-contract"] } : { kind: "attestation", status: "attestation", evidence };
+    return { result, expectedEvidence: null, ...error ? { diagnostic: { code: "invalid_verify", message: error, retryable: true } } : {} };
+  }
+  function legacyCustomRequirement(requirement) {
+    return requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded";
+  }
+  function legacyCustomSubmissionVerification(requirement, evidence) {
+    if (!evidence) return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
+    const error = verifyCommandError(evidence);
+    if (error) {
+      return {
+        result: { kind: "custom", status: "failed_check", evidence: error, failureIdentities: ["custom:invalid-fallback"] },
+        expectedEvidence: null,
+        diagnostic: { code: "invalid_verify", message: error, retryable: true }
+      };
+    }
+    if (manualVerify(evidence)) return { result: { kind: "custom", status: "manual", evidence }, expectedEvidence: null };
+    return evidenceSubmissionVerification(requirement, evidence);
+  }
+  function commandSubmissionVerification(ticket, requirement, evidence, candidateCommit, directCaptureInvocation) {
+    if (requirement.environment === "shared") return { result: deferredVerification(requirement), expectedEvidence: null };
+    const error = evidence === requirement.command ? verifyCommandError(requirement.command) : null;
+    if (error) {
+      return {
+        result: { kind: requirement.kind, status: "could_not_run", evidence: error, command: requirement.command, failureIdentities: ["could_not_run:invalid-command"] },
+        expectedEvidence: requirement.command,
+        diagnostic: { code: "invalid_verify", message: error, retryable: true }
+      };
+    }
+    return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, submittedCandidate(candidateCommit), String(ticket.dispatchNonce || ""), directCaptureInvocation);
+  }
+  function evidenceSubmissionVerification(requirement, evidence) {
+    const manual = requirement.kind === "manual";
+    const error = evidence ? null : manual ? "manual verification requires evidence from the prepared verifier contract" : `required ${requirement.kind} verification evidence is missing`;
+    if (error) {
+      return {
+        result: { kind: requirement.kind, status: "failed_check", evidence: error, failureIdentities: [`${requirement.kind}:evidence-required`] },
+        expectedEvidence: null,
+        diagnostic: { code: "invalid_verify", message: error, retryable: true }
+      };
+    }
+    const result = manual ? { kind: "manual", status: "manual", evidence, command: null } : { kind: requirement.kind, status: "passed", evidence };
+    return { result, expectedEvidence: null };
+  }
   function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation) {
     const requirement = pinnedVerificationRequirement(ticket);
-    const evidence = String(verify || "").trim();
-    if (requirement.kind === "attestation" || sourceRevision != null) {
-      const artifact = sourceRevision ? sourceRevision.value : requirement.artifact;
-      const error2 = attestationErrors(evidence, artifact)[0];
-      const result2 = error2 ? { kind: "attestation", status: "failed_check", evidence: error2, failureIdentities: ["attestation:evidence-contract"] } : { kind: "attestation", status: "attestation", evidence };
-      return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
-    }
-    if (requirement.kind === "manual") {
-      const error2 = evidence ? null : "manual verification requires evidence from the prepared verifier contract";
-      const result2 = error2 ? { kind: "manual", status: "failed_check", evidence: error2, failureIdentities: ["manual:evidence-required"] } : { kind: "manual", status: "manual", evidence, command: requirement.command || null };
-      return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
-    }
-    if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && evidence) {
-      const error2 = verifyCommandError(evidence);
-      if (error2) {
-        return {
-          result: { kind: "custom", status: "failed_check", evidence: error2, failureIdentities: ["custom:invalid-fallback"] },
-          expectedEvidence: null,
-          diagnostic: { code: "invalid_verify", message: error2, retryable: true }
-        };
-      }
-      if (manualVerify(evidence)) return { result: { kind: "custom", status: "manual", evidence }, expectedEvidence: null };
-    }
-    if (requirement.command && evidence !== requirement.command) {
-      return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
-        source: "git",
-        value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
-    }
-    if (requirement.command) {
-      const error2 = verifyCommandError(requirement.command);
-      if (error2) {
-        return {
-          result: { kind: requirement.kind, status: "could_not_run", evidence: error2, command: requirement.command, failureIdentities: ["could_not_run:invalid-command"] },
-          expectedEvidence: requirement.command,
-          diagnostic: { code: "invalid_verify", message: error2, retryable: true }
-        };
-      }
-      return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
-        source: "git",
-        value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
-    }
-    if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
-      return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
-    }
-    const error = evidence ? null : `required ${requirement.kind} verification evidence is missing`;
-    const result = error ? { kind: requirement.kind, status: "failed_check", evidence: error, failureIdentities: [`${requirement.kind}:evidence-required`] } : { kind: requirement.kind, status: "passed", evidence };
-    return { result, expectedEvidence: null, ...error ? { diagnostic: { code: "invalid_verify", message: error, retryable: true } } : {} };
+    const evidence = submittedEvidence(verify);
+    if (requirement.kind === "attestation" || sourceRevision != null) return attestationSubmissionVerification(requirement, sourceRevision, evidence);
+    if (legacyCustomRequirement(requirement)) return legacyCustomSubmissionVerification(requirement, evidence);
+    if (requirement.command) return commandSubmissionVerification(ticket, requirement, evidence, candidateCommit, directCaptureInvocation);
+    return evidenceSubmissionVerification(requirement, evidence);
   }
   function submissionAdmissionDecision(slug, ticket, by, opts, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
     const adapterFacts = opts.admissionFacts || {};
@@ -3019,6 +3049,13 @@ ${verify.outputTail}` : null
     const requirement = waveVerificationRequirement(tickets);
     if (!requirement.ok) return requirement;
     if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
+    if (requirement.requirement.environment === "shared") {
+      return {
+        ok: true,
+        provisioning: "The gate deferred to the environment lane: the pinned command runs in the shared checkout at delivery, so nothing ran and worktree provisioning was skipped.",
+        verification: deferredVerification(requirement.requirement)
+      };
+    }
     if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement);
     return suppliedWaveVerification(wave.id, requirement.requirement, supplied);
   }
@@ -3102,7 +3139,7 @@ ${verify.outputTail}` : null
   }
   function assembledWaveForDelivery(slug, ticket) {
     const wave = ticket?.submission?.wave;
-    if (!wave?.gate || wave.gate.state !== "gate_passed") {
+    if (!gateDeliverable(wave)) {
       return {
         ok: false,
         reason: "assembled_wave_gate_required",
@@ -3336,18 +3373,7 @@ ${verify.outputTail}` : null
       ...omittedPendingOverlaps.length ? { omittedPendingOverlaps } : {}
     };
   }
-  function recordSubmissionWaveDelivery(slug, refs, revision, verification) {
-    const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
-    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Delivery requires the exact assembled participant refs." };
-    const tickets = participantRefs.map((ref) => getTicket(slug, ref));
-    if (tickets.some((ticket) => !ticket?.submission?.wave)) {
-      return { ok: false, reason: "assembled_wave_gate_required", message: "Delivery requires every exact participant to retain a passing assembled-wave gate." };
-    }
-    const waveState = tickets[0].submission.wave;
-    const expectedParticipants = Array.isArray(waveState.participants) ? waveState.participants.slice().sort() : [];
-    if (expectedParticipants.length !== participantRefs.length || expectedParticipants.some((ref, index) => ref !== participantRefs.slice().sort()[index]) || tickets.some((ticket) => ticket.submission.wave.id !== waveState.id || ticket.submission.wave.gate?.state !== "gate_passed")) {
-      return { ok: false, reason: "assembled_wave_gate_required", message: "Delivery requires the exact participant set from one passing assembled wave." };
-    }
+  function reopenedWaveAssembly(slug, tickets, waveState) {
     const opened = openWave({
       baseline: waveState.baseline,
       participants: tickets.map((ticket) => ({
@@ -3359,8 +3385,19 @@ ${verify.outputTail}` : null
     if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };
     const candidates = tickets.map(submissionWaveCandidate);
     if (candidates.some((candidate) => !candidate)) return { ok: false, reason: "wave_candidate_required", message: "Delivery requires the immutable candidates that passed assembly." };
-    const assembly = { wave: opened, candidates, state: "assembled" };
-    const delivery = recordWaveDelivery({ assembly, verification: waveState.gate.verification, state: "gate_passed" }, revision, verification);
+    return { ok: true, assembly: { wave: opened, candidates, state: "assembled" } };
+  }
+  function recordSubmissionWaveDelivery(slug, refs, revision, verification) {
+    const participantRefs = uniqueParticipantRefs(refs);
+    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Delivery requires the exact assembled participant refs." };
+    const tickets = participantRefs.map((ref) => getTicket(slug, ref));
+    const waveState = tickets[0]?.submission?.wave;
+    if (!assembledWaveMatches(waveState, tickets, participantRefs)) {
+      return { ok: false, reason: "assembled_wave_gate_required", message: "Delivery requires the exact participant set from one passing assembled wave." };
+    }
+    const reopened = reopenedWaveAssembly(slug, tickets, waveState);
+    if (!reopened.ok) return reopened;
+    const delivery = recordWaveDelivery({ assembly: reopened.assembly, verification: waveState.gate.verification, state: waveState.gate.state }, revision, verification);
     if ("code" in delivery) return { ok: false, reason: delivery.code, message: delivery.message };
     transaction(() => {
       for (const ticket of tickets) {
