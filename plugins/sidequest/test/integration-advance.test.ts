@@ -1740,7 +1740,7 @@ function jobOwnerReportTamperingVerifier(tamper: string, mainExitCode: number) {
 }
 
 // The done line alone is SQ-3487's reproduction: the owner's old log parse recorded it passed with exit 0.
-for (const [forgery, forgedLines] of [['every owner marker', FORGED_OWNER_MARKERS], ['the done line alone', "console.error('__SIDEQUEST_VERIFY_DONE__');"]]) {
+for (const [forgery, forgedLines] of [['every owner marker', FORGED_OWNER_MARKERS], ['the done line alone', "console.error('__SIDEQUEST_VERIFY_DONE__');"]] as const) {
   test(`SQ-3488: an environment-lane owner that crashes while its verifier prints ${forgery} and exits 0 is never accepted and rolls the delivery back`, { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
     const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-owner-crash-'));
     const reportPathFile = forwardSlashes(path.join(evidenceDirectory, 'report.path'));
