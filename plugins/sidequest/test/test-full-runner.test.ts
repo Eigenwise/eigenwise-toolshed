@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, ChildProcess, type SpawnOptions } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { getEventListeners, once } from 'node:events';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -1183,21 +1184,28 @@ test('SQ-2195: a value that is not a process id is refused rather than answered 
 const MISSING_VERIFIER_MESSAGE = process.platform === 'win32'
   ? /^The Windows job owner could not run the phase: The system cannot find the file specified$/m
   : /ENOENT/;
+// SQ-3488: the entry reports only on the caller's channel, so records come back from that file, never stderr.
 function runOwnedVerifyCli(spec: Record<string, unknown>) {
-  return spawnSync(process.execPath, [runnerModulePath, JSON.stringify(spec)], {
+  const reportPath = workspacePath(`owned-verify-${randomUUID()}.jsonl`);
+  const nonce = randomUUID();
+  const result = spawnSync(process.execPath, [runnerModulePath, JSON.stringify({ ...spec, reportPath, nonce })], {
     encoding: 'utf8',
     env: process.env,
     windowsHide: true,
     timeout: PROBE_BUDGET_MILLISECONDS,
   });
+  const lines = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8').split('\n').filter(Boolean) : [];
+  const records = lines.map((line) => JSON.parse(line));
+  assert.ok(records.every((record) => record.nonce === nonce), 'every record carries the caller nonce');
+  return { ...result, records: records.map(({ record, value }) => (value === undefined ? [record] : [record, value])) };
 }
 
-test('SQ-3425: the owned verify entry reports a deadline with its marker and exit 124 after ending the descendant', { timeout: 60_000 }, async () => {
+test('SQ-3425: the owned verify entry reports a deadline on its channel and exits 124 after ending the descendant', { timeout: 60_000 }, async () => {
   const fixture = descendantFixture(SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS, false, 'spin');
   const result = runOwnedVerifyCli({ command: process.execPath, args: fixture.args, cwd: workspace, timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS });
 
   assert.equal(result.status, 124, result.stderr);
-  assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${SPAWN_ARMED_DEADLINE_MILLISECONDS}\\n\\n__SIDEQUEST_VERIFY_DONE__\\n$`, 'm'), 'the done marker follows the timeout marker');
+  assert.deepEqual(result.records, [['timeout', SPAWN_ARMED_DEADLINE_MILLISECONDS], ['done']], 'the done record follows the timeout record');
   await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the descendant of the owned verify entry');
   assert.equal(fixture.markerWritten(), false);
 });
@@ -1205,16 +1213,18 @@ test('SQ-3425: the owned verify entry reports a deadline with its marker and exi
 test('SQ-3425: the owned verify entry forwards output and passes the verifier exit code through', () => {
   const exited = runOwnedVerifyCli({ command: process.execPath, args: [exitWithScript, '17'], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(exited.status, 17, exited.stderr);
-  assert.equal(exited.stderr.includes('__SIDEQUEST_VERIFY_TIMEOUT__'), false);
+  assert.deepEqual(exited.records, [['exit', 17], ['done']]);
 
   const spoken = runOwnedVerifyCli({ command: process.execPath, args: [helloScript], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(spoken.status, 0, spoken.stderr);
   assert.equal(spoken.stdout, 'phase stdout\n');
-  assert.equal(spoken.stderr, 'phase stderr\n\n__SIDEQUEST_VERIFY_DONE__\n', 'the done marker comes last');
+  assert.equal(spoken.stderr, 'phase stderr\n', 'the owner adds nothing to the verifier output');
+  assert.deepEqual(spoken.records, [['exit', 0], ['done']]);
 
   const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(unspawned.status, 2, unspawned.stderr);
   assert.match(unspawned.stderr, MISSING_VERIFIER_MESSAGE);
+  assert.deepEqual(unspawned.records, [['done']], 'a phase that never ran reports no exit');
 });
 
 // A detached descendant leaves libuv's job, so before the job owner (SQ-3456) it outlived a Windows deadline
@@ -1244,7 +1254,7 @@ test('SQ-3477: a Windows deadline ends a detached descendant holding the output 
   });
 
   assert.equal(result.status, 124, result.stderr);
-  assert.match(result.stderr, new RegExp(`^__SIDEQUEST_VERIFY_TIMEOUT__=${deadlineMilliseconds}$`, 'm'));
+  assert.deepEqual(result.records, [['timeout', deadlineMilliseconds], ['done']]);
   await assertTerminalWithin(requireProcessId(recordedDescendantPid(descendantPidPath), 'the detached descendant'), SETTLED_BUDGET_MILLISECONDS, 'the detached descendant');
   assert.equal(fs.existsSync(markerPath), false, 'the detached descendant acted after the deadline');
 });

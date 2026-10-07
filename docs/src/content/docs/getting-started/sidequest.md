@@ -63,6 +63,8 @@ still alive, or no account of the job's members) is recorded as `could_not_run` 
 delivery rolls back. A verifier that exits non-zero is recorded as `failed_suite` with its own exit code even then,
 with the cleanup error added to the evidence. The run passes only when the tree's owner reports that it finished;
 an owner that dies first is recorded as `could_not_run`, whatever the verifier exited, and the delivery rolls back.
+The owner reports how the run ended on a private channel the verifier never sees, so the verifier's stdout and
+stderr are only the suite's log: nothing it prints, even a copy of an owner line, changes the verdict.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or

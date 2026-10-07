@@ -896,36 +896,36 @@ function runOwnedPhase(rawOptions) {
 }
 
 const ownedVerifyTimeoutExitCode = 124;
-const ownedVerifyTimeoutMarker = '__SIDEQUEST_VERIFY_TIMEOUT__';
-const ownedVerifyCleanupErrorMarker = '__SIDEQUEST_VERIFY_CLEANUP_ERROR__';
-const ownedVerifyDoneMarker = '__SIDEQUEST_VERIFY_DONE__';
 
-/**
- * Runs one verifier shell as an owned phase for a synchronous caller: the deadline ends the
- * whole tree (process group on POSIX, the job owner's job on Windows), the output is forwarded to
- * stdout/stderr, and a timeout is reported with a marker line and exit code 124 so the caller
- * can tell it from the verifier's own exit. A cleanupError after the verifier exited is reported
- * with its own marker line: the verifier's exit code is then no proof that its tree ended. The
- * done marker comes last, after every other marker: an owner that dies before writing it has
- * reported nothing, whatever exit the verifier printed.
- */
-function ownedVerifyExitCode(result, timedOut, timeoutMilliseconds) {
-  if (timedOut) {
-    process.stderr.write(`\n${ownedVerifyTimeoutMarker}=${timeoutMilliseconds}\n`);
+function exitedPhaseExitCode(result, report) {
+  if (result.status !== null) report('exit', result.status);
+  if (result.cleanupError === null) return result.status ?? 2;
+  report('cleanup-error', result.cleanupError);
+  return 2;
+}
+
+function ownedVerifyExitCode(result, timeoutMilliseconds, report) {
+  if (result.timedOut) {
+    report('timeout', timeoutMilliseconds);
     return ownedVerifyTimeoutExitCode;
   }
   if (result.error) {
     process.stderr.write(`${result.error.message}\n`);
     return 2;
   }
-  if (result.cleanupError !== null) {
-    process.stderr.write(`\n${ownedVerifyCleanupErrorMarker}=${result.cleanupError}\n`);
-    return 2;
-  }
-  return result.status ?? 2;
+  return exitedPhaseExitCode(result, report);
 }
 
+/**
+ * Runs one verifier shell as an owned phase for a synchronous caller: the deadline ends the
+ * whole tree (process group on POSIX, the job owner's job on Windows) and the output is forwarded
+ * to stdout/stderr. How the phase ended goes only to spec.reportPath, one JSON record per line
+ * carrying spec.nonce: the verifier's exit, a timeout (exit 124), a cleanupError (the exit is then
+ * no proof that its tree ended), and done last. The verifier never sees the path or the nonce, so
+ * nothing it prints is a record, and an owner that dies before done has reported nothing.
+ */
 async function runOwnedVerifyPhase(spec) {
+  const report = (record, value) => fs.appendFileSync(spec.reportPath, `${JSON.stringify({ nonce: spec.nonce, record, value })}\n`);
   const result = await runOwnedPhase({
     command: spec.command,
     args: spec.args,
@@ -933,8 +933,8 @@ async function runOwnedVerifyPhase(spec) {
     env: { ...process.env, SIDEQUEST_OWNED_VERIFY_PHASE: '1' },
     timeoutMilliseconds: spec.timeoutMilliseconds,
   });
-  const exitCode = ownedVerifyExitCode(result, result.timedOut, spec.timeoutMilliseconds);
-  process.stderr.write(`\n${ownedVerifyDoneMarker}\n`);
+  const exitCode = ownedVerifyExitCode(result, spec.timeoutMilliseconds, report);
+  report('done');
   return exitCode;
 }
 
@@ -943,7 +943,6 @@ module.exports = {
   classifyProcessState,
   isProcessTerminal,
   ownedVerifyTimeoutExitCode,
-  ownedVerifyTimeoutMarker,
   runOwnedPhase,
   withJobEvidence,
   runOwnedVerifyPhase,

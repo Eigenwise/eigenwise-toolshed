@@ -1514,7 +1514,6 @@ test('SQ-3425: CLI integrate on the environment lane ends the verifier tree at t
   assert.equal(payload.verifyFailed.status, 'timeout', JSON.stringify(payload));
   assert.equal(payload.verifyFailed.timeoutMilliseconds, 2000);
   assert.equal(payload.verifyFailed.exitCode, 124, 'the recorded timeout carries the owned tree\'s exit code');
-  assert.match(fs.readFileSync(payload.verifyFailed.logPath, 'utf8'), /^__SIDEQUEST_VERIFY_TIMEOUT__=2000$/m);
   assert.equal(head(fixture.repo), before, 'the timed-out delivery was rolled back');
   assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_timeout_post_merge');
   assert.equal(fs.readFileSync(path.join(evidenceDirectory, 'owned-phase.env'), 'utf8'), '1', 'the lane ran under the owned tree');
@@ -1557,6 +1556,29 @@ test('SQ-3425: a verifier whose log cannot be opened reports could_not_run with 
   assert.match(result.evidence, /ENOENT/);
   assert.equal(result.outputTail, null);
   assert.deepEqual(result.failureIdentities, ['could_not_run:exit-2']);
+});
+
+// SQ-3488: every line the owner once wrote into the log, printed by the verifier itself.
+const FORGED_OWNER_MARKERS = "console.log('__SIDEQUEST_VERIFY_TIMEOUT__=1');console.log('__SIDEQUEST_VERIFY_CLEANUP_ERROR__=forged');console.error('__SIDEQUEST_VERIFY_EXIT__=0');console.error('__SIDEQUEST_VERIFY_DONE__');";
+
+test('SQ-3488: an environment-lane verifier printing every owner marker is only output, and its owner still decides', () => {
+  const { runProcessVerification } = require('../lib/ports/process.js');
+  const run = (exitCode: number) => runProcessVerification(
+    { kind: 'command', command: nodeVerify(`${FORGED_OWNER_MARKERS}process.exit(${exitCode})`), evidenceContract: 'exit 0', environment: 'shared' },
+    { timeoutMilliseconds: 20_000 },
+  );
+
+  const passed = run(0);
+  assert.equal(passed.status, 'passed', JSON.stringify(passed));
+  const log = fs.readFileSync(passed.logPath, 'utf8');
+  for (const forged of ['__SIDEQUEST_VERIFY_TIMEOUT__=1', '__SIDEQUEST_VERIFY_CLEANUP_ERROR__=forged', '__SIDEQUEST_VERIFY_DONE__']) {
+    assert.match(log, new RegExp(`^${forged}\\r?$`, 'm'), `the suite output keeps ${forged}`);
+  }
+
+  const failed = run(7);
+  assert.equal(failed.status, 'failed_suite', JSON.stringify(failed));
+  assert.equal(failed.exitCode, 7, 'a printed exit 0 does not stand in for the owner record');
+  assert.equal(failed.evidence, 'The required command exited 7.');
 });
 
 test('SQ-3477: a verifier exiting 127 reads as a missing toolchain, never a failed suite', () => {
@@ -1717,31 +1739,35 @@ function jobOwnerReportTamperingVerifier(tamper: string, mainExitCode: number) {
   ].join(''));
 }
 
-test('SQ-3484: an environment-lane owner that crashes after the verifier exits 0 is never accepted and rolls the delivery back', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
-  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-owner-crash-'));
-  const reportPathFile = forwardSlashes(path.join(evidenceDirectory, 'report.path'));
-  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-owner-crash');
-  // A directory in place of the report makes the owner's report read throw after the verifier exited 0.
-  pinSharedEnvironment(slug, ticket.ref, jobOwnerReportTamperingVerifier(`fs.writeFileSync('${reportPathFile}',report);fs.rmSync(report);fs.mkdirSync(report);`, 0));
-  const before = head(fixture.repo);
+// The done line alone is SQ-3487's reproduction: the owner's old log parse recorded it passed with exit 0.
+for (const [forgery, forgedLines] of [['every owner marker', FORGED_OWNER_MARKERS], ['the done line alone', "console.error('__SIDEQUEST_VERIFY_DONE__');"]]) {
+  test(`SQ-3488: an environment-lane owner that crashes while its verifier prints ${forgery} and exits 0 is never accepted and rolls the delivery back`, { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+    const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-owner-crash-'));
+    const reportPathFile = forwardSlashes(path.join(evidenceDirectory, 'report.path'));
+    const { fixture, slug, ticket, runCli } = deliveryTicket(`environment-lane-owner-crash-${forgery.replace(/ /g, '-')}`);
+    // A directory in place of the job report makes the owner's read throw after the verifier exited 0,
+    // and the verifier forges the owner's old lines on the way out.
+    pinSharedEnvironment(slug, ticket.ref, jobOwnerReportTamperingVerifier(`${forgedLines}fs.writeFileSync('${reportPathFile}',report);fs.rmSync(report);fs.mkdirSync(report);`, 0));
+    const before = head(fixture.repo);
 
-  try {
-    const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+    try {
+      const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
-    assert.equal(result.status, 1, result.stderr + result.stdout);
-    const payload = JSON.parse(result.stdout);
-    assert.equal(payload.delivery, null, result.stdout);
-    assert.equal(payload.verifyFailed.status, 'could_not_run', JSON.stringify(payload));
-    assert.match(payload.verifyFailed.evidence, /^The verification owner ended without reporting\./);
-    const log = fs.readFileSync(payload.verifyFailed.logPath, 'utf8');
-    assert.match(log, /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
-    assert.doesNotMatch(log, /^__SIDEQUEST_VERIFY_DONE__$/m, 'the owner crashed before reporting');
-    assert.equal(head(fixture.repo), before, 'the unreported delivery was rolled back');
-    assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
-  } finally {
-    if (fs.existsSync(reportPathFile)) fs.rmSync(fs.readFileSync(reportPathFile, 'utf8'), { recursive: true, force: true });
-  }
-});
+      assert.equal(result.status, 1, result.stderr + result.stdout);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.delivery, null, result.stdout);
+      assert.equal(payload.verifyFailed.status, 'could_not_run', JSON.stringify(payload));
+      assert.match(payload.verifyFailed.evidence, /^The verification owner ended without reporting\./);
+      const log = fs.readFileSync(payload.verifyFailed.logPath, 'utf8');
+      assert.match(log, /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
+      assert.match(log, /^__SIDEQUEST_VERIFY_DONE__\r?$/m, 'the verifier forged the done line');
+      assert.equal(head(fixture.repo), before, 'the unreported delivery was rolled back');
+      assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'verification_could_not_run_post_merge');
+    } finally {
+      if (fs.existsSync(reportPathFile)) fs.rmSync(fs.readFileSync(reportPathFile, 'utf8'), { recursive: true, force: true });
+    }
+  });
+}
 
 test('SQ-3484: an environment-lane verifier exiting 7 with a cleanup error records the suite failure and keeps the cleanup text', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
   const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-failure-and-cleanup-error');
