@@ -28,7 +28,7 @@ From inside the repository you want to track, run:
 /observability:enable-project-telemetry
 ```
 
-Claude asks separately for the shared service consent and this repository's opt-in, then handles the local observer and any dashboard choice. A bare setup keeps SQLite reports only and does not request Docker. Use `--dashboard` only when the user explicitly wants the Docker-backed loopback dashboard. Remote sinks may require you to provide an endpoint or complete the provider's sign-in yourself.
+Claude asks separately for the shared service consent and this repository's opt-in, then handles the local observer and any dashboard choice. A bare setup keeps SQLite reports only and does not request Docker. Use `--dashboard` only when the user explicitly wants the Docker-backed loopback dashboard. Remote sinks may require you to provide an endpoint or complete the provider's sign-in yourself. On Claude Code 2.1.282 and later, Claude also asks a third question: whether to turn telemetry export on in your user settings. Project settings can't turn export on anymore, so without that step nothing exports. [Per-project opt-in](../project-opt-in/) explains which settings each Claude Code version reads.
 
 After setup, restart every Claude Code session that was already running in the repository or in a listed session-hosting directory. Restart before creating activity or running verification. This is required for project settings and hooks to apply; `/reload-plugins` alone does not apply the new environment. The restart does not let an older session replace a newer live observer. New sessions pick up the project settings and send metadata for that repository only under the intended policy.
 
@@ -45,7 +45,7 @@ The Docker probe has a 1500 ms budget. Local SQLite observability continues when
 ## What you can expect
 
 - Per-repository opt-in is enforced before capture and before export: a hook event for a repository that has not opted in is gated at the spool write, and the observer's outbox is the only route to a configured sink. Traces and metrics still reach a configured sink through the Collector without this gate.
-- The telemetry schema is designed to exclude prompt and response text, code and file contents, tool inputs and results, credentials, and environment values. Sink configuration you provide stays in the private local observability config.
+- The telemetry schema is designed to exclude prompt and response text, code and file contents, tool inputs and results, credentials, and environment values. Sink configuration and supplied exporter credentials are stored in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set.
 - The local dashboard is optional. Local reports still work when Docker is unavailable.
 - Hook events from a linked worktree can resolve to the main repository identity. Native Claude Code metrics still require wiring in the exact directory where the session starts.
 - Claude keeps the managed local processes running after setup. You do not start them by hand.

@@ -188,6 +188,24 @@ test('a long claim does not let a second executor take the ticket', () => {
   assert.strictEqual(store.readyTickets(slug).some((entry?: any) => entry.ref === ticket.ref), false, 'live work never returns to the ready pool');
 });
 
+// The ticket lock is a file owned by this live pid, so the stranger's claim waits out its bounded
+// acquisition. The answer must name the live claimant rather than a retryable busy.
+test('a claim that cannot take the ticket lock still names the live claimant', () => {
+  const ticket = addRouted('locked live claim');
+  const prepared = claimRouted(ticket, 'lock-holder-executor');
+  const before = JSON.stringify(store.getTicket(slug, ticket.ref));
+  const lock = path.join(store.projectDir(slug), 'tickets', `.${ticket.id}.lock`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'claim-liveness-held-ticket-lock' }), { flag: 'wx' });
+  try {
+    const stranger = store.claimTicket(slug, ticket.ref, 'locked-out-executor', { token: prepared.token, executor: prepared.ticket.dispatchExecutor, source: 'mcp' });
+    assert.strictEqual(stranger.reason, 'claimed');
+    assert.strictEqual(stranger.claim.by, 'lock-holder-executor');
+  } finally {
+    fs.unlinkSync(lock);
+  }
+  assert.strictEqual(JSON.stringify(store.getTicket(slug, ticket.ref)), before);
+});
+
 test('a quiet long-running executor and an executor between turns survive the sweep', () => {
   const quiet = addRouted('quiet but alive');
   claimRouted(quiet, 'quiet-executor');
@@ -1587,13 +1605,48 @@ test('the idle backstop only applies when no executor is associated', () => {
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a bound executor is not idle just because it is quiet');
 });
 
-test('a launched unbound dispatch can be superseded with observed evidence, but a freshly bound or claimed dispatch cannot', () => {
+// GH-228. A dispatched claim quiet for 72 minutes read `stale: false` in list, printed beside
+// `claimIdleMs: 3600000`, while pulse showed the same claim board-quiet well past that. A dispatched
+// claim is judged against the abandon backstop, not the idle one, so each view has to say which.
+test('GH-228: list and pulse report the same stale flag and the threshold it was judged against', () => {
+  const dispatched = addRouted('GH-228 quiet dispatched claim');
+  claimRouted(dispatched, 'gh228-wedged-executor');
+  backdateClaim(dispatched.ref, 72 * 60 * 1000);
+  const hand = store.createTicket(slug, {
+    title: 'GH-228 idle hand claim',
+    complexity: 2,
+    complexityWhy: 'fixture for list and pulse staleness, no implementation work',
+    labels: ['direct-ok'],
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  assert.strictEqual(store.claimTicket(slug, hand.ref, 'human', { direct: true, reason: 'A hand claim needs no executor association.' }).ok, true);
+  backdateClaim(hand.ref, 2 * HOUR);
+
+  const rows = store.listPayload(slug, { brief: true, status: 'doing', all: true }).tickets;
+  const cases = [
+    { ref: dispatched.ref, stale: false, staleAfterMs: store.claimAbandonMs() },
+    { ref: hand.ref, stale: true, staleAfterMs: store.claimIdleMs() },
+  ];
+  for (const expected of cases) {
+    const row = rows.find((candidate: any) => candidate.ref === expected.ref);
+    const pulse = store.pulsePayload(slug, expected.ref);
+    assert.deepStrictEqual({ stale: row.claim.stale, staleAfterMs: row.claim.staleAfterMs }, { stale: expected.stale, staleAfterMs: expected.staleAfterMs }, expected.ref);
+    assert.deepStrictEqual({ stale: pulse.claim.stale, staleAfterMs: pulse.claim.staleAfterMs }, { stale: row.claim.stale, staleAfterMs: row.claim.staleAfterMs }, `${expected.ref} pulse agrees with list`);
+  }
+});
+
+test('a launched unbound dispatch becomes supersedable on evidence after its latest signal grace, while freshly bound or claimed attempts cannot', () => {
   const ticket = addRouted('supersedable unclaimed launch');
   const first = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-supersedable-launch' });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     token: first.token, executor: first.ticket.dispatchExecutor, sessionId: 'session-supersedable-launch', agentName: 'supersedable-launch-agent',
   }).ok, true);
-  assert.match(store.pulsePayload(slug, ticket.ref).livenessEvidence, /without a bound runtime identity, claim, or checkpoint/);
+  assert.match(store.pulsePayload(slug, ticket.ref).livenessEvidence, /still starting until/);
+  const expired = store.getTicket(slug, ticket.ref);
+  const silentSince = new Date(Date.now() - 2 * HOUR).toISOString();
+  for (const field of ['preparedAt', 'launchedAt']) expired.dispatch[field] = silentSince;
+  persist(expired);
   const replacement = store.prepareDispatch(slug, ticket.ref, {
     sharedTree: true,
     sessionId: 'session-supersedable-replacement',
@@ -1625,7 +1678,7 @@ test('a launched unbound dispatch can be superseded with observed evidence, but 
 // SQ-2206: a bound attempt that never claimed had no exit but its own stop hook, so a runtime that died
 // without firing it stranded the ticket for good: redispatch refused it as live, evidence refused it as bound,
 // and session-start reconciliation skips bound attempts on purpose.
-test('SQ-2206: a bound launch that never claimed becomes retirable on evidence past the idle backstop', () => {
+test('SQ-2206: a bound launch that never claimed becomes retirable on evidence past the claim grace', () => {
   const ticket = addRouted('stranded bound launch');
   const sessionId = 'session-stranded-bound';
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
@@ -1637,8 +1690,8 @@ test('SQ-2206: a bound launch that never claimed becomes retirable on evidence p
   const evidence = 'The native task for this launch completed without ever claiming, observed by the orchestrator.';
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: `${sessionId}-early`, recoveryEvidence: evidence }),
-    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in .* unless its terminal hook fires first/,
-    'inside the backstop a live executor stays protected, and the refusal says how long is left',
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence at .*, in \d+ minutes?, unless its terminal hook fires first/,
+    'inside the grace a live executor stays protected, and the refusal says exactly how long is left',
   );
 
   const originalIdleMinutes = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
@@ -1671,7 +1724,10 @@ test('retireOnly retires an expired bound-unclaimed attempt without a replacemen
   assert.equal(store.bindDispatchAgent('wrong-retire-only-session', expiredPrepared.ticket.dispatchExecutor, 'retire-only-expired-agent', 'retire-only-expired-agent').reason, 'not_found', 'a different session cannot bind the attempt');
   assert.equal(store.bindDispatchAgent(expiredSessionId, expiredPrepared.ticket.dispatchExecutor, 'retire-only-expired-agent', 'retire-only-expired-agent').ok, true);
   const expiredState = store.getTicket(slug, expired.ref);
-  expiredState.dispatch.boundAt = new Date(Date.now() - 2 * HOUR).toISOString();
+  // Every signal, not just the bind: the grace runs from the newest board fact the runtime produced, so
+  // leaving preparedAt at now keeps this attempt inside its grace no matter how old the bind is.
+  const silentSince = new Date(Date.now() - 2 * HOUR).toISOString();
+  for (const field of ['preparedAt', 'launchedAt', 'boundAt']) expiredState.dispatch[field] = silentSince;
   persist(expiredState);
 
   assert.doesNotThrow(
@@ -1691,8 +1747,8 @@ test('retireOnly retires an expired bound-unclaimed attempt without a replacemen
   assert.equal(store.bindDispatchAgent('retire-only-young-session', youngPrepared.ticket.dispatchExecutor, 'retire-only-young-agent', 'retire-only-young-agent').ok, true);
   assert.throws(
     () => store.prepareDispatch(slug, young.ref, { retireOnly: true, recoveryEvidence: evidence }),
-    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in/,
-    'a live bound attempt stays protected during the backstop',
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence at .*, in \d+ minutes?, unless/,
+    'a live bound attempt stays protected during the claim grace',
   );
 
   const claimed = addRouted('retire only claimed attempt');
@@ -1719,6 +1775,9 @@ test('SQ-2136: a prepared dispatch that never launched is retirable on evidence,
   assert.equal(prepared.boundAt, null);
 
   const evidence = 'Pulse showed prepared with no launch, runtime identity, claim, or checkpoint, and the spawn was cancelled before it ran.';
+  const expired = store.getTicket(slug, ticket.ref);
+  expired.dispatch.preparedAt = new Date(Date.now() - 2 * HOUR).toISOString();
+  persist(expired);
   const replacement = store.prepareDispatch(slug, ticket.ref, {
     sharedTree: true,
     sessionId: 'session-prepared-unbound-replacement',

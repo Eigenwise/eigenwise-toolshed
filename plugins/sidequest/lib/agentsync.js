@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -12,9 +12,11 @@ const { spawnDescription } = store;
 const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const { verificationRequirement } = require("./kernel/verification.js");
+const { scopeKey } = require("./scope-match.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
+const DISCOVERED_MODEL_MARKER = "<!-- generated-by: sidequest-agentsync discovered-model -->";
 const TEMP_MARKER = "<!-- generated-by: sidequest-native-agent -->";
 const TEMP_PREFIX = "sidequest-native-";
 const TICKET_PREFIX = "sidequest-ticket-";
@@ -23,7 +25,7 @@ const RESTART_NOTICE = RELOAD_NOTICE;
 const ARTIFACT_LIFECYCLE_MARKER = "[sidequest-artifact-mode]";
 const NON_MAX_EFFORTS = ["low", "medium", "high", "xhigh"];
 const EXEC_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 75;
 const EXECUTOR_CONTRADICTION_RULE = "Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.";
 function defaultAgentsDir() {
   const explicit = process.env.SIDEQUEST_AGENTS_DIR;
@@ -48,33 +50,34 @@ function routeMarker(dispatchModel, effort, ticketRef) {
   if (!EMITTED_ROUTE_MARKER_RE.test(marker)) throw new Error("dispatch route marker does not match the gateway grammar.");
   return marker;
 }
+function recipeAgentWiring(exec, effort) {
+  if (exec.backend === "codex") {
+    return {
+      agent: { model: DISPATCH_MODEL_ID, promptPrefix: `${routeMarker(exec.dispatchModel, effort)}
+
+` },
+      effortCarrier: "marker"
+    };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) {
+    ensureDiscoveredModelAgents(exec.agent);
+    return { agent: { model: null, subagentType: exec.agent, promptPrefix: "" }, effortCarrier: "definition" };
+  }
+  return { agent: { model: exec.model, promptPrefix: "" }, effortCarrier: "none" };
+}
 function workflowRecipe(category, resolved) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error("A resolved category route is required.");
-  const recipe = {
+  return {
     project: category.project,
     category: category.id,
     categoryName: category.name,
     backend: exec.backend,
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
-    agent: null,
-    effortCarrier: null,
+    ...recipeAgentWiring(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : []
   };
-  if (exec.backend === "codex") {
-    recipe.agent = {
-      model: DISPATCH_MODEL_ID,
-      promptPrefix: `${routeMarker(exec.dispatchModel, resolved.effort)}
-
-`
-    };
-    recipe.effortCarrier = "marker";
-  } else {
-    recipe.agent = { model: exec.model, promptPrefix: "" };
-    recipe.effortCarrier = "none";
-  }
-  return recipe;
 }
 const EXECUTOR_SKILLS = ["sidequest:verify-discipline"];
 const READ_ONLY_DENIED_TOOLS = [
@@ -97,7 +100,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
   };
 }
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 function scratchWorktreeNote() {
   return "\n\n**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.";
@@ -110,7 +113,6 @@ function renderDiagnosticProbe() {
     "model: haiku",
     "maxTurns: 3",
     "tools: Read, Glob, Grep",
-    "permissionMode: bypassPermissions",
     "---",
     MARKER,
     "Diagnose only the Agent spawn path. Read repository files and report concise evidence. Do not edit, run commands, use network tools, delegate, mention tickets, or investigate ordinary work.",
@@ -148,9 +150,12 @@ function renderDispatchAgent(_effort) {
     extraNote: dispatchNote()
   }));
 }
+function withoutPermissionMode(source) {
+  return source.replace(/^permissionMode: bypassPermissions\n/m, "");
+}
 function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return collapseEffortProse(renderExecAgent({
+  return withoutPermissionMode(collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
     effort: "high",
     modelId: DISPATCH_MODEL_ID,
@@ -158,18 +163,18 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  }));
+  })));
 }
 function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return renderExecAgent({
+  return withoutPermissionMode(renderExecAgent({
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
     extraNote: readOnlyNote(),
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  });
+  }));
 }
 function implementationExecutorSources() {
   const sources = /* @__PURE__ */ new Map();
@@ -328,7 +333,9 @@ function ticketCloseout(ticket) {
   if (ticket?.dispatch?.readonly === true) {
     return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
   }
-  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after the pinned verify-capture wrapper records the current dispatch attempt and revision; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
+  const externalDeliverableRequirement = ticket.dispatch?.verificationRequirement || {};
+  const externalDeliverableVerify = externalDeliverableRequirement.command ? "the pinned verify-capture wrapper records the current dispatch attempt and revision" : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || "custom"} requirement is supplied`;
+  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after ${externalDeliverableVerify}; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
 }
 function continuationResumeDecision(continuation) {
   if (!continuation?.lease) return { allowed: false, reason: "the continuation has no immutable worktree lease." };
@@ -352,6 +359,15 @@ function retainedWorktreeAccess(worktree) {
 }
 function ticketContinuationPacket(ticket) {
   const continuation = ticket?.dispatch?.continuation;
+  if (continuation?.mode === "live_claim_resume" && continuation.sourceWorktree && continuation.commit) {
+    return [
+      "Live-claim recovery:",
+      `The prior executor died after claiming this ticket. Continue in its rebound linked worktree ${continuation.sourceWorktree}.`,
+      ...retainedWorktreeAccess(continuation.sourceWorktree),
+      `Before any other work, verify \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\`.`,
+      "Preserve any retained uncommitted work. The board kept the live claim and binds this ticket to that worktree."
+    ].join("\n");
+  }
   const resume = continuationResumeDecision(continuation);
   if (continuation?.mode === "retained_worktree_resume" && continuation.sourceWorktree && continuation.commit && resume.allowed) {
     const branch = continuation.sourceBranch || "(detached HEAD)";
@@ -385,6 +401,15 @@ function ticketContinuationPacket(ticket) {
   const evidence = cause ? ` Validation evidence: ${cause}.` : "";
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, " ")}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ""}${evidence}${replay}`.trim();
 }
+function explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch) {
+  if (!continuation.retainReason || !checkpointBase || checkpointBase === commit) return null;
+  return [
+    `Worktree synchronization (run before work): ${continuation.retainReason}.`,
+    `Confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged entries. If not, stop and report that this checkout is not the retained candidate.`,
+    `Then preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+    "Never check out or discard over the retained changes, and never use `git stash`. If the commit or the rebase fails, stop and report it rather than resolving toward either side."
+  ].join(" ");
+}
 function ticketWorktreeSync(ticket, projectPath) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || "").trim();
@@ -406,6 +431,12 @@ function ticketWorktreeSync(ticket, projectPath) {
   if (!branch) return null;
   const continuation = dispatch?.continuation;
   const checkpointBase = String(continuation?.baseCommit || "").trim();
+  if (continuation?.mode === "live_claim_resume" && continuation.sourceWorktree && continuation.commit) {
+    return [
+      `Worktree synchronization (run before work): check \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and \`git -C ${continuation.sourceWorktree} merge-base --is-ancestor ${commit} HEAD\`.`,
+      "If either check fails, stop and report it. Do not reset, rebase, or discard retained work."
+    ].join(" ");
+  }
   const checkpoint = continuation?.mode === "retained_worktree_resume" && checkpointBase && continuation.commit;
   if (checkpoint) {
     return [
@@ -415,6 +446,8 @@ function ticketWorktreeSync(ticket, projectPath) {
     ].join(" ");
   }
   if (continuation?.mode === "dirty_worktree_resume") {
+    const explicitMove = explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch);
+    if (explicitMove) return explicitMove;
     const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged (\`UU\`, \`AA\`, \`DU\`, \`UD\`, \`AU\`, \`UA\`, \`DD\`) entries. If any of that fails, stop and report that this checkout is not the retained candidate. Only then check \`git merge-base --is-ancestor ${commit} HEAD\`, and change nothing if it passes.`;
     if (!checkpointBase) {
       return [
@@ -504,12 +537,21 @@ function ticketIsolationContract(ticket, projectPath) {
   const dispatch = ticket.dispatch;
   const continuationWorktree = String(dispatch.continuation?.sourceWorktree || "").trim();
   const expected = continuationWorktree || String(dispatch.worktree || "").trim() || "(immutable worktree binding unavailable; writes will be refused)";
+  if (dispatch.continuation?.mode === "live_claim_resume") {
+    return [[
+      "Live-claim worktree contract: continue in the rebound linked worktree. The prepared spawn intentionally carries no isolation field, so the harness does not create another worktree.",
+      `Expected worktree root: ${expected}`,
+      "Use absolute paths under that worktree. If its Git directory is unavailable, stop and report the lost binding without writing in the shared checkout."
+    ].join("\n")];
+  }
   return [[
     "Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.",
     "The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.",
     `Expected worktree root: ${expected}`,
+    "If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other's checkouts until they claim.",
     "Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.",
-    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`
+    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
+    `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Follow the refusal's remedy and ask the orchestrator to rebind this live claim to that checkout (\`dispatch\` with \`claimHolder\`, \`worktree\` and \`recoveryEvidence\`). When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, the board swaps the two records onto their own checkouts at once. Otherwise it allows the rebind only once the checkout's HEAD is this claim's own commit: commit your work with git in the checkout you run in, pin that hash at \`refs/sidequest/${ticket.ref}\`, and comment it as the crossing evidence before asking for the rebind. If you have no exact crossing to swap and no commit to pin, or the rebind is refused, release this ticket with kind \`technical_blocker\` and status \`todo\`, quoting the refusal as its command and output evidence, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`
   ].join("\n")];
 }
 const DEPENDENCY_LINK_TYPES = /* @__PURE__ */ new Set(["blocks", "blocked-by"]);
@@ -519,13 +561,10 @@ function linkedPlanSuffix(link, slug) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : "";
 }
 function capturedVerifyCommand(verify, ticketRef, project, boundWorktree) {
-  const command = String(verify || "").trim();
-  if (!command) return "";
-  const encoded = Buffer.from(command, "utf8").toString("base64");
   const captureScript = path.join(__dirname, "verify-capture.js");
-  const target = String(ticketRef || "").trim() && String(project || "").trim() ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : "";
-  const worktree = String(boundWorktree || "").trim() ? ` --worktree ${JSON.stringify(String(boundWorktree))}` : "";
-  return `node "${captureScript}" --base64 ${encoded}${target}${worktree}`;
+  const commandSource = ticketRef && project ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : ` --base64 ${Buffer.from(verify.trim(), "utf8").toString("base64")}`;
+  const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : "";
+  return `node "${captureScript}"${commandSource}${worktree}`;
 }
 function ticketEvidenceGuidance(ticket) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || "").trim();
@@ -628,9 +667,10 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     ...worktreeSync ? [worktreeSync] : [],
     ...ticketIsolationContract(ticket, project) || [],
     verify,
+    ...ticket.executorVerifyCwd ? [`verifyCwd: the wrapper runs it from ${ticket.executorVerifyCwd}, relative to the checkout root; the integrate gate does the same.`] : [],
     verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
     evidenceGuidance || "",
-    "Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.",
+    "Execution survival: Budget tool calls and preserve progress early. If the budget nears exhaustion before completing the ticket contract, use the existing Continuation checkpoint path: make a scoped checkpoint commit, write a `Continuation checkpoint` comment with the exact remaining work and verification status, release the ticket to `todo`, and end for a fresh continuation dispatch. Do not submit incomplete ticket work as ready. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.",
     "If Sidequest itself misbehaves, such as a refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error, report it to the user with the reproducing evidence and treat it as an upstream defect. Executors also put that evidence in a ticket comment so the orchestrator sees it. Do not encode a workaround in project rules, hooks, or memory; any unavoidable stopgap must be marked temporary and name the defect it awaits.",
     ...highStakes.length ? [highStakes.join("\n")] : [],
     boundReview || "",
@@ -664,10 +704,34 @@ function rejectedSubmissionRows(ticket) {
     ...rejected.supersededAt ? { supersededAt: rejected.supersededAt, supersededBy: rejected.supersededBy || null } : {}
   }));
 }
+function latestPendingRework(ticket) {
+  const latest = ticket.rejectedSubmissions.filter(Boolean).at(-1);
+  return latest.rejectionKind === "rework" && !latest.supersededAt && !ticket.submission ? latest : null;
+}
+function preservedRefSuffix(rejected) {
+  return rejected.quarantineRef && rejected.preservationState !== "pending" ? ` (preserved at ${rejected.quarantineRef})` : "";
+}
+function pendingReworkBody(ticket) {
+  const latest = latestPendingRework(ticket);
+  if (!latest) return null;
+  const candidate = latest.commit || latest.sourceRevision.value;
+  const preserved = preservedRefSuffix(latest);
+  return [
+    "## Pending rework",
+    `This dispatch repairs a rejected candidate. Candidate ${candidate} was sent back for rework at ${latest.rejectedAt} and the ticket returned to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
+    `Rejected candidate: ${candidate}${preserved}`,
+    `Rework reason:
+${latest.reason}`,
+    `Review:
+${latest.review}`
+  ].join("\n\n");
+}
 function rejectedSubmissionHistoryBody(ticket) {
   const rows = rejectedSubmissionRows(ticket);
   if (!rows.length) return null;
+  const pendingRework = pendingReworkBody(ticket);
   return [
+    ...pendingRework ? [pendingRework] : [],
     "## Rejected submission history",
     `${rows.length} prior candidate${rows.length === 1 ? " was" : "s were"} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
     ...rows.map((rejected) => [
@@ -721,22 +785,27 @@ ${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     "Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle. A user is not a board fallback: when no board path remains, comment the evidence and release with kind `technical_blocker`; never compose a command for a human to run.\n\nScope check: request scope when a needed path is outside the declared set. A granted ruling takes effect immediately for write enforcement and commit admission. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants, and globs match paths consistently at the hook and commit gate. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix."
   ].join("\n\n");
 }
-function taskAndScopeBody(ticket, slug) {
-  const category = ticket?.category || {};
-  const declared = Array.isArray(ticket?.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
-  const effectiveFiles = store.effectiveScope(slug, ticket);
-  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const generatedFiles = effectiveFiles.filter((file) => {
-    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
-    return !declaredKeys.has(key) && !alwaysKeys.has(key);
-  });
-  const scopedFiles = generatedFiles.length ? `${declaredFiles}
+function scopeListing(heading, files) {
+  return files.length ? `
 
-Auto-paired tracked generated files (regenerate before verifying):
-${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
-  return executorTaskBody(ticket, category, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
+${heading}:
+${files.map((file) => `- ${file}`).join("\n")}` : "";
+}
+function scopeAddedBeyondDeclared(ticket, slug, declared) {
+  const declaredKeys = new Set(declared.map(scopeKey));
+  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
+  const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
+  return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
+}
+function noDeclaredFilesText(ticket) {
+  const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
+  return writeScope ? `(No files were declared.) ${writeScope}.` : "(No files were declared.)";
+}
+function taskAndScopeBody(ticket, slug) {
+  const declared = Array.isArray(ticket?.files) ? ticket.files : [];
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : noDeclaredFilesText(ticket);
+  const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
+  return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
 function executorHandlesBody(ticket, slug) {
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
@@ -810,7 +879,7 @@ function renderTicketBriefing(ticket, nonce, slug, projectPath) {
 }
 function ticketIsolation(ticket, sharedTree) {
   const continuationMode = ticket?.dispatch?.continuation?.mode;
-  return sharedTree === true || continuationMode === "retained_worktree_resume" || continuationMode === "dirty_worktree_resume" ? null : "worktree";
+  return sharedTree === true || ["retained_worktree_resume", "dirty_worktree_resume", "live_claim_resume"].includes(continuationMode) ? null : "worktree";
 }
 function withProjectIdentity(prompt, projectPath) {
   const text = String(prompt || "").trim();
@@ -819,7 +888,7 @@ function withProjectIdentity(prompt, projectPath) {
   if (!project) return text;
   return `${text}
 
-Dispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+Dispatch board identity: --project "${project.replace(/"/g, '\\"')}". Pass it as project on every board call: an unqualified ref resolves on the orchestrating session's board, and only calls naming your claim or worktree follow you to this one.`;
 }
 function quotedShellArgument(value) {
   return `"${String(value || "").replace(/"/g, '\\"')}"`;
@@ -943,13 +1012,18 @@ function renderDispatchStub(ticket, projectPath) {
     ...marker ? ["", marker] : []
   ].join("\n");
 }
+function unattendedSpawnMode(subagentType) {
+  return isReadOnlyExecutor(subagentType) ? {} : { mode: "bypassPermissions" };
+}
 function agentSpawn(name, isolation, model, agentType, prompt, description, options) {
   const suppliedLabel = typeof description === "string" ? description.replace(EMBEDDED_ROUTE_MARKER_RE, "").replace(/\s+/g, " ").trim() : "";
   const taskLabel = suppliedLabel || "Sidequest ticket executor.";
   const reducedAgentSchema = options?.reducedAgentSchema === true;
+  const subagentType = bundledAgentType(agentType || name);
+  ensureDiscoveredModelAgents(subagentType);
   return Object.assign(
-    { subagent_type: bundledAgentType(agentType || name), description: taskLabel },
-    reducedAgentSchema ? {} : { name, mode: "bypassPermissions" },
+    { subagent_type: subagentType, description: taskLabel },
+    reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
     isolation ? { isolation } : {},
     model ? { model } : {},
     prompt ? { prompt } : {}
@@ -1091,12 +1165,114 @@ function migrateExecAgents(_prefs, opts) {
   }
   return { written: 0, removed, unchanged };
 }
+function renderDiscoveredModelAgent(name, effort, modelId) {
+  return renderExecAgent({ name, effort, modelId, marker: DISCOVERED_MODEL_MARKER });
+}
+function renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
+  return withoutPermissionMode(renderExecAgent({
+    name,
+    effort,
+    modelId,
+    marker: DISCOVERED_MODEL_MARKER,
+    extraNote: readOnlyNote(),
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools
+  }));
+}
+function routedDiscoveredModelExec(route) {
+  const exec = route && store.resolveExec(route.model, route.effort);
+  return isDiscoveredModelExecutor(exec?.agent) ? exec : null;
+}
+function routedDiscoveredModelDefinitions() {
+  const globalFallback = store.getRoutingFallback();
+  const definitions = [];
+  for (const { route, fallback, readonly } of store.getCategoryRoutePairs()) {
+    for (const exec of [route, fallback, globalFallback].map(routedDiscoveredModelExec)) {
+      if (!exec) continue;
+      definitions.push({ name: exec.agent, effort: exec.effort, modelId: exec.spawnId, readOnly: false });
+      if (readonly) definitions.push({ name: exec.readOnlyAgent, effort: exec.effort, modelId: exec.spawnId, readOnly: true });
+    }
+  }
+  return definitions;
+}
+function requestedDiscoveredModelDefinitions(executor) {
+  for (const backend of store.discoveredModelBackends()) {
+    for (const effort of EXEC_EFFORTS) {
+      if (discoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: false }];
+      if (readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: true }];
+    }
+  }
+  return [];
+}
+function discoveredModelAgentSources(definitions, readOnlyDeniedTools) {
+  const sources = /* @__PURE__ */ new Map();
+  for (const { name, effort, modelId, readOnly } of definitions) {
+    sources.set(`${name}.md`, readOnly ? renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) : renderDiscoveredModelAgent(name, effort, modelId));
+  }
+  return sources;
+}
+function readTextOrNull(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (_) {
+    return null;
+  }
+}
+function agentFileNames(dir) {
+  try {
+    return fs.readdirSync(dir);
+  } catch (_) {
+    return [];
+  }
+}
+function pruneDiscoveredModelAgents(dir, wanted) {
+  let removed = 0;
+  for (const filename of agentFileNames(dir)) {
+    if (wanted.has(filename) || !isDiscoveredModelExecutor(filename.replace(/\.md$/, ""))) continue;
+    if (!readTextOrNull(path.join(dir, filename))?.includes(DISCOVERED_MODEL_MARKER)) continue;
+    fs.rmSync(path.join(dir, filename), { force: true });
+    removed++;
+  }
+  return removed;
+}
+function writeOwnedDiscoveredModelAgent(filePath, source) {
+  const previous = readTextOrNull(filePath);
+  if (previous === source || previous !== null && !previous.includes(DISCOVERED_MODEL_MARKER)) return false;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, source);
+  return true;
+}
+function writeDiscoveredModelAgents(dir, wanted) {
+  let written = 0;
+  for (const [filename, source] of wanted) {
+    if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
+  }
+  return written;
+}
+function syncDiscoveredModelAgents(opts) {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(routedDiscoveredModelDefinitions(), opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  const written = writeDiscoveredModelAgents(dir, wanted);
+  return { written, removed, unchanged: wanted.size - written };
+}
+function ensureDiscoveredModelAgents(executor, opts) {
+  if (!isDiscoveredModelExecutor(executor)) return;
+  const wanted = discoveredModelAgentSources(requestedDiscoveredModelDefinitions(executor), opts?.readOnlyDeniedTools);
+  if (writeDiscoveredModelAgents(opts?.dir || defaultAgentsDir(), wanted) > 0) waitForNativeAgentReload(opts?.waitMs);
+}
 function syncExecAgentsIfChanged(_prefs, opts) {
-  const result = migrateExecAgents(_prefs, opts);
-  return Object.assign({}, result, {
-    skipped: result.removed === 0,
+  const migrated = migrateExecAgents(_prefs, opts);
+  const discovered = syncDiscoveredModelAgents(opts);
+  const removed = migrated.removed + discovered.removed;
+  return {
+    written: discovered.written,
+    removed,
+    unchanged: migrated.unchanged + discovered.unchanged,
+    skipped: removed === 0 && discovered.written === 0,
     installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools)
-  });
+  };
 }
 function syncExecAgents(_prefs, opts) {
   if (!opts?.dir) return migrateExecAgents(_prefs, opts);
@@ -1193,6 +1369,9 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  syncDiscoveredModelAgents,
+  ensureDiscoveredModelAgents,
+  DISCOVERED_MODEL_MARKER,
   migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,

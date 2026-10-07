@@ -5,6 +5,17 @@ delegation rule (gather enough evidence with read-only tools or native `Explore`
 route implementation by default, batch small same-model tickets, and fan out over independent waves) lives
 in the main skill — this file is the detail on the bigger shapes.
 
+## Contents
+
+- [Improvement authority](#improvement-authority) and [decomposition](#decomposition-in-depth)
+- [Inline-safe work](#inline-safe-direct-work) and [acceptance/advice](#acceptance-evidence-and-audit-gates)
+- [Fan-out](#fan-out-mechanics), [resources](#shared-resource-handoff) and [worktree bases](#worktree-base-selection)
+- [Bookend supervision and immutable review](#bookend-supervision)
+- [Checkpoints](#natural-orchestrator-checkpoints), [touch budget](#small-ticket-touch-budget) and [lead load](#orchestration-load-keep-the-lead-responsive)
+- [Research](#discovery-and-research) and [agent teams](#agent-teams-claude_code_experimental_agent_teams)
+- [Background permissions](#background-fan-out-and-the-permission-allowlist)
+- [Instant dispatch](#instant-ticket-executor-dispatch) and [routed dispatch](#routed-agent-dispatch)
+
 ## Improvement authority
 
 The orchestrator decides whether an improvement is worth making, its concrete benefit, the approach, and
@@ -51,9 +62,7 @@ mid-run tickets.
 Wave mode files its complete backlog under a story. A planning investigation can pin shared decisions and
 anchors before a wave starts. Put frozen orchestrator decisions, invariants, acceptance evidence, and
 durable artifact links in the story execution contract once (`story contract US-n --body-file path` or
-MCP `story_contract`) rather than repeating them in steering messages. Durable contract storage is capped at 256 KiB UTF-8; MCP reads retrieve it in 16 KiB UTF-8-safe pages with revision, SHA-256, total bytes, and a cursor. The contract arrives before ticket scope in every member briefing. The `story log` is the executor-to-executor
-channel for live cross-ticket discoveries; at integration, the orchestrator promotes durable entries into
-the contract, then clears the log. If the contract changes after a member is claimed, `pulse`/`changes` and the next dispatch warn
+MCP `story_contract`) rather than repeating them in steering messages. Durable contract storage is capped at 256 KiB UTF-8; MCP reads retrieve it in 16 KiB UTF-8-safe pages with revision, SHA-256, total bytes, and a cursor. The contract arrives before ticket scope in every member briefing. The story log holds orchestrator planning history outside those briefings. It automatically archives older entries when the live briefing window fills; `full: true` reads archive then live entries. At integration, the orchestrator promotes durable entries into the contract. If the contract changes after a member is claimed, `pulse`/`changes` and the next dispatch warn
 about revision drift. This keeps context completeness cheap without the orchestrator rediscovering the
 codebase inline.
 
@@ -65,6 +74,8 @@ Before dispatching a wave, ask: “What will every ticket in this wave need to c
 
 When a package commits build output, the source ticket scopes its generated output too. For content-hashed output, assign exactly one rebuild ticket per wave: parallel rebuilds choose different filenames and collide at merge.
 
+A write ticket with no declared files refuses at dispatch unless you pass `allowUnscoped: true` (CLI `--allow-unscoped`). That gives the executor the whole tree as its write scope. Board `alwaysInScope` paths such as `docs/` ride beside it and are never the only scope. The dispatch result's `writeScope` and the briefing's declared-files line say it in one line: `write scope: unscoped (whole tree), always-in-scope: docs/`. A whole-tree commit only works in an isolated worktree, so an unscoped dispatch that would run in the shared checkout refuses at dispatch: declare the paths it needs. A whole-tree candidate overlaps every sibling in a wave, so declare files whenever you know them. Work an executor handed back that you cherry-picked onto the integration branch closes with `groomClose <ref> --deliveryCommit <the cherry-pick> --deliveryMethod manual`.
+
 **The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket,
 bounded recon may `Read`/`Glob`/`Grep` named anchors and make one narrow location sweep. Route unfamiliar
 path tracing, deep investigation, or multi-angle research through the live taxonomy, with a proportional
@@ -74,16 +85,21 @@ scoped test or reproduction for its declared files; reserve full-suite green for
 ship ticket. Shrink until the complexity drops — a piece still scoring 7+ is usually a small design
 ticket plus a mechanical application ticket.
 
+**Size implementation plus final verification to fit comfortably before 75 tool rounds.** Otherwise split
+along actual cohesive boundaries before dispatch; a resource pause does not release or restart an executor.
+
 **Ticket detail follows the decision and remaining uncertainty.** Every ticket needs the selected outcome,
 anchors, expected behavior, boundaries, and precise verification commands needed to implement the pinned plan.
 If finishing would need facts the contract does not carry, gather only the facts that could change the decision,
 then add them to the spec or split the work further.
 
-**Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts, or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
+**Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts (a read-only ticket may close with `done` over paths under its category's `artifactRoots`; any other declared-scope change refuses `done_scope_violation`, naming those roots), or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
 
 ## Inline-safe direct work
 
 Run this check before filing. Do the user-directed 1–2 named-file carve-out inline without creating a ticket; an exact one-line `.gitignore` entry is the canonical case. If a routed ticket already exists, direct work still records a 20+ character reason. Other inline work is limited to a failing integration gate that pinpoints a known small mechanical diff (strict-TS null guard, deliberate assertion-string sync, byte-checked golden regeneration, or merge-conflict resolution preserving both intents) or release bookkeeping (fragment, cut, or evidence closeout). `direct-ok` is optional user signal only, never a gate.
+
+A direct claim submits without a briefing: commit the candidate, `git update-ref refs/sidequest/<ref> <commit>`, run `node "<sidequest plugin>/lib/verify-capture.js" --project "<project path>" --ticket "<ref>"` from that clean checkout, then `submit`. The wrapper and submit use the ticket's current verify, not an earlier dispatch's pin, and a `verification_capture_required` refusal prints the exact wrapper line.
 
 Route a ticket to an executor for work needing investigation or other-file reading to be confident,
 new behavior or API surface, a failing test that does not pinpoint the location, or any rationale
@@ -100,46 +116,38 @@ Set the acceptance boundary before splitting fixes:
   separate tickets before one matrix covers the lifecycle.
 - **Skip an audit wave when the done-oracle is deterministic.** If the ticket's executable
   acceptance commands or test suite pass, do not append a `review-audit` + fix wave by default.
-  Audit when the work has no deterministic done-oracle, a weak oracle leaves material uncertainty, or
-  high-stakes flags demand independent scrutiny. The integrator consumes the submission report and gate
+  Bind review only for a contract-named seam the oracle cannot exercise or a required high-stakes review.
+  Distinct review lenses need distinct named risks; wave count alone adds no review. The integrator consumes the submission report and gate
   evidence; it does not inspect the implementation diff.
-- **Keep one implementation ticket open through a required independent review.** Attach findings as
-  comments on the open implementation claim and correct them there. Submit only after that required
-  review is clean, rather than closing each narrow step and filing a follow-up fix chain.
+- **Keep one producer through live advice.** A declared readonly advisor can report bounded draft
+  findings while the producer implements and tests; see `readonly-guidance.md`. Correct useful findings
+  in that claim. Formal final acceptance starts only after terminal submission and immutable binding.
 - **Record stable facts once.** Put local-only git, artifact lifecycle, and frozen acceptance wording
   in the ticket or board record that owns them. Executors consume that source instead of receiving
   the same steering repeatedly.
 
 When full-suite failures move between runs but each failing test passes alone, reproduce under load and inspect runner concurrency or shared resources. Do not add sleeps, retries, or looser assertions. Accept the runner fix only after several consecutive green runs.
 
-### Live review checkpoints
+### Live advice and retained checkpoints
 
-Use a **live review checkpoint** when an implementation needs an independent review before submission:
+Use `readonly-guidance.md` for authorized builder/advisor collaboration. Ordinary source work and
+focused checks proceed under the pinned contract without checkpoint/acknowledgement relays. Pause only
+the step lacking a scope, resource or authority decision. Moving-draft inspection records actual
+hashes and limits; it neither accepts a candidate nor ends ownership. Final independent review binds
+the terminal submitted candidate, reuses byte-identical inspected material, and checks the settled
+delta, unresolved findings and real execution identity. No duplicate suite merely for reviewer identity.
 
-1. The implementation executor verifies the candidate, then calls `checkpoint` with its commit or
-   absolute worktree path, verification evidence, and the same `by` identity that holds the claim.
-2. The board returns a checkpoint id, keeps the claim and dispatch active, and writes a durable
-   `Live review checkpoint` comment. Link each review ticket to the implementation ticket. Review
-   findings go on the implementation thread and name that checkpoint id.
-3. A clean review lets the implementation executor submit. Findings resume the same named executor
-   with `SendMessage`; it corrects, reverifies, and creates a new live review checkpoint for the new
-   candidate. The healthy gated relay is implement → checkpoint → review → correct → submit.
-
-A live review checkpoint lasts 60 minutes by default and accepts an explicit TTL from 1 minute to 24
-hours. `pulse` and `changes` report `active`, `resumed`, `recoverable`, `expired`, `submitted`, or
-`completed`. Expired evidence stays on the ticket but needs a fresh verification checkpoint before a
-review gate can pass. If the executor is dead, salvage its commit or declared-scope diff, release the
-claim, and redispatch. The stored checkpoint and its automatic comment survive that recovery, and the
-replacement claim reports the checkpoint as `resumed` while its TTL is live.
-
-Keep the two checkpoint names exact. A **live review checkpoint** uses the `checkpoint` operation and
-holds the claim so the same executor remains addressable. A **Continuation checkpoint** is the
-100-tool-round handoff: commit, comment, release to `todo`, then start a fresh executor with a fresh
-dispatch. Only the continuation flow releases during a healthy handoff.
+A **live review checkpoint** uses `checkpoint` to retain a commit or worktree/evidence pointer while
+keeping the claim addressable. It is optional recovery evidence, not a formal review binding or
+acceptance gate. It lasts 60 minutes by default (explicit TTL: 1 minute to 24 hours); expired evidence
+stays recorded but cannot prove fresh execution. If its executor dies, salvage before release and
+redispatch under the normal liveness rules. A **Continuation checkpoint** is the 75-tool-round handoff:
+commit, comment, release to `todo`, then a fresh executor/dispatch. Only that continuation flow releases
+during a healthy handoff; a draft checkpoint never authorizes ownership release.
 
 ### Scope expansion without a bounce
 
-When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>`. A concrete path in the same declared package surface, such as `src` or `lib`, is added immediately and recorded as an audited auto-approval. Test roots and mechanically derived build outputs use the same no-pause path. A sibling package surface, another package or plugin, wildcards, read-only work, CI and Claude control files, credentials, and release machinery stay pending for a ruling with the claim intact. Verification evidence never needs repository scope: the dispatch briefing names its board-owned evidence directory for screenshots, HTML dumps, and probe output. Reference that directory from the ticket record instead of writing evidence into a worktree or integration target. A pending request records only the uncovered additions and prints the authoritative `sidequest update <ref> --files ...` approval command. Run that exact update to approve the full request, then resume the same executor. A plain `update --files` is also authoritative only when its resulting scope covers every pending requested path; otherwise Sidequest reports the request is still pending and prints the full command. Scope lint still rejects out-of-scope commits and submissions. Do not release and redispatch a healthy executor just to add a path.
+When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>`. A concrete path in a package surface, such as `src` or `lib`, that the ticket or any ticket in its story declares is added immediately and recorded as an audited auto-approval, so identical same-story requests get identical answers; a refusal comment names why each path missed. Test roots and mechanically derived build outputs use the same no-pause path. A sibling package surface, another package or plugin, wildcards, read-only work, CI and Claude control files, credentials, and release machinery stay pending for a ruling with the claim intact. Verification evidence never needs repository scope: the dispatch briefing names its board-owned evidence directory for screenshots, HTML dumps, and probe output. Reference that directory from the ticket record instead of writing evidence into a worktree or integration target. A pending request records only the uncovered additions and prints the authoritative `sidequest update <ref> --files ...` approval command. Run that exact update to approve the full request, then resume the same executor. A plain `update --files` is also authoritative only when its resulting scope covers every pending requested path; otherwise Sidequest reports the request is still pending and prints the full command. Scope lint still rejects out-of-scope commits and submissions. Do not release and redispatch a healthy executor just to add a path.
 
 ## Fan-out mechanics
 
@@ -150,7 +158,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Never invent a worker name.** Full-schema `dispatch` returns `spawn.name` built from the board:
   ticket ref, a short title slug, resolved route token, and effort (`sq-843-release-engine-terra-high`).
   A relaunch keeps that route then counts up (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That label is what shows
-  in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes; the board retains it even when a reduced-schema spawn omits
+  in the fleet view (filter `a:<name>`) and is the first `SendMessage {to: name}` target; name resolution can fail. Use the original-ID fallback below, never the claim holder label. The board retains the name even when a reduced-schema spawn omits
   callable `name` and `mode`. Opt into reduced schema only after inspecting the visible Agent tool schema, pass its returned fields unchanged, and
   require hook-reported `agent_id` plus `permission_mode` `"auto"` or `"bypassPermissions"` on first claim. `spawn.description` still leads with `<model>, <effort> ·`
   for notifications and stop lines.
@@ -161,8 +169,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   is session-random.
 - **One wave at a time.** `ready --json --brief` partitions the set into parallel-safe waves by declared file scope and named contract edges. MCP `ready` returns the same wave data with a count plus ref/title rows by default; use `full:true` only when a ticket record is needed. A ticket can declare free-form `produces`, `changes`, and `consumes` metadata for interfaces it touches; a produce/consume or change/change match sequences otherwise disjoint tickets. Read `waveDependencies` for the named reason before spawning. `contractWaiver:true` is an explicit reviewed override, so use it only after checking the real integration seam. Before spawning a wave, assess the runtime
   resources each ticket needs: fixed ports, domains, shared databases, existing servers, and files
-  outside the declared scopes. Worktrees isolate files, not those resources. Serialize tickets that
-  share one, and name the orchestrator/worker ownership before launch. Spawn wave 1, wait, re-run
+  outside the declared scopes. Worktrees isolate files, not those resources. Serialize commands on a
+  named shared resource, not entire tickets; name the parent and current holder before launch. Spawn wave 1, wait, re-run
   `ready`, repeat.
 - **Workers record operational state in the canonical closeout payload.** The orchestrator owns wave admission and shared-resource
   coordination; each worker owns its ticket. A submission's `body` carries the report, while its automatic terminal marker stays short. A `done` completion comment carries the report directly. Record conflicts found,
@@ -170,29 +178,31 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   verification output there. Tickets with no declared scope never mechanically conflict, so eyeball whether
   they'd edit the same files before parallelizing them.
 - **Integrate and verify by wave.** Each executor runs its scoped verification before submission.
-  When the quiet wave lands, read each submit report, then run one combined full gate for the wave. On
-  green, integrate. The oracle is the review: never open source or inspect diffs to re-review executor
+  When the wave submits, read each submit report, deliver the exact candidates through the real pinned
+  delivery verifier, then run one combined full gate for the merged tree before versioning. A changed
+  tree after rebase needs a fresh gate. Assembled-tree proof is reusable only when the runtime
+  authorizes its exact tree, command, candidate, and capture identities. The oracle is the review: never open source or inspect diffs to re-review executor
   work. When a named safety-sensitive seam needs independent scrutiny, dispatch a `review-audit` for that
   seam; do not turn the orchestrator into the reviewer.
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In a sample ticket, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
-- **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 100 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
+- **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 75 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
-- **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
+- **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting, only on a notification or user prompt, never right after spawning: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state, or `changes --since <iso>` for the `{tickets:[...]}` delta across several tickets, sorted oldest first. A process list (`tasklist`/`ps`) is never evidence about a dispatch.
 - **Read completion from the board.** An executor stop notification wakes the orchestrator; its terminal
   submit or done state is the completion signal. Do not expect or request a routine
   `SendMessage` report. Read a submission's canonical report body or a done completion comment for what changed, verification evidence, commit hash or
   close confirmation, and anything deliberately skipped. `SendMessage` remains for blockers,
   `kind=question` needs, scope conflicts, and failures the board cannot express.
-- **Recover a dormant completion.** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent to continue, keeping its claim, token-file path, and recorded worktree binding. If that resumed executor gets `matches no dispatch record` from the write hook, it keeps the claim and calls MCP `dispatch` once with `ref`, `recoveryEvidence`, `claimHolder` (the exact claim `by`), and the linked `worktree` path. The board verifies the stored executor, re-mints the token, and re-binds the worktree without a release. A silent worker is dead only when the board and task evidence confirm terminal death: salvage, release, fresh-dispatch, then spawn one replacement. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
-- **Correct the live worker before replacing it.** When a claimed executor has useful edits, a scoped commit, or meaningful verification and its concern is interpretive or correctness-related, read the evidence it recorded and send the corrected evidence or decision to its board-derived name with `SendMessage`. Keep the claim and its worktree alive so that executor can correct and reverify. A fresh dispatch is only for confirmed terminal death, an intentional Continuation checkpoint, or a genuine blocker with no salvageable work.
+- **Original-ID fallback for a held claim.** If the board-derived name fails, the ORIGINAL matching host session may make one `SendMessage` to the authentic `dispatch.agentId`, or the exact original host Agent-returned identifier when actually available. Check the recorded original session first. Never substitute `claim.by`, a holder label, guessed/partial ID or name, another session, or a replacement dispatch. Missing/mismatched ID or session means continuation UNVERIFIED: preserve the claim and work. Honor an explicit user **Pause retries** decision. This send continues the original executor; it retires nothing. Queued/resuming transport alone proves no work, completion, or death. Require the original executor's authentic response/activity before calling it resumed. Unknown, completed, absent, or failed-send host results stay nonterminal; terminal executors are never restarted. No automatic sends, retry loops, claim/token/status changes, or takeover.
+- **Recover a dormant completion.** A task-completed notification with no submission or terminal board state while its claim is live means the executor may be dormant. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent to continue, using the original-ID fallback above if name resolution fails, keeping its claim, token-file path, and recorded worktree binding. If that resumed executor gets `matches no dispatch record` from the write hook, it keeps the claim and calls MCP `dispatch` once with `ref`, `recoveryEvidence`, `claimHolder` (the exact claim `by`), and the linked `worktree` path. The board verifies the stored executor, re-mints the token, and re-binds the worktree without a release. A silent worker is dead only when the board and task evidence confirm terminal death: salvage, release, fresh-dispatch, then spawn one replacement. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
+- **Correct the live worker before replacing it.** When a claimed executor has useful edits, a scoped commit, or meaningful verification and its concern is interpretive or correctness-related, read the evidence it recorded and send the corrected evidence or decision to its board-derived name with `SendMessage`, using the original-ID fallback above if that name fails. Keep the claim and its worktree alive so that executor can correct and reverify. A fresh dispatch is only for confirmed terminal death, an intentional Continuation checkpoint, or a genuine blocker with no salvageable work.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
   reading the ticket instead, because a resumed agent must never fall back to the shared checkout. Preserve a
   verified commit, or recover the declared-scope diff, then read the ticket and its thread again before deciding
-  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees status` to check the disk use of active worktrees, recovery backups, and quarantine. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees and recovery entries; it only removes worktrees that are clean, at least three hours old, and whose commits are patch-equivalent to
-  `origin/main`. Sweep, reclaim, and failed-creation recovery never follow a dependency link. Before removal, each unlinks only a Sidequest-created link whose recorded normalized path, expected target, and checkout identity still match; missing, foreign, unreadable, or changed links remain protected as `dependency_link_untrusted`. The dry run also names expired backups and quarantine entries, which default to 14 days and three per agent. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
-  2–3 minute grace period, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
+  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees status` to check active worktrees and quarantine storage per directory with a total. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees and recovery entries, and `--all-projects` to walk every registered project rather than just this one. Cleanup classifies in this order: `status_unknown` keeps; `tracked_changes` keeps; `too_young` keeps for 3 hours; `upstream_ambiguous` or `upstream_unavailable` keeps; `untracked_recent` keeps, while `untracked_quarantined` moves a tree holding untracked or ignored content older than 7 days whole into quarantine; `ticket_archived`, `ticket_done`, `branch_reachable`, and `patch_equivalent` remove; `commits_on_branch` removes the tree and retains its branch; `not_integrated_salvage` salvages work older than 7 days; then `not_integrated` keeps. Quarantined work is parked for 14 days and removed on age alone; nothing younger is ever deleted, and entries under a live claim are kept. Nothing is deleted where it stands: a reclaimed tree is renamed into quarantine, and content that was there when the sweep classified it, or that arrives before the move, parks the whole tree. A tree counts as clean only when its status carries nothing untracked or ignored (ignored content counts, including a gitignored nested repository; the one exception is installed files under an ignored `node_modules`, which worktree setup regenerates, including one reached through a link that resolves inside the tree, such as the `node_modules/.bin` entries an install writes, and every link inside a `node_modules` that `worktreeDependencyPaths` copied in; outside such a copy, a link under `node_modules` that escapes the tree, a directory entry reached directly rather than through a link, and a nested repository all still count as data); anything else stays in quarantine. The moved copy is re-read once before its files are deleted, so a file written into it in the instant after that read is deleted with it. A commit on the worktree's own branch is not lost: the branch is deleted only with `update-ref -d refs/heads/<branch> <tip>` against the tip re-read at that destination, so a commit landed on it after that read leaves the branch retained as `tip_moved`. That compare is by value, so a ref moved away and then back to the same tip is not detected. A detached checkout is never reclaimed on ticket status alone: before its tree is touched, and again at the quarantine destination, the sweep asks the main checkout whether another ref already contains that HEAD, counting neither the checkout's own private metadata, nor a per-worktree ref (`refs/worktree/`, `refs/bisect/`, `refs/rewritten/`) of the checkout doing the asking, nor any branch this sweep could still delete, which includes every `worktree-agent` branch the orphan pass may take once the reclaims are done; a probe that cannot answer keeps the tree, and so does a branch listing it cannot read. A HEAD no other ref holds keeps its checkout where it stands as `detached_head_unpinned`, and one whose ref disappears mid-reclaim parks the moved tree: the park runs `git worktree repair` against the quarantine destination, so the parked tree keeps a working HEAD and its commit stays in `rev-list --all` after the prune. A repair that cannot be confirmed withholds every repository prune until a later sweep repairs every retained park, and is reported as a failure, leaving both the files and the registration they came from intact. Expiry removes quarantine files with link-safe filesystem deletion; only after retained parks reconcile does Git's metadata-only prune remove their registrations, otherwise that metadata cleanup is reported as deferred. A review's detached checkout still reclaims normally, because its candidate is pinned by `refs/sidequest/<ref>`. The limit is a commit made on a detached HEAD after those reads. On Windows a process still holding the tree open makes the rename fail and the tree stays in place until a later pass, and quarantine lives under the Sidequest home, so a worktree on a different volume is never reclaimed and parks as `quarantine_failed` every pass until the quarantine directory is on the same volume. Sweep, reclaim, and failed-creation recovery never follow a dependency link: a rename never follows one, and the links are released at the quarantine destination after the move, which never touches their targets. Before removal, each unlinks only a Sidequest-created link whose recorded normalized path, expected target, and checkout identity still match. A link nothing recorded is judged by where it resolves: one whose target stays inside the tree is removed with the tree, because it can reach nothing the tree does not already own, so the `node_modules/.bin` entries an executor's install wrote never hold a worktree. A link inside a `node_modules` that `worktreeDependencyPaths` copied in came with the copy and goes with the tree wherever it points. Any other link that escapes the tree, a link or directory that cannot be read, a recorded link that could not be unlinked at the quarantine destination, and a recorded path that no longer holds a link (left in place, never unlinked) park the tree instead of deleting it, and that entry carries a `detail` naming the first offending path and why (`<path> escapes worktree -> <target>`, `unreadable <path>`, `a recorded dependency link could not be released`, `<path> is no longer the dependency link that was recorded`) in the sweep row and the sweep JSON. Every delivery path reclaims the candidate worktree in the same command, at zero age: `sidequest integrate`, `groom-close --integration`, and the MCP integrate and groomClose tools. A missing integration ref no longer skips the project; the settled check falls back to the repository default and the report says so. The dry run names expired quarantine entries. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
+  recorded retirement deadline, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
   terminal reason verbatim. Make ONE retry only when that diagnosis changes the dispatch; never blindly
   respawn the identical spec. When native Agent reports the exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt
   and prepares the ticket's configured fallback with a fresh token. Run `dispatch` for the ref again, then
@@ -203,23 +213,83 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
   escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
-- **Retire an attempt no runtime will finish.** Two shapes qualify. When `pulse` reports the dispatch
-  `prepared` or `launched` with no bound runtime identity, no claim, and no checkpoint, there is nothing to
-  wait for: the spawn never started or never bound. And when it reports `stalled` with "bound a runtime that
-  never claimed, past the claim-idle backstop", that runtime is gone: a claim is a bound executor's FIRST
-  action, and its stop hook never fired, so nothing else will ever retire the attempt. Retire either in one
+- **Retire an attempt no runtime will finish.** An attempt that died before its first claim (an API error at
+  launch, a refused claim, a failed or cancelled WorktreeCreate, the Agent call returning with no claim) has no
+  claim to release and no TaskStop to make: the one recovery is `recoveryEvidence`. **The session that prepared
+  the dispatch is the authority:** it spawned the runtime, so the host's failure text or the returned Agent call is
+  proof the board never receives, and its evidence retires the attempt at once, grace or idle backstop
+  notwithstanding (SQ-3110). Any other session uses it only when `pulse` reports the unclaimed attempt as
+  `stalled`: it has no readable runtime signal, or its deadline has passed. Retire it in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
-  `recoveryEvidence`). Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
-  preparing a replacement; it accepts those same two recovery-evidence shapes. A tokened claim refused as
+  `recoveryEvidence`). If a stop hook already made the attempt terminal, the same call just prepares the
+  replacement, and `retireOnly` reports it retired. Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
+  preparing a replacement. `pulse` reports `starting` while the same attempt remains inside that deadline. A tokened claim refused as
   `prepared_compatibility_stale` is already terminal: that refusal retires its own stale attempt, so the executor
   stops without claiming and the orchestrator dispatches a fresh token. That records the evidence on the failed
   attempt, keeps it in `dispatch.attempts` as history, and prepares exactly one fresh identity when replacement
-  is requested. It refuses while a bound attempt is still inside the backstop, and once the attempt is
-  checkpointed or terminal; the refusal names which of those it found and, for a bound one, how long is left.
+  is requested. It refuses while the attempt is still inside the grace, and once it is claimed,
+  checkpointed, or terminal; the refusal names which of those it found and, for an unclaimed one, the exact instant
+  it becomes retirable, the minutes left until then, and the runtime signal it measured from. An attempt that
+  DID claim is untouched by the grace and still waits for the hour-long idle backstop.
+  **What the grace actually is.** `recoveryEvidence` is your attestation and the board does not verify it:
+  any text is accepted. So the grace is the ONLY mechanical protection against retiring a runtime that is
+  still starting, and an elapsed grace does not prove the runtime is gone. It is 15 minutes
+  (`SIDEQUEST_CLAIM_GRACE_MIN`, clamped to the idle backstop) measured from the newest runtime signal:
+  launch, WorktreeCreate start and completion, finished worktree provisioning, SubagentStart bind,
+  briefing fetch, claim, or a board write from that runtime itself. The launcher session is the trust boundary
+  for that eighth signal, and it is a wide one: you and every fan-out sibling write on it, so a board write
+  counts only when it lands on the attempt's own ticket, on the launcher session the dispatch recorded, after
+  launch, before any claim, and under the EXACT runtime name SubagentStart bound. A same-session caller that
+  deliberately writes under that bound name is trusted as that runtime — including you, so do not post
+  progress under an executor's agent name unless you mean to hold its attempt open. Any other `by`, your own
+  orchestrator identity included, a different session, or a comment written before launch counts for nothing,
+  and an attempt whose bind recorded only an agent id has no name to match, so no board write can speak for it.
+  Each signal pushes the deadline out because a gateway first turn, a briefing fetch,
+  and a pre-claim skill load are all legitimately slow. Preparing the dispatch is not one of those signals, so an
+  attempt that recorded none of them, a spawn that never started, is retirable at once. An attempt whose WorktreeCreate has not recorded
+  finished provisioning (a cold `npm ci` is minutes of silence) waits for the idle backstop. One authority answers this
+  for every route, so `groomClose` with `recoveryEvidence` refuses with the same countdown the dispatch call prints, and
+  `sidequest groom-close --recovery-evidence` is that same authority rather than a second implementation: both surfaces
+  print the same refusal inside the deadline and retire-and-close together past it. Retiring an attempt whose runtime is still
+  starting strands it: its claim is then refused and a second runtime can start on the same ticket. When the
+  refusal names a deadline and you are not the preparing session it names, wait for it rather than looking for
+  another route. The preparing session attests only what it saw: a runtime that is merely quiet is not dead.
+  **Which WorktreeCreate callbacks are generation-scoped.** Five are: creation completed, finished provisioning,
+  provisioning failure, dependency link, and recovery. Each must present the attempt generation its binding handed
+  out, and a missing or retired one is refused as `missing_attempt` or `stale_attempt` having stamped nothing. The
+  start binding itself is NOT: the hook learns its generation from that call, and a WorktreeCreate payload carries
+  nothing that tells two generations of one session and checkout apart, so the start binding is scoped to the
+  session and the checkout. It refuses `stale_attempt` when a retired attempt still holds the checkout rather than
+  handing a late hook some other live attempt, and refuses `missing_attempt` rather than letting a generation-less
+  second caller acquire the live generation of a checkout that is still being created.
+  **A WorktreeCreate that fails before its checkout exists** (lease refusal, an occupied destination, a failed
+  `git worktree add`) records the attempt `failed` with `worktree_create_failed` and the hook error, and clears its
+  binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`. While another
+  isolated reservation on this board from the same session has not claimed, creation order may have bound this one for that live
+  executor, so the attempt only loses the binding and stays live; stderr names the sibling. Wait for the claim,
+  then retire whichever attempt never claimed.
+  **A retired attempt never removes a checkout another ticket is running in.** Creation order and the runtime bind
+  can both cross, so a stranded record can name a sibling's checkout down to the sibling's agent id. Before the
+  retry reclaims that checkout, the board looks for another ticket whose live claim or live dispatch records the
+  same path, or whose agent id names it. When one does, nothing is removed, only the retired attempt's binding is
+  cleared, and the dispatch prepares with a `Dispatch warning` naming the sibling and saying the binding was a
+  cross-bind, not a tree this ticket created. Leave that checkout alone; it belongs to the sibling. The same holds
+  while any isolated sibling on this board from the retired attempt's session has not claimed: the checkout stays, the warning names that
+  sibling, and the retired creation record is parked so the sibling's token claim takes the checkout it runs in,
+  only on an exact checkout-instance match. A checkout that claim gives up stays parked while another sibling is
+  still unclaimed.
   TaskStop output and host task notifications do not include the dispatch token, attempt generation, and immutable
-  ticket binding, so they cannot record a terminal dispatch. The backstop remains the only recovery route when
-  a bound unclaimed runtime dies without SubagentStop or PostToolUseFailure. A claimed executor that is provably
-  dead goes through claim release or `groomClose --recoveryEvidence`. The exception is a live claimed executor
+  ticket binding, so they cannot record a terminal dispatch, but they are the evidence `--recovery-evidence`
+  wants: you spawned the runtime, so you are the authority that can attest the host reported it gone. Attest what
+  you observed, not what you assume. The host is
+  not documented to fire SubagentStop for an agent that ends with `status: failed`, and SubagentStop carries no
+  terminal status field, so do not wait for a stop hook that may never arrive. A ticket whose bound attempt never
+  claimed closes through that same one call: from the preparing session, or past the deadline, `groomClose
+  --deliveryCommit <sha> --recoveryEvidence "<evidence>"` retires the attempt and closes the ticket together, and
+  any other session inside the deadline gets the countdown.
+  A claimed executor that is provably
+  dead goes through claim release first; `groomClose --recoveryEvidence` refuses a live claim as
+  `active_dispatch` on both the CLI and MCP surfaces and only retires an attempt that never claimed. The exception is a live claimed executor
   that resumed into its original linked checkout but lost only the board binding: it uses `dispatch` with
   `recoveryEvidence`, `claimHolder`, and `worktree`; the board verifies the stored executor and restores that
   same identity without releasing.
@@ -244,13 +314,15 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   process failure, not caution. The costs to keep honest:
   idle notifications wake the lead at full context, and teams-style flows can run several times the
   token spend of plain subagents, so answer executor questions promptly and retire terminal teammates
-  only after consuming board evidence. After spawning, end the
-  turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification,
-  user message, or other task notification, make opportunistic liveness checks for work that has run about
-  5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking
-  `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board
-  state with `changes --since <iso>` before deciding what to do next. Use synchronous execution only for a
-  tight wave where blindness is acceptable.
+  only after consuming board evidence. After spawning, end the turn naming what is in flight in one
+  line — never a "waiting" paragraph. Its stop notification is the only wakeup. On the next natural
+  wakeup, whether a stop notification, user message, or other task notification, make opportunistic
+  liveness checks for work that has run about 5–8 minutes or longer. Never hold a session open with
+  foreground or background `sleep`, blocking `TaskOutput` as a delay, or busy-wait loops. A host
+  check-in or idle-nudge prompt is not an evidence request: answer it in one line, or continue the
+  pending work, without re-summarizing the wave. At every wakeup, diff board state with `changes
+  --since <iso>` before deciding what to do next. Use synchronous execution only for a tight wave
+  where blindness is acceptable.
 - **No proxy waiters.** The polling ban covers indirect waits too. Never create a Bash, PowerShell,
   `Monitor`, or cron task whose only purpose is to wait for a Sidequest executor or poll for its expected
   report or artifact file (`until [ -f <report> ]; do ...; done`), and never block `TaskOutput` on such a
@@ -258,31 +330,55 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   lifecycle. Native Agent completion arrives on its own; at natural wakeups use `changes --since` / `pulse`,
   and read the artifact only after terminal board evidence. A genuine one-shot readiness watch for a local
   server or build is fine; waiting on an executor through a side channel is not.
-- **Retire terminal teammates.** Once terminal board evidence has been consumed and its submission report,
-  done comment, or recovery handoff has been preserved, call `TaskStop({ task_id: "<agent name>" })` once for
-  that exact native teammate, but only while it is still registered as a running task. This is a Claude Code host action, not a Sidequest tool.
-  It applies to submitted, done, released, failed-before-claim, and superseded attempts. A background native
-  Agent can already have exited on its own before you call this: a `No task found with ID` or `Task <name> is
-  not running (status: completed)` reply means it already exited, needs no retry, and is not a failure to
-  investigate. Never stop a live claim, retained continuation, or candidate awaiting integration. Do not wake a completed executor, poll FleetView, or create a cleanup loop.
-  A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction
-  ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a
-  submitted ticket. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
+- **No TaskStop after terminal evidence.** Consume the submission report, done comment, or recovery handoff;
+  the executor already ended its own run, so the host lists it completed and a TaskStop only fails (GH-203).
+  The TaskStop rule is authoritative in `SKILL.md`'s "Work a ticket" section, not restated here: it is host
+  cleanup for an executor `pulse` still shows alive after its ticket went terminal. A `READY_FOR_INTEGRATION`
+  verdict additionally queues the ticket for the publish transaction ([publishing.md](publishing.md)) — publish
+  the wave's submissions in one batch; never respawn an executor for a submitted ticket.
 
 - **Reports stay terse:** a submission body carries the canonical full report and its automatic terminal marker stays short; a `done` completion comment carries its report directly. A repo-changing executor records a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.
 
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
 
+## Shared-resource handoff
+
+A non-owner continues independent read/edit/commit work. Once ready for the resource, it records readiness
+and ends the turn retaining its claim, with no polling, proxy waiter, automatic release/restart, or
+invented executor death. Heavy commands use at most two workers, finite owned deadlines, and descendant
+cleanup, within the two-core heavy budget. An owner with a required command still running keeps ownership and supervises it to completion.
+
+Transfer needs the actual owner's acknowledgement that its owned heavy command and descendants ended,
+then an explicit parent `SendMessage` naming the resource and next holder. Terminal submit/done/release
+is sufficient evidence when it really ends the owner's work; an authenticated explicit mid-claim return
+is valid too. Never infer availability from elapsed time, process counts, failed sends, model labels,
+or absence. Ticket liveness and resource ownership are separate.
+
+Comment `since` is exclusive and only a read cursor, not proof that the instruction at the watermark
+was processed. Handoff messages include the exact instruction/comment or direct bounded inclusive/all-comments
+recovery. Advance a processed cursor only after consuming the instructions; do not change the API semantics.
+
 ## Worktree base selection
 
 For an isolated repository dispatch, a configured `worktreeBase` of `local-main` or `origin-main` selects that base for read-only and writer tickets alike. `auto` intentionally keeps a read-only ticket on the checkout that prepared it; writers retain automatic integration-target selection. An explicit local or remote dispatch target overrides the board setting. Shared-tree artifacts and non-repository output stay on the current tree. A bound Git review candidate overrides every configured or explicit integration target.
 
+## Current exact-composition adoption
+
+A main-thread orchestrator can use existing `update.admitComposition` to adopt exact immutable candidate C for a genuinely released root. The admission is a current attestation with `historicalCheckout:false`; historical checkout ownership remains unverified. Keep original BASE and the full BASE..C range. Every commit belongs exactly once to a complete pending related source range or to the root's own changes within its original scope. A source's authoritative review and correction generation is part of the locked CAS. Admission changes no source submission, review outcome, acceptance, or delivery status.
+
+Call admission separately from ordinary updates. First omit `expected` to read its write-free bounded observation, then retry with that exact expected root/source snapshot. Keep the released checkout and old proofs untouched. The fresh writable native isolated dispatch starts a new checkout at C, preserves original BASE in `dispatch.baseCommit`, and consumes the admission once with its new attempt, preparation timestamp, and genuine nonce digest. A reused checkout or grant cannot continue this flow. Live-claim recovery of the claimed root refuses write-free as `admission_consumed`, because a re-minted token would no longer match the consumed nonce; the holder keeps its existing token and checkout.
+
+Use the ordinary verifier update and current-holder evidence contract, then normal claim, controls, fresh capture, and full-range submit. Bind an independent exact-C review only after submission. The ordinary review provenance and delivery gates still apply, including a genuine readonly review completed with `done` where the current gate accepts that completion. Adoption supplies no review verdict, capture, historical ownership, or delivery waiver. The included source tickets remain pending through root delivery. Integrate the admitted root as a single ref: a multi-participant wave refuses with `composition_wave_unsupported` because it would skip the composition locks. A source review or correction change after consumption refuses the next claim, capture, submit, or integrate with `stale_source`.
+
 ## Bookend supervision
 
-After dispatch, leave a ticket alone until it submits: no pulse, comment read, worktree peek, or proxy
-waiting. At integration, read the submit report and run the one combined full gate for the wave, then
-integrate on green. The executable oracle is the review, so do not open source or inspect diffs to
+After dispatch, avoid routine pulse/comment reads, arbitrary worktree peeks and proxy waiting.
+Explicitly assigned builders and readonly advisors can inspect authorized snapshots and message directly
+under `readonly-guidance.md`; this does not authorize orchestrator peeking or self-review. At integration,
+read the submit report, deliver through the real pinned verifier, then run
+one combined full gate for the merged wave before versioning. Re-gate a changed tree after rebase; do
+not reuse assembled-tree proof without the runtime's exact authority checks. The executable oracle is the review, so do not open source or inspect diffs to
 re-review executor work. File a separately routed `review-audit` only when the contract names a
 safety-sensitive seam the oracle cannot exercise.
 
@@ -306,15 +402,18 @@ are both refused. A review also ENDS on its candidate: a terminal `done` reads t
 revision and is refused as `review_tree_mismatch` when it sits on anything else, naming the observed
 revision, the candidate, and the `git -C <worktree> checkout --detach <candidate>` repair, and as
 `review_tree_unobservable` when the checkout cannot be read at all, which releases as a technical blocker
-and dispatches again. Integration waits for the bound review to reach a terminal `done`, including an accepted oracle closeout for a readonly review. Close that case with exactly `verdict({ ref, outcome: "accepted", text, why })`; it stores `text` as the completion comment and changes the review to `done`. Integration reads both identities from immutable terminal dispatch attempts rather than the live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt, or the terminal `released` attempt accepted by that oracle closeout. A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration blocked with `candidate_review_required`.
+and dispatches again. A write-scoped review (`readonly: false`) that ends on its candidate with no dirty or
+committed path in its declared scope closes with `done` too; only scope it actually changed still needs
+commit and submit. Integration waits for the bound review to reach a terminal `done`, including an accepted oracle closeout for a readonly review. Close that case with exactly `verdict({ ref, outcome: "accepted", text, why })`; it stores `text` as the completion comment and changes the review to `done`. Integration reads both identities from immutable terminal dispatch attempts rather than the live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt, or the terminal `released` attempt accepted by that oracle closeout. A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration blocked with `candidate_review_required`.
 
 No caller-controlled route rejects a bound candidate. `rework`, `recordSubmissionRejection`, raw MCP `rework`, CLI `rework`, and
 reconciliation of a matching pending rejection all return one pre-write `candidate_review_locked` refusal,
 whatever `by` or `reviewRef` claims, because MCP hands a handler nothing but caller-supplied JSON and no
-argument can prove an external release principal. A review that finds a defect records its evidence on the review ticket and releases that review with `kind=oracle`. When the oracle accepts the defect conclusion, Sidequest records `rejected` on both binding halves; if it rejects that conclusion, it records `accepted` and closes a readonly review through `verdict({ ref, outcome: "accepted", text, why })`.
+argument can prove an external release principal. A review that finds a defect records its evidence on the review ticket and releases that review with `kind=oracle`. When the defect means the bound candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and verdict text does not override the enum. For a mistaken finalized `accepted`, the main thread uses MCP `verdict` with `correct` under the [correction contract](invocation-contracts.md), then uses a fresh independently reviewed repair, integrates it, and closes the rejected source with `supersede_submission`.
 `verdict.outcome` is always the candidate's fate, never agreement with the reviewer's prose: `rejected` confirms
 the candidate must not ship, `accepted` approves the candidate, and `inconclusive` approves nothing. Text does
-not override outcome, and a finalized `accepted` cannot be reversed by another verdict; do not guess.
+not override outcome. Ordinary verdict cannot reverse a finalized `accepted`; an evidenced main-thread
+`verdict.correct` appends the correction while preserving the original verdict. Do not guess.
 The source stays pending until a fresh repair is dispatched, reviewed, and integrated, then
 `supersede_submission` closes the oracle-rejected source against that repair. `rework` still bounces an
 UNBOUND candidate back to `todo` for its owner.
@@ -437,9 +536,13 @@ and `spawn.prompt` ends with `[sidequest-route model=... effort=... ticket=...]`
 model, effort, and ticket ref to record, so pass the prompt verbatim, never write another such line, and never batch tickets
 stamped with different models into one spawn. The gateway route log records the route and ticket ref per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. Claude builtins are provisioned at all five effort
 levels; Codex dispatch is one read-write def and one readonly def, because the route marker carries the
-effort. Route edits change only board data; the executor def set
-is fixed, so nothing is written or registered when a route changes. The executor claims with the
-returned token and exact stable executor name.
+effort. Route edits change only board data; the bundled executor def set
+is fixed, so nothing is written or registered when a route changes. A discovered provider the shim
+does not serve spawns `sidequest-exec-model-<slug>-<effort>` (or its `-readonly-model-` twin) with
+`model` omitted: that user-scope def pins the full catalog id, because the Agent `model` parameter
+takes only the four Claude aliases. SessionStart writes a def only for a (slug, effort) pair some
+category route or fallback uses on any board, a readonly twin only for readonly categories, and
+prunes the rest; dispatch writes the def it spawns (an override may route an unused pair). The executor claims with the returned token and exact stable executor name.
 
 Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
 the token and returns the current spawn for the same stable route. A retained-worktree continuation

@@ -31,7 +31,8 @@ const os = require('os');
 const path = require('path');
 const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
+const { execFileSync } = require('./git-process.js');
 const db = require('./db.js');
 const sourceRevisionCapability = require('./source-revision-capability.js');
 const {
@@ -43,16 +44,16 @@ const {
   isFilesystemSnapshotLimitError,
   isFilesystemSnapshotChildError,
 } = sourceRevisionCapability;
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
+const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
 const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require('./discovery.js');
+const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, gatewayCatalogRefreshFailure, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
-const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance } = require('./refusal-guidance.js');
+const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
@@ -62,6 +63,8 @@ const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
+const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
@@ -76,6 +79,7 @@ const { createConfig } = require('./store/config.js');
 const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
 const { createProjects } = require('./store/projects.js');
+const candidateRefs = require('./store/candidate-refs.js');
 const { createWarnings } = require('./store/warnings.js');
 
 let servingInstallResolved = false;
@@ -157,11 +161,36 @@ function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
 function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
 function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
 function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
+function takeSourceRevisionAdapterSwitch(slug: string) { return projectsLayer.takeSourceRevisionAdapterSwitch(slug); }
 function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
-function archiveProject(...args: any[]) { return projectsLayer.archiveProject(...args); }
-function unarchiveProject(...args: any[]) { return projectsLayer.unarchiveProject(...args); }
+// A board whose path is gone or outside Git has no candidate refs to move.
+function boardRepository(slug: string): string | null {
+  const projectPath = String(readMeta(slug)?.path || '');
+  try {
+    return projectPath ? commitScope.repoRoot(projectPath) : null;
+  } catch (_: any) {
+    return null;
+  }
+}
+
+function archiveProject(slug: string) {
+  const result = projectsLayer.archiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.archiveBoardCandidateRefs(commitScope, repository, slug, listTickets(slug)) } : result;
+}
+
+function unarchiveProject(slug: string) {
+  const result = projectsLayer.unarchiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.restoreBoardCandidateRefs(commitScope, repository, slug) } : result;
+}
+
+function ticketRecordedCommits(ticket: any): string[] { return candidateRefs.ticketRecordedCommits(ticket); }
 function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProjectExact(...args); }
 function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
+function listProjectsFlaggingMissingPaths(...args: any[]) { return projectsLayer.listProjectsFlaggingMissingPaths(...args); }
+function registerProject(...args: any[]) { return projectsLayer.registerProject(...args); }
+function boardRootRefusal(...args: any[]) { return projectsLayer.boardRootRefusal(...args); }
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
 function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
 
@@ -320,6 +349,7 @@ function normalizeVerifyOracleKind(...args: any[]) { return warningsLayer.normal
 function attestationErrors(...args: any[]) { return warningsLayer.attestationErrors(...args); }
 function verifyOracleErrors(...args: any[]) { return warningsLayer.verifyOracleErrors(...args); }
 function requireVerifyOracle(...args: any[]) { return warningsLayer.requireVerifyOracle(...args); }
+function normalizeVerifyCwd(...args: any[]) { return warningsLayer.normalizeVerifyCwd(...args); }
 function verifyCommandErrors(...args: any[]) { return warningsLayer.verifyCommandErrors(...args); }
 function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
 function requireVerifyCommand(...args: any[]) {
@@ -350,9 +380,15 @@ function storyContractDriftWarnings(...args: any[]) { return warningsLayer.story
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
 function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
+// The baseline source changed under this dispatch, so its result says so (GH-334).
+function sourceRevisionAdapterSwitchWarnings(ticket: any): string[] {
+  const adapterSwitch = ticket?.dispatch?.sourceRevisionAdapterSwitch;
+  if (!adapterSwitch) return [];
+  return [`Dispatch information: this board switched its source revision adapter from ${adapterSwitch.from} to ${adapterSwitch.to} at ${adapterSwitch.at}, because a .git now exists at or above its path. This and later dispatches take git baselines instead of filesystem snapshots.`];
+}
 function dispatchWarnings(ticket?: any, slug?: any) {
   const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
-  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+  return [...warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null)), ...sourceRevisionAdapterSwitchWarnings(ticket)];
 }
 function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
 function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
@@ -378,7 +414,6 @@ function refreshPreparedDispatches(...args: any[]) { return dispatch.refreshPrep
 
 const {
   CLAUDE_RUNTIMES,
-  CLAUDE_RUNTIME_LABELS,
   VALID_EFFORTS,
   BACKEND_SLUG_RE,
   BACKEND_KEY_RE,
@@ -401,6 +436,7 @@ const {
   dispatchRouteState,
   execFromBackend,
   resolveExec,
+  discoveredModelBackends,
   resolveReportedExec,
   resolveModelId,
   routingModels,
@@ -482,6 +518,7 @@ const {
   db,
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   discoverExternalModels,
+  gatewayCatalogRefreshFailure,
   invalidateStoreCaches,
   listProjects,
   projectRoutingEnabled,
@@ -531,6 +568,11 @@ const {
   rederiveUnlaunchedPreparedRoute,
   stampDispatchEvent,
   pulseDispatchState,
+  unclaimedRetirement,
+  unclaimedEvidenceAttempt,
+  unclaimedRetirementRefusal,
+  preparingSessionAttests,
+  unclaimedAttemptRecoveryGuidance,
   isolatedDispatchWorktreeMissing,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -554,17 +596,23 @@ const {
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
+  rekeyReleasedCheckout,
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
+  boardVerificationEvidencePath,
+  dispatchEvidenceDirectory,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -573,11 +621,18 @@ const {
   dispatchCanBindRuntimeIdentity,
   recordDispatchRuntimeIdentity,
   bindDispatchClaimToken,
+  exchangeGuessedClaimIdentity,
+  exchangeCrossedClaimCheckout,
+  settleDeferredStops,
+  tokenAdmission,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
+  agentDispatchWorktrees,
   reconcileLaunchedDispatches,
 } = (dispatch = createDispatch({
+  withCompositionDispatchPreparation: (slug: string, ref: string, callback: () => unknown) => withCompositionDispatchPreparation(slug, ref, callback),
+  withCompositionGenerationLock: (slug: string, ref: string, callback: () => unknown) => withCompositionGenerationLock(slug, ref, callback),
   ARTIFACT_BASELINE_MAX_PATHS,
   normalizeCategoryId: (...args: any[]) => normalizeCategoryId(...args),
   projectRoutingEnabled,
@@ -607,6 +662,7 @@ const {
   localAheadOfUpstreamWarning,
   availableRoute: (...args: any[]) => availableRoute(...args),
   boardConfig,
+  claimGraceMs: () => claimGraceMs(),
   claimIdleMs: () => claimIdleMs(),
   claimReclaimable: (...args: any[]) => claimReclaimable(...args),
   claimVerification: (...args: any[]) => claimVerification(...args),
@@ -617,6 +673,7 @@ const {
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
+  takeSourceRevisionAdapterSwitch,
   dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
@@ -632,6 +689,7 @@ const {
   pendingSubmission: pendingSubmissionForTickets,
   agentWorktreePath,
   agentWorktreeCandidates,
+  agentIdFromWorktreePath,
   resolvedAgentWorktree,
   reclaimUnclaimedDispatchWorktree,
   legacyCategoryForComplexity: (...args: any[]) => legacyCategoryForComplexity(...args),
@@ -705,12 +763,22 @@ function sessionProjectRoot() {
   return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 }
 
+// A missing path must not fold up to an ancestor repo: the refusal has to name what was typed.
+function explicitProjectRoot(absPath: string) {
+  const resolved = path.resolve(absPath);
+  return fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory() ? nearestRepoRoot(resolved) : resolved;
+}
+
+function claudeHome() {
+  return process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+}
+
 /* ------------------------------------------------------------------ *
  *  SQLite persistence
  * ------------------------------------------------------------------ */
 
 const dbByHome = new Map<string, any>();
-const transactionDepth = new WeakMap<object, number>();
+const openTransactionCommitTasks = new WeakMap<object, Array<() => void>>();
 
 // SQLite has no nested transactions, so anything that begins one has to know whether one is already open on
 // that handle. Every writer must come through here rather than calling db.txn itself: the seed refreshers
@@ -718,13 +786,28 @@ const transactionDepth = new WeakMap<object, number>();
 // seed turned into `cannot start a transaction within a transaction` from whichever unrelated test happened
 // to leave a routing profile entry mismatched (SQ-2196).
 function withinTransaction(handle: object, fn: () => any) {
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
+  if (openTransactionCommitTasks.has(handle)) return fn();
+  const commitTasks: Array<() => void> = [];
+  openTransactionCommitTasks.set(handle, commitTasks);
+  let result;
   try {
-    return db.txn(handle, fn);
+    result = db.txn(handle, () => {
+      // A busy retry reruns fn, so only the attempt that commits may leave tasks behind.
+      commitTasks.length = 0;
+      return fn();
+    });
   } finally {
-    transactionDepth.delete(handle);
+    openTransactionCommitTasks.delete(handle);
   }
+  for (const task of commitTasks) task();
+  return result;
+}
+
+// Side writes that must not hold the write lock or roll back the transaction that caused them (GH-351).
+function afterCommit(task: () => void) {
+  const commitTasks = openTransactionCommitTasks.get(database());
+  if (commitTasks) commitTasks.push(task);
+  else task();
 }
 
 cacheLayer = createCache({ database, db, fs });
@@ -757,12 +840,14 @@ const {
   markAllRead,
   markRead,
   pendingReminders,
+  pruneOversizedNotificationsOnce,
   pruneRead,
   queueEventNotification,
   setNotifyPrefs,
   setReminder,
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -803,7 +888,7 @@ function eachTableTestName(lines: string[], startIndex: number) {
     const line = lines[index]!;
     const name = capturedTestName(line.match(/[)`]\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/));
     if (name) return name;
-    if (index > startIndex && /\b(?:test|it|specify)\s*\(/.test(line)) return null;
+    if (index > startIndex && /(?<![.\w$])(?:test|it|specify)\s*\(/.test(line)) return null;
   }
   return null;
 }
@@ -812,8 +897,8 @@ function eachTableTestName(lines: string[], startIndex: number) {
 // test_*`, or, when the line opens an `.each` table, the name printed after the table.
 function testDefinitionName(lines: string[], index: number) {
   const line = lines[index]!;
-  const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-  return capturedTestName(match) ?? (/\b(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+  const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+  return capturedTestName(match) ?? (/(?<![.\w$])(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
 }
 
 function testDefinitions(source: string) {
@@ -883,7 +968,7 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
       }
       if (line.startsWith('+') && !line.startsWith('+++')) {
         addedInHunk = true;
-        const addedDefinition = line.match(/\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+        const addedDefinition = line.match(/(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
         const addedName = capturedTestName(addedDefinition);
         if (addedName) names.add(addedName);
         addNearestDefinition(newLine);
@@ -1144,11 +1229,13 @@ function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
 
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_IDLE_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   autoReleasedClaimMessage,
   claimAbandonMs,
   claimActivityMs,
+  claimGraceMs,
   claimIdleAge,
   claimIdleMs,
   claimMaySubmit,
@@ -1156,6 +1243,7 @@ const {
   claimReleaseBlocker,
   claimReleaseNote,
   claimReleaseVerdict,
+  claimStaleness,
   claimVerification,
   hasNoOpReleaseProof,
   preparedDispatchTtlMs,
@@ -1203,6 +1291,7 @@ const {
   appendExperimentEntry,
   appendOverturnLine,
   applyExperimentVerdict,
+  recordBoundReviewOutcome,
   experimentPacket,
   ticketPlanInfo,
   writeOracleExperimentRound,
@@ -1235,6 +1324,7 @@ const {
   readOnlyOverrideActive,
   dispatchReadOnly,
   submissionReviewRelation,
+  withSourceTicketLock,
   createTicket,
   normalizeLabels,
   normalizeFiles,
@@ -1298,15 +1388,28 @@ const {
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyOracle,
+  normalizeVerifyCwd,
   transaction: (...args: any[]) => transaction(...args),
   normalizeVerifyOracleKind,
   saveAssetData,
   ticketLockPath,
   ticketStoryId,
   touchClaimActivity,
+  unclaimedAttemptRecoveryGuidance: (...args: any[]) => unclaimedAttemptRecoveryGuidance(...args),
   upperRef,
   stripLinksTo,
   withTicketLock,
+});
+
+const { admitComposition, withCompositionDispatchPreparation, withCompositionGenerationLock } = createCompositionAdmissions({
+  getTicket, listTickets, submissionReviewRelation, readMeta,
+  withTicketLock, putTicket, createComment, invalidateStoreCaches,
+  dispatchTokenDigest: (nonce: string) => dispatchTokenDigest(nonce),
+});
+
+const { correctAcceptedReviewVerdict } = createReviewCorrections({
+  getTicket, pendingSubmission: pendingSubmissionForTickets, isReadOnlyExecutor, submissionReviewRelation,
+  withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
 });
 
 function pendingSubmissionForTickets(...args: any[]) {
@@ -1332,7 +1435,7 @@ const {
 } = createReads({
   checkpointProjection: checkpointProjectionForRead,
   claimIdleMs,
-  claimReclaimable,
+  claimStaleness,
   classifierCategories,
   contractMetadata,
   countTickets,
@@ -1378,6 +1481,7 @@ const {
   submissionReadiness,
   submissionProjection,
   pendingSubmission,
+  applyDeliveryAwaitingContentCommit,
   submissionUsesGit,
   workingTreeVerification,
   verifyIntegration,
@@ -1389,6 +1493,7 @@ const {
   closeSubmissionAsSuperseded,
   submissionOwnershipFailure,
   submitTicket,
+  pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
   reconcileSubmissionRejections,
@@ -1425,6 +1530,7 @@ const {
   integrationTargetCommit,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -1436,6 +1542,7 @@ const {
   normalizeIntegrationBranch,
   normalizeIntegrationVerifyTimeoutMs,
   nullableText,
+  os,
   path,
   prepareComment,
   projectDir,
@@ -1456,6 +1563,7 @@ const {
   verifyCommandErrors,
   verifyCommandError,
   withTicketLock,
+  withCompositionGenerationLock,
 });
 
 let refreshingRoutingProfileSeeds = false;
@@ -1509,57 +1617,67 @@ function refreshRoutingProfileSeeds(handle?: any) {
   invalidateStoreCaches();
 }
 
-// A profile entry is keyed by the id inside its stored category; a project layer row carries its own.
-function categoryNeedingReadonlyFlag(readonlyIds: Set<string>, data: string, rowId?: string) {
+type StoredCategoryRewrite = (category: any, categoryId: unknown) => object | null;
+
+function rewrittenStoredCategory(rewrite: StoredCategoryRewrite, data: string, categoryId: string) {
   let category: any;
   try { category = JSON.parse(data); } catch (_: any) { return null; }
-  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== undefined) return null;
-  return category;
+  return category ? rewrite(category, categoryId) : null;
 }
 
-function readonlyCategorySeedsAreStale(handle: any, readonlyIds: Set<string>) {
-  for (const row of handle.prepare('SELECT data FROM routing_profile_entries').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+function storedCategoriesNeedRewrite(handle: any, rewrite: StoredCategoryRewrite) {
+  return handle.prepare('SELECT category_id, data FROM routing_profile_entries').all()
+    .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.category_id))
+    || handle.prepare('SELECT id, data FROM project_categories').all()
+      .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.id));
+}
+
+interface StoredCategoryRewriteOutcome { affectedProjects: Set<string>; rewrittenIds: Set<string> }
+
+function rewriteProfileEntries(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
+  const now = new Date().toISOString();
+  for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.category_id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+    for (const pointer of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) outcome.affectedProjects.add(String(pointer.project));
+    outcome.rewrittenIds.add(String(row.category_id));
   }
-  for (const row of handle.prepare('SELECT id, data FROM project_categories').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+}
+
+function rewriteProjectCategories(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
+  for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), row.project, row.id);
+    outcome.affectedProjects.add(String(row.project));
+    outcome.rewrittenIds.add(String(row.id));
   }
-  return false;
+}
+
+// Scanning first means a settled store never opens a write transaction, which is the whole cost
+// of a load-time rewrite on process start. The scan inside the transaction stays authoritative so the
+// decision is never acted on from outside the lock.
+function rewriteStoredCategories(handle: any, rewrite: StoredCategoryRewrite) {
+  if (!storedCategoriesNeedRewrite(handle, rewrite)) return;
+  withinTransaction(handle, () => {
+    const outcome: StoredCategoryRewriteOutcome = { affectedProjects: new Set(), rewrittenIds: new Set() };
+    rewriteProfileEntries(handle, rewrite, outcome);
+    rewriteProjectCategories(handle, rewrite, outcome);
+    if (outcome.rewrittenIds.size) refreshPreparedDispatches(handle, [...outcome.affectedProjects], [...outcome.rewrittenIds]);
+  });
 }
 
 function refreshReadonlyCategorySeeds(handle?: any) {
-  const readonlyIds = new Set([
+  const readonlyIds = new Set<unknown>([
     ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
     'hand-analysis',
   ]);
-  // Scanning first means a settled store never opens a write transaction, which is the whole cost
-  // of this refresher on process start. The scan inside the transaction stays authoritative so the
-  // decision is never acted on from outside the lock.
-  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
-  const affected = new Set<string>();
-  let changed = false;
-  withinTransaction(handle, () => {
-    const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
-    const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
-    const now = new Date().toISOString();
-    for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
-      if (!category) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
-      if (!category) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
+  rewriteStoredCategories(handle, (category, categoryId) => (
+    readonlyIds.has(categoryId) && category.readonly === undefined ? { ...category, readonly: true } : null
+  ));
 }
 
 function refreshRoutingProfileSeedsForCatalogState(handle: unknown, root: string) {
@@ -1577,6 +1695,8 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    rewriteStoredCategories(handle, categoryWithCurrentCodexRoutes);
+    pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
@@ -1678,7 +1798,7 @@ function autoStoryColor(index?: any) {
   return STORY_PALETTE[(((index || 0) % n) + n) % n];
 }
 
-configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef: commitScope.integrationTargetRef, isTrackedBuildOutput: (...args: any[]) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args: any[]) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args: any[]) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef: commitScope.integrationTargetRef, isInScope: commitScope.isInScope, isTrackedBuildOutput: (...args: any[]) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args: any[]) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args: any[]) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
 
 /* ------------------------------------------------------------------ *
@@ -1863,6 +1983,7 @@ function stableExecutorName(ticket?: any, artifactMode = false) {
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
+  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
   return resolved.backend === 'codex'
     ? stableReadOnlyDispatchName(ticket.effort)
     : stableReadOnlyClaudeName(ticket.effort);
@@ -2058,7 +2179,10 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
       message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`,
     } : {}),
   };
-  return withTicketLock(slug, found.id, () => {
+  const tokenAdmitted = tokenAdmission(claimAdmission, slug, found.id, opts);
+  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, tokenAdmitted);
+  exchangeCrossedClaimCheckout(slug, found.id, opts?.sessionId, opts?.observedWorktree, tokenAdmitted);
+  const bound = withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
     const admission = claimAdmission(slug, ticket.id, opts);
@@ -2093,7 +2217,7 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     // A reduced-schema attempt has no agentName, so SubagentStop can only reach
     // it by agent_id. Recording identity before refusing keeps a refused attempt
     // retirable by its own terminal hook instead of stranding it until the
-    // claim-idle backstop. Identity is not permission: claimTicket re-checks.
+    // claim grace elapses. Identity is not permission: claimTicket re-checks.
     const permissionRefused = state.reducedAgentSchema === true && !reducedPermissionModeSupported(observedPermissionMode);
     stampDispatchEvent(ticket, permissionRefused ? 'claim-permission-refused' : 'claim-runtime-identity', now);
     putTicket(slug, ticket);
@@ -2107,6 +2231,9 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     }
     return { ok: true, ticket };
   });
+  // A stop held while this runtime's reservation was still a guess can be decided once the claim has vouched for it.
+  settleDeferredStops(opts?.sessionId);
+  return bound;
 }
 
 function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2114,7 +2241,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   by = String(by || 'agent');
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  const result = withTicketLock(slug, found.id, () => {
+  const result = withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
     // A bound candidate is frozen for its review: reclaiming it would let the
@@ -2136,7 +2263,9 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t);
-    if (currentDispatch?.reducedAgentSchema === true && (
+    // Only the live tokened attempt needs its runtime's hook evidence. A terminal one gated a direct claim on a
+    // dispatch that no longer governs the ticket (GH-191).
+    if (currentDispatch?.reducedAgentSchema === true && !currentDispatch.terminalAt && (
       !String(currentDispatch.agentId || '').trim()
       || !reducedPermissionModeSupported(currentDispatch.observedPermissionMode)
     )) {
@@ -2306,13 +2435,18 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
   });
-  if (result.reason !== 'busy' || opts.force) return result;
-  const t = getTicket(slug, found.id);
-  const held = t && t.claim;
-  if (held && held.by && held.by !== by && !claimReclaimable(t)) {
-    return { ok: false, reason: 'claimed', ticket: t, claim: held };
-  }
-  return result;
+  return lockedClaimOutcome(slug, found.id, by, result, opts.force);
+}
+
+function heldByAnotherLiveClaimant(ticket: { claim?: { by?: string } | null } | null, by: string): boolean {
+  const claimant = ticket?.claim?.by;
+  return Boolean(claimant) && claimant !== by && !claimReclaimable(ticket);
+}
+
+function lockedClaimOutcome<Result extends { reason?: string }>(slug: string, ticketId: string, by: string, result: Result, force?: boolean) {
+  if (result.reason !== 'busy' || force) return result;
+  const ticket = getTicket(slug, ticketId);
+  return heldByAnotherLiveClaimant(ticket, by) ? { ok: false, reason: 'claimed', ticket, claim: ticket.claim } : result;
 }
 
 function nullableText(value?: any) {
@@ -2351,6 +2485,20 @@ function failedClaimCanSurrender(ticket?: any, dispatch?: any, by?: any, opts?: 
   if (String(authorization.tokenDigest || '') !== dispatchTokenDigest(nonce)) return false;
   const authorizedSessionId = String(authorization.sessionId || '').trim();
   return !authorizedSessionId || authorizedSessionId === String(opts?.sessionId || '').trim();
+}
+
+// A bound review has to END on its candidate, so write scope it never touched leaves no commit it could submit, and
+// demanding one sent done and submit pointing at each other (GH-215). Scope it did use still takes the submit path.
+function boundReviewLeftScopeUnused(dispatch: any, completionDelta: any, declaredFiles: string[]) {
+  if (dispatch?.reviewTarget?.candidate?.source !== 'git' || !completionDelta?.ok) return false;
+  return ![...completionDelta.working, ...completionDelta.committed].some((file: string) => commitScope.isInScope(file, declaredFiles));
+}
+
+// A readonly category's artifactRoots name the one write it authorizes, so done must not count those paths
+// against it (GH-332).
+function readOnlyChangesOutsideArtifactRoots(slug: string, ticket: any, changedPaths: string[]) {
+  const artifactRoots: string[] = normalizeArtifactRoots(getCategory(ticketCategory(ticket), { project: slug })?.artifactRoots);
+  return { artifactRoots, paths: changedPaths.filter((file) => !commitScope.isInScope(file, artifactRoots)) };
 }
 
 // Release a claim. Only the owner or a reclaimable claim may release it.
@@ -2404,7 +2552,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
             reason: 'pending_submission',
             ticket: t,
             submission: t.submission,
-            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
           };
         }
         reopenedSubmission = t.submission;
@@ -2424,7 +2572,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return {
         ok: false,
         reason: 'unclaimed_active_dispatch',
-        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. ${unclaimedPreRuntimeDeliveryGuidance(t, dispatch) || `Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`}`,
+        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. ${unclaimedAttemptRecoveryGuidance(t, dispatch).trim() || `Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`}`,
         ticket: t,
       };
     }
@@ -2452,18 +2600,19 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         const scopedWorking = completionDelta.working.filter((file: string) => commitScope.isInScope(file, declaredFiles));
         // A restricted read-only executor cannot own shared-checkout changes; siblings must remain free to commit during its run.
         const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch?.sharedTree === true;
-        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
-          ? Array.from(new Set([...scopedWorking, ...scopedCommitted]))
-          : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
+        const readOnlyChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
+          ? readOnlyChangesOutsideArtifactRoots(slug, t, Array.from(new Set([...scopedWorking, ...scopedCommitted])))
+          : { artifactRoots: [], paths: [] };
+        if (readOnlyChanges.paths.length) {
+          const paths = readOnlyChanges.paths.sort();
           const mode = activeReadOnlyDispatch ? 'read-only dispatch' : 'declared scope';
           return {
             ok: false,
             reason: 'done_scope_violation',
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(', ')}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope and outside its category artifactRoots [${readOnlyChanges.artifactRoots.join(', ')}] since dispatch base: ${paths.join(', ')}. Paths under those artifactRoots are the only writes a read-only dispatch may close with. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
             unscopedPaths: paths,
+            artifactRoots: readOnlyChanges.artifactRoots,
           };
         }
       }
@@ -2505,17 +2654,18 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // A dispatch executor can be read-only even when the ticket's category is
     // normally writable. Its recorded identity controls an active closeout and
     // the terminal oracle closeout that follows an already-released review.
-    const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease);
+    const unusedReviewScope = boundReviewLeftScopeUnused(dispatch, completionDelta, declaredFiles);
+    const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease) || unusedReviewScope;
     if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !terminalReadOnlyOracle && !activeArtifactDispatch && !activeWorkingTreeDelivery && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path unless the recorded last executor is read-only. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then run the pinned command through the dispatched verify-capture wrapper for the current dispatch attempt and revision, and repeat done. Dirty or committed declared paths still require commit and submit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path unless the recorded last executor is read-only. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then, if the pinned requirement has a command, run it through the dispatched verify-capture wrapper for the current dispatch attempt and revision; otherwise supply explicit done --verify evidence for the pinned requirement. Repeat done with that evidence. Dirty or committed declared paths still require commit and submit.`,
         ticket: t,
       };
     }
     if (executorDone && liveClaim && activeDispatch) {
-      const completion = completionTreeCheck(slug, t, { explicitNoOp: opts.cleanDeclaredScope === true });
+      const completion = completionTreeCheck(slug, t, { explicitNoOp: opts.cleanDeclaredScope === true || unusedReviewScope });
       if (!completion.ok) return Object.assign({ ticket: t }, completion);
       if (!completionDelta?.ok && dispatch?.sharedTree === true && dispatch?.baseCommit) {
         return {
@@ -2631,6 +2781,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     } : null;
     if (release) t.release = release;
     if (dispatch) delete dispatch.failedClaimSurrender;
+    if (liveClaim) rekeyReleasedCheckout(slug, t, heldOwner);
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
         slug,
@@ -2954,12 +3105,12 @@ function workingTreeDeliveryCloseout(slug?: any, ticket?: any, completionDelta?:
   return { ok: true, ...candidate };
 }
 
-function externalDeliverableCloseout(slug?: any, ticket?: any) {
+function externalDeliverableCloseout(slug?: any, ticket?: any, verify?: any) {
   if (ticket?.externalDeliverable !== true) {
     return {
       ok: false,
       reason: 'external_deliverable_not_declared',
-      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can rerun the pinned verify-capture wrapper and done.`,
+      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can repeat done: a pinned command requires a current verify-capture; a commandless requirement needs explicit done --verify evidence.`,
     };
   }
   const workspace = dispatchWorkspace(slug, ticket);
@@ -2972,7 +3123,7 @@ function externalDeliverableCloseout(slug?: any, ticket?: any) {
       pending.working.length ? `uncommitted ${pending.working.join(', ')}` : null,
       pending.committed.length ? `committed but not submitted ${pending.committed.join(', ')}` : null,
     ].filter(Boolean).join('; ');
-    return { ok: false, reason: 'external_deliverable_scope_dirty', message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion.` };
+    return { ok: false, reason: 'external_deliverable_scope_dirty', message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion. ${landedWithoutSubmissionGuidance(ticket.ref)}` };
   }
   let revision: string;
   try {
@@ -2987,7 +3138,7 @@ function externalDeliverableCloseout(slug?: any, ticket?: any) {
   }
   if (!revision) return { ok: false, reason: 'external_deliverable_revision_unavailable', message: `${ticket.ref} cannot read the current revision for its external-deliverable verification capture.` };
   const candidate = { source: 'git', value: revision };
-  const verification = workingTreeVerification(ticket, candidate);
+  const verification = workingTreeVerification(ticket, candidate, verify);
   if (!verification.ok) return verification;
   const capture = Array.isArray(ticket.verificationCaptures)
     ? ticket.verificationCaptures.find((entry: any) => entry?.status === 'passed'
@@ -3075,6 +3226,12 @@ function missingDeliveredReleaseFragment(repoPath?: any, ref?: any, changedPaths
   return shippedPluginsWithoutReleaseFragment(repoPath, ref, changedPaths, () => true);
 }
 
+// A pinned multi-commit candidate is delivered by its tip, and the tip's own diff can
+// miss the fragment an earlier commit in the submitted range carried (GH-244).
+function deliveredReleasePaths(repo: string, delivery: any) {
+  return [...commitPaths(repo, delivery.commit), ...(delivery.integration?.changedPaths || [])];
+}
+
 function missingReleaseFragmentMessage(ref?: any, fragmentPath?: any, plugins?: any) {
   return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin: any) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Write the fragment, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin: any) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
 }
@@ -3119,6 +3276,36 @@ function ticketIntegrationTargets(slug?: any, tickets?: any) {
     };
   }
   return { ok: true, target: first, targets: resolved };
+}
+
+// The dispatch-time branch stays the default target, but an integrator that has since
+// fast-forwarded past it, or names integrationBranch, delivers onto the branch it has
+// checked out (SQ-3144). Any other checkout keeps the recorded target, so delivery
+// still refuses branch_not_checked_out. A local topic branch has no origin/<branch>
+// for remote mode to read, and delivery only ever moves the local branch, so that
+// target falls back to local mode rather than refusing.
+function deliveryIntegrationTarget(slug?: any, recorded?: any, integrationBranch?: any) {
+  const branch = integrationBranch == null
+    ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded))
+    : normalizeIntegrationBranch(integrationBranch);
+  if (!branch || branch === recorded.branch) return recorded;
+  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
+}
+
+function deliveryBranchMode(slug: any, recordedMode: string, branch: string) {
+  return recordedMode === 'remote' && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? 'remote' : 'local';
+}
+
+function checkedOutBranchDescendingFrom(repo: string, ref: string) {
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: 'pipe' }).trim();
+  const currentBranch = git(['branch', '--show-current']);
+  try {
+    git(['merge-base', '--is-ancestor', ref, 'HEAD']);
+    return currentBranch;
+  } catch (error: any) {
+    if (error?.status === 1) return '';
+    throw error;
+  }
 }
 
 function recordedDelivery(slug?: any, ticket?: any, commit?: any, evidence?: any) {
@@ -3186,21 +3373,11 @@ function pendingSubmissionDeliveryRefusal(ticket?: any, result?: any) {
   });
 }
 
+// The same shape the dispatch evidence path accepts, deliberately: grooming used to refuse every bound
+// attempt outright, so closing one meant a retire-then-close dance through two tools while the two surfaces
+// slowly drifted apart. Whether it is retirable YET is the authority's call in clearUnclaimedDispatch.
 function unclaimedPreRuntimeDispatch(ticket?: any, state?: any) {
-  return Boolean(
-    ticket?.dispatchNonce
-    && state
-    && ['prepared', 'launched'].includes(state.outcome)
-    && !state.terminalAt
-    && !state.boundAt
-    && !state.claimedAt
-    && !ticket.claim?.by,
-  );
-}
-
-function unclaimedPreRuntimeDeliveryGuidance(ticket?: any, state?: any) {
-  if (!unclaimedPreRuntimeDispatch(ticket, state)) return '';
-  return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
+  return unclaimedEvidenceAttempt(ticket, state);
 }
 
 function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
@@ -3232,7 +3409,18 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
         ok: false,
         reason: 'active_dispatch',
         ticket,
-        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is live, bound, claimed, or already terminal. Recovery evidence clears only an unclaimed prepared or launched dispatch before runtime binding.`,
+        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is claimed, checkpointed, or already terminal. Recovery evidence clears an unclaimed prepared or launched dispatch once it is past its retirement deadline.`,
+      };
+    }
+    // This door used to skip the retirement authority entirely and retire an attempt that was still inside
+    // its grace, which is what let groomClose kill a runtime that had barely started (SQ-2949 finding 1).
+    const nowMs = Date.now();
+    if (!preparingSessionAttests(state, opts?.sessionId) && nowMs < unclaimedRetirement(ticket, state, nowMs).retirableAt) {
+      return {
+        ok: false,
+        reason: 'unclaimed_launch_not_supersedable',
+        ticket,
+        message: unclaimedRetirementRefusal(ticket, state, nowMs),
       };
     }
     if (agentId && String(state.agentId || '') !== agentId) return { ok: false, reason: 'dispatch_identity_mismatch', ticket };
@@ -3252,6 +3440,25 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
     queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
     return { ok: true, ticket };
   });
+}
+
+// THE groom-close retirement authority, so the CLI and the MCP tool cannot answer the same recovery evidence
+// differently. The CLI accepted `--recovery-evidence`, never read it, and went straight to
+// completeTicketAsControlPlane, which refuses a bound unclaimed attempt as `active_dispatch` both inside and
+// past the deadline - while MCP counted down and then retired and closed in one call. So the CLI's advertised
+// recovery door could never open (SQ-2959 finding 3). Both surfaces now call this and print what it returns.
+function groomCloseRecovery(slug?: any, idOrRef?: any, opts?: any) {
+  const evidence = String(opts?.evidence || '').trim();
+  const reason = String(opts?.reason || '');
+  if (!evidence) return { ok: true, reason };
+  const ticket = getTicket(slug, idOrRef);
+  const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
+  if (recovered.ok) return { ok: true, reason };
+  // A dispatch that is ALREADY terminal needs no retirement, so evidence arriving after the fact is recorded
+  // in the closure reason rather than refused.
+  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+  if (!terminalDispatch) return { ok: false, recovered };
+  return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 
 function unconsumedPreparedDispatch(ticket?: any, state?: any) {
@@ -3310,7 +3517,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it.${unclaimedAttemptRecoveryGuidance(ticket, state) || ` After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`}`,
         ticket,
       };
     }
@@ -3320,7 +3527,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it.${unclaimedPreRuntimeDeliveryGuidance(ticket, state) || ` Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`}`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it.${unclaimedAttemptRecoveryGuidance(ticket, state) || ` Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`}`,
         ticket,
       };
     }
@@ -3329,7 +3536,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     return {
       ok: false,
       reason: 'submission_required',
-      message: `${ticket.ref} has no submission to consume, so an integration closure has nothing to integrate. A submission only exists after its executor ran commit and then submit. When the work shipped outside that flow — the usual case is the orchestrator committing an executor's changes out of the shared tree after it lost its worktree — release the claim (\`sidequest release ${ticket.ref} --by <claim holder>\`) and close it as plain grooming with the shipped commit as evidence, without --integration.`,
+      message: `${ticket.ref} has no submission to consume, so an integration closure has nothing to integrate. A submission only exists after its executor ran commit and then submit. When the work shipped outside that flow — the usual case is the orchestrator committing an executor's changes out of the shared tree after it lost its worktree — ${ticket.claim?.by ? `release the claim first (\`sidequest release ${ticket.ref} --by ${String(ticket.claim.by)}\`), then ` : ''}close it without --integration. ${landedWithoutSubmissionGuidance(ticket.ref)}`,
       ticket,
     };
   }
@@ -3362,13 +3569,19 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
         const integrationRefs = commitScope.integrationTargetRefs(target);
         const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || '', ticket.submission || {}, integrationRefs);
         return landed ? deliveredSubmission : Object.assign({}, deliveredSubmission, {
-          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${integrationRefs.join(' or ') || target?.branch || 'the integration branch'}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`,
+          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${integrationRefs.join(' or ') || target?.branch || 'the integration branch'}. If a squash or rebase merge carried it there, record the commit that landed it: \`sidequest groom-close ${ticket.ref} --delivery-commit <landed commit> --reason "<where it landed>"\` (MCP \`deliveryCommit\`). If it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`,
         });
       }
     }
   }
   let reconciledDelivery: any = null;
-  if (purpose === 'delivery' && pendingSubmission(ticket)) {
+  // An apply delivery consumed its submission and closed the ticket while leaving the
+  // delivered bytes in the working tree. Binding the commit of that exact tree is the
+  // remainder of that same delivery, so it goes through the verified delivery record
+  // rather than the reachability-only hand-delivery note, and it does not re-close a
+  // ticket that is already done.
+  const completingApplyDelivery = purpose === 'delivery' && applyDeliveryAwaitingContentCommit(ticket);
+  if (purpose === 'delivery' && (pendingSubmission(ticket) || completingApplyDelivery)) {
     let target: any;
     try {
       target = ticketIntegrationTarget(slug, ticket);
@@ -3380,11 +3593,21 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       deliveryCommit: opts.deliveryCommit,
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
+      deliveryRevision: opts.deliveryRevision,
+      resolvedPaths: opts.resolvedPaths,
       verificationSupersession: opts.verificationSupersession,
+      completingApplyDelivery,
       by,
       reason,
     });
-    if (!recordedSubmission.ok) return pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    if (!recordedSubmission.ok) {
+      return completingApplyDelivery
+        ? Object.assign({ ticket }, recordedSubmission)
+        : pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    }
+    if (completingApplyDelivery) {
+      return { ok: true, idempotent: true, deliveryRecordCompleted: true, ticket: recordedSubmission.ticket, integration: recordedSubmission.integration };
+    }
     const integration = recordedSubmission.integration;
     reconciledDelivery = {
       ok: true,
@@ -3398,7 +3621,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   }
   const delivery = purpose === 'delivery' ? reconciledDelivery || recordedDelivery(slug, ticket, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
-  const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || '', delivery.commit)) : null;
+  const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, deliveredReleasePaths(readMeta(slug)?.path || '', delivery)) : null;
   if (missingFragment) return {
     ok: false,
     reason: 'missing_release_fragment',
@@ -3406,7 +3629,15 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     ticket,
   };
   if (purpose === 'integration') {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true });
+    // recordDeliveredSubmission already ran (and, for a diverged expected upstream,
+    // already re-validated under its own deliveryMethod waiver) before this control-plane
+    // closure re-checks admission. Dropping deliveryMethod here re-ran that same check
+    // unwaived and refused the closure MCP `integrate` had just recorded.
+    const admitted = validateIntegrationSubmission(slug, idOrRef, {
+      requireDeliveredWave: true,
+      deliveryMethod: opts.deliveryMethod,
+      integrationBranch: ticket.submission?.integration?.targetBranch,
+    });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3643,6 +3874,7 @@ const {
   STORY_LOG_ENTRY_ADVISORY_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   appendStoryLogEntry,
+  appendStoryLogEntryResult,
   coerceStoryId,
   createStory,
   deleteStory,
@@ -3650,6 +3882,7 @@ const {
   listStories,
   normalizeStoryLogEntry,
   rotateStoryLog,
+  rotateStoryLogResult,
   storyLogEntryAdvisory,
   storyDecisionLog,
   storyDecisionLogWarnings,
@@ -3660,7 +3893,7 @@ const {
 } = stories;
 
 projectsLayer = createProjects({
-  acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
+  acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
   deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
   path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction,
 });
@@ -3676,8 +3909,9 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   boardConfig,
   checkpointProjection,
   claimPulse,
-  claimIdleMs,
+  claimStaleness,
   claimReleaseVerdict,
+  unclaimedRetirement,
   claimVerification,
   commitScope,
   dispatchState,
@@ -3728,6 +3962,7 @@ module.exports = {
   availableRoute,
   resolveModelId,
   resolveExec,
+  discoveredModelBackends,
   resolveReportedExec,
   normalizeReportedModel,
   resolvedDispatchRoute,
@@ -3738,6 +3973,7 @@ module.exports = {
   sharedTreeArtifactMode,
   resolveTicketRoute,
   resolveCategoryRoute,
+  dispatchRouteRefusal,
   projectDispatchAdmission,
   claudeQuotaFailure,
   classifyDispatchFailure,
@@ -3788,6 +4024,7 @@ module.exports = {
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
@@ -3805,11 +4042,17 @@ module.exports = {
   verifyOracleErrors,
   verifyCommandErrors,
   verifyCommandError,
+  normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
+  listProjectsFlaggingMissingPaths,
+  registerProject,
+  boardRootRefusal,
+  explicitProjectRoot,
   findProject,
   archiveProject,
   unarchiveProject,
+  ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
   setProjectNotify,
@@ -3824,6 +4067,8 @@ module.exports = {
   ticketPlanInfo,
   appendExperimentEntry,
   applyExperimentVerdict,
+  correctAcceptedReviewVerdict,
+  admitComposition,
   appendOverturnLine,
   experimentPacket,
   listTickets,
@@ -3845,6 +4090,7 @@ module.exports = {
   syncLiveDispatchVerification,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
   dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,
@@ -3852,19 +4098,24 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
+  boardVerificationEvidencePath,
+  dispatchEvidenceDirectory,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
   terminalDispatchForIdle,
   markDispatchStopped,
+  agentDispatchWorktrees,
   reconcileLaunchedDispatches,
   claimAdmission,
   bindClaimRuntimeIdentity,
@@ -3879,6 +4130,7 @@ module.exports = {
   missingReleaseFragmentMessage,
   unrecordedSanctionedCommitWarning,
   clearUnclaimedDispatch,
+  groomCloseRecovery,
   closeTicketForGrooming,
   makeWorkedBy,
   checkpointTicket,
@@ -3890,6 +4142,7 @@ module.exports = {
   MAX_CHECKPOINT_TTL_MIN,
   submissionOwnershipFailure,
   submitTicket,
+  pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
   reconcileSubmissionRejections,
@@ -3924,10 +4177,12 @@ module.exports = {
   storyExecutionContractPage,
   normalizeStoryLogEntry,
   rotateStoryLog,
+  rotateStoryLogResult,
   storyLogEntryAdvisory,
   storyDecisionLog,
   storyReadPayload,
   appendStoryLogEntry,
+  appendStoryLogEntryResult,
   storyDecisionLogWarnings,
   listStories,
   getStory,
@@ -3961,9 +4216,11 @@ module.exports = {
   technicalBlockerRelease,
   touchClaim,
   claimIdleMs,
+  claimGraceMs,
   claimAbandonMs,
   preparedDispatchTtlMs,
   DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,

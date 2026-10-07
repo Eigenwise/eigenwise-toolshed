@@ -464,48 +464,59 @@ test('buildCatalog publishes the v4 provider-generic model contract', () => {
   assert.equal(catalog.writtenBy, JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version);
   assert.deepEqual(catalog.providers, readiness);
   assert.deepEqual(catalog.codexReadiness, catalog.providers.codex);
+  const codexWindow = {
+    contextWindow: 272000,
+    contextWindowNote: 'compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double',
+  };
   assert.deepEqual(catalog.models, [
     {
       slug: 'codex-gpt-5-6-sol',
       id: 'claude-gpt-5.6-sol[1m]',
       label: 'GPT-5.6 Sol',
       provider: 'codex',
+      ...codexWindow,
     },
     {
       slug: 'codex-gpt-5-6-terra',
       id: 'claude-gpt-5.6-terra[1m]',
       label: 'GPT-5.6 Terra',
       provider: 'codex',
+      ...codexWindow,
     },
     {
       slug: 'codex-gpt-5-6-luna',
       id: 'claude-gpt-5.6-luna[1m]',
       label: 'GPT-5.6 Luna',
       provider: 'codex',
+      ...codexWindow,
     },
     {
       slug: 'codex-gpt-5-6-sol-fast',
       id: 'claude-gpt-5.6-sol-fast[1m]',
       label: 'GPT-5.6 Sol Fast',
       provider: 'codex',
+      ...codexWindow,
     },
     {
       slug: 'codex-gpt-5-6-terra-fast',
       id: 'claude-gpt-5.6-terra-fast[1m]',
       label: 'GPT-5.6 Terra Fast',
       provider: 'codex',
+      ...codexWindow,
     },
     {
       slug: 'codex-gpt-5-6-luna-fast',
       id: 'claude-gpt-5.6-luna-fast[1m]',
       label: 'GPT-5.6 Luna Fast',
       provider: 'codex',
+      ...codexWindow,
     },
     {
       slug: 'grok-4-5',
       id: 'claude-grok-4.5[1m]',
       label: 'Grok 4.5',
       provider: 'grok',
+      contextWindow: 500000,
     },
     {
       slug: 'grok-build',

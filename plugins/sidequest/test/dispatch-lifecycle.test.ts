@@ -6,6 +6,7 @@ import './_hook-runtime.js';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { creationGeneration } = require('./_creation-generation.js');
 const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -21,7 +22,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' },
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
   ],
 }));
@@ -198,6 +199,37 @@ test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
   assert.equal(persistedSnapshots.filter((snapshot: any) => snapshot.value === baseline.revision.value).length, 1);
 });
 
+// GH-334: the store resolves a board by slug here, so no ensureProject runs between `git init` and
+// the dispatch; dispatch itself has to notice the repository and say it switched.
+test('dispatch moves a snapshot board to git after git init and reports the switch once', () => {
+  const lateGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-late-git-'));
+  fs.writeFileSync(path.join(lateGitProject, 'page.md'), 'registered before git init\n');
+  const lateGitSlug = store.ensureProject(lateGitProject).slug;
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapter, 'filesystem-snapshot');
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: lateGitProject, windowsHide: true });
+  execFileSync('git', ['add', 'page.md'], { cwd: lateGitProject, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Late Git', '-c', 'user.email=late-git@example.invalid', 'commit', '--quiet', '-m', 'seed'], { cwd: lateGitProject, windowsHide: true });
+  const first = store.createTicket(lateGitSlug, {
+    title: 'dispatch after git init', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+  const second = store.createTicket(lateGitSlug, {
+    title: 'second dispatch after git init', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+
+  const prepared = store.prepareDispatch(lateGitSlug, first.ref, { sharedTree: true });
+  const later = store.prepareDispatch(lateGitSlug, second.ref, { sharedTree: true });
+
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapter, 'git');
+  assert.equal(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.source, 'git');
+  assert.deepEqual(
+    { from: prepared.ticket.dispatch.sourceRevisionAdapterSwitch.from, to: prepared.ticket.dispatch.sourceRevisionAdapterSwitch.to },
+    { from: 'filesystem-snapshot', to: 'git' },
+  );
+  assert.ok(store.dispatchWarnings(prepared.ticket, lateGitSlug).some((warning: string) => /switched its source revision adapter from filesystem-snapshot to git/.test(warning)));
+  assert.equal(later.ticket.dispatch.sourceRevisionAdapterSwitch, undefined, 'only the dispatch that made the switch reports it');
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapterSwitch, undefined);
+});
+
 for (const limit of [
   { bound: 'path cap', observed: 501, cap: 500, unit: 'paths' },
   { bound: 'byte cap', observed: 65, cap: 64, unit: 'bytes' },
@@ -304,7 +336,7 @@ test('a changed recovery route refuses before rehashing or mutating the prepared
     return originalRevision(projectPath, observedAt);
   }, (snapshotStore: any) => {
     snapshotStore.setCategory({
-      id: 'snapshot.recovery.route', name: 'Snapshot recovery route', route: { model: 'fable', effort: 'high' }, fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' }, enabled: true,
+      id: 'snapshot.recovery.route', name: 'Snapshot recovery route', route: { model: 'fable', effort: 'high' }, fallback: { model: 'codex-gpt-6-1-sol', effort: 'high' }, enabled: true,
     });
     const snapshotProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-recovery-route-'));
     fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'recovery route\n');
@@ -611,6 +643,85 @@ function dispatchBindingCounts(refs: any[]) {
   };
 }
 
+test('dispatch lists what it adds beyond the ticket files and never adds a declared file\'s bare parent (GH-194)', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-board-added-scope-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: project });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: project });
+  execFileSync('git', ['config', 'user.name', 'Board Added Scope Test'], { cwd: project });
+  fs.mkdirSync(path.join(project, 'docs'));
+  fs.writeFileSync(path.join(project, 'docs', 'tools.md'), '# Tools\n');
+  execFileSync('git', ['add', '.'], { cwd: project });
+  execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: project });
+  const projectSlug = store.ensureProject(project).slug;
+  assert.deepEqual(store.boardConfig(projectSlug).alwaysInScope, ['docs/']);
+  const golden = store.createTicket(projectSlug, {
+    title: 'golden fixture scope',
+    category: 'dispatch.lifecycle',
+    files: ['tests/golden/fixture.dat'],
+    source: 'test',
+  });
+  const docsFile = store.createTicket(projectSlug, {
+    title: 'single doc scope',
+    category: 'dispatch.lifecycle',
+    files: ['docs/tools.md'],
+    source: 'test',
+  });
+  try {
+    const goldenFragment = `.release/unreleased/${golden.ref}.md`;
+    const preparedGolden = store.prepareDispatch(projectSlug, golden.ref, { sessionId: `board-added-golden-${Date.now()}` });
+    assert.deepEqual(preparedGolden.ticket.dispatch.declaredFiles, ['tests/golden/fixture.dat', 'docs/', goldenFragment]);
+    assert.deepEqual(preparedGolden.ticket.dispatch.boardAddedFiles, ['docs/', goldenFragment]);
+    const briefing = agentsync.renderTicketBriefing(store.getTicket(projectSlug, golden.ref), 'board-added-token', projectSlug, project);
+    assert.match(briefing, /Board-added scope \(board config alwaysInScope[^\n]*\n- docs\//);
+
+    const docsFragment = `.release/unreleased/${docsFile.ref}.md`;
+    const preparedDocs = store.prepareDispatch(projectSlug, docsFile.ref, { sessionId: `board-added-docs-${Date.now()}` });
+    assert.deepEqual(preparedDocs.ticket.dispatch.declaredFiles, ['docs/tools.md', docsFragment]);
+    assert.deepEqual(preparedDocs.ticket.dispatch.boardAddedFiles, [docsFragment]);
+    assert.doesNotMatch(agentsync.renderTicketBriefing(store.getTicket(projectSlug, docsFile.ref), 'docs-token', projectSlug, project), /Board-added scope/);
+  } finally {
+    store.deleteTicket(projectSlug, golden.ref);
+    store.deleteTicket(projectSlug, docsFile.ref);
+  }
+});
+
+test('GH-341: an unscoped write dispatch binds the whole tree beside docs/, says so, and refuses the shared checkout', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-unscoped-whole-tree-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: project });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: project });
+  execFileSync('git', ['config', 'user.name', 'Unscoped Whole Tree Test'], { cwd: project });
+  fs.mkdirSync(path.join(project, 'docs'));
+  fs.mkdirSync(path.join(project, 'src'));
+  fs.writeFileSync(path.join(project, 'docs', 'tools.md'), '# Tools\n');
+  fs.writeFileSync(path.join(project, 'src', 'app.js'), 'module.exports = 1;\n');
+  execFileSync('git', ['add', '.'], { cwd: project });
+  execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: project });
+  const projectSlug = store.ensureProject(project).slug;
+  assert.deepEqual(store.boardConfig(projectSlug).alwaysInScope, ['docs/']);
+  const unscoped = store.createTicket(projectSlug, { title: 'edit src without declared files', category: 'dispatch.lifecycle', source: 'test' });
+  try {
+    assert.throws(
+      () => store.prepareDispatch(projectSlug, unscoped.ref, { sessionId: `unscoped-shared-${Date.now()}`, sharedTree: true, allowUnscoped: true }),
+      (error: any) => /would run in the shared checkout/.test(error.message)
+        && /Board policy alone would give it only docs\//.test(error.message)
+        && error.message.includes(`sidequest update ${unscoped.ref} --file <path>`),
+    );
+    assert.equal(store.getTicket(projectSlug, unscoped.ref).dispatch, undefined, 'the refused dispatch records nothing');
+
+    const prepared = store.prepareDispatch(projectSlug, unscoped.ref, { sessionId: `unscoped-isolated-${Date.now()}`, allowUnscoped: true });
+    assert.equal(prepared.ticket.dispatch.sharedTree, false);
+    assert.deepEqual(prepared.ticket.dispatch.declaredFiles, ['**', 'docs/']);
+    assert.deepEqual(prepared.ticket.dispatch.boardAddedFiles, ['docs/'], 'writeScope names the whole tree; boardAddedFiles keeps to real paths');
+    assert.equal(prepared.ticket.dispatch.unscopedOverride.writeScope, 'write scope: unscoped (whole tree), always-in-scope: docs/');
+    const executionScope = store.executionScope(projectSlug, prepared.ticket);
+    assert.ok(require('../lib/commit-scope.js').isInScope('src/app.js', executionScope), `docs/ must not be the only scope, got ${executionScope.join(', ')}`);
+    const briefing = agentsync.renderTicketBriefing(store.getTicket(projectSlug, unscoped.ref), 'unscoped-token', projectSlug, project);
+    assert.match(briefing, /\(No files were declared\.\) write scope: unscoped \(whole tree\), always-in-scope: docs\/\./);
+  } finally {
+    store.deleteTicket(projectSlug, unscoped.ref);
+  }
+});
+
 test('scope drift ignores always-in-scope paths and preserves declared casing for real drift', () => {
   const scopeDriftProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-drift-project-'));
   execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: scopeDriftProject });
@@ -701,7 +812,7 @@ test('batch launch records every prepared ticket and binds the shared native age
     const pulse = store.pulsePayload(slug, ref);
     assert.equal(pulse.dispatch.state, 'bound');
     assert.ok(pulse.dispatch.boundAt);
-    assert.equal(pulse.liveness, 'unknown');
+    assert.equal(pulse.liveness, 'starting');
   }
 });
 
@@ -1032,10 +1143,10 @@ test('a bound runtime without a claim keeps its recovery-evidence backstop', () 
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
 
-  const recoveryEvidence = 'The bound runtime has not claimed and must remain protected during the configured backstop.';
+  const recoveryEvidence = 'The bound runtime has not claimed and must remain protected during the configured grace.';
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { recoveryEvidence }),
-    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in/,
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence at .*, in \d+ minutes?, unless/,
   );
   const protectedAttempt = store.getTicket(slug, ticket.ref);
   assert.equal(protectedAttempt.dispatchNonce, prepared.token);
@@ -1052,6 +1163,778 @@ test('a bound runtime without a claim keeps its recovery-evidence backstop', () 
     store.releaseTicket(slug, ticket.ref, 'bound-unclaimed-recovery-cleanup', { status: 'todo', source: 'test', force: true });
   }
 });
+
+function bindUnclaimedFixture(label: string) {
+  const ticket = createFixture(`${label} fixture`);
+  const sessionId = `${label}-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  const agentName = `${label}-worker-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+  return { ticket, prepared, sessionId, agentName, executor: prepared.ticket.dispatchExecutor };
+}
+
+const RUNTIME_SIGNAL_FIELDS = [
+  'preparedAt',
+  'launchedAt',
+  'worktreeBoundAt',
+  'worktreeCreationCompletedAt',
+  'worktreeProvisionedAt',
+  'boundAt',
+  'briefedAt',
+];
+
+// The fake clock: every retirement decision and every printed deadline is measured from the newest board
+// signal the runtime produced, so moving every recorded signal back is indistinguishable from letting that
+// much wall time pass with the runtime silent.
+function backdateRuntimeSignals(ticketId: string, elapsedMs: number) {
+  const dispatch = store.getTicket(slug, ticketId).dispatch;
+  const at = new Date(Date.now() - elapsedMs).toISOString();
+  const attempt = Array.isArray(dispatch.attempts) ? dispatch.attempts.at(-1) : null;
+  for (const field of RUNTIME_SIGNAL_FIELDS) {
+    if (!dispatch[field]) continue;
+    dispatch[field] = at;
+    if (attempt && attempt[field]) attempt[field] = at;
+  }
+  independentTicketWrite(slug, ticketId, { dispatch });
+  return at;
+}
+
+function stampRuntimeSignal(ticketId: string, field: string, elapsedMs: number) {
+  const dispatch = store.getTicket(slug, ticketId).dispatch;
+  const at = new Date(Date.now() - elapsedMs).toISOString();
+  dispatch[field] = at;
+  independentTicketWrite(slug, ticketId, { dispatch });
+  return at;
+}
+
+// Pinned rather than read back from the store: the shipped defaults ARE the contract an orchestrator
+// plans around, so changing either should fail here and be changed on purpose.
+const CLAIM_GRACE_MS = 15 * 60 * 1000;
+const CLAIM_IDLE_MS = 60 * 60 * 1000;
+
+function retireOnGrace(ref: string, recoveryEvidence: string) {
+  try {
+    return store.prepareDispatch(slug, ref, { recoveryEvidence, retireOnly: true });
+  } catch (error: any) {
+    return { refusal: String(error.message) };
+  }
+}
+
+function retirementOutcome(result: any) {
+  return result?.refusal ? `refused: ${result.refusal}` : `retired=${result?.retired}`;
+}
+
+function printedDeadline(refusal: string) {
+  const printed = /becomes retirable on evidence at (\S+?), in (\d+) minutes?, unless/.exec(refusal);
+  assert.ok(printed, `the refusal must print its deadline and countdown, got: ${refusal}`);
+  return { at: Date.parse(String(printed![1])), remaining: Number(printed![2]) };
+}
+
+// SQ-2932 finding 1: SubagentStart stamps boundAt before the model's first turn, so a grace measured from
+// the bind alone retired executors that were reading their briefing. The briefing fetch is a board call
+// the runtime makes before its claim, and it has to move the deadline.
+test('SQ-2934: the claim grace runs from the briefing fetch, not from the bind that preceded it', () => {
+  const { ticket, prepared } = bindUnclaimedFixture('grace-briefing');
+  const recoveryEvidence = 'The host reported this agent terminated before its first claim.';
+
+  try {
+    assert.equal(store.readDispatchBriefing(slug, ticket.ref, prepared.token).ok, true);
+    assert.ok(store.getTicket(slug, ticket.ref).dispatch.briefedAt, 'a served briefing must record itself as a runtime signal');
+
+    backdateRuntimeSignals(ticket.id, 6 * 60000);
+    const briefedAt = stampRuntimeSignal(ticket.id, 'briefedAt', 2 * 60000);
+
+    const refused = retireOnGrace(ticket.ref, recoveryEvidence);
+    assert.ok(refused.refusal, `six minutes after bind the executor is still protected, got ${retirementOutcome(refused)}`);
+    assert.match(refused.refusal, /last runtime signal: briefing fetched at/);
+    const printed = printedDeadline(refused.refusal);
+    assert.equal(printed.at, Date.parse(briefedAt) + CLAIM_GRACE_MS, 'the deadline must be measured from the briefing fetch');
+    assert.equal(printed.remaining, CLAIM_GRACE_MS / 60000 - 2);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.terminalAt, null);
+
+    backdateRuntimeSignals(ticket.id, CLAIM_GRACE_MS + 4 * 60000);
+    stampRuntimeSignal(ticket.id, 'briefedAt', CLAIM_GRACE_MS);
+    const retired = retireOnGrace(ticket.ref, recoveryEvidence);
+    assert.equal(retired.retired, true, 'a whole grace after the last signal, retirement is accepted');
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'grace-briefing-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+function worktreeCreationFixture(label: string) {
+  const ticket = createFixture(`${label} fixture`);
+  const sessionId = `${label}-${Date.now()}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, `${label}-${ticket.id}`);
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.ok(!store.getTicket(slug, ticket.ref).dispatch.worktreeProvisionedAt, 'the fixture must start with provisioning unfinished');
+  return { ticket, sessionId, worktree };
+}
+
+// SQ-2932 finding 2: WorktreeCreate records its completed checkout before it runs provisioning, so a cold
+// `npm ci` is minutes of board silence that used to read as a dead hook and retire immediately.
+test('SQ-2934: an in-flight WorktreeCreate is never grace-retirable, and the idle backstop still reaches it', () => {
+  const recoveryEvidence = 'The host reported no executor ever started in this checkout.';
+  const provisioning = worktreeCreationFixture('grace-provisioning');
+  const lifted = worktreeCreationFixture('grace-provisioned');
+
+  try {
+    backdateRuntimeSignals(provisioning.ticket.id, 30 * 60000);
+    const refused = retireOnGrace(provisioning.ticket.ref, recoveryEvidence);
+    assert.ok(refused.refusal, `an unfinished WorktreeCreate is not a dead hook, got ${retirementOutcome(refused)}`);
+    assert.match(refused.refusal, /has not recorded finished provisioning, so only the idle backstop applies/);
+    assert.equal(printedDeadline(refused.refusal).remaining, (CLAIM_IDLE_MS - 30 * 60000) / 60000);
+
+    backdateRuntimeSignals(provisioning.ticket.id, CLAIM_IDLE_MS);
+    const retired = retireOnGrace(provisioning.ticket.ref, recoveryEvidence);
+    assert.equal(retired.retired, true, 'the idle backstop still reaches a WorktreeCreate nobody will finish');
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+
+    // The provisioning stamp is what lifts the block, so the same elapsed time retires once it lands.
+    assert.equal(store.recordDispatchWorktreeProvisioned(slug, lifted.sessionId, lifted.worktree, creationGeneration(slug, lifted.sessionId, lifted.worktree)).ok, true);
+    backdateRuntimeSignals(lifted.ticket.id, 30 * 60000);
+    assert.equal(retireOnGrace(lifted.ticket.ref, recoveryEvidence).retired, true);
+  } finally {
+    for (const fixture of [provisioning, lifted]) {
+      store.releaseTicket(slug, fixture.ticket.ref, 'grace-provisioning-cleanup', { status: 'todo', source: 'test', force: true });
+    }
+  }
+});
+
+// pulse is what an orchestrator reads before reaching for recovery evidence, so a pulse saying stalled
+// while retirement still refuses sends it looking for another route. Both read one helper (SQ-2932).
+test('SQ-2934: pulse and the retirement refusal agree at the exact grace boundary', () => {
+  const recoveryEvidence = 'The host reported this agent terminated before its first claim.';
+  for (const offsetMs of [-5000, 0, 5000]) {
+    const { ticket } = bindUnclaimedFixture(`grace-boundary${offsetMs}`);
+    try {
+      // The briefing fetch sits four minutes after the bind, so a deadline measured from the bind alone
+      // would already be past at every offset and this boundary would move under both surfaces.
+      backdateRuntimeSignals(ticket.id, CLAIM_GRACE_MS + offsetMs + 4 * 60000);
+      stampRuntimeSignal(ticket.id, 'briefedAt', CLAIM_GRACE_MS + offsetMs);
+      const pulse = store.pulsePayload(slug, ticket.ref);
+      const stalled = pulse.liveness === 'stalled' && /passed its retirement deadline/.test(pulse.livenessEvidence);
+      const retired = retireOnGrace(ticket.ref, recoveryEvidence).retired === true;
+      assert.equal(stalled, retired, `pulse said ${pulse.liveness} (${pulse.livenessEvidence}) while retirement said ${retired} at ${offsetMs}ms past the deadline`);
+      assert.equal(retired, offsetMs >= 0, `the deadline itself must be inclusive, and anything before it protected (${offsetMs}ms)`);
+    } finally {
+      store.releaseTicket(slug, ticket.ref, 'grace-boundary-cleanup', { status: 'todo', source: 'test', force: true });
+    }
+  }
+});
+
+test('SQ-2922: the unclaimed countdown names the instant retirement is actually accepted', () => {
+  const { ticket } = bindUnclaimedFixture('grace-countdown');
+  const recoveryEvidence = 'The host reported this agent terminated before its first claim.';
+  let previousRemaining = Number.POSITIVE_INFINITY;
+
+  try {
+    for (let elapsedMinutes = 0; elapsedMinutes * 60000 < CLAIM_GRACE_MS; elapsedMinutes += 1) {
+      const signalAt = backdateRuntimeSignals(ticket.id, elapsedMinutes * 60000);
+      const refused = retireOnGrace(ticket.ref, recoveryEvidence);
+      assert.ok(refused.refusal, `inside the grace retirement must be refused, got ${retirementOutcome(refused)}`);
+      const printed = printedDeadline(refused.refusal);
+      assert.equal(
+        printed.at,
+        Date.parse(signalAt) + CLAIM_GRACE_MS,
+        'the printed deadline must be the same instant the gate uses, not a second computation',
+      );
+      assert.ok(printed.remaining < previousRemaining, `the countdown must fall, got ${printed.remaining} after ${previousRemaining}`);
+      assert.equal(printed.remaining, Math.ceil((CLAIM_GRACE_MS - elapsedMinutes * 60000) / 60000));
+      previousRemaining = printed.remaining;
+      assert.equal(store.getTicket(slug, ticket.ref).dispatch.terminalAt, null);
+    }
+    assert.equal(previousRemaining, 1, 'the last refusal before the deadline must read one minute, not a clamped floor');
+
+    backdateRuntimeSignals(ticket.id, CLAIM_GRACE_MS);
+    const retired = retireOnGrace(ticket.ref, recoveryEvidence);
+    assert.equal(retired.retired, true, 'the refusal must flip to acceptance at the instant it printed');
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'grace-countdown-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-2922: an attested unclaimed attempt retires past the grace, and a claimed one still does not', () => {
+  const recoveryEvidence = 'Host task notification: the agent ended with status failed before its first claim.';
+  const stranded = bindUnclaimedFixture('grace-retire');
+  backdateRuntimeSignals(stranded.ticket.id, CLAIM_GRACE_MS);
+  const retired = retireOnGrace(stranded.ticket.ref, recoveryEvidence);
+  assert.equal(retired.retired, true);
+  assert.equal(retired.ticket.dispatchNonce, null);
+  assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  assert.equal(retired.ticket.dispatch.attempts.at(-1).recoveryEvidence, recoveryEvidence);
+  const retirement = retired.ticket.dispatch.terminalAt;
+
+  // The stop hook that never fired may still arrive late. It must find the retirement already recorded
+  // and leave it alone rather than writing a second terminal outcome over the same attempt.
+  const lateStop = store.markDispatchStopped(stranded.sessionId, stranded.executor, stranded.agentName, stranded.agentName);
+  assert.notEqual(lateStop.stopped, true);
+  const afterStop = store.getTicket(slug, stranded.ticket.ref);
+  assert.equal(afterStop.dispatch.terminalAt, retirement);
+  assert.equal(afterStop.dispatch.failureShape, 'stranded_bound_launch_superseded');
+
+  const replacement = store.prepareDispatch(slug, stranded.ticket.ref, { sessionId: `grace-retire-replacement-${Date.now()}` });
+  assert.notEqual(replacement.token, stranded.prepared.token);
+  assert.equal(replacement.ticket.dispatch.terminalAt, null);
+  store.releaseTicket(slug, stranded.ticket.ref, 'grace-retire-cleanup', { status: 'todo', source: 'test', force: true });
+
+  // The reporter's dead end: work delivered by hand could not be closed while the attempt stayed bound.
+  const delivered = bindUnclaimedFixture('grace-delivery');
+  backdateRuntimeSignals(delivered.ticket.id, CLAIM_GRACE_MS);
+  commitFixtureChange();
+  const deliveredCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  const closeOptions = {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The contract shipped by hand after the runtime died unclaimed.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  };
+  const blocked = store.completeTicketAsControlPlane(slug, delivered.ticket.ref, closeOptions);
+  assert.equal(blocked.reason, 'active_dispatch');
+  assert.match(blocked.message, /`sidequest dispatch .* --retire-only`/);
+  assert.match(blocked.message, /close it with `groomClose .* --recoveryEvidence/);
+  assert.equal(retireOnGrace(delivered.ticket.ref, recoveryEvidence).retired, true);
+  assert.equal(store.completeTicketAsControlPlane(slug, delivered.ticket.ref, closeOptions).ok, true);
+  assert.equal(store.getTicket(slug, delivered.ticket.ref).status, 'done');
+
+  const claimed = createFixture('grace-claimed fixture');
+  const claimedSession = `grace-claimed-${Date.now()}`;
+  const claimedPrepared = store.prepareDispatch(slug, claimed.ref, { sessionId: claimedSession, sharedTree: true });
+  assert.equal(store.claimTicket(slug, claimed.ref, 'grace-claimed-worker', {
+    sessionId: claimedSession,
+    token: claimedPrepared.token,
+    executor: claimedPrepared.ticket.dispatchExecutor,
+  }).ok, true);
+  backdateRuntimeSignals(claimed.id, CLAIM_IDLE_MS * 10);
+  try {
+    assert.throws(
+      () => store.prepareDispatch(slug, claimed.ref, { recoveryEvidence, retireOnly: true }),
+      /claimed by grace-claimed-worker/,
+      'the grace must never shorten the backstop for an attempt that did claim',
+    );
+  } finally {
+    store.releaseTicket(slug, claimed.ref, 'grace-claimed-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// SQ-2951: one authority, four doors. SQ-2940 and SQ-2949 each found a door that had computed its own
+// answer after the previous ticket patched the others, so this walks every attempt state through all four
+// at the exact millisecond either side of the deadline and requires them to say the same thing.
+const ORDERED_PRE_CLAIM_SIGNALS: ReadonlyArray<readonly [string, string]> = [
+  ['launchedAt', 'launch recorded'],
+  ['worktreeBoundAt', 'worktree creation started'],
+  ['worktreeCreationCompletedAt', 'worktree checkout recorded'],
+  ['worktreeProvisionedAt', 'worktree provisioning finished'],
+  ['boundAt', 'runtime bound'],
+  ['briefedAt', 'briefing fetched'],
+  ['claimedAt', 'claim recorded'],
+];
+
+type AttemptStateCase = {
+  name: string;
+  window: number;
+  verdict?: 'always' | 'never';
+  // The one state whose deadline is not a runtime signal: pulse names no instant once it is retirable,
+  // because the deadline is `dispatch.preparedAt` in the same payload and `changes` has no bytes to spare.
+  noSignal?: boolean;
+  shape: (dispatch: any, signalAt: string) => void;
+};
+
+// Each signal in turn as the newest, with every earlier one a minute behind it, so a deadline measured from
+// anything but the newest signal lands on a different instant and fails here.
+const LATEST_SIGNAL_CASES: AttemptStateCase[] = ORDERED_PRE_CLAIM_SIGNALS.map(([field, label], index) => ({
+  name: `${label} is the newest signal`,
+  window: CLAIM_GRACE_MS,
+  // A claimed attempt is out of the authority's reach entirely: the grace never shortens the idle backstop.
+  verdict: field === 'claimedAt' ? 'never' as const : undefined,
+  shape: (dispatch: any, signalAt: string) => {
+    ORDERED_PRE_CLAIM_SIGNALS.slice(0, index + 1).forEach(([earlierField], earlier) => {
+      dispatch[earlierField] = new Date(Date.parse(signalAt) - (index - earlier) * 60000).toISOString();
+    });
+  },
+}));
+
+const ATTEMPT_STATE_CASES: AttemptStateCase[] = [
+  ...LATEST_SIGNAL_CASES,
+  {
+    name: 'WorktreeCreate is still in flight',
+    window: CLAIM_IDLE_MS,
+    shape: (dispatch: any, signalAt: string) => {
+      dispatch.launchedAt = new Date(Date.parse(signalAt) - 60000).toISOString();
+      dispatch.worktreeBoundAt = signalAt;
+      // Only the fields the authority reads. The end-to-end isolated fixture is covered by the SQ-2934
+      // provisioning test and by the stale-generation test below.
+      dispatch.worktree = 'authority-in-flight-checkout';
+      dispatch.worktreeBindingSource = 'worktree-create';
+    },
+  },
+  {
+    // SQ-2955: this row used to backdate preparedAt two hours and declare the verdict `always`, so the one
+    // state whose deadline is not a signal never reached the boundary this table exists for, and pulse
+    // disagreeing with the other three doors at preparedAt-1 ms went unnoticed. A fresh attempt no runtime
+    // touched is retirable AT its own prepare stamp, so the window is zero and -1/0/+1 ms means exactly
+    // that, with nothing backdated.
+    name: 'no runtime ever recorded a signal',
+    window: 0,
+    noSignal: true,
+    shape: (dispatch: any, signalAt: string) => {
+      dispatch.preparedAt = signalAt;
+    },
+  },
+  {
+    name: 'an unparseable stamp is one missing signal, not a poisoned comparison',
+    window: CLAIM_GRACE_MS,
+    shape: (dispatch: any, signalAt: string) => {
+      dispatch.launchedAt = new Date(Date.parse(signalAt) - 60000).toISOString();
+      dispatch.boundAt = 'not-a-timestamp';
+      dispatch.briefedAt = signalAt;
+    },
+  },
+  {
+    name: 'a prior generation stamp never moves the live deadline',
+    window: CLAIM_GRACE_MS,
+    shape: (dispatch: any, signalAt: string) => {
+      dispatch.launchedAt = new Date(Date.parse(signalAt) - 60000).toISOString();
+      dispatch.briefedAt = signalAt;
+      const fresh = new Date().toISOString();
+      dispatch.attempts = [{
+        outcome: 'failed',
+        failureShape: 'unclaimed_launch_superseded',
+        terminalAt: fresh,
+        launchedAt: fresh,
+        boundAt: fresh,
+        briefedAt: fresh,
+      }];
+    },
+  },
+];
+
+type RetirementProbe = { retirable: boolean; deadline: number | null };
+
+function refusalProbe(message?: string): RetirementProbe {
+  const printed = /becomes retirable on evidence at (\S+?), in \d+ minutes?, unless/.exec(String(message || ''));
+  return { retirable: false, deadline: printed ? Date.parse(String(printed[1])) : null };
+}
+
+function pulseProbe(ref: string): RetirementProbe {
+  const pulse = store.pulsePayload(slug, ref);
+  const printed = /(?:still starting until|passed its retirement deadline at) (\S+?) \(/.exec(String(pulse.livenessEvidence || ''));
+  return { retirable: pulse.liveness === 'stalled', deadline: printed ? Date.parse(String(printed[1])) : null };
+}
+
+// A millisecond either side of the deadline is not observable against a live clock: three fixtures and four
+// board calls take longer than that, so every door would read a different instant and the boundary would be
+// untested. Freezing the clock is what makes -1/0/+1 mean exactly that.
+function atFrozenInstant<Result>(instant: number, probe: () => Result): Result {
+  const realNow = Date.now;
+  Date.now = () => instant;
+  try {
+    return probe();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+// The signals a runtime would have left, written straight onto the record rather than waited for.
+function attemptStateFixture(label: string, attemptCase: AttemptStateCase, retirableAt: number) {
+  const ticket = createFixture(`${label} fixture`);
+  store.prepareDispatch(slug, ticket.ref, { sessionId: `${label}-${ticket.id}`, sharedTree: true });
+  const dispatch = store.getTicket(slug, ticket.ref).dispatch;
+  for (const [field] of ORDERED_PRE_CLAIM_SIGNALS) dispatch[field] = null;
+  dispatch.outcome = 'launched';
+  attemptCase.shape(dispatch, new Date(retirableAt - attemptCase.window).toISOString());
+  independentTicketWrite(slug, ticket.id, { dispatch });
+  return ticket;
+}
+
+test('SQ-2951: every evidence door reads one retirement authority and agrees at the deadline', () => {
+  const evidence = 'The host reported this agent gone before its first claim.';
+  for (const attemptCase of ATTEMPT_STATE_CASES) {
+    for (const offsetMs of [-1, 0, 1]) {
+      const retirableAt = Date.now();
+      const observedAt = retirableAt + offsetMs;
+      const label = `authority-${ATTEMPT_STATE_CASES.indexOf(attemptCase)}-${offsetMs}`;
+      const tickets = ['retire', 'replace', 'groom'].map((door) =>
+        attemptStateFixture(`${label}-${door}`, attemptCase, retirableAt));
+      const [retireTicket, replaceTicket, groomTicket] = tickets;
+      try {
+        // Read-only, so it runs before anything retires.
+        const pulse = atFrozenInstant(observedAt, () => pulseProbe(retireTicket.ref));
+
+        const retireOnly = atFrozenInstant(observedAt, () => retireOnGrace(retireTicket.ref, evidence));
+        const retire: RetirementProbe = retireOnly.refusal
+          ? refusalProbe(retireOnly.refusal)
+          : { retirable: retireOnly.retired === true, deadline: null };
+
+        const replace: RetirementProbe = atFrozenInstant(observedAt, () => {
+          try {
+            // This door retires and prepares the replacement in one call, so reaching a fresh token at all
+            // is the acceptance; only retireOnly reports a `retired` flag.
+            const prepared = store.prepareDispatch(slug, replaceTicket.ref, { recoveryEvidence: evidence });
+            assert.ok(prepared.token, 'a retirement that prepares a replacement must return its token');
+            return { retirable: true, deadline: null };
+          } catch (error: any) {
+            return refusalProbe(String(error.message));
+          }
+        });
+
+        const cleared = atFrozenInstant(observedAt, () =>
+          store.clearUnclaimedDispatch(slug, groomTicket.ref, { by: 'control-plane', evidence }));
+        const groom: RetirementProbe = cleared.ok ? { retirable: true, deadline: null } : refusalProbe(cleared.message);
+
+        const expected = attemptCase.verdict === 'never' ? false
+          : attemptCase.verdict === 'always' ? true
+            : offsetMs >= 0;
+        const where = `${attemptCase.name} at ${offsetMs}ms`;
+        assert.equal(retire.retirable, expected, `retireOnly disagreed: ${where} (${retirementOutcome(retireOnly)})`);
+        assert.equal(replace.retirable, expected, `dispatch with evidence disagreed: ${where}`);
+        assert.equal(groom.retirable, expected, `clearUnclaimedDispatch disagreed: ${where} (${cleared.reason || 'ok'})`);
+        assert.equal(pulse.retirable, expected, `pulse disagreed: ${where}`);
+
+        // Every door that printed an instant must have printed the SAME instant, and for a steered case
+        // that instant is the deadline the table asked for.
+        for (const [door, probe] of [['pulse', pulse], ['retireOnly', retire], ['dispatch', replace], ['groomClose', groom]] as const) {
+          if (probe.deadline === null) continue;
+          if (attemptCase.verdict) {
+            assert.ok(Number.isFinite(probe.deadline), `${door} printed an unreadable deadline for ${where}`);
+            continue;
+          }
+          assert.equal(probe.deadline, retirableAt, `${door} printed a different deadline for ${where}`);
+        }
+        if (!attemptCase.verdict) {
+          // SQ-2955 narrowed this from "always" to "whenever pulse names an instant at all": a retirable
+          // no-signal attempt deliberately names the retirement and not its prepare stamp, which the same
+          // pulse payload already carries and the per-ticket `changes` line has no bytes for.
+          if (!expected || !attemptCase.noSignal) {
+            assert.ok(pulse.deadline !== null, `pulse must print the deadline it decided on for ${where}`);
+          }
+          if (!expected) {
+            assert.ok(retire.deadline !== null, `the retireOnly refusal must carry the countdown for ${where}`);
+            assert.ok(replace.deadline !== null, `the dispatch refusal must carry the countdown for ${where}`);
+            assert.ok(groom.deadline !== null, `the groomClose refusal must carry the countdown for ${where}`);
+          }
+        }
+      } finally {
+        for (const ticket of tickets) {
+          store.releaseTicket(slug, ticket.ref, `${label}-cleanup`, { status: 'todo', source: 'test', force: true });
+        }
+      }
+    }
+  }
+});
+
+// SQ-2949 finding 3: a WorktreeCreate callback carries only the session and the checkout path, both of which
+// a replacement dispatch reuses, so a prior generation's late hook used to land its stamp on the live attempt
+// and drop it from the idle backstop to the claim grace.
+test('SQ-2951: a retired generation cannot stamp runtime signals onto its replacement', () => {
+  const first = worktreeCreationFixture('stale-generation');
+  const staleAttempt = store.getTicket(slug, first.ticket.ref).dispatch.preparedAt;
+  try {
+    backdateRuntimeSignals(first.ticket.id, CLAIM_IDLE_MS);
+    assert.equal(retireOnGrace(first.ticket.ref, 'The host reported the WorktreeCreate host gone.').retired, true);
+
+    const replacementPrepared = store.prepareDispatch(slug, first.ticket.ref, { sessionId: first.sessionId, sharedTree: false });
+    assert.equal(store.recordDispatchLaunch(slug, first.ticket.ref, {
+      sessionId: first.sessionId,
+      token: replacementPrepared.token,
+      executor: replacementPrepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, first.sessionId, first.worktree).ok, true);
+    const liveAttempt = store.getTicket(slug, first.ticket.ref).dispatch.preparedAt;
+    assert.notEqual(liveAttempt, staleAttempt, 'the replacement must be a different generation');
+
+    const replayed = store.recordDispatchWorktreeProvisioned(slug, first.sessionId, first.worktree, staleAttempt);
+    assert.equal(replayed.ok, false);
+    assert.equal(replayed.reason, 'stale_attempt');
+    const live = store.getTicket(slug, first.ticket.ref).dispatch;
+    assert.ok(!live.worktreeProvisionedAt, 'the stale callback must stamp nothing on the live attempt');
+    assert.equal(live.preparedAt, liveAttempt);
+
+    // And the replacement keeps the idle backstop the stale stamp would have taken from it.
+    backdateRuntimeSignals(first.ticket.id, CLAIM_GRACE_MS + 60000);
+    const refused = retireOnGrace(first.ticket.ref, 'A replacement is still provisioning.');
+    assert.ok(refused.refusal, `the replacement keeps its unfinished-WorktreeCreate protection, got ${retirementOutcome(refused)}`);
+    assert.match(refused.refusal, /has not recorded finished provisioning, so only the idle backstop applies/);
+
+    // The positive control: the live generation's own token still records, and that is what lifts the block.
+    // Backdating rewrote preparedAt, which IS the generation token, so read the current one back.
+    const backdatedAttempt = store.getTicket(slug, first.ticket.ref).dispatch.preparedAt;
+    assert.equal(store.recordDispatchWorktreeProvisioned(slug, first.sessionId, first.worktree, backdatedAttempt).ok, true);
+    assert.ok(store.getTicket(slug, first.ticket.ref).dispatch.worktreeProvisionedAt);
+  } finally {
+    store.releaseTicket(slug, first.ticket.ref, 'stale-generation-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// SQ-2953 finding 1: `stale_attempt` was only a NONEMPTY mismatch, so a caller that omitted the generation
+// stamped the replacement through all four recorders, and the failure and dependency-link recorders asked
+// whether the replacement had completed creation before they looked at the token at all - answering
+// `dispatch_binding_unavailable` where the contract requires `stale_attempt`.
+// The set is exactly the five POST-start callbacks. The start binding hands the generation out rather than
+// presenting one, so it is covered by its own SQ-2961 test above instead of a row here.
+test('SQ-2955: every post-start WorktreeCreate recorder demands its attempt generation and reads it first', () => {
+  const first = worktreeCreationFixture('generation-mandatory');
+  const staleAttempt = store.getTicket(slug, first.ticket.ref).dispatch.preparedAt;
+  try {
+    backdateRuntimeSignals(first.ticket.id, CLAIM_IDLE_MS);
+    assert.equal(retireOnGrace(first.ticket.ref, 'The host reported the WorktreeCreate host gone.').retired, true);
+
+    const replacementPrepared = store.prepareDispatch(slug, first.ticket.ref, { sessionId: first.sessionId, sharedTree: false });
+    assert.equal(store.recordDispatchLaunch(slug, first.ticket.ref, {
+      sessionId: first.sessionId,
+      token: replacementPrepared.token,
+      executor: replacementPrepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, first.sessionId, first.worktree).ok, true);
+    const liveAttempt = store.getTicket(slug, first.ticket.ref).dispatch.preparedAt;
+    assert.notEqual(liveAttempt, staleAttempt, 'the replacement must be a different generation');
+    // The replacement has NOT completed creation, which is exactly the state that used to answer
+    // `dispatch_binding_unavailable` ahead of the generation check.
+    assert.ok(!store.getTicket(slug, first.ticket.ref).dispatch.worktreeCreationCompletedAt);
+
+    const failure = { command: 'npm ci', reason: 'exit 1', stderrTail: 'ENOENT' };
+    const link = { relativePath: 'node_modules', target: path.join(PROJECT, 'node_modules') };
+    const recorders: [string, (attempt?: any) => any][] = [
+      ['creation completed', (attempt?: any) => store.completeDispatchWorktreeCreation(slug, first.sessionId, first.worktree, attempt)],
+      ['finished provisioning', (attempt?: any) => store.recordDispatchWorktreeProvisioned(slug, first.sessionId, first.worktree, attempt)],
+      ['provisioning failure', (attempt?: any) => store.recordDispatchWorktreeProvisioningFailure(slug, first.sessionId, first.worktree, failure, attempt)],
+      ['dependency link', (attempt?: any) => store.recordDispatchWorktreeDependencyLink(slug, first.sessionId, first.worktree, link, attempt)],
+    ];
+    const generations: [string, any, string][] = [
+      ['a missing', undefined, 'missing_attempt'],
+      ['an empty', '', 'missing_attempt'],
+      ['a whitespace', '   ', 'missing_attempt'],
+      ['a retired', staleAttempt, 'stale_attempt'],
+    ];
+    for (const [what, record] of recorders) {
+      for (const [label, attempt, reason] of generations) {
+        const result = record(attempt);
+        assert.equal(result.ok, false, `${what} accepted ${label} generation`);
+        assert.equal(result.reason, reason, `${what} with ${label} generation answered ${result.reason}`);
+      }
+    }
+    const untouched = store.getTicket(slug, first.ticket.ref).dispatch;
+    assert.equal(untouched.preparedAt, liveAttempt);
+    assert.ok(!untouched.worktreeCreationCompletedAt, 'a refused callback must stamp nothing');
+    assert.ok(!untouched.worktreeProvisionedAt, 'a refused callback must stamp nothing');
+    assert.ok(!untouched.worktreeProvisioningFailure, 'a refused callback must stamp nothing');
+    assert.deepEqual(untouched.ownedDependencyLinks || [], []);
+
+    // The live generation is what makes any other refusal reachable at all: the two recorders that require
+    // a completed creation now report that, rather than shadowing the generation with it.
+    assert.equal(store.recordDispatchWorktreeProvisioningFailure(slug, first.sessionId, first.worktree, failure, liveAttempt).reason, 'dispatch_binding_unavailable');
+    assert.equal(store.recordDispatchWorktreeDependencyLink(slug, first.sessionId, first.worktree, link, liveAttempt).reason, 'dispatch_binding_unavailable');
+    const completion = store.completeDispatchWorktreeCreation(slug, first.sessionId, first.worktree, liveAttempt);
+    assert.equal(completion.ok, false, 'this fixture never checks out the path, so completion still fails');
+    assert.ok(!['missing_attempt', 'stale_attempt'].includes(String(completion.reason)), `completion stopped at the generation gate: ${completion.reason}`);
+
+    // The positive control: the live generation records, and recovery refuses the retired one without
+    // touching the replacement it would otherwise have terminalized.
+    assert.equal(store.recordDispatchWorktreeProvisioned(slug, first.sessionId, first.worktree, liveAttempt).ok, true);
+    assert.ok(store.getTicket(slug, first.ticket.ref).dispatch.worktreeProvisionedAt);
+    for (const [label, attempt, reason] of generations) {
+      const recovery = store.recoverDispatchWorktreeCreation(slug, first.sessionId, first.worktree, new Error('the old hook failed'), attempt);
+      assert.equal(recovery.ok, false, `recovery accepted ${label} generation`);
+      assert.equal(recovery.reason, reason, `recovery with ${label} generation answered ${recovery.reason}`);
+    }
+    const afterRecovery = store.getTicket(slug, first.ticket.ref);
+    assert.equal(afterRecovery.dispatch.terminalAt, null, 'a retired hook must not terminalize its replacement');
+    assert.ok(afterRecovery.dispatchNonce, 'a retired hook must not clear its replacement nonce');
+  } finally {
+    store.releaseTicket(slug, first.ticket.ref, 'generation-mandatory-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// SQ-2959 finding 2: the start binding is the one WorktreeCreate callback that cannot present a generation -
+// the hook learns its generation FROM this call - so it is scoped to the session and the checkout instead. A
+// delayed hook whose own attempt had been retired used to land on the replacement that reused both, acquire
+// its generation, and stamp it. A caller that knows its generation is now held to it, and a generation-less
+// second caller can no longer acquire the live one from a checkout that is still being created.
+test('SQ-2961: the WorktreeCreate start binding is session-and-checkout scoped without handing out a live generation', () => {
+  const ticket = createFixture('start-binding-scope fixture');
+  const sessionId = `start-binding-scope-${Date.now()}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, `start-binding-scope-${ticket.id}`);
+  const launch = (token: string, executor: string) => store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token, executor });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  assert.equal(launch(prepared.token, prepared.ticket.dispatchExecutor).ok, true);
+  const staleAttempt = store.getTicket(slug, ticket.ref).dispatch.preparedAt;
+  const sibling = createFixture('start-binding-sibling fixture');
+  try {
+    // The delayed hook's attempt is retired mid-setup and a replacement launches on the same session and the
+    // same checkout: the exact sequence the review probe ran.
+    backdateRuntimeSignals(ticket.id, CLAIM_IDLE_MS);
+    assert.equal(retireOnGrace(ticket.ref, 'The host reported the WorktreeCreate host gone.').retired, true);
+    const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+    assert.equal(launch(replacement.token, replacement.ticket.dispatchExecutor).ok, true);
+    const liveAttempt = store.getTicket(slug, ticket.ref).dispatch.preparedAt;
+    assert.notEqual(liveAttempt, staleAttempt, 'the replacement must be a different generation');
+
+    const stale = store.bindDispatchWorktreeCreation(slug, sessionId, worktree, staleAttempt);
+    assert.equal(stale.ok, false, 'the retired generation bound the replacement');
+    assert.equal(stale.reason, 'stale_attempt');
+    assert.ok(!store.getTicket(slug, ticket.ref).dispatch.worktreeBoundAt, 'a refused start binding must stamp nothing');
+
+    // The replacement's own hook carries no generation yet: this call is where it learns one.
+    const live = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);
+    assert.equal(live.ok, true, `the replacement's own hook was refused: ${live.reason}`);
+    assert.equal(live.attempt, liveAttempt);
+    assert.ok(store.getTicket(slug, ticket.ref).dispatch.worktreeBoundAt);
+    assert.ok(!store.getTicket(slug, ticket.ref).dispatch.worktreeCreationCompletedAt, 'creation must still be in flight here');
+
+    // Now the checkout is held by a live attempt mid-creation. A second caller with no generation is a racing
+    // hook, and the one thing it must never get back is that live generation.
+    const racing = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);
+    assert.equal(racing.ok, false, 'a generation-less second start binding acquired the live generation');
+    assert.equal(racing.reason, 'missing_attempt');
+    assert.ok(!racing.attempt, 'a refused start binding must hand out no generation');
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree, staleAttempt).reason, 'stale_attempt');
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree, liveAttempt).ref, ticket.ref);
+    assert.equal(store.recordDispatchWorktreeProvisioned(slug, sessionId, worktree, racing.attempt).reason, 'missing_attempt');
+
+    // A retired attempt still holding this checkout is named as retired rather than silently binding some
+    // other live attempt of the same session to it.
+    backdateRuntimeSignals(ticket.id, CLAIM_IDLE_MS);
+    assert.equal(retireOnGrace(ticket.ref, 'The host reported the replacement gone too.').retired, true);
+    const siblingPrepared = store.prepareDispatch(slug, sibling.ref, { sessionId, sharedTree: false });
+    assert.equal(store.recordDispatchLaunch(slug, sibling.ref, {
+      sessionId,
+      token: siblingPrepared.token,
+      executor: siblingPrepared.ticket.dispatchExecutor,
+    }).ok, true);
+    const late = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);
+    assert.equal(late.ok, false, `a late hook bound ${late.ref} to a retired attempt's checkout`);
+    assert.equal(late.reason, 'stale_attempt');
+    assert.ok(!store.getTicket(slug, sibling.ref).dispatch.worktree, 'the unrelated sibling must stay unbound');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'start-binding-scope-cleanup', { status: 'todo', source: 'test', force: true });
+    store.releaseTicket(slug, sibling.ref, 'start-binding-sibling-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// SQ-2953 finding 2: two bound-unclaimed executors whose seven stamps were two hours old were still posting
+// board comments, and retireOnly and groomClose retired both. A write is the runtime talking, so it is the
+// eighth signal, attributed by the launcher session the dispatch recorded plus its bound runtime identity.
+// SQ-2959 finding 1: matching the launcher session alone trusted every writer on it. Fan-out siblings and the
+// orchestrator share that one session and the MCP transport carries no per-agent identity, so a foreign
+// ticket's agent - and the orchestrator's own progress comments - refreshed all four doors and could strand a
+// dead attempt forever. The launcher session is still the trust boundary, but the write must also carry the
+// exact runtime name SubagentStart bound, land on this attempt's own ticket, and fall between launch and the
+// first claim. A same-session caller writing under that bound name is deliberately trusted as that runtime.
+test('SQ-2961: only a board write under the bound runtime name on the launcher session is a runtime signal', () => {
+  const evidence = 'The host reported this agent gone before its first claim.';
+  type Writer = (agentName: string, sessionId: string) => { by: string; sourceSession: string };
+  const BOUND_RUNTIME: Writer = (agentName, sessionId) => ({ by: agentName, sourceSession: sessionId });
+  const FOREIGN_SIBLING: Writer = (agentName, sessionId) => ({ by: `${agentName}-sibling`, sourceSession: sessionId });
+  const ORCHESTRATOR: Writer = (_agentName, sessionId) => ({ by: 'orchestrator', sourceSession: sessionId });
+  const OTHER_SESSION: Writer = (agentName, sessionId) => ({ by: agentName, sourceSession: `${sessionId}-someone-else` });
+  const TRAILING_SPACE: Writer = (agentName, sessionId) => ({ by: `${agentName} `, sourceSession: sessionId });
+
+  // One `wroteAt` across all three fixtures, so every door's printed deadline is the same instant.
+  function writingFixture(label: string, wroteAt: string, identity: Writer) {
+    const fixture = bindUnclaimedFixture(label);
+    backdateRuntimeSignals(fixture.ticket.id, 2 * 60 * 60 * 1000);
+    const sessionId = store.getTicket(slug, fixture.ticket.ref).dispatch.sessionId;
+    const writer = identity(fixture.agentName, sessionId);
+    const posted = store.addComment(slug, fixture.ticket.ref, {
+      by: writer.by,
+      body: `${label}: still working, mid-run`,
+      kind: 'comment',
+      source: 'mcp',
+      sourceSession: writer.sourceSession,
+      // The transport stamps this from the caller, so it can never authenticate anyone; the contract reads
+      // `by` against the bound name instead, and this proves the foreign actor label changes nothing.
+      actor: 'a foreign actor label the transport cannot authenticate',
+    });
+    assert.equal(posted.ok, true);
+    const ticket = store.getTicket(slug, fixture.ticket.ref);
+    ticket.comments = ticket.comments.map((comment: any) => (comment.id === posted.comment.id ? { ...comment, at: wroteAt } : comment));
+    independentTicketWrite(slug, fixture.ticket.id, { comments: ticket.comments });
+    return fixture;
+  }
+
+  function doorVerdicts(label: string, wroteAgoMs: number, identity: Writer) {
+    const wroteAt = new Date(Date.now() - wroteAgoMs).toISOString();
+    const retireFixture = writingFixture(`${label}-retire`, wroteAt, identity);
+    const replaceFixture = writingFixture(`${label}-replace`, wroteAt, identity);
+    const groomFixture = writingFixture(`${label}-groom`, wroteAt, identity);
+    const fixtures = [retireFixture, replaceFixture, groomFixture];
+    try {
+      const pulse = store.pulsePayload(slug, retireFixture.ticket.ref);
+      const retire = retireOnGrace(retireFixture.ticket.ref, evidence);
+      let replace: any;
+      try {
+        replace = { retired: Boolean(store.prepareDispatch(slug, replaceFixture.ticket.ref, { recoveryEvidence: evidence }).token) };
+      } catch (error: any) {
+        replace = { refusal: String(error.message) };
+      }
+      const groom = store.clearUnclaimedDispatch(slug, groomFixture.ticket.ref, { by: 'control-plane', evidence });
+      return { wroteAt, pulse, retire, replace, groom };
+    } finally {
+      for (const fixture of fixtures) {
+        store.releaseTicket(slug, fixture.ticket.ref, `${label}-cleanup`, { status: 'todo', source: 'test', force: true });
+      }
+    }
+  }
+
+  const writing = doorVerdicts('board-write-live', 60000, BOUND_RUNTIME);
+  const deadline = Date.parse(writing.wroteAt) + CLAIM_GRACE_MS;
+  assert.ok(writing.retire.refusal, `retireOnly retired a writing executor: ${retirementOutcome(writing.retire)}`);
+  assert.equal(printedDeadline(writing.retire.refusal).at, deadline, 'the countdown must run from the board write');
+  assert.match(writing.retire.refusal, /last runtime signal: board write recorded at/);
+  assert.ok(writing.replace.refusal, 'dispatch with evidence retired a writing executor');
+  assert.equal(printedDeadline(writing.replace.refusal).at, deadline);
+  assert.equal(writing.groom.ok, false, 'groomClose retired a writing executor');
+  assert.equal(writing.groom.reason, 'unclaimed_launch_not_supersedable');
+  assert.equal(printedDeadline(writing.groom.message).at, deadline);
+  assert.equal(writing.pulse.liveness, 'starting', `pulse called a writing executor ${writing.pulse.liveness}`);
+  assert.match(String(writing.pulse.livenessEvidence), /board write recorded/);
+
+  // Past the grace the same attempt retires at every door: a write protects a runtime, it does not immunize one.
+  const silent = doorVerdicts('board-write-silent', CLAIM_GRACE_MS + 60000, BOUND_RUNTIME);
+  assert.equal(silent.retire.retired, true, retirementOutcome(silent.retire));
+  assert.equal(silent.replace.retired, true, silent.replace.refusal);
+  assert.equal(silent.groom.ok, true, silent.groom.reason);
+  assert.equal(silent.pulse.liveness, 'stalled');
+
+  // The reviewer's live-comment matrix. Every one of these writes lands one minute ago - well inside the
+  // grace - and none of them may hold the attempt open.
+  const notTheRuntime: Array<[string, Writer]> = [
+    ['board-write-foreign-sibling', FOREIGN_SIBLING],
+    ['board-write-orchestrator', ORCHESTRATOR],
+    ['board-write-other-session', OTHER_SESSION],
+    ['board-write-trailing-space', TRAILING_SPACE],
+  ];
+  for (const [label, identity] of notTheRuntime) {
+    const foreign = doorVerdicts(label, 60000, identity);
+    assert.equal(foreign.retire.retired, true, `${label}: ${retirementOutcome(foreign.retire)}`);
+    assert.equal(foreign.replace.retired, true, `${label}: ${foreign.replace.refusal}`);
+    assert.equal(foreign.groom.ok, true, `${label}: ${foreign.groom.reason}`);
+    assert.equal(foreign.pulse.liveness, 'stalled', label);
+  }
+
+  // A write dated before the attempt launched belongs to an earlier generation of the same ticket, so the
+  // bound name and the launcher session together still do not make it this runtime's.
+  const preLaunch = doorVerdicts('board-write-pre-launch', 2 * 60 * 60 * 1000 + 60000, BOUND_RUNTIME);
+  assert.equal(preLaunch.retire.retired, true, retirementOutcome(preLaunch.retire));
+  assert.equal(preLaunch.replace.retired, true, preLaunch.replace.refusal);
+  assert.equal(preLaunch.groom.ok, true, preLaunch.groom.reason);
+  assert.equal(preLaunch.pulse.liveness, 'stalled');
+});
+
 
 test('direct claim release records the terminal lifecycle state', () => {
   const ticket = createFixture('direct release lifecycle fixture');
@@ -1135,7 +2018,7 @@ test('one runtime cannot claim two isolated dispatches at once', () => {
   assert.equal(store.releaseTicket(slug, second.ref, 'runtime-claim-worker', { status: 'todo', source: 'test' }).ok, true);
 });
 
-test('launched dispatches without an executor identity, claim, or checkpoint are stalled', () => {
+test('launched dispatches inside their runtime-signal grace are starting', () => {
   const ticket = createFixture('stalled dispatch fixture');
   const sessionId = `stalled-${Date.now()}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
@@ -1148,13 +2031,13 @@ test('launched dispatches without an executor identity, claim, or checkpoint are
   }).ok, true);
 
   const pulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(pulse.liveness, 'stalled');
-  assert.match(pulse.livenessEvidence, /without a bound runtime identity, claim, or checkpoint/);
+  assert.equal(pulse.liveness, 'starting');
+  assert.match(pulse.livenessEvidence, /starting until/);
   const changed = store.changesPayload(slug, new Date(0).toISOString()).tickets.find((entry?: any) => entry.ref === ticket.ref);
-  assert.equal(changed.liveness, 'stalled');
+  assert.equal(changed.liveness, 'starting');
 
   assert.equal(store.bindDispatchAgent(sessionId, executor, `stalled-agent-${ticket.id}`, `stalled-agent-${ticket.id}`).ok, true);
-  assert.equal(store.pulsePayload(slug, ticket.ref).liveness, 'unknown');
+  assert.equal(store.pulsePayload(slug, ticket.ref).liveness, 'starting');
 });
 
 test('same-name launches on different projects remain ambiguous', () => {
@@ -1261,7 +2144,7 @@ test('shared-tree agents bind by name before SubagentStop supplies their id', ()
   assert.equal(dispatch.terminalSource, terminalSource);
 });
 
-test('a resumed live claim re-mints its token and re-binds the linked worktree', () => {
+test('a resumed live claim re-mints its token, re-binds the linked worktree, and carries no isolation', () => {
   const ticket = createFixture('resumed live claim fixture');
   const originalSession = `resumed-live-claim-${Date.now()}`;
   const resumedSession = `${originalSession}-resumed`;
@@ -1293,6 +2176,15 @@ test('a resumed live claim re-mints its token and re-binds the linked worktree',
     fs.rmSync(prepared.ticket.dispatch.tokenFile);
     assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).reason, 'token');
 
+    const refusedRecovery = (override: Record<string, string>) => store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: claimHolder, executor, worktree, sessionId: resumedSession,
+      recoveryEvidence: 'A different caller asks to recover this live claim.', ...override,
+    });
+    const beforeRefusals = JSON.stringify(store.getTicket(slug, ticket.ref));
+    assert.equal(refusedRecovery({ by: 'another-live-worker' }).reason, 'not_claim_holder');
+    assert.equal(refusedRecovery({ executor: 'another-executor' }).reason, 'executor_mismatch');
+    assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref)), beforeRefusals, 'a refused recovery writes nothing');
+
     const recovered = store.recoverLiveClaimDispatch(slug, ticket.ref, {
       by: claimHolder,
       executor,
@@ -1302,9 +2194,31 @@ test('a resumed live claim re-mints its token and re-binds the linked worktree',
     });
     assert.equal(recovered.ok, true);
     assert.notEqual(recovered.token, prepared.token);
+    assert.equal(recovered.ticket.dispatch.continuation?.mode, 'live_claim_resume');
+    assert.equal(recovered.ticket.dispatch.continuation.sourceWorktree, worktrees.canonicalPath(worktree));
+    const recoveredSpawn = agentsync.agentSpawn(
+      recovered.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(recovered.ticket, recovered.ticket.dispatch.sharedTree),
+      null,
+      executor,
+      agentsync.renderDispatchStub(recovered.ticket, PROJECT),
+      recovered.ticket.dispatch.description,
+    );
+    assert.equal(Object.hasOwn(recoveredSpawn, 'isolation'), false);
+    const recoveredLaunch = runForceBypass({
+      session_id: resumedSession,
+      cwd: PROJECT,
+      tool_name: 'Agent',
+      tool_input: recoveredSpawn,
+    });
+    assert.notEqual(recoveredLaunch.hookSpecificOutput.permissionDecision, 'deny', JSON.stringify(recoveredLaunch));
+    const briefing = agentsync.renderTicketBriefing(recovered.ticket, recovered.token, slug, PROJECT);
+    assert.match(briefing, new RegExp(`Live-claim recovery:[\\s\\S]*${worktrees.canonicalPath(worktree).replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}`));
+    assert.match(briefing, /prepared spawn intentionally carries no isolation field/);
+    assert.match(briefing, /Preserve any retained uncommitted work/);
     assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).token, recovered.token);
     assert.equal(store.pulsePayload(slug, ticket.ref).dispatch.worktreeBound, true);
-    assert.equal(store.bindDispatchAgent(resumedSession, executor, resumedAgentId, agentName, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(resumedSession, executor, resumedAgentId, recoveredSpawn.name, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, claimHolder, {
       sessionId: resumedSession,
       token: recovered.token,
@@ -1325,6 +2239,26 @@ test('a resumed live claim re-mints its token and re-binds the linked worktree',
   } finally {
     store.releaseTicket(slug, ticket.ref, claimHolder, { status: 'todo', source: 'test', force: true });
     if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+  }
+});
+
+test('live-claim recovery refuses a direct claim that has no live isolated dispatch and writes nothing', () => {
+  const ticket = createFixture('direct claim recovery fixture');
+  const owner = 'direct-claim-recovery-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    direct: true,
+    reason: 'The recovery fixture needs a live claim without an isolated dispatch.',
+  }).ok, true);
+  try {
+    const before = JSON.stringify(store.getTicket(slug, ticket.ref));
+    const refused = store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: owner, executor: 'sidequest-exec-high', worktree: PROJECT, sessionId: 'direct-claim-recovery-session',
+      recoveryEvidence: 'The direct claim holder asks to recover an isolated dispatch it never had.',
+    });
+    assert.equal(refused.reason, 'dispatch_unavailable', JSON.stringify(refused));
+    assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref)), before, 'a refused recovery writes nothing');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, owner, { status: 'todo', source: 'test', force: true });
   }
 });
 
@@ -1963,7 +2897,11 @@ test('creation bindings reserve one launched dispatch each within a shared sessi
   const bindings = targets.map((target) => store.bindDispatchWorktreeCreation(slug, sessionId, target));
   assert.equal(bindings.every((binding: any) => binding.ok), true);
   assert.deepEqual(new Set(bindings.map((binding: any) => binding.ref)), new Set(tickets.map((ticket) => ticket.ref)));
-  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, targets[0]).ref, bindings[0].ref);
+  // Re-binding the same checkout is generation-scoped: the owning hook's generation still resolves to its own
+  // reservation, and a second caller that carries none is refused rather than handed the live one (SQ-2961).
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, targets[0], bindings[0].attempt).ref, bindings[0].ref);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, targets[0]).reason, 'missing_attempt');
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, targets[0], bindings[1].attempt).reason, 'stale_attempt');
   assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, path.join(SIDEQUEST_HOME, 'worktrees', 'creation-allocation-extra')).reason, 'dispatch_binding_unavailable');
   for (let index = 0; index < tickets.length; index += 1) {
     assert.equal(store.releaseTicket(slug, tickets[index].ref, `creation-allocation-${index}`, { status: 'todo', source: 'test', force: true }).ok, true);
@@ -2022,6 +2960,36 @@ test('isolated dispatch admits a spawning runtime outside the board repository',
     execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT, windowsHide: true });
     fs.rmSync(foreign, { recursive: true, force: true });
   }
+});
+
+// GH-269. A session rooted in a plain folder has no checkout for WorktreeCreate to fall
+// back to, so while it owns isolated dispatches on another board the hook could not tell
+// which board to follow and crashed after the launch was recorded. Prepare refuses that
+// case up front; with one board in play the dispatch stays isolated.
+test('isolated dispatch from a non-git runtime is refused only while another board holds the session', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-non-git-runtime-'));
+  const sessionId = `non-git-runtime-${Date.now()}`;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-non-git-other-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: other });
+  fs.writeFileSync(path.join(other, 'tracked.js'), 'module.exports = 3;\n');
+  execFileSync('git', ['add', 'tracked.js'], { cwd: other });
+  execFileSync('git', ['-c', 'user.email=test@example.invalid', '-c', 'user.name=Other Board', 'commit', '--quiet', '-m', 'seed other board'], { cwd: other });
+  const otherSlug = store.ensureProject(other).slug;
+  const alone = createFixture('non-git runtime with one board');
+  const prepared = store.prepareDispatch(slug, alone.ref, { sessionId, runtimeCwd: hub });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false, 'one board in play stays isolated');
+  assert.equal(store.recordDispatchLaunch(slug, alone.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+  const competing = store.createTicket(otherSlug, { title: 'non-git runtime competing board', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test' });
+  assert.throws(() => store.prepareDispatch(otherSlug, competing.ref, { sessionId, runtimeCwd: hub }), (error: Error) => {
+    assert.ok(error.message.includes(PROJECT), 'the refusal names the board already holding the session');
+    assert.match(error.message, /Dispatch SQ-\d+ once those are terminal/);
+    return true;
+  });
+  // The refusal's remedy has to work: once the other board's dispatch is terminal, the same call goes through.
+  assert.equal(store.releaseTicket(slug, alone.ref, 'non-git-runtime-remedy', { status: 'todo', source: 'test', force: true }).ok, true);
+  const remedied = store.prepareDispatch(otherSlug, competing.ref, { sessionId, runtimeCwd: hub });
+  assert.equal(remedied.ticket.dispatch.sharedTree, false);
+  assert.equal(store.releaseTicket(otherSlug, competing.ref, 'non-git-runtime-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 // SQ-2570/SQ-2739. A creation that finds only a prepared dispatch for its session
@@ -2088,6 +3056,53 @@ test('ordinary isolated dispatches preserve native worktree isolation', () => {
   assert.equal(store.releaseTicket(slug, ticket.ref, 'ordinary-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+test('a working-tree deliverable refuses an isolated dispatch and prepares nothing', () => {
+  const ticket = store.createTicket(slug, { title: 'working-tree deliverable isolation fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], workingTreeDelivery: true, source: 'test' });
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { sessionId: `working-tree-isolated-${Date.now()}`, sharedTree: false }),
+    /declares a working-tree deliverable and must run in the shared checkout\. Re-dispatch with sharedTree:true\./,
+  );
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+// Claims a native checkout, commits a sanctioned checkpoint in it and hands the ticket back.
+function releaseNativeCheckpoint(ticket: { ref: string }, agentId: string): { worktree: string; branch: string; checkpoint: string } {
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: agentId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId: agentId, token: prepared.token, executor, agentName: agentId }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, agentId, worktree).ok, true);
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  markCheckoutInstance(worktree);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, agentId, worktree, creationGeneration(slug, agentId, worktree)).ok, true);
+  assert.equal(store.bindDispatchAgent(agentId, executor, agentId, agentId, worktree).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'checkpoint-worker', { sessionId: agentId, token: prepared.token, executor }).ok, true);
+  fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 3;\n');
+  execFileSync('git', ['commit', '--quiet', '-am', 'shared-tree continuation checkpoint'], { cwd: worktree });
+  const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+  assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'checkpoint-worker', commit: checkpoint }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpoint-worker', { status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'Continue elsewhere.' }).ok, true);
+  return { worktree, branch, checkpoint };
+}
+
+test('a released checkpoint dispatched into the shared tree records why its retained checkout cannot resume there', () => {
+  const ticket = createFixture('shared-tree continuation fallback fixture');
+  const released = releaseNativeCheckpoint(ticket, `shared-continuation-${Date.now()}`);
+  try {
+    const shared = store.prepareDispatch(slug, ticket.ref, { sessionId: `${released.branch}-shared`, sharedTree: true });
+    assert.equal(shared.ticket.dispatch.sharedTree, true);
+    assert.equal(shared.ticket.dispatch.continuation, undefined);
+    assert.equal(shared.ticket.dispatch.continuationFallback.reason, 'continuation_checkpoint_requires_isolated_worktree');
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: released.worktree, encoding: 'utf8' }).trim(), released.checkpoint, 'the retained checkout is left as it was');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'shared-continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', released.worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', released.branch], { cwd: PROJECT });
+  }
+});
+
 test('released handbacks carry registered native worktrees into continuation dispatches', () => {
   const ticket = createFixture('continuation checkpoint fixture');
   const sessionId = `continuation-${Date.now()}`;
@@ -2107,7 +3122,7 @@ test('released handbacks carry registered native worktrees into continuation dis
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
     assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-worker', {
@@ -2119,6 +3134,8 @@ test('released handbacks carry registered native worktrees into continuation dis
     execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
     execFileSync('git', ['commit', '--quiet', '-m', 'continuation checkpoint'], { cwd: worktree });
     const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'continuation-worker', commit: checkpoint }).ok, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
       status: 'todo',
       source: 'test',
@@ -2217,7 +3234,7 @@ test('continuation refuses a same-path replacement linked checkout', () => {
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-replacement-worker', {
       sessionId,
@@ -2274,7 +3291,7 @@ test('dirty released worktrees without commits resume in place for a continuatio
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-continuation-worker', {
       sessionId,
@@ -2296,6 +3313,7 @@ test('dirty released worktrees without commits resume in place for a continuatio
       integrationBranch: 'main',
     });
     assert.equal(continued.ticket.dispatch.continuation.mode, 'dirty_worktree_resume');
+    assert.match(continued.ticket.dispatch.continuation.retainReason, /explicitly names integration base main at [0-9a-f]{40}, which is the retained checkout's own base/);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     const spawn = agentsync.agentSpawn(
       continued.ticket.dispatch.launchName,
@@ -2388,7 +3406,7 @@ test('a retained checkout with unmerged entries is refused as a continuation eve
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'conflicted-recovery-worker', {
       sessionId,
@@ -2447,6 +3465,107 @@ test('a retained checkout with unmerged entries is refused as a continuation eve
   }
 });
 
+// GH-125. The retained checkout was built on newer main C, and the redispatch explicitly named the original
+// base A. Ancestry of A passes against C, so the retain decision handed out the C-based checkout and the
+// named base never reached the executor. Each case releases a clean checkout on C and redispatches on A.
+function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: string, ticket: any) => { releaseKind?: string }, run: (context: any) => void) {
+  const ticket = createFixture(title);
+  const marker = `gh125-${Date.now()}`;
+  const sessionId = `explicit-base-${marker}`;
+  const agentId = `explicit-base-${marker}`;
+  const branch = `worktree-agent-${agentId}`;
+  const recoveryBaseBranch = `${marker}-recovery-base`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  const project = (args: string[]) => execFileSync('git', args, { cwd: PROJECT, encoding: 'utf8', windowsHide: true }).trim();
+  const baselineA = project(['rev-parse', 'HEAD']);
+  project(['branch', recoveryBaseBranch, baselineA]);
+  fs.writeFileSync(path.join(PROJECT, `${marker}-newer.txt`), 'newer main\n');
+  project(['add', `${marker}-newer.txt`]);
+  project(['commit', '--quiet', '-m', 'newer main C']);
+  const newerC = project(['rev-parse', 'HEAD']);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(prepared.ticket.dispatch.baseCommit, newerC);
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName: agentId }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'explicit-base-worker', { sessionId, token: prepared.token, executor }).ok, true);
+    const release = leaveWork(worktree, ticket);
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'explicit-base-worker', {
+      status: 'todo', source: 'test', ...(release.releaseKind ? { releaseKind: release.releaseKind, releaseReason: 'Continue on the original base.' } : {}),
+    }).ok, true);
+    const continued = store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sessionId}-next`,
+      integrationMode: 'local',
+      integrationBranch: recoveryBaseBranch,
+    });
+    assert.equal(continued.ticket.dispatch.baseCommit, baselineA);
+    run({ continued, worktree, baselineA, newerC, recoveryBaseBranch });
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'explicit-base-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+    project(['reset', '--hard', baselineA]);
+    project(['branch', '-D', recoveryBaseBranch]);
+  }
+}
+
+test('GH-125: a committed checkpoint on a newer base replays onto an explicitly named older base in a fresh checkout', () => {
+  let checkpoint = '';
+  redispatchOnOlderExplicitBase('explicit base committed checkpoint fixture', (worktree, ticket) => {
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 125;\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'checkpoint on C'], { cwd: worktree, windowsHide: true });
+    checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'explicit-base-worker', commit: checkpoint }).ok, true);
+    return { releaseKind: 'handback' };
+  }, ({ continued, worktree, baselineA, newerC, recoveryBaseBranch }) => {
+    assert.equal(continued.ticket.dispatch.continuation, undefined, 'the C-based checkout is not handed out');
+    const fallback = continued.ticket.dispatch.continuationFallback;
+    assert.equal(fallback.reason, 'released_worktree_base_differs_from_explicit_integration_base');
+    assert.deepEqual(fallback.commits, [checkpoint]);
+    assert.ok(fallback.cause.includes(`integration base ${recoveryBaseBranch} at ${baselineA}`), fallback.cause);
+    assert.ok(fallback.cause.includes(`is built on ${newerC}`), fallback.cause);
+    const spawn = agentsync.agentSpawn(
+      continued.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
+      null,
+      continued.ticket.dispatchExecutor,
+      agentsync.renderDispatchStub(continued.ticket, PROJECT),
+      'explicit base committed checkpoint fixture',
+    );
+    assert.equal(spawn.isolation, 'worktree');
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.ok(briefing.includes(`git cherry-pick ${checkpoint}`));
+    assert.match(briefing, /Validation evidence: the dispatch explicitly names integration base/);
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim(), checkpoint, 'the retained checkout is left as it was');
+  });
+});
+
+test('GH-125: uncommitted work on a newer base stays retained, names the explicit base, and moves onto it', () => {
+  redispatchOnOlderExplicitBase('explicit base dirty checkout fixture', (worktree) => {
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 126;\n');
+    return {};
+  }, ({ continued, baselineA, newerC, recoveryBaseBranch }) => {
+    const continuation = continued.ticket.dispatch.continuation;
+    assert.equal(continuation.mode, 'dirty_worktree_resume', 'the only copy of the work is still retained');
+    assert.equal(continuation.baseCommit, newerC);
+    assert.ok(continuation.retainReason.includes(`integration base ${recoveryBaseBranch} at ${baselineA}`), continuation.retainReason);
+    assert.match(continuation.retainReason, /exist nowhere else, so it is still retained/);
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.ok(briefing.includes(continuation.retainReason));
+    assert.ok(briefing.includes(`git rebase --onto ${baselineA} ${newerC}`));
+    assert.doesNotMatch(briefing, /change nothing if it passes/);
+    assert.match(briefing, /never use `git stash`/);
+    assert.ok(store.dispatchWarnings(continued.ticket).join('\n').includes(`Retain reason: ${continuation.retainReason}.`));
+  });
+});
+
 test('dirty released worktrees with checkpoints fall back to cherry-picking the commit range', () => {
   const ticket = createFixture('dirty checkpoint fallback fixture');
   const sessionId = `dirty-checkpoint-${Date.now()}`;
@@ -2466,7 +3585,7 @@ test('dirty released worktrees with checkpoints fall back to cherry-picking the 
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-checkpoint-worker', {
       sessionId,
@@ -2527,7 +3646,7 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
     assert.equal(store.bindDispatchWorktreeCreation(aliasSlug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
-    assert.equal(store.completeDispatchWorktreeCreation(aliasSlug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(aliasSlug, sessionId, worktree, creationGeneration(aliasSlug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(aliasSlug, ticket.ref, 'continuation-short-path-worker', {
       sessionId,
@@ -2716,6 +3835,9 @@ test('control plane records an abandoned candidate after recovering the dead unc
     agentName,
   }).ok, true);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'orchestrator', { source: 'test' }).reason, 'unclaimed_active_dispatch');
+  // SQ-2949 finding 1: grooming reads the same retirement authority as dispatch, so a runtime silent
+  // for a whole claim grace is what makes this attempt clearable at all.
+  backdateRuntimeSignals(ticket.id, CLAIM_GRACE_MS);
   assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
     by: 'orchestrator',
     agentName,
@@ -2783,6 +3905,9 @@ test('unclaimed pre-runtime delivery names and preserves its manual recovery pat
   assert.match(release.message, /recoveryEvidence/);
   assert.match(release.message, /reachable from the recorded integration branch/);
 
+  // SQ-2949 finding 1: grooming reads the same retirement authority as dispatch, so a runtime silent
+  // for a whole claim grace is what makes this attempt clearable at all.
+  backdateRuntimeSignals(ticket.id, CLAIM_GRACE_MS);
   assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
     by: 'control-plane',
     evidence: 'The dispatched executor exited before its first claim.',
@@ -2804,6 +3929,10 @@ test('unclaimed pre-runtime delivery names and preserves its manual recovery pat
     executor: retirePrepared.ticket.dispatchExecutor,
     agentName: `retire-only-${retireOnly.id}`,
   }).ok, true);
+  const noRuntimeSignal = store.getTicket(slug, retireOnly.ref).dispatch;
+  noRuntimeSignal.preparedAt = 'unreadable';
+  noRuntimeSignal.launchedAt = 'unreadable';
+  independentTicketWrite(slug, retireOnly.id, { dispatch: noRuntimeSignal });
   const retired = store.prepareDispatch(slug, retireOnly.ref, {
     recoveryEvidence: 'The executor exited before its first claim.',
     retireOnly: true,
@@ -2840,11 +3969,17 @@ test('unclaimed pre-runtime delivery names and preserves its manual recovery pat
     deliveryMethod: 'manual',
   });
   assert.equal(boundGroomClose.reason, 'active_dispatch');
-  assert.doesNotMatch(boundGroomClose.message, /deliveryMethod manual/);
-  assert.equal(store.clearUnclaimedDispatch(slug, bound.ref, {
+  assert.match(boundGroomClose.message, /no claim to release/, 'a bound attempt that never claimed gets the one recovery, not a release');
+  // Grooming reaches a bound-unclaimed attempt through the same authority as dispatch now, so a live one is
+  // refused by its countdown rather than by a blanket "bound" rule (SQ-2951).
+  const boundClear = store.clearUnclaimedDispatch(slug, bound.ref, {
     by: 'control-plane',
     evidence: 'A live bound executor must not be retired by grooming.',
-  }).reason, 'active_dispatch');
+  });
+  assert.equal(boundClear.ok, false);
+  assert.equal(boundClear.reason, 'unclaimed_launch_not_supersedable');
+  assert.match(boundClear.message, /becomes retirable on evidence at .*, in \d+ minutes?, unless/);
+  assert.equal(store.getTicket(slug, bound.ref).dispatch.terminalAt, null);
   assert.equal(store.releaseTicket(slug, bound.ref, 'control-plane', { force: true, source: 'test' }).ok, true);
 
   const unreachable = createFixture('unreachable manual delivery fixture');
@@ -2854,6 +3989,9 @@ test('unclaimed pre-runtime delivery names and preserves its manual recovery pat
     executor: unreachablePrepared.ticket.dispatchExecutor,
     agentName: `unreachable-manual-${unreachable.id}`,
   }).ok, true);
+  // SQ-2949 finding 1: grooming reads the same retirement authority as dispatch, so a runtime silent
+  // for a whole claim grace is what makes this attempt clearable at all.
+  backdateRuntimeSignals(unreachable.id, CLAIM_GRACE_MS);
   assert.equal(store.clearUnclaimedDispatch(slug, unreachable.ref, {
     by: 'control-plane',
     evidence: 'The executor ended before its first claim.',
@@ -2883,6 +4021,14 @@ test('SQ-2117: a pending submission refuses preparation instead of minting an un
   assert.equal(store.submitTicket(slug, ticket.ref, owner, { commit: candidateCommit, source: 'test' }).ok, true);
   const submitted = store.getTicket(slug, ticket.ref);
 
+  // SQ-59: submit clears the claim, so `owner` — the identity `rework --by` requires — is
+  // recoverable only from the submission record. Pulse has to carry it without needing
+  // full:true or a round trip through the comment thread.
+  const submittedPulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(submittedPulse.claim, null);
+  assert.equal(submittedPulse.dispatch.state, 'submitted');
+  assert.equal(submittedPulse.dispatch.submittedBy, owner);
+
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-submission-retry-${Date.now()}` }),
     new RegExp(`has a pending submission \\(${candidateCommit}\\)[\\s\\S]*sidequest integrate[\\s\\S]*sidequest rework[\\s\\S]*--abandon-submission`),
@@ -2907,6 +4053,37 @@ test('SQ-2117: a pending submission refuses preparation instead of minting an un
   const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-submission-rework-${Date.now()}` });
   assert.equal(replacement.ok, true);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'pending-submission-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
+test('GH-349: a reworked ticket\'s fresh dispatch briefing states the pending rework above the comment thread', () => {
+  const ticket = createFixture('pending rework briefing fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-rework-${Date.now()}` });
+  const owner = `pending-rework-owner-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  commitFixtureChange();
+  const candidateCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  assert.equal(store.submitTicket(slug, ticket.ref, owner, { commit: candidateCommit, source: 'test' }).ok, true);
+  // The executor that reads only the thread sees this acceptance and treats the relaunch as a duplicate.
+  assert.equal(store.addComment(slug, ticket.ref, { by: 'orchestrator', body: 'Candidate accepted; queued for integration.' }).ok, true);
+  const review = 'SQ-9001 review: the parser still drops trailing fields.';
+  const reason = 'Repair trailing-field parsing and resubmit.';
+  assert.equal(store.reworkSubmission(slug, ticket.ref, { by: owner, review, reason, source: 'test' }).ok, true);
+
+  const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-rework-replacement-${Date.now()}` });
+  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, ticket.ref), replacement.token, slug, PROJECT);
+  const pending = briefing.indexOf('## Pending rework');
+  const thread = briefing.indexOf('## Newest ticket evidence and comments');
+  assert.ok(pending >= 0, 'the briefing names the pending rework');
+  assert.ok(thread > pending, 'the pending rework precedes the comment thread');
+  const section = briefing.slice(pending, briefing.indexOf('\n## ', pending + 1));
+  assert.ok(section.includes(candidateCommit), 'the pending rework names the rejected candidate');
+  assert.ok(section.includes(reason), 'the pending rework carries the rework reason');
+  assert.ok(section.includes(review), 'the pending rework carries the review');
+  assert.match(section, /not a duplicate/);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'pending-rework-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('claim holders can release routed write scope without submitting first', () => {
@@ -3019,9 +4196,10 @@ function runTeammateIdle(teammateName?: any) {
 // Those same fields must not be able to veto a match: only an exact agent id or
 // an exact agent name may prove identity.
 function finishDispatch(title?: any, options: any = {}) {
-  const ticket = store.createTicket(slug, { title, category: 'dispatch.lifecycle', source: 'test' });
+  // Read-only, so done closes it: an unscoped write dispatch now owns the whole tree and must submit (GH-341).
+  const ticket = store.createTicket(slug, { title, category: 'research', source: 'test' });
   const sessionId = options.sessionId || `idle-${ticket.id}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, allowUnscoped: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
   const agentName = options.agentName || `idle-teammate-${ticket.id}`;
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
@@ -3716,5 +4894,232 @@ test('dispatch briefing includes each pinned decision once and reports later del
   assert.match(warnings, /decision log gained 1 entry \(#3\) since .* was prepared/);
   assert.doesNotMatch(warnings, /was claimed/);
 });
+
+// SQ-3110: one case per report of a dispatch that died before its first claim with no working exit. The
+// session that prepared the attempt spawned it, so it is the one holding the host's failure report.
+function retireFromSession(ref: string, sessionId: string | undefined, recoveryEvidence: string) {
+  try {
+    return store.prepareDispatch(slug, ref, { sessionId, recoveryEvidence, retireOnly: true });
+  } catch (error: any) {
+    return { refusal: String(error.message) };
+  }
+}
+
+test('SQ-3110 SQ-3071: the preparing session retires a bound attempt that died at launch at once', () => {
+  const { ticket, sessionId } = bindUnclaimedFixture('sq3110-bound');
+  const recoveryEvidence = 'Agent terminated early due to an API error: 400 this build does not support the model.';
+  try {
+    const foreign = retireFromSession(ticket.ref, `${sessionId}-other`, recoveryEvidence);
+    assert.ok(foreign.refusal, `another session still waits for the deadline, got ${retirementOutcome(foreign)}`);
+    assert.match(foreign.refusal, /becomes retirable on evidence at/);
+    assert.match(foreign.refusal, new RegExp(`session that prepared it \\(${sessionId}\\) can retire it now`));
+
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `the preparing session holds the host report, got ${retirementOutcome(retired)}`);
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+    assert.equal(retired.ticket.dispatch.attempts.at(-1).recoveryEvidence, recoveryEvidence);
+    assert.equal(retired.ticket.dispatchNonce, null);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-bound-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-285: a launched attempt whose spawn failed at WorktreeCreate retires at once from its session', () => {
+  const ticket = createFixture('sq3110 launched unbound fixture');
+  const sessionId = `sq3110-launched-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const recoveryEvidence = 'WorktreeCreate hook failed: worktree lease refused creation: dispatch_binding_unavailable.';
+  try {
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `a launch that never started is dead the moment the host says so, got ${retirementOutcome(retired)}`);
+    assert.equal(retired.ticket.dispatch.failureShape, 'unclaimed_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-launched-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-289: a cancelled WorktreeCreate retires at once from its session instead of the idle hour', () => {
+  const { ticket, sessionId } = worktreeCreationFixture('sq3110-cancelled');
+  const recoveryEvidence = 'WorktreeCreate hook failed: node hooks/worktree-create.js: Hook cancelled';
+  try {
+    const foreign = retireFromSession(ticket.ref, `${sessionId}-other`, recoveryEvidence);
+    assert.ok(foreign.refusal, `another session still waits for the backstop, got ${retirementOutcome(foreign)}`);
+    assert.match(foreign.refusal, /only the idle backstop applies/);
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `the preparing session saw the hook cancelled, got ${retirementOutcome(retired)}`);
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-cancelled-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-285: groomClose from the preparing session retires and closes; the grooming refusal names no absent claim holder', () => {
+  const { ticket, sessionId } = bindUnclaimedFixture('sq3110-groom');
+  const recoveryEvidence = 'Both executors were refused at their first claim and exited.';
+  try {
+    const refused = store.completeTicketAsControlPlane(slug, ticket.ref, { purpose: 'grooming', by: 'groomer', reason: 'stale dispatch' });
+    assert.equal(refused.reason, 'active_dispatch');
+    assert.doesNotMatch(refused.message, /<claim holder>/, 'nobody holds a claim, so release is not a move');
+    assert.match(refused.message, /recoveryEvidence/);
+
+    const recovery = store.groomCloseRecovery(slug, ticket.ref, { by: 'groomer', reason: 'stale dispatch', evidence: recoveryEvidence, sessionId });
+    assert.equal(recovery.ok, true, `the preparing session retires inside the grace, got ${JSON.stringify(recovery.recovered?.message)}`);
+    assert.equal(store.completeTicketAsControlPlane(slug, ticket.ref, { purpose: 'grooming', by: 'groomer', reason: 'stale dispatch' }).ok, true);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-groom-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-69 GH-191: after a reduced-schema attempt stops before its claim, evidence retirement and a direct claim both work', () => {
+  const ticket = createFixture('sq3110 reduced stopped fixture');
+  const sessionId = `sq3110-reduced-${Date.now()}`;
+  const agentName = `sq3110-reduced-agent-${ticket.id}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true, reducedAgentSchema: true });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+  assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.failureShape, 'stopped_before_claim');
+  const recoveryEvidence = 'claim refused: reduced Agent-schema dispatch observed permission_mode "default"; the executor exited.';
+  try {
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `a terminal attempt has nothing left to retire, got ${retirementOutcome(retired)}`);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.failureShape, 'stopped_before_claim', 'the stop hook outcome stays recorded');
+
+    const direct = store.claimTicket(slug, ticket.ref, 'orchestrator', { direct: true, reason: 'The reduced-schema executor cannot claim on this host.' });
+    assert.notEqual(direct.reason, 'reduced_runtime_unverified', 'a terminal reduced-schema attempt must not gate a direct claim');
+    assert.equal(direct.ok, true, `direct claim: ${direct.reason}`);
+    store.releaseTicket(slug, ticket.ref, 'orchestrator', { status: 'todo', source: 'test' });
+
+    const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true, recoveryEvidence });
+    assert.notEqual(replacement.token, prepared.token, 'redundant evidence on a terminal attempt still prepares the replacement');
+    assert.equal(replacement.ticket.dispatch.terminalAt, null);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-reduced-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-295: work landed after a technical_blocker release names groomClose from integrate', () => {
+  const ticket = createFixture('sq3110 released blocker fixture');
+  const sessionId = `sq3110-blocker-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'sq3110-blocked-executor', {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'sq3110-blocked-executor', { status: 'todo', source: 'test' }).ok, true);
+  commitFixtureChange();
+  const landed = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  try {
+    const refused = store.integrateSubmission(slug, ticket.ref, { deliveryMethod: 'manual', deliveryCommit: landed });
+    assert.equal(refused.reason, 'submission_required');
+    assert.match(refused.message, /groomClose/, 'integrate must name the closure that works without a submission');
+    const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+      purpose: 'delivery', by: 'orchestrator', reason: 'landed by hand after the executor released', deliveryCommit: landed, deliveryMethod: 'manual',
+    });
+    assert.equal(closed.ok, true, `groomClose delivery: ${closed.reason} ${closed.message || ''}`);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-blocker-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('GH-341: a handback whose commit the orchestrator cherry-picked closes through groomClose manual', () => {
+  const ticket = createFixture('gh341 cherry-picked handback fixture');
+  const sessionId = `gh341-handback-${Date.now()}`;
+  const by = 'gh341-handback-executor';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor }).ok, true);
+  const branch = `gh341-handback-${ticket.id}`;
+  execFileSync('git', ['checkout', '--quiet', '-b', branch], { cwd: PROJECT });
+  commitFixtureChange();
+  const original = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  execFileSync('git', ['checkout', '--quiet', 'main'], { cwd: PROJECT });
+  execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'main moves on before the cherry-pick'], { cwd: PROJECT });
+  assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'scope refused src/' }).ok, true);
+  execFileSync('git', ['cherry-pick', original], { cwd: PROJECT, stdio: 'ignore' });
+  const landed = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  assert.notEqual(landed, original, 'the cherry-pick is a new commit, so only it is reachable from main');
+  try {
+    const refused = store.integrateSubmission(slug, ticket.ref, { deliveryMethod: 'manual', deliveryCommit: landed });
+    assert.equal(refused.reason, 'submission_required');
+    assert.match(refused.message, /handback/);
+    assert.match(refused.message, /pass the cherry-picked commit/);
+    const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+      purpose: 'delivery', by: 'orchestrator', reason: 'cherry-picked the handback commit onto main', deliveryCommit: landed, deliveryMethod: 'manual',
+    });
+    assert.equal(closed.ok, true, `groomClose delivery: ${closed.reason} ${closed.message || ''}`);
+  } finally {
+    execFileSync('git', ['branch', '--quiet', '-D', branch], { cwd: PROJECT });
+    store.releaseTicket(slug, ticket.ref, 'gh341-handback-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// Claude Code 2.1.282+ validates the Agent `model` against exactly these; anything else never starts an executor.
+const AGENT_MODEL_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'];
+
+test('GH-361: no prepared dispatch spawn, before or after the launch hook, carries an Agent model outside the four aliases', () => {
+  const ready = { ready: true, state: 'ready', message: 'ready' };
+  const catalogRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-gh361-'));
+  fs.mkdirSync(path.join(catalogRoot, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalogRoot, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    source: 'model-gateway',
+    providers: { codex: ready, grok: ready, opencode: ready },
+    models: [
+      { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', provider: 'codex' },
+      { slug: 'grok-build', id: 'claude-grok-build', label: 'Grok Build', provider: 'grok' },
+      { slug: 'oc-flash', id: 'claude-opencode-deepseek-v4.1-flash', label: 'DeepSeek Flash', provider: 'opencode' },
+    ],
+  }));
+  const previousDiscovery = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  process.env.SIDEQUEST_DISCOVERY_DIRS = catalogRoot;
+  const shapes = [
+    { model: 'sonnet', readonly: false, executor: 'sidequest-exec-high' },
+    { model: 'codex-gpt-5-6-terra', readonly: false, executor: 'sidequest-exec-dispatch' },
+    { model: 'grok-build', readonly: false, executor: 'sidequest-exec-dispatch' },
+    { model: 'oc-flash', readonly: false, executor: 'sidequest-exec-model-oc-flash-high' },
+    { model: 'oc-flash', readonly: true, executor: 'sidequest-exec-readonly-model-oc-flash-high' },
+  ];
+  try {
+    for (const shape of shapes) {
+      const category = `gh361.${shape.model}${shape.readonly ? '.readonly' : ''}`;
+      store.setCategory({ id: category, name: category, route: { model: shape.model, effort: 'high' }, fallback: null, readonly: shape.readonly, enabled: true });
+      const ticket = createFixture(`GH-361 ${category}`, category);
+      try {
+        const sessionId = `gh361-${category}`;
+        const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+        assert.equal(prepared.ok, true, prepared.message);
+        const executor = store.canonicalPreparedDispatchExecutor(prepared.ticket);
+        assert.equal(executor, shape.executor, category);
+        const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
+        const spawn = agentsync.agentSpawn(prepared.ticket.dispatch.launchName, undefined, resolved.model, executor,
+          agentsync.renderDispatchStub(prepared.ticket, PROJECT), prepared.ticket.dispatch.description);
+        assert.ok(!Object.hasOwn(spawn, 'model') || AGENT_MODEL_ALIASES.includes(spawn.model), `${category} spawn model ${spawn.model}`);
+
+        const launch = runForceBypass({ session_id: sessionId, cwd: PROJECT, tool_name: 'Agent', tool_input: spawn });
+        assert.notEqual(launch?.hookSpecificOutput?.permissionDecision, 'deny', `${category}: ${launch?.hookSpecificOutput?.permissionDecisionReason}`);
+        const launched = launch?.hookSpecificOutput?.updatedInput || spawn;
+        assert.ok(!Object.hasOwn(launched, 'model') || AGENT_MODEL_ALIASES.includes(launched.model), `${category} launched model ${launched.model}`);
+        if (shape.model === 'oc-flash') {
+          const overridden = runForceBypass({ session_id: sessionId, cwd: PROJECT, tool_name: 'Agent', tool_input: { ...spawn, model: 'sonnet' } });
+          assert.equal(Object.hasOwn(overridden.hookSpecificOutput.updatedInput, 'model'), false, 'an Agent model would override the pinned id, so the hook strips it');
+        }
+      } finally {
+        store.releaseTicket(slug, ticket.ref, 'gh361-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    }
+    const definition = fs.readFileSync(path.join(SIDEQUEST_HOME, 'agents', 'sidequest-exec-model-oc-flash-high.md'), 'utf8');
+    assert.match(definition, /^model: claude-opencode-deepseek-v4\.1-flash$/m, 'the definition pins the discovered id the spawn left out');
+    assert.match(definition, /^effort: high$/m);
+    assert.equal(fs.existsSync(path.join(SIDEQUEST_HOME, 'agents', 'sidequest-exec-model-grok-build-high.md')), false, 'shim-served entries keep the shared dispatch executor');
+  } finally {
+    process.env.SIDEQUEST_DISCOVERY_DIRS = previousDiscovery;
+  }
+});
+
 
 export {};

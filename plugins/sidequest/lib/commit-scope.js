@@ -28,8 +28,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var commit_scope_exports = {};
 __export(commit_scope_exports, {
+  WHOLE_TREE_SCOPE: () => WHOLE_TREE_SCOPE,
+  candidatePaths: () => candidatePaths,
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
+  foreignRefMessage: () => foreignRefMessage,
   foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
   foreignReleaseFragmentRefusalMessage: () => foreignReleaseFragmentRefusalMessage,
   foreignReleaseFragmentScopePaths: () => foreignReleaseFragmentScopePaths,
@@ -40,8 +43,12 @@ __export(commit_scope_exports, {
   isInScope: () => import_scope_match2.isInScope,
   isRemoteIntegrationRef: () => isRemoteIntegrationRef,
   linkedWorktree: () => linkedWorktree,
+  listRefs: () => listRefs,
+  moveRefs: () => moveRefs,
+  outsideScopeCommitState: () => outsideScopeCommitState,
   preserveCommitRef: () => preserveCommitRef,
   rangePaths: () => rangePaths,
+  recordsCommit: () => recordsCommit,
   repoRoot: () => repoRoot,
   scopedPaths: () => import_scope_match2.scopedPaths,
   scopedWorkPending: () => scopedWorkPending,
@@ -54,13 +61,14 @@ __export(commit_scope_exports, {
   unscopedWorkingPaths: () => unscopedWorkingPaths,
   validateCommitRangeScope: () => validateCommitRangeScope,
   validateCommitScope: () => validateCommitScope,
+  validatePaths: () => validatePaths,
   validateRelativeScopes: () => validateRelativeScopes,
   validateScopeResolution: () => validateScopeResolution,
   validateStoredSubmissionRange: () => validateStoredSubmissionRange,
   workingPaths: () => workingPaths
 });
 module.exports = __toCommonJS(commit_scope_exports);
-var import_node_child_process = require("node:child_process");
+var import_git_process = require("./git-process.js");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 var import_scope_match = require("./scope-match.js");
@@ -72,7 +80,7 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function git(cwd, args) {
-  return (0, import_node_child_process.execFileSync)("git", args, { cwd, encoding: "utf8", windowsHide: true });
+  return (0, import_git_process.execFileSync)("git", args, { cwd, encoding: "utf8", windowsHide: true });
 }
 function gitResult(cwd, args) {
   try {
@@ -87,7 +95,7 @@ function patchIds(cwd, args) {
     if (!patches.trim()) return { ok: true, value: "" };
     return {
       ok: true,
-      value: (0, import_node_child_process.execFileSync)("git", ["patch-id", "--stable"], {
+      value: (0, import_git_process.execFileSync)("git", ["patch-id", "--stable"], {
         cwd,
         encoding: "utf8",
         input: patches,
@@ -299,6 +307,7 @@ function foreignReleaseFragmentRefusalMessage(operation, ticketRef, fragments) {
   }
   return `${operation}: refused ${ticketRef}; only ${ownFragment} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(", ")}.`;
 }
+const WHOLE_TREE_SCOPE = "**";
 function ticketCommitScope(effectiveFiles, declaredFiles, ticketRef) {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
@@ -452,6 +461,20 @@ function isAncestor(cwd, ancestor, descendant) {
     return false;
   }
 }
+function recordedBaselineBoundsRange(cwd, baseline, mergeBase, tip) {
+  if (!isAncestor(cwd, baseline, tip)) return false;
+  return mergeBase === tip || isAncestor(cwd, mergeBase, baseline);
+}
+function candidatePaths(cwd, changedPaths, commit, upstreamCommit) {
+  if (isAncestor(cwd, commit, upstreamCommit)) return [...changedPaths];
+  const differing = gitResult(cwd, ["diff", "--name-only", "--no-renames", "-z", upstreamCommit, commit]);
+  if (!differing.ok) return [...changedPaths];
+  const differingKeys = new Set(differing.value.split("\0").filter(Boolean).map(import_scope_match.scopeKey));
+  return changedPaths.filter((file) => differingKeys.has((0, import_scope_match.scopeKey)(file)));
+}
+function rangeCandidatePaths(cwd, range, changedPaths) {
+  return range.ok && typeof range.commit === "string" && typeof range.upstreamCommit === "string" ? candidatePaths(cwd, changedPaths, range.commit, range.upstreamCommit) : changedPaths;
+}
 function submissionLandedIntegrationRef(cwd, submission, integrationBranchOverride) {
   if (submission.noOp === true) return null;
   const commit = String(submission.commit || "").trim();
@@ -493,30 +516,61 @@ function unpublishedReleaseTip(cwd, commit, remoteBranchRef) {
   const plugins = annotated.filter((name) => PLUGIN_RELEASE_TAG.test(name));
   return { commit: tip.value, tags: [...marketplace, ...plugins].sort() };
 }
-function preserveCommitRef(cwd, commit, gitRef, options) {
+const EMPTY_OBJECT_ID = "0000000000000000000000000000000000000000";
+function commitMatchesRevision(commit, revision) {
+  const text = String(revision || "").trim().toLowerCase();
+  return text.length >= 7 && commit.startsWith(text);
+}
+function recordsCommit(recorded, commit) {
+  return recorded.some((revision) => commitMatchesRevision(commit, revision));
+}
+function ownsRefTip(current, replaces) {
+  return current === EMPTY_OBJECT_ID || recordsCommit(replaces, current);
+}
+function foreignRefMessage(ref, commit) {
+  const archived = ref.replace("refs/sidequest/", "refs/sidequest-archived/foreign/");
+  return `${ref} already points to ${commit}, a commit this ticket never recorded, so it belongs to another board or ticket on this repository. Archiving that board moves its candidate refs to refs/sidequest-archived/<board>/; otherwise move this one aside with \`git update-ref ${archived} ${commit} && git update-ref -d ${ref} ${commit}\`, then retry.`;
+}
+function compareAndSetRef(root, ref, tip, replaces) {
+  const existing = resolvedCommit(root, ref);
+  const current = existing.ok ? existing.value : EMPTY_OBJECT_ID;
+  const preserved = { ok: true, commit: tip, gitRef: ref };
+  if (current === tip) return preserved;
+  if (!ownsRefTip(current, replaces)) return { ok: false, reason: "git_ref_collision", message: foreignRefMessage(ref, current) };
+  const updated = gitResult(root, ["update-ref", ref, tip, current]);
+  return updated.ok ? preserved : { ok: false, reason: "git_ref_collision", message: updated.message };
+}
+function refTarget(root, commit, ref) {
+  const tip = resolvedCommit(root, commit);
+  if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
+  const validRef = gitResult(root, ["check-ref-format", ref]);
+  return validRef.ok ? tip : { ok: false, reason: "invalid_git_ref", message: validRef.message };
+}
+function preserveCommitRef(cwd, commit, gitRef, replaces = []) {
   const ref = String(gitRef || "").trim();
   if (!ref) return { ok: false, reason: "missing_git_ref" };
   try {
     const root = repoRoot(cwd);
-    const tip = resolvedCommit(root, commit);
-    if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
-    const validRef = gitResult(root, ["check-ref-format", ref]);
-    if (!validRef.ok) return { ok: false, reason: "invalid_git_ref", message: validRef.message };
-    if (options?.noOverwrite) {
-      const existing = resolvedCommit(root, ref);
-      if (existing.ok) {
-        if (existing.value === tip.value) return { ok: true, commit: tip.value, gitRef: ref };
-        return { ok: false, reason: "git_ref_collision", message: `${ref} already points to ${existing.value}` };
-      }
-      const emptyRef = "0000000000000000000000000000000000000000";
-      const created = gitResult(root, ["update-ref", ref, tip.value, emptyRef]);
-      if (!created.ok) return { ok: false, reason: "git_ref_collision", message: created.message };
-      return { ok: true, commit: tip.value, gitRef: ref };
-    }
-    git(root, ["update-ref", ref, tip.value]);
-    return { ok: true, commit: tip.value, gitRef: ref };
+    const target = refTarget(root, commit, ref);
+    return target.ok ? compareAndSetRef(root, ref, target.value, replaces) : target;
   } catch (error) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
+  }
+}
+function listRefs(cwd, prefix) {
+  const listed = gitResult(cwd, ["for-each-ref", "--format=%(refname) %(objectname)", prefix]);
+  if (!listed.ok) return [];
+  return listed.value.split(/\r?\n/).map((line) => line.trim().split(" ")).filter((fields) => fields.length === 2).map(([name, commit]) => ({ name, commit }));
+}
+function moveRefs(cwd, moves) {
+  const script = moves.map((move) => `create ${move.to} ${move.commit}
+delete ${move.from} ${move.commit}
+`).join("");
+  try {
+    (0, import_git_process.execFileSync)("git", ["update-ref", "--stdin"], { cwd, encoding: "utf8", input: script, windowsHide: true });
+    return { ok: true, value: "" };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error) };
   }
 }
 function scopedWorkPending(cwd, files, options) {
@@ -598,15 +652,9 @@ function submissionRange(cwd, options) {
       };
     }
   }
-  let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && dispatchBase) {
-    const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
-    const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
-    const dispatchBaseIsIntegrated = dispatchBase.ok && integratedFrom(dispatchBase.value) !== null;
-    if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
-      effectiveBase = dispatchBase.value;
-    }
-  }
+  const recordedBase = !requestedBase && dispatchBase?.ok && recordedBaselineBoundsRange(cwd, dispatchBase.value, mergeBase.value, tip.value) ? dispatchBase.value : null;
+  const pinnedBase = requestedBase ? requestedBase.value : recordedBase;
+  let effectiveBase = pinnedBase ?? mergeBase.value;
   if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = /* @__PURE__ */ new Set();
     for (const name of opts.baseCandidates) {
@@ -637,7 +685,7 @@ function submissionRange(cwd, options) {
     const commitList = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
     if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
     commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-    if (!commits.length && requestedBase && requestedBase.value === tip.value) {
+    if (!commits.length && pinnedBase === tip.value) {
       noOp = true;
     }
     if (!commits.length && !noOp && !requestedBase && effectiveBase === tip.value) {
@@ -664,15 +712,17 @@ function submissionRange(cwd, options) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
-function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrationBranchOverride) {
+function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrationBranchOverride, options) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const opts = isRecord(options) ? options : {};
+  const allowDivergedExpectedUpstream = opts.allowDivergedExpectedUpstream === true;
   const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
   const landed = submissionLandedIntegrationRef(cwd, submission, integrationRefs);
   const range = submissionRange(cwd, {
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
-    upstreamCommit: submission.upstreamCommit,
+    ...allowDivergedExpectedUpstream ? {} : { upstreamCommit: submission.upstreamCommit },
     integrationTarget: submission,
     integrationBranch: integrationRefs,
     base: submission.base
@@ -712,7 +762,7 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
     });
   }
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
-  const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
+  const scopeValidation = validatePaths(submissionScope, rangeCandidatePaths(cwd, range, rangeChangedPaths));
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, {
     ok: true,
@@ -726,7 +776,25 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
     } : {}
   });
 }
-function commitScoped(cwd, message, files) {
+function validateCommitOrUndo(root, commit, scopes, previousHead) {
+  const validation = validateCommitScope(root, commit, scopes);
+  if (validation.reason !== "outside_scope") return validation;
+  const undone = previousHead.ok ? gitResult(root, ["reset", "--soft", previousHead.value]) : gitResult(root, ["update-ref", "-d", "HEAD"]);
+  return { ...validation, rolledBack: undone.ok, message: undone.ok ? void 0 : undone.message };
+}
+async function commitWithinScope(root, message, scopes, stageableScopes, committableScopes) {
+  if (stageableScopes.length) await (0, import_git_process.execFileText)("git", ["add", "--all", "--", ...stageableScopes], { cwd: root });
+  const previousHead = gitResult(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const commitArgs = ["commit", "--only"];
+  if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
+  await (0, import_git_process.execFileText)("git", [...commitArgs, "-m", String(message || ""), "--", ...committableScopes], { cwd: root });
+  const commit = git(root, ["rev-parse", "HEAD"]).trim();
+  return Object.assign({ commit }, validateCommitOrUndo(root, commit, scopes, previousHead));
+}
+function outsideScopeCommitState(result) {
+  return result.rolledBack ? "Nothing was committed: the commit was undone, HEAD is back where it was and the declared paths stay staged. A commit hook usually stages the extra paths." : `Commit ${result.commit} is still on HEAD because undoing it failed: ${result.message}.`;
+}
+async function commitScoped(cwd, message, files) {
   const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope" };
   try {
@@ -742,26 +810,23 @@ function commitScoped(cwd, message, files) {
     }
     const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
     const directScopes = commitScopes.filter((scope) => !(0, import_scope_match.hasGlob)(scope));
-    const stageableScopes = [.../* @__PURE__ */ new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const stageableScopes = stageableScopedPaths(root, [.../* @__PURE__ */ new Set([...directScopes, ...concreteGlobPaths])]);
     const committableScopes = [.../* @__PURE__ */ new Set([
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))
     ])];
-    if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
-    const commitArgs = ["commit", "--only"];
-    if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
-    git(root, [...commitArgs, "-m", String(message || ""), "--", ...committableScopes]);
-    const commit = git(root, ["rev-parse", "HEAD"]).trim();
-    const validation = validateCommitScope(root, commit, scopes);
-    return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
+    return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
   } catch (error) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  WHOLE_TREE_SCOPE,
+  candidatePaths,
   commitPaths,
   commitScoped,
+  foreignRefMessage,
   foreignReleaseFragmentPaths,
   foreignReleaseFragmentRefusalMessage,
   foreignReleaseFragmentScopePaths,
@@ -772,8 +837,12 @@ function commitScoped(cwd, message, files) {
   isInScope,
   isRemoteIntegrationRef,
   linkedWorktree,
+  listRefs,
+  moveRefs,
+  outsideScopeCommitState,
   preserveCommitRef,
   rangePaths,
+  recordsCommit,
   repoRoot,
   scopedPaths,
   scopedWorkPending,
@@ -786,6 +855,7 @@ function commitScoped(cwd, message, files) {
   unscopedWorkingPaths,
   validateCommitRangeScope,
   validateCommitScope,
+  validatePaths,
   validateRelativeScopes,
   validateScopeResolution,
   validateStoredSubmissionRange,

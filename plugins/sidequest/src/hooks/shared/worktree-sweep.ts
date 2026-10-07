@@ -9,6 +9,10 @@ import { writeSweepProgress, type SweepProgress } from './sweep-handoff.js';
 
 const MAX_PROJECTS_PER_START = 3;
 const MAX_CANDIDATES_PER_PROJECT = 8;
+// Whatever the current project leaves unspent goes to the other projects' oldest
+// candidates, so a machine that only ever opens one repository still drains the
+// rest over successive starts (SQ-2924).
+const MAX_CANDIDATES_PER_START = 24;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const MAX_ORPHAN_SUBJECT_LENGTH = 120;
 
@@ -22,24 +26,30 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (ref: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   integrationTarget: (slug: string) => { upstream: string; branch: string } | null;
-  boardConfig: (slug: string) => { notIntegratedSalvageAgeHours?: number; worktreeRecoveryRetentionAgeHours?: number; worktreeRecoveryRetentionMaxPerAgent?: number } | null;
+  boardConfig: (slug: string) => { notIntegratedSalvageAgeHours?: number; worktreeRecoveryRetentionAgeHours?: number } | null;
   worktreeGcTickets: () => any[];
   worktreeGcProjects: (currentSlug: string, limit: number) => Project[];
 }
 
 interface Worktrees {
+  WORKTREE_SWEEP_CLASSIFICATION_ORDER: readonly string[];
+  retainedBranchExplanation: (reason: string, upstream: string) => string;
   sweep: (repo: string, tickets: any[], options: {
     execute: boolean;
     currentPath: string;
     livePaths: string[];
-    integrationTarget: { upstream: string; branch: string };
+    integrationTarget: { upstream: string; branch: string } | null;
     maxCandidates: number;
     notIntegratedSalvageAgeMs: number;
     recoveryRetentionAgeMs: number;
-    recoveryRetentionMaxPerAgent: number;
     onProgress?: (progress: SweepProgress) => void;
   }) => Promise<{
     skipped?: string;
+    upstream?: string;
+    upstreamFallback?: boolean;
+    entries?: Array<{ action: string; reason: string }>;
+    remainingCandidates?: number;
+    retainedBranches?: Array<{ branch: string; path: string; reason: string }>;
     failures?: Array<{ path: string | null; message: string; suppressed?: boolean }>;
     salvaged?: Array<{ path: string; ref: string; recovery: string }>;
     orphanBranches?: Array<{ branch: string; action: string; reason: string; subject?: string }>;
@@ -218,6 +228,10 @@ function missingIntegrationTarget(error: unknown): boolean {
   return /Configured integration ref .+ does not exist\./.test(String((error as Error)?.message || error));
 }
 
+function sweepRule(order: readonly string[]): string {
+  return `Cleanup classifies in this order: ${order.join(', ')}.`;
+}
+
 export async function sweepWorktrees(data: HookInput, includeKnownProjects: boolean): Promise<string[]> {
   const store = require(runtimeModule('store')) as Store;
   const { project: current, sessionPath } = currentProject(data, store);
@@ -227,6 +241,7 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
     : [current];
   const notices: string[] = [];
   const worktrees = require(runtimeModule('worktrees')) as Worktrees;
+  const rule = sweepRule(worktrees.WORKTREE_SWEEP_CLASSIFICATION_ORDER);
   const activePaths = liveSessionPaths();
   const progressCwd = stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const projectProgress = new Map<string, SweepProgress>();
@@ -259,6 +274,7 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
     writeSweepProgress(progressCwd, { phase, candidates, observed, current, reason, planned, removed, keptByReason });
   };
 
+  let budget = MAX_CANDIDATES_PER_START;
   for (const project of projects) {
     const isCurrentProject = project.slug === current.slug;
     try {
@@ -267,20 +283,19 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
       continue;
     }
 
-    let target: { upstream: string; branch: string } | null;
+    if (budget <= 0) break;
+    // A missing or unconfigured integration ref no longer skips the project: the
+    // sweep falls back to origin's default or HEAD for the settled check (SQ-2924).
+    let target: { upstream: string; branch: string } | null = null;
     try {
       target = store.integrationTarget(project.slug);
     } catch (error: any) {
-      if (isCurrentProject && missingIntegrationTarget(error)) {
-        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the configured integration branch is unavailable locally.`);
+      if (isCurrentProject && !missingIntegrationTarget(error)) {
+        notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not read its integration target: ${(error && error.message) || error}`);
       }
-      continue;
     }
-    if (!target) {
-      if (isCurrentProject) {
-        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: no integration target. Configure one with ${projectCommand(project)}.`);
-      }
-      continue;
+    if (!target && isCurrentProject) {
+      notices.push(`sidequest: ${project.name || project.slug} has no usable integration ref, so the worktree sweep compared against the repository default instead. ${rule} Configure one with ${projectCommand(project)}.`);
     }
 
     try {
@@ -290,13 +305,19 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
         currentPath: isCurrentProject ? sessionPath : '',
         livePaths: activePaths,
         integrationTarget: target,
-        maxCandidates: MAX_CANDIDATES_PER_PROJECT,
+        maxCandidates: isCurrentProject ? Math.min(MAX_CANDIDATES_PER_PROJECT, budget) : budget,
         notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
         recoveryRetentionAgeMs: (config?.worktreeRecoveryRetentionAgeHours || 14 * 24) * 60 * 60 * 1e3,
-        recoveryRetentionMaxPerAgent: config?.worktreeRecoveryRetentionMaxPerAgent || 3,
         onProgress: (progress) => updateProgress(project, progress),
       });
+      budget -= result.entries?.length || 0;
+      for (const retained of result.retainedBranches || []) {
+        notices.push(`sidequest: reclaimed ${retained.path} and kept branch ${retained.branch}: ${worktrees.retainedBranchExplanation(retained.reason, String(result.upstream))}. ${rule}`);
+      }
       if (!isCurrentProject) continue;
+      if (result.remainingCandidates) {
+        notices.push(`sidequest: ${result.remainingCandidates} worktree candidate(s) in ${project.name || project.slug} remain past this session's sweep budget; later sessions continue oldest first.`);
+      }
       if (result.skipped === 'repository_busy') {
         notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the repository has an in-progress git operation.`);
       }

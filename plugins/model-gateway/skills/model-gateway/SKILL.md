@@ -77,7 +77,11 @@ flags whose values equal plugin defaults. It leaves unrelated settings alone, sk
 agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+; `models` shows exactly what the shim advertises. Claude Code
 only refetches gateway discovery when it has an API-key credential. OAuth subscriptions do not give it
-one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes.
+one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes, but
+only from a list the proxy answered. While the proxy is unreachable the shim serves `models.json` or its
+built-in list, keeps the previous cache, retries the proxy on its next refresh tick, and `status` says
+`fallback catalog (proxy unreachable)`. `setup --preserve-wiring` (what the Toolshed updater runs) never
+wires the directory it runs from.
 
 Restart remains necessary to surface new rows in `/model`: Claude Code reads the picker cache once at
 session start. `/reload-plugins` does not reload it. Restoring or refreshing auth on an already-wired
@@ -96,31 +100,38 @@ bring auth back, or you kill the session that was about to use it.
 
 ## Selecting models
 
-- `/model` picker: rows like "GPT-5.6-sol (Codex)" and "Grok 4.5".
-- Typed: `/model claude-gpt-5.6-sol[1m]` or `/model claude-grok-4.5[1m]`. The picker and Sidequest catalog emit those exact ids. The suffix is stripped before routing to Codex or Grok.
-- `lib/runtime.js`'s exported `MODEL_WINDOW_POLICY` is the sole authority for gateway backend windows, picker aliases, advertised windows, and sentry mode. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows. GPT ids absent from the table are deliberately advertised through its explicitly unmeasured 920k default, rather than silently inheriting a window. Grok 4.5 is a measured 500k row and now has the `[1m]` picker alias.
-- Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). The shim advertises `920000` by default. Its synthetic 413 trigger is the smaller of `CODEX_GATEWAY_COMPACT_TRIGGER` when set and the policy row's backend window minus 40k tokens. `CODEX_GATEWAY_COMPACT_TRIGGER` is a ceiling, never an override of that headroom. With the optional client `autoCompactWindow` cap at `325000`, Claude Code compacts around `292000`, so the sentry is a backstop that normally does not fire. `CODEX_GATEWAY_CONTEXT_WINDOW` overrides every advertised Codex window. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; it does not promise a 1M backend input limit. A lower explicit `autoCompactWindow` still wins. Use `/context` to inspect the selected model and effective cap.
+- `/model` picker: rows like "GPT-6.1-sol (Codex)" and "Grok 4.5".
+- Typed: `/model claude-gpt-6.1-sol[1m]` or `/model claude-grok-4.5[1m]`. The picker and Sidequest catalog emit those exact ids. The suffix is stripped before routing to Codex or Grok.
+- `lib/runtime.js`'s exported `MODEL_WINDOW_POLICY` is the sole authority for gateway backend windows, picker aliases, advertised windows, and sentry mode. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets. GPT ids absent from the table are deliberately advertised through its explicitly unmeasured 920k default, rather than silently inheriting a window. Grok 4.5 is a measured 500k row with a `[1m]` picker alias and the shared synthetic-413 sentry.
+- Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). Every `synthetic-413` policy row keeps its backend-window-minus-40000 ceiling. With no saved `compactAt`, the lowest legacy environment trigger or cap-minus-85000 wins. With `compactAt.codex` or `compactAt.grok` saved, the explicit maximum replaces those legacy candidates, is clamped to the cap, and ignores `CODEX_GATEWAY_COMPACT_TRIGGER` without mutating it. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; it does not promise a 1M backend input limit. A lower explicit `autoCompactWindow` still wins. Use `/context` to inspect the selected model and effective cap.
+- **Context window and cost**: `context-window` saves backend windows in `~/.claude/model-gateway/context-window.json` (`--claude <tokens|full> --codex <tokens|full> --grok <tokens|full>`). Defaults stay Claude `full`, Codex `272000`, Grok `full`; existing installs are never auto-migrated. `/v1/models` advertises the cap and keeps `[1m]` ids. With no explicit maximum, the gateway's legacy cap policy subtracts 85000, so Codex still compacts past 187000.
+- **Direct gateway compaction maximum**: `context-window --codex-compact-at <tokens|cap>` and `--grok-compact-at <tokens|cap>` save positive whole counts under `compactAt`; `cap` removes the explicit field and restores the legacy policy. These flags have no 100000 floor. Window-only updates preserve saved maxima. An explicit maximum has no hidden 85000 subtraction; the cap and actual backend window minus 40000 remain authoritative. `status`, `doctor`, and catalog notes report the requested and effective trigger, actual backend window, limiting source, and any ignored `CODEX_GATEWAY_COMPACT_TRIGGER` unchanged. `--codex-compact-at 242000` is an opt-in example that leaves the 272000 cap unchanged. OpenAI bills input above 272k at 2x; the crossing turn and compaction request can still exceed 272k and pay double. Never promise this example keeps every request below the billing boundary.
+- **Native Claude window**: preserve `--claude <tokens|full>` and existing gateway-owned `autoCompactWindow` synchronization to project-wired `.claude/settings.local.json`; numeric windows require project-scoped wiring. Native engine headroom and exact trigger are unverified. `--claude-compact-at` and `compactAt.claude` are unsupported and refuse without writing. Same-model main/subagent thresholds are unverified; use one backend policy with no role inference. A lower native session window can bound gateway models too. After deliberately adopting a change, restart the gateway (`stop`, then `ensure`) and restart open Claude Code sessions for native-window or picker changes. No automatic 242000 adoption, machine environment mutation, or worker restart during implementation. `CODEX_GATEWAY_CONTEXT_WINDOW` still applies only when no Codex window is saved.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
   applies Codex window advertisement or error rewriting to them. The env block pins the current
   real 1M aliases (Opus, Sonnet, Fable) to `[1m]` ids so a gateway session on one gets its full 1M
   window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
-  SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
-  the last good pin, then a shipped safe default. Set a persistent per-alias override with
-  `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
-  to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
-  pin and whether it is overridden. Overrides live in `~/.claude/model-gateway/pins.json`, outside
-  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-project` (or
-  `env --write-user` for a shared fallback) and start a new Claude Code session; changing a saved value alone cannot alter
-  an open session.
+  SessionStart refreshes its cache after the CLI changes or the cache ages out, and rewrites stale pins
+  it wrote, including in a project where the gateway was turned off for Remote Control. A failed probe keeps
+  the last good pin, then a shipped safe default. A detected alias older than the shipped default, or
+  one the plugin retired, loses to the shipped default. Set a persistent per-alias override with
+  `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
+  to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
+  effective pin, whether it is overridden, and which lagging CLI alias a shipped pin replaced. Overrides live in
+  `~/.claude/model-gateway/pins.json`, outside
+  the plugin cache. A pin change, and every SessionStart pin refresh, updates every registered wired
+  project's gateway-owned pins (so a new shipped default reaches them too) and skips any project with a
+  user-owned pin value. Restart every open Claude Code session in an
+  affected project; changing a saved value cannot alter an open session.
 - Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
   `/compact` fail after history already exceeds the Codex limit.
 - Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can
   spike Codex context past the point proactive compaction can recover from. Prefer pulling large
   references incrementally on Codex models.
-- The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models). A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
+- The advertised catalog comes from the proxy's /v1/models; `models.json` and the built-in list only stand in while the proxy is unreachable. A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
 - **Claude Desktop cannot use Codex/Grok models in this version**: Desktop has its own native Gateway
   configuration, separate from Claude Code CLI settings, and can point at this shim's endpoint. But
   installed Desktop 1.49585.0 validates every Gateway model ID client-side and rejects any
@@ -201,11 +212,7 @@ restart. If a host replaces it, use the supported Claude Code CLI on the wired p
 Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent,
 or User-scope edits cannot be promised to win. Disabling stays available.
 
-- The user (never this plugin, never automatically) adds one hosts entry mapping
-  `api.anthropic.com` to loopback — `127.0.0.1 api.anthropic.com` on Windows
-  (`C:\Windows\System32\drivers\etc\hosts`, needs Administrator), macOS, and Linux (`/etc/hosts`,
-  needs `sudo`). If asked to help with this, tell the user the exact line and file, and that they
-  need elevated privileges to save it; do not attempt to edit the hosts file yourself.
+- After the user directly confirms `remote-control enable --confirm`, the plugin creates a backup and writes its marked hosts block mapping `api.anthropic.com` to loopback: `127.0.0.1 api.anthropic.com` on Windows (`C:\Windows\System32\drivers\etc\hosts`, needs Administrator), macOS, and Linux (`/etc/hosts`, needs `sudo`). Do not edit the hosts file outside that procedure.
 - `ensure`/`setup`/`doctor` detect the entry (read-only) and, only after confirming the shim can
   actually bind loopback port 80, switch `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and
   start a second listener on port 80 next to the usual `127.0.0.1:18764`. Exactly one line tells
@@ -226,6 +233,12 @@ or User-scope edits cannot be promised to win. Disabling stays available.
 ... stop
 ... env --remove   # unwire Claude Code (do this BEFORE uninstalling the plugin)
 ```
+
+`status`, `doctor` and `ensure` read the shim through one shared probe and print the same line,
+`shim (model router) on :<port>: <state>`, where the state is `running-ours (serving <version>)`,
+`running-foreign (PID <pid>, <install root or owner unidentified>)`, `starting (PID <pid> since <time>)` or
+`stopped`. `ensure` leaves `running-ours` at the installed version alone and succeeds, waits up to its startup
+window for `starting` before replacing anything, and refuses `running-foreign`.
 
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
@@ -254,12 +267,26 @@ agree).
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
-- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 60 seconds.
+- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 30 seconds; the message names its status, time, and hold end.
   It records completed request outcomes, not `/v1/models` or a health check, and clears only after
-  a completed successful Codex response. The 60-second expiry means there is no recent failure
-  evidence, not that Codex is live. An `upstream-blocked` OpenAI/auth rejection stays separate
-  and does not expire; `setup` deliberately clears either record. Sidequest consumes a cached
-  catalog and can lag this state by up to five minutes.
+  a completed successful Codex response. The 30-second expiry means there is no recent failure
+  evidence, not that Codex is live. An attributed OpenAI 401, 403, or 429 rejection enters
+  `upstream-blocked`. A 401 or 403 stays until `setup` or a completed successful Codex response
+  clears it. A 429 block expires: `upstreamBlocked.expiresAt` comes from the 429's Retry-After,
+  else claude-code-proxy's usage-limit reset header, else 60 seconds, and the `doctor` message
+  names that time. It lifts by itself then, or sooner on a completed successful Codex response,
+  and a later rejected request can latch it again. Sidequest consumes a cached catalog and can lag
+  this state by up to five minutes.
+- **Codex turn with no output**: claude-code-proxy answers a Codex turn that completed with no
+  text, tool call, or thinking as a 503 "Codex completed without producing output". The shim
+  answers it as an empty `end_turn` instead, so the session ends the turn rather than retrying
+  into the same empty answer; the shim log records each one.
+- **Gateway models vanish from a Sidequest board a few minutes after the shim starts**: Sidequest
+  discards a catalog older than five minutes and refreshes it by running `catalog --refresh --json`.
+  Run that command by hand and read stderr plus the exit code. It exits non-zero and names the reason
+  when it declines to write (shim not answering `/healthz`, `/v1/models` erroring, or a model list
+  with no gateway ids in it), leaving the stored catalog and its timestamp untouched. Exit 0 with no
+  diagnostic means it did write, so compare the printed `updatedAt` with the stored file.
 - **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe shares one
   `CODEX_GATEWAY_PROBE_TIMEOUT_MS` budget (2 seconds by default, 8 seconds on Windows, where the Win32_Process
   lookup itself typically takes 1.8-2.4 seconds). When that budget expires, the refusal says so, names the elapsed

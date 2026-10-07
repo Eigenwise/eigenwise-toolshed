@@ -77,6 +77,7 @@ async function cmdDispatch(opts, positional) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
+    ...dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {},
     warnings: presentedWarnings,
     spawn: spawn2,
     guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} and its dispatched token file.`
@@ -236,7 +237,6 @@ async function cmdBoardConfig(opts) {
   if (opts["worktree-base"] != null) patch.worktreeBase = opts["worktree-base"];
   if (opts["not-integrated-salvage-age-hours"] != null) patch.notIntegratedSalvageAgeHours = opts["not-integrated-salvage-age-hours"];
   if (opts["worktree-recovery-retention-age-hours"] != null) patch.worktreeRecoveryRetentionAgeHours = opts["worktree-recovery-retention-age-hours"];
-  if (opts["worktree-recovery-retention-max-per-agent"] != null) patch.worktreeRecoveryRetentionMaxPerAgent = opts["worktree-recovery-retention-max-per-agent"];
   if (opts["auto-approve-test-scope"] !== void 0) patch.autoApproveTestScope = opts["auto-approve-test-scope"];
   if (opts["auto-approve-scope"] != null) patch.autoApproveScope = opts["auto-approve-scope"];
   if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
@@ -264,14 +264,14 @@ async function cmdBoardConfig(opts) {
   console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
   console.log(`worktree base: ${payload.worktreeBase}`);
   console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
-  console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h, ${payload.worktreeRecoveryRetentionMaxPerAgent} entries per agent`);
+  console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h`);
   console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? "enabled" : "disabled"}`);
   console.log(`configured scope auto-approval: ${payload.autoApproveScope.length ? payload.autoApproveScope.join(", ") : "(none)"}`);
   console.log(`worktree setup command: ${payload.worktreeSetup || "(none)"}`);
   console.log(`worktree dependency paths: ${payload.worktreeDependencyPaths.length ? payload.worktreeDependencyPaths.map((dependency) => `${dependency.mode} ${dependency.path}`).join(", ") : "(none)"}`);
 }
 async function cmdProjects(opts) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + "\n");
     return;
@@ -305,6 +305,15 @@ function resolveExplicitBoard(opts, positional, action) {
   if (!found.ok) fail(`${action}: board "${ref}" ${describeFindFailure(found, ref)}`);
   return found;
 }
+function keptArchivedNote(candidateRefs) {
+  const kept = candidateRefs.keptArchived?.length || 0;
+  return kept ? `, ${kept} kept under refs/sidequest-archived/ because another board holds the live name` : "";
+}
+function candidateRefsNote(candidateRefs) {
+  if (!candidateRefs) return "";
+  if (candidateRefs.error) return `; candidate refs left in place: ${candidateRefs.error}`;
+  return `; moved ${candidateRefs.moved.length} candidate ref(s)${keptArchivedNote(candidateRefs)}`;
+}
 async function cmdArchiveBoard(opts, positional) {
   const board = resolveExplicitBoard(opts, positional, "archive-board");
   const res = store.archiveProject(board.slug);
@@ -313,7 +322,7 @@ async function cmdArchiveBoard(opts, positional) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + "\n");
     return;
   }
-  console.log(`✓ ${res.alreadyArchived ? "already archived" : "archived"} board ${board.meta.name}`);
+  console.log(`✓ ${res.alreadyArchived ? "already archived" : "archived"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 async function cmdUnarchiveBoard(opts, positional) {
   const board = resolveExplicitBoard(opts, positional, "unarchive-board");
@@ -323,7 +332,7 @@ async function cmdUnarchiveBoard(opts, positional) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + "\n");
     return;
   }
-  console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}`);
+  console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 function describeFindFailure(res, ref) {
   if (res.reason === "ambiguous") {

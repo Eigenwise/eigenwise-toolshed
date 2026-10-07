@@ -179,7 +179,7 @@ async function cmdDone(opts, positional) {
     };
     res = store.completeTicket(slug, idOrRef, by, completionOptions);
     if (!res.ok && ["submission_required", "empty_declared_scope"].includes(res.reason)) {
-      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket);
+      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket, opts.verify);
       if (externalDeliverable.ok) {
         res = store.completeTicket(slug, idOrRef, by, Object.assign({}, completionOptions, {
           cleanDeclaredScope: true,
@@ -223,6 +223,28 @@ function reportIntegrationBranch(outcome) {
   console.log(outcome.advanced ? `  ${outcome.message}` : `  ! ${outcome.message}`);
   if (outcome.command) console.log(`    run: ${outcome.command}`);
 }
+async function advanceAndSweepAfterIntegration(slug, projectPath, ticket) {
+  try {
+    const integrationTarget = store.ticketIntegrationTarget(slug, ticket);
+    const integrationBranch = await worktrees.advanceIntegrationBranch(projectPath, {
+      integrationTarget,
+      submissionCommit: ticket.submission ? ticket.submission.commit : null,
+      submissionWorktree: ticket.submission ? ticket.submission.worktree : null,
+      admittedScope: ticket.submission ? ticket.submission.admittedScope : null,
+      changedPaths: ticket.submission ? ticket.submission.changedPaths : null
+    });
+    const worktreeSweep = await worktrees.sweep(projectPath, store.worktreeGcTickets(), {
+      execute: true,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget,
+      minAgeMs: 0,
+      ticketRef: ticket.ref
+    });
+    return { integrationBranch, worktreeSweep };
+  } catch (error) {
+    return { worktreeSweep: { failures: [{ path: null, message: error && error.message || String(error) }] } };
+  }
+}
 async function cmdGroomClose(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('groom-close: pass a ticket id or ref, e.g. sidequest groom-close SQ-3 --reason "Already shipped in abc1234."');
@@ -232,43 +254,36 @@ async function cmdGroomClose(opts, positional) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? "integration" : opts["delivery-commit"] ? "delivery" : "grooming";
+  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts["recovery-evidence"], sessionId: sessionId(opts) });
+  if (!recovery.ok) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + "\n");
+      process.exitCode = 1;
+      return;
+    }
+    reportClaimFailure("groom-close", idOrRef, recovery.recovered, meta);
+    return;
+  }
   const res = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,
-    reason,
+    reason: recovery.reason,
     purpose,
     abandonSubmission: opts["abandon-submission"] === true,
     deliveryCommit: opts["delivery-commit"],
     deliveryInteractionCommit: opts["delivery-interaction-commit"],
-    deliveryMethod: opts["delivery-method"]
+    deliveryMethod: opts["delivery-method"],
+    deliveryRevision: opts["delivery-revision"],
+    resolvedPaths: opts["resolved-path"]
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
-  if (res.ok && opts.integration) {
-    try {
-      const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
-      res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
-        integrationTarget,
-        submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
-        submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
-        admittedScope: res.ticket.submission ? res.ticket.submission.admittedScope : null,
-        changedPaths: res.ticket.submission ? res.ticket.submission.changedPaths : null
-      });
-      res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
-        execute: true,
-        currentPath: store.nearestRepoRoot(process.cwd()),
-        integrationTarget,
-        ticketRef: res.ticket.ref
-      });
-    } catch (error) {
-      res.worktreeSweep = { failures: [{ path: null, message: error && error.message || String(error) }] };
-    }
-  }
+  if (res.ok && opts.integration) Object.assign(res, await advanceAndSweepAfterIntegration(slug, meta.path, res.ticket));
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
   if (res.ok) {
-    console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
+    console.log(res.deliveryRecordCompleted ? `✓ ${res.ticket.ref} bound delivered commit ${res.integration.deliveryCommit} to its recorded apply delivery — ${meta.name}` : `✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
     if (res.advisory) console.log(`  advisory: ${res.advisory}`);
     reportIntegrationBranch(res.integrationBranch);
   } else reportClaimFailure("groom-close", idOrRef, res, meta);
@@ -341,11 +356,11 @@ async function cmdCommit(opts, positional) {
   if (foreignFragments.length) {
     fail(commitScope.foreignReleaseFragmentRefusalMessage("commit", ticket.ref, foreignFragments));
   }
-  const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
+  const result = await commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === "missing_scope") fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
     if (result.reason === "outside_scope") {
-      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(", ")}. Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
+      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(", ")}. ${commitScope.outsideScopeCommitState(result)} Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
     }
     if (result.reason === "no_existing_scope") fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);
@@ -396,7 +411,7 @@ function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
 }
 async function cmdRework(opts, positional) {
   const idOrRef = positional[0];
-  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by reviewer --review SQ-4 --reason "what needs repair"');
+  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by <submitter id> --review SQ-4 --reason "what needs repair"');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const review = String(opts.review || "").trim();
@@ -626,8 +641,9 @@ async function cmdIntegrate(opts, positional) {
       } else {
         target = store.ticketIntegrationTarget(slug, ticket);
       }
+      target = store.deliveryIntegrationTarget(slug, target, opts["integration-branch"]);
     } catch (error) {
-      fail(`integrate: ${error && error.message || error}`);
+      fail(`integrate:${error && error.message || error}`);
       return;
     }
   }
@@ -638,6 +654,9 @@ async function cmdIntegrate(opts, positional) {
       deliveryCommit: opts["delivery-commit"],
       deliveryInteractionCommit: opts["delivery-interaction-commit"],
       deliveryMethod: opts["delivery-method"],
+      deliveryRevision: opts["delivery-revision"],
+      resolvedPaths: opts["resolved-path"],
+      by,
       reason: opts.reason,
       skipVerify: !!opts["skip-verify"],
       verificationWaiver
@@ -648,6 +667,7 @@ async function cmdIntegrate(opts, positional) {
       reason: opts.reason,
       purpose: "integration"
     });
+    if (closed.ok && !closed.idempotent) Object.assign(closed, await advanceAndSweepAfterIntegration(slug, meta.path, closed.ticket));
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed), null, 2) + "\n");
       if (!closed.ok) process.exitCode = 1;
@@ -661,11 +681,13 @@ async function cmdIntegrate(opts, positional) {
   const delivery = refs.length > 1 ? store.integrateSubmissionWave(slug, refs, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   }) : store.integrateSubmission(slug, idOrRef, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   });
@@ -710,6 +732,10 @@ async function cmdIntegrate(opts, positional) {
     purpose: "integration"
   }));
   const failedClosure = closures.find((closure) => !closure.ok);
+  for (const closure of closures) {
+    if (!closure.ok || closure.idempotent) continue;
+    Object.assign(closure, await advanceAndSweepAfterIntegration(slug, meta.path, closure.ticket));
+  }
   if (opts.json) {
     const payload = refs.length > 1 ? { project: slug, delivery: integration, verify: verification.verify, tickets: closures.map((closure) => closure.ticket || null), ok: !failedClosure } : Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closures[0]);
     process.stdout.write(JSON.stringify(payload, null, 2) + "\n");

@@ -78,10 +78,13 @@ function runStateControl(t, environment) {
     const expired = state.readUpstreamUnavailable(state.UPSTREAM_UNAVAILABLE_TTL_MS + 1);
     state.setUpstreamUnavailable({ statusCode: 503, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 1 });
     const retained = JSON.parse(fs.readFileSync(state.CODEX_UPSTREAM_UNAVAILABLE_PATH, 'utf8'));
-    state.clearUpstreamUnavailable();
     state.setUpstreamBlocked({ statusCode: 429, evidence: 'headers:x-openai-request-id' });
     const suppressed = state.setUpstreamUnavailable({ statusCode: 502, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 2 });
-    process.stdout.write(JSON.stringify({ expired, retained, suppressed, unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() }));
+    const beforeSetup = { unavailable: state.readUpstreamUnavailable(state.UPSTREAM_UNAVAILABLE_TTL_MS + 1), blocked: state.readUpstreamBlocked() };
+    state.clearUpstreamBlocked();
+    state.clearUpstreamUnavailable();
+    const afterSetup = { unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() };
+    process.stdout.write(JSON.stringify({ expired, retained, suppressed, beforeSetup, afterSetup }));
   `;
   return new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, ['-e', script], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -172,16 +175,20 @@ test('readiness reports each local failure state from an isolated home', async (
   ));
 });
 
-test('transient evidence expires without reader mutation and cannot replace an auth block', async (t) => {
+test('setup clears both isolated upstream records without reader mutation', async (t) => {
   const result = await runStateControl(t, gatewayTestEnvironment(t));
+  const setupSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'commands.js'), 'utf8');
 
   assert.equal(result.expired, null);
   assert.equal(result.retained.state, 'upstream-unavailable');
   assert.equal(result.retained.statusCode, 503,
     'the new atomic write remains after an expired reader observed the old record');
   assert.equal(result.suppressed, null);
-  assert.equal(result.unavailable, null);
-  assert.equal(result.blocked.state, 'upstream-blocked');
+  assert.equal(result.beforeSetup.unavailable.state, 'upstream-unavailable');
+  assert.equal(result.beforeSetup.blocked.state, 'upstream-blocked');
+  assert.equal(result.afterSetup.unavailable, null);
+  assert.equal(result.afterSetup.blocked, null);
+  assert.match(setupSource, /const r = await startAll\([\s\S]*?\);\s+if \(!r\.ok\) die\(r\.reason\);\s+clearUpstreamBlocked\(\);\s+clearUpstreamUnavailable\(\);/);
 });
 
 test('upstream-blocked survives a health check and clears on a successful Codex request', async (t) => {
@@ -207,6 +214,16 @@ test('upstream-blocked survives a health check and clears on a successful Codex 
   assert.equal(result.before.state, 'upstream-blocked');
   assert.equal(result.afterHealthCheck.state, 'upstream-blocked');
   assert.equal(result.afterSuccess.state, 'ready');
+
+  const gatewaySkill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'model-gateway', 'SKILL.md'), 'utf8');
+  const guide = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'src', 'content', 'docs', 'getting-started', 'model-gateway.md'), 'utf8');
+  for (const prose of [gatewaySkill, guide]) {
+    assert.match(prose, /An attributed OpenAI 401, 403, or 429 rejection enters\s+`upstream-blocked`/);
+    assert.match(prose, /A 401 or 403 stays until `setup` or a completed successful Codex\s+response\s+clears it/);
+    assert.match(prose, /A 429 block expires: `upstreamBlocked\.expiresAt` comes from the 429's Retry-After,\s+else claude-code-proxy's usage-limit reset header, else 60 seconds/);
+    assert.match(prose, /It lifts by itself then, or sooner on a completed successful Codex response,\s+and a later rejected request can latch it again/);
+    assert.match(prose, /as an empty `end_turn`/);
+  }
 });
 
 test('shim health retains an OpenAI rejection until a successful proxied request', async (t) => {
@@ -287,4 +304,109 @@ test('upstream blocking only accepts explicit OpenAI evidence', () => {
   assert.equal(gateway.hasOpenAiRejectionEvidence(429, {}, 'OpenAI rejected this request'), true);
   assert.equal(gateway.hasOpenAiRejectionEvidence(403, {}, 'forbidden'), false);
   assert.equal(gateway.hasOpenAiRejectionEvidence(500, { 'x-openai-request-id': 'req_1' }, ''), false);
+});
+
+const worker = require('../lib/request-worker.js');
+
+test('#367: concurrent /healthz reads share one proxy and auth check, and a stale result starts exactly one refresh', async () => {
+  let now = 1000;
+  let runs = 0;
+  let finish;
+  const latest = worker.sharedProxyAndAuthCheck({
+    clock: () => now,
+    runCheck: () => { runs++; return new Promise((resolve) => { finish = resolve; }); },
+  });
+  assert.equal(latest(), null);
+  assert.equal(latest(), null);
+  assert.equal(runs, 1, 'a second read while the first check runs starts no new one');
+  finish({ proxyBinary: true, proxyModels: true, codexAuth: true });
+  await new Promise(setImmediate);
+  assert.deepEqual(latest(), { proxyBinary: true, proxyModels: true, codexAuth: true, checkedAt: 1000 });
+
+  now += 14999;
+  latest();
+  assert.equal(runs, 1, 'a fresh result starts no check');
+  now += 1;
+  assert.equal(latest().checkedAt, 1000, 'the stale result is served while its refresh runs');
+  latest();
+  assert.equal(runs, 2);
+  finish({ proxyBinary: true, proxyModels: true, codexAuth: false });
+  await new Promise(setImmediate);
+  assert.equal(latest().codexAuth, false);
+});
+
+test('#367: /healthz readiness says whether its checks are pending, confirmed, or stale', () => {
+  const health = { ok: true, version: '0.0.0' };
+  const pending = worker.healthzCodexReadiness(null, health, 5000);
+  assert.equal(pending.state, 'checking');
+  assert.equal(pending.ready, false);
+  assert.equal(pending.checks, null);
+  assert.equal(pending.checkedAt, null);
+  assert.equal(pending.stale, true);
+
+  const check = { proxyBinary: true, proxyModels: true, codexAuth: true, checkedAt: 5000 };
+  const confirmed = worker.healthzCodexReadiness(check, health, 6000);
+  assert.equal(confirmed.checks.codexAuth, true);
+  assert.equal(confirmed.checkedAt, new Date(5000).toISOString());
+  assert.equal(confirmed.ageMs, 1000);
+  assert.equal(confirmed.stale, false);
+
+  const stale = worker.healthzCodexReadiness(check, health, 20000);
+  assert.equal(stale.ageMs, 15000);
+  assert.equal(stale.stale, true);
+});
+
+function getOverSocket(socketPath) {
+  return new Promise((resolve, reject) => {
+    http.get({ socketPath, path: '/', agent: false }, (response) => {
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve(body));
+    }).on('error', reject);
+  });
+}
+
+function bindOwner(t, socketPath) {
+  const owner = http.createServer((request, response) => response.end('owner'));
+  t.after(() => owner.close());
+  const failures = [];
+  const listening = new Promise((resolve) => owner.once('listening', resolve));
+  worker.listenOnUnixSocket(owner, socketPath, (error) => failures.push(error));
+  return listening.then(() => failures);
+}
+
+test('#367: a second shim binding the gateway socket leaves the live owner alone', async (t) => {
+  let socketPath = `\\\\.\\pipe\\model-gateway-test-${process.pid}-${Date.now()}`;
+  if (process.platform !== 'win32') {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-sock-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    socketPath = path.join(directory, 'gateway.sock');
+  }
+  assert.deepEqual(await bindOwner(t, socketPath), []);
+
+  const intruderFailure = await new Promise((resolve) => worker.listenOnUnixSocket(http.createServer(), socketPath, resolve));
+  assert.equal(intruderFailure.code, 'EADDRINUSE');
+  assert.equal(await getOverSocket(socketPath), 'owner', 'the live owner kept its socket');
+});
+
+test('#367: a socket file nobody listens on is removed and bound; a plain file is left alone', {
+  skip: process.platform === 'win32' && 'the gateway socket is a named pipe on Windows, which leaves no file behind',
+}, async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-sock-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const socketPath = path.join(directory, 'gateway.sock');
+  await new Promise((resolve) => {
+    const script = `require('net').createServer().listen(${JSON.stringify(socketPath)}, () => process.kill(process.pid, 'SIGKILL'))`;
+    spawn(process.execPath, ['-e', script], { stdio: 'ignore' }).once('exit', resolve);
+  });
+  assert.ok(fs.lstatSync(socketPath).isSocket(), 'the killed listener left its socket file behind');
+
+  assert.deepEqual(await bindOwner(t, socketPath), []);
+  assert.equal(await getOverSocket(socketPath), 'owner');
+
+  const plainFile = path.join(directory, 'not-a-socket');
+  fs.writeFileSync(plainFile, 'keep me');
+  const plainFailure = await new Promise((resolve) => worker.listenOnUnixSocket(http.createServer(), plainFile, resolve));
+  assert.equal(plainFailure.code, 'EADDRINUSE');
+  assert.equal(fs.readFileSync(plainFile, 'utf8'), 'keep me');
 });

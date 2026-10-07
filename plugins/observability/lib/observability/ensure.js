@@ -26,17 +26,18 @@ const LOOPBACK = '127.0.0.1';
 const MAX_MANAGED_LOG_BYTES = 16 * 1024 * 1024;
 const MANAGED_LOG_ARCHIVES = 3;
 const PROCESS_RECORD_STALE_AFTER_MS = 120_000;
+// A file written this instant can read a whole millisecond AHEAD of Date.now() on Windows (1152 of
+// 3000 writes measured 2026-09-28, even after flooring mtimeMs), so a strict `<= now` guard called a
+// live observer dead and replaced it. Anything within this skew is a heartbeat from right now.
+const HEARTBEAT_CLOCK_SKEW_MS = 1000;
 
 // The worker records a five-second main-thread pulse. The longest measured spool drain is 17 seconds, so this permits seven such drains before takeover.
 const processRecordHeartbeatIsFresh = (record, recordFile, now = Date.now()) => {
-  // mtimeMs carries sub-millisecond precision while Date.now() is whole milliseconds, so a file
-  // written this instant reads as ~0.3ms in the FUTURE and fails the `<= now` guard below. Measured
-  // at 989/2000 writes. Floor it back to the clock's resolution before comparing.
   const heartbeatAt = typeof record?.heartbeatAt === 'string'
     ? Date.parse(record.heartbeatAt)
     : Math.floor(fs.statSync(recordFile).mtimeMs);
   return Number.isFinite(heartbeatAt)
-    && heartbeatAt <= now
+    && heartbeatAt - now <= HEARTBEAT_CLOCK_SKEW_MS
     && now - heartbeatAt <= PROCESS_RECORD_STALE_AFTER_MS;
 };
 
@@ -811,6 +812,23 @@ async function launchEnsure(options = {}) {
   return true;
 }
 
+// Warns only; turning export on in user settings changes every session, so it stays an explicit
+// step of the enable-project-telemetry skill. A broken settings file must not block the launch.
+function userExportNotice(options = {}) {
+  try {
+    const config = consentedConfig(options.configFile || defaultConfigPath(options.dataDir || defaultDataDir(options.environment)));
+    return config ? require('../../bin/project-telemetry.js').userExportNotice(config, options) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function launchWithNotices(options = {}) {
+  const notices = [userExportNotice(options)].filter(Boolean);
+  await launchEnsure({ ...options, reportNotice: (message) => notices.push(message) });
+  return notices.length > 0 ? JSON.stringify({ systemMessage: notices.join('\n') }) : '';
+}
+
 function handoffArgument(argv, name) {
   const index = argv.indexOf(name);
   if (index < 0 || !argv[index + 1]) throw new Error(`Missing ${name} for observer handoff.`);
@@ -828,11 +846,7 @@ async function main() {
     return;
   }
   if (process.argv.includes('--launch')) {
-    await launchEnsure({
-      reportNotice(message) {
-        process.stdout.write(JSON.stringify({ systemMessage: message }));
-      },
-    });
+    process.stdout.write(await launchWithNotices());
     return;
   }
   if (process.argv.includes('--health')) {
@@ -852,6 +866,7 @@ module.exports = {
   ensureObservability,
   healthSnapshot,
   launchEnsure,
+  launchWithNotices,
   managedLogNeedsRotation,
   observerIdentity,
   portListening,

@@ -302,7 +302,8 @@ const tools = [
         fallbackModel: { type: ["string", "null"], description: "Set null to clear the fallback route." },
         fallbackEffort: { type: "string", enum: store.VALID_EFFORTS },
         enabled: { type: "boolean" },
-        readonly: { type: "boolean", description: "Comment closeout." }
+        readonly: { type: "boolean", description: "Comment closeout." },
+        deniedTools: { type: "array", items: { type: "string" } }
       },
       required: ["id"]
     },
@@ -324,7 +325,7 @@ const tools = [
       const existing = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch = {};
-      for (const key of ["name", "description", "contract", "artifactRoots", "readonly"]) if (args[key] !== void 0) patch[key] = args[key];
+      for (const key of ["name", "description", "contract", "artifactRoots", "readonly", "deniedTools"]) if (args[key] !== void 0) patch[key] = args[key];
       if (args.routeModel !== void 0 || args.routeEffort !== void 0) patch.route = { model: args.routeModel === void 0 ? existing.route.model : args.routeModel, effort: args.routeEffort === void 0 ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel === null) patch.fallback = null;
       else if (args.fallbackModel !== void 0 || args.fallbackEffort !== void 0) patch.fallback = { model: args.fallbackModel === void 0 ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === void 0 ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
@@ -425,6 +426,7 @@ const tools = [
         name: { type: "string" },
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
         readOnlyDeniedTools: { type: "array", items: { type: "string" } },
+        deniedTools: { type: "array", items: { type: "string" } },
         generatedPairs: {},
         integrationMode: { type: "string", description: "auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode." },
         integrationBranch: { type: "string", minLength: 1, description: "Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>." },
@@ -434,13 +436,12 @@ const tools = [
         worktreeBase: { type: "string", enum: ["auto", "origin-main", "local-main"], description: "Isolated-worktree base." },
         notIntegratedSalvageAgeHours: { type: "integer", minimum: 168, description: "Default 168 hours." },
         worktreeRecoveryRetentionAgeHours: { type: "integer", minimum: 1, description: "Hours, default 336." },
-        worktreeRecoveryRetentionMaxPerAgent: { type: "integer", minimum: 1, description: "Per agent, default 3." },
         autoApproveTestScope: { type: "boolean", description: "Auto-approve reachable test directories (default true)." },
         autoApproveScope: { type: "array", items: { type: "string" }, description: "Repo-relative auto-approved globs." },
         worktreeSetup: { type: ["string", "null"], description: "One-line command Sidequest runs after creating an isolated worktree; null clears it." },
         worktreeDependencyPaths: {
           type: "array",
-          description: 'Dependency directories to provision from the primary checkout before dispatch. Each entry is { path: repo-relative directory, mode: "link" | "copy" }.',
+          description: 'Copied or linked from the primary checkout into each isolated worktree. copy: repo file or directory, tracked too, working-tree version. link: untracked directory; "../<name>" links a sibling checkout beside the worktree.',
           items: {
             type: "object",
             properties: {
@@ -458,6 +459,7 @@ const tools = [
       if (args.name !== void 0) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.readOnlyDeniedTools !== void 0) patch.readOnlyDeniedTools = args.readOnlyDeniedTools;
+      if (args.deniedTools !== void 0) patch.deniedTools = args.deniedTools;
       if (args.generatedPairs !== void 0) patch.generatedPairs = args.generatedPairs;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
@@ -467,7 +469,6 @@ const tools = [
       if (args.worktreeBase !== void 0) patch.worktreeBase = args.worktreeBase;
       if (args.notIntegratedSalvageAgeHours !== void 0) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
       if (args.worktreeRecoveryRetentionAgeHours !== void 0) patch.worktreeRecoveryRetentionAgeHours = args.worktreeRecoveryRetentionAgeHours;
-      if (args.worktreeRecoveryRetentionMaxPerAgent !== void 0) patch.worktreeRecoveryRetentionMaxPerAgent = args.worktreeRecoveryRetentionMaxPerAgent;
       if (args.autoApproveTestScope !== void 0) patch.autoApproveTestScope = args.autoApproveTestScope;
       if (args.autoApproveScope !== void 0) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;
@@ -479,7 +480,7 @@ const tools = [
   },
   {
     name: "models",
-    description: "Available models, global fallback, and compact effective category routes. Pass full:true for configured routes, resolved executors, and warnings.",
+    description: "Available models, global fallback, and compact effective category routes. Discovered rows carry contextWindow tokens and a contextWindowNote. Pass full:true for configured routes, resolved executors, and warnings.",
     inputSchema: { type: "object", properties: { project: PROJECT_PROP, full: { type: "boolean", description: "Include configured/resolved category detail and warnings." } } },
     handler(args) {
       const { slug } = resolveProject(args.project);
@@ -491,7 +492,7 @@ const tools = [
     description: "Every registered board with open/doing/done counts — the switcher across all projects. Pass archived:true to list archived boards only.",
     inputSchema: { type: "object", properties: { archived: { type: "boolean", description: "List archived boards only." } } },
     handler(args) {
-      return { projects: store.listProjects({ archived: !!args.archived }) };
+      return { projects: store.listProjectsFlaggingMissingPaths({ archived: !!args.archived }) };
     }
   },
   {

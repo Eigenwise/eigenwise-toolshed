@@ -1,5 +1,141 @@
 # Changelog
 
+## 0.11.10 (2026-10-03)
+
+Released in v3.589.0, up from 0.11.9.
+
+### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Make directory-alias verification portable on Windows (SQ-3306) [`736c299`](https://github.com/Eigenwise/eigenwise-toolshed/commit/736c299c)
+  Use a directory junction for the Windows realpath fixture while preserving its alias-resolution assertions. The full Quartermaster suite can run without directory-symlink privilege.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+## 0.11.9 (2026-09-30)
+
+Released in v3.585.0, up from 0.11.8.
+
+### Fixes
+
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+## 0.11.8 (2026-09-30)
+
+Released in v3.584.0, up from 0.11.7.
+
+### Fixes
+
+- CRAP gate measures a function lizard cuts off at its parameter list over its real body and complexity (GH-315)
+  The CRAP gate no longer exits 2 "coverage unverified" for a function whose parameter list holds
+  parentheses of its own, such as a React component with a function-typed prop
+  (`onSelect: (card: Card) => void`) or a function with a default arrow parameter. lizard's JavaScript,
+  TypeScript and TSX readers end such a function inside its own signature, where coverage has no line
+  data, and leave every branch in its body out of its complexity. The gate now reads the source, measures
+  coverage over the function's real body, and scores the larger of lizard's complexity and the body's own
+  branch count, so an uncovered branchy function fails instead of passing at complexity 1. An edit to
+  that body counts as a change against the base revision. When the gate cannot find where the body ends,
+  the function is still reported as unverified.
+
+## 0.11.7 (2026-09-29)
+
+Released in v3.582.0, up from 0.11.6.
+
+### Fixes
+
+- Quartermaster CRAP gate reports phantom complexity in .tsx: lizard loses a self-closing JSX tag after brace attributes plus a hyphenated attribute and attributes later functions to that component (GH-239)
+  lizard 1.24.0's TSX reader abandons an opening tag as soon as an attribute is not `name="text"` or `name={expr}` — a hyphenated attribute like `data-testid`, a valueless one like `required`, a spread, even tag text holding `(`, `)`, `;` or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced braces kept the enclosing component open to the end of the file, so a React component was charged with a complexity nothing in it branches on and the functions it swallowed were never gated at all. The gate now measures `.tsx` and `.jsx` through lizard's TypeScript reader, from a byte-for-byte copy of the file under a `.ts` or `.js` name, on both sides of the ratchet. Nothing in the source is rewritten, so line numbers, coverage ranges and baseline identity still come from the real file, and every offender line for those files names the measurement behind it.
+
+## 0.11.6 (2026-09-28)
+
+Released in v3.581.0, up from 0.11.5.
+
+### Fixes
+
+- Auto-allowlist vetoes loop keywords, shell fragments, variable-only cd, and version-pinned paths (GH-165) [`e222dd0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e222dd0e6676e9cbf9ca5e1f7fffffdc8b7a3e08)
+- CRAP ratchet pairs each function one-to-one with its baseline copy by source text, so an inserted anonymous function no longer shifts its neighbours onto the wrong row (GH-167)
+- CRAP gate measures the worktree it runs in and isolates coverage output per run (GH-169)
+- CRAP ratchet pairs a function to its baseline by source text, so an insertion cannot flag its untouched neighbours (GH-182)
+  Inserting one function shifted the position of every later function sharing its name, so the ratchet compared untouched namesakes against the wrong baseline row: one came back as a regression and the one pushed past the baseline's ordinals came back as a new function over the ceiling. Every function now pairs with its baseline copy by exact source text first, then by name and position among its namesakes, and pairing is one-to-one: a baseline function is claimed by at most one of today's functions, and a function that claims nothing answers to the ceiling on its own. A byte-identical copy of an over-ceiling function is therefore new code over the ceiling, and so is a third `run` in a file that already had two.
+- CRAP gate's unmeasured-files check now honours the config's exclude patterns (GH-270)
+  The CRAP gate's unmeasured-files check now skips files covered by the configured `exclude`
+  patterns instead of treating every excluded, function-bearing file as an unverified measurement.
+  A changed file that matches an exclude pattern no longer forces the gate to exit with a spurious
+  "lizard reported zero functions" error.
+- status, doctor and ensure agree on the shim's state, and ensure stops fighting its own shim (SQ-3124)
+  `status`, `doctor` and `ensure` now read the shim through one shared probe and print the same state:
+  `running-ours`, `running-foreign`, `starting` or `stopped` (#275). `ensure` against a shim that is ours
+  and already at the installed version is a no-op success instead of a second supervisor failing on
+  `EADDRINUSE` (#230), and a supervisor that is still starting gets the startup window to answer before
+  anything replaces it.
+
+  The supervisor no longer starts a second proxy while the first is still warming up: a proxy it started
+  gets 30 seconds to answer `/v1/models` before recovery replaces it, and a replacement stops the old
+  child first (#251).
+
+  On Windows, port-owner detection reads `netstat`'s foreign-address and PID columns instead of the
+  localized `LISTENING` text, so a German or French UI no longer hides the owner and upgrades replace the
+  running shim (#296). The advised command path already falls back to the CLI until SessionStart writes
+  the stable launcher (#77).
+
+  Quartermaster's session-start gateway audit reads the new shim line: `running-ours` counts as a running
+  shim, and a `running-foreign` listener no longer passes for one.
+- Model Gateway keeps its built-in fallback model list out of Claude Code's discovery cache, and updating Toolshed no longer wires the directory the updater runs from (SQ-3126)
+  GH-297: the discovery cache is written only from a list the proxy answered. While the proxy is
+  unreachable the shim serves `models.json` or its built-in list from memory, keeps the previous cache,
+  retries the proxy on its next refresh tick, and `status` reports `fallback catalog (proxy unreachable)`.
+
+  GH-292: the stable updater runs `setup --preserve-wiring`. It refreshes Claude alias pins only in
+  projects already recorded as wired, and only when a pin changed, so an update that changes no version
+  touches no settings file. Wiring a project stays a deliberate `setup` or `env --write-project` inside it.
+- Quartermaster: fix crap base/ratchet docs, add decisions update/remove, name real doctor failures, and stop counting hook blocks as denials (SQ-3128)
+  Four small fixes: the crap gate's config key is documented and read as base, with ratchet kept as a deprecated alias (GH-267). decisions gained update and remove verbs so a status change no longer needs a stale duplicate row (GH-265). The model-gateway health notice now names doctor's own first failing check instead of always blaming Grok auth (GH-141). mine/verify now detect a PreToolUse hook's own stderr wrapper, classify it as hook_block, and exclude it from denial friction and allowlist candidates while still showing its count separately (GH-302 item 2).
+
+## 0.11.5 (2026-09-28)
+
+Released in v3.580.0, up from 0.11.4.
+
+### Fixes
+
+- Quartermaster CLI loads again from the plugin cache: the CRAP module now ships inside the plugin (GH-261, GH-262, GH-301, GH-302, GH-309) (SQ-3095)
+
+## 0.11.4 (2026-09-22)
+
+Released in v3.575.0, up from 0.11.3.
+
+### Fixes
+
+- Align CRAP gates with the strict six-point standard (SQ-3047)
+  Makes CRAP measurement fail closed, checks only functions a change writes, and uses the shared quality parser for Quartermaster and plugin sources.
+
+## 0.11.3 (2026-09-22)
+
+Released in v3.574.0, up from 0.11.2.
+
+### Fixes
+
+- Repair complete inventoried privacy and signal routing documentation (SQ-3019)
+  Correct privacy storage wording and document the consent-filtered log outbox with separate trace and metric Collector sink pipelines.
+- Restore lost privacy matrix assertions (SQ-3024)
+  Restore two SQ-3013 privacy-matrix test protections dropped in SQ-3019: exact
+  Windows/fallback `observability.json` path checks and the setup-reference
+  "private config" / "current-user-only permissions" prohibitions. Test-only
+  fix, no runtime or documentation prose changes.
+- Clarify Gateway recovery and RC hosts handling (SQ-3026)
+  Clarifies Gateway recovery after attributed OpenAI rejections and the confirmation-gated RC hosts update. The `env` RC-compatibility line now points users at `remote-control enable --confirm`, the command that actually backs up and writes the hosts entry, instead of telling them to add it themselves.
+
+## 0.11.2 (2026-09-19)
+
+Released in v3.572.0, up from 0.11.1.
+
+### Fixes
+
+- Fix resupply eval schema (SQ-2995)
+  Make Quartermaster's resupply host-capability evals compatible with skill-creator.
+
 ## 0.11.1 (2026-09-15)
 
 Released in v3.570.0, up from 0.11.0.

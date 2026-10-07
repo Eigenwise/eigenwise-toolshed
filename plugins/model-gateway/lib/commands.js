@@ -19,12 +19,12 @@
  * built-in /remote-control only lights up when ANTHROPIC_BASE_URL is exactly
  * the real Anthropic host. There's no supported way to get gateway routing
  * and that exact host at once without touching the OS resolver, so it's an
- * opt-in "RC-compatibility" mode: the user (never this plugin) adds one hosts
- * entry mapping api.anthropic.com to loopback, and once detected the shim
- * additionally binds loopback:80 and Claude Code's env is pointed at
- * http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
- * detectHostsCompat / syncCompatMode below. Never automatic on the hosts side;
- * only the env switch and the extra listener are automatic.
+ * opt-in "RC-compatibility" mode: after the user confirms, the remote-control
+ * command backs up and writes one hosts entry mapping api.anthropic.com to
+ * loopback. The shim then additionally binds loopback:80 and Claude Code's env
+ * is pointed at http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
+ * detectHostsCompat / syncCompatMode below. Hosts writes require confirmation;
+ * the env switch and extra listener follow automatically.
  */
 
 const { fork, spawn, spawnSync } = require('node:child_process');
@@ -43,14 +43,18 @@ const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const {
-  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, STABLE_COMMAND_PATH,
+  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, resolveStableCommandPath,
   gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
   resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
-  syncGatewayDiscoveryCache,
+  syncGatewayDiscoveryCache, CONTEXT_WINDOW_PATH, contextWindowCap, contextWindowCompactAt, readContextWindowSettings,
+  writeContextWindowSettings,
 } = require('./runtime.js');
+const {
+  contextWindowReport, contextWindowUpdate, gatewayWindowNote, savedContextWindows, saveContextWindowUpdate, syncClaudeContextWindow,
+} = require('./context-window.js');
 const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const {
-  CODEX_UPSTREAM_BLOCK_PATH, clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
+  CODEX_UPSTREAM_BLOCK_PATH, clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamUnavailable,
   setUpstreamBlocked, setUpstreamUnavailable,
 } = require('./codex-upstream-state.js');
 
@@ -113,11 +117,12 @@ const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cook
 const {
   COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL, HOSTS_BLOCK_END, HOSTS_BLOCK_LINE,
   HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, CODEX_UNKNOWN_MODEL_WINDOW,
-  codexContextWindow, codexReadinessMessage,
+  codexContextWindow,
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
+  writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -135,15 +140,32 @@ const USAGE = `usage: model-gateway.js <command>
   ensure [--quiet] start whatever isn't running; used by the SessionStart hook
   status           show what's running
   models           show the model list the shim advertises to Claude Code
-  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
+  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')});
+                   --refresh exits non-zero and says why on stderr when it could not write a
+                   fresh one, and prints the retained catalog unchanged
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
+  context-window [--claude <tokens|full>] [--codex <tokens|full>] [--grok <tokens|full>]
+                   show or persist the context window per backend (${CONTEXT_WINDOW_PATH}); the
+                   orchestrator and every executor share it. Defaults: claude full, codex 272000,
+                   grok full. Without compact-at, a gateway cap compacts 85000 below the cap.
+                   --codex-compact-at <tokens|cap> and --grok-compact-at <tokens|cap> set a direct
+                   maximum before compaction (positive whole tokens); cap removes the override.
+                   The cap and backend window minus 40000 still limit the effective maximum.
+                   A saved compact-at ignores CODEX_GATEWAY_COMPACT_TRIGGER, reported unchanged.
+                   Example: --codex-compact-at 242000 leaves the 272000 cap unchanged. OpenAI bills
+                   input above 272k tokens at 2x; the crossing turn and compaction request can still
+                   exceed 272k. Existing installations keep their current policy until configured.
+                   --claude sets the native autoCompactWindow in project-wired settings; native
+                   engine headroom applies and the exact trigger is unverified. Claude compact-at
+                   is unsupported. No same-model main/subagent split is applied.
+                   CODEX_GATEWAY_CONTEXT_WINDOW is superseded and only applies when no codex value is saved.
   env [--write-project | --write-user | --remove] [--reconcile]
                    print the Claude Code env block, or merge/remove wiring
                    (--write-project writes .claude/settings.local.json; --write-user
                    is an opt-in shared fallback in ~/.claude/settings.json)
   doctor           full health check
-  remote-control <enable|disable|doctor>
+  remote-control <enable|disable|doctor> [--confirm]
                    manage the opt-in hosts-file compatibility mode; enable refuses an effective
                    HTTPS api.anthropic.com process URL before hosts changes
   serve-shim       (internal) run the router in the foreground
@@ -190,7 +212,7 @@ function flushHookOutput() {
   const [worst, ...rest] = userActionNotices;
   // One line, every session start, so noise discipline is part of the contract: the first actionable state names
   // its own fix, and the rest are counted with the one command that lists them all.
-  if (worst) output.systemMessage = rest.length ? `${worst} (+${rest.length} more: run \`node "${STABLE_COMMAND_PATH}" doctor\`)` : worst;
+  if (worst) output.systemMessage = rest.length ? `${worst} (+${rest.length} more: run \`node "${resolveStableCommandPath()}" doctor\`)` : worst;
   if (Object.keys(output).length) process.stdout.write(JSON.stringify(output));
 }
 // Flushes first so a die() from anywhere inside the hook path still emits what was buffered; otherwise the
@@ -205,15 +227,16 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProbeChildRegistry, createProxyRecovery, fetchUrl, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
+  createProbeChildRegistry, createProxyRecovery, fetchUrl, killPidAsync, listeningPidsFromNetstat, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcessAsync, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
+const { describeShimState, fetchShimHealth, probeShimState, servingShimVersion } = require('./shim-state.js');
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
-  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectWirings,
-  selectedWiringScope, retireWiringModeConfig, settingsPath, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
+  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings,
+  selectedWiringScope, retireWiringModeConfig, settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -222,15 +245,13 @@ const {
   addManagedHostsBlock, configureRemoteControl, detectHostsCompat, findConflictingHostsMappings, hostsFilePath,
   managedHostsBlock, parseHostsCompatBlock, parseHostsCompatEntry, removeManagedHostsBlock, remoteControlCommand,
 } = require('./remote-control.js');
-function compatibilityPortOwnerIdentifiers() {
+function compatibilityPortOwnerIdentifiers(lookup = spawnSync) {
   const portLookup = WIN
-    ? spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true })
-    : spawnSync('lsof', ['-nP', `-iTCP:${COMPAT_PORT}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', windowsHide: true });
+    ? lookup('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true })
+    : lookup('lsof', ['-nP', `-iTCP:${COMPAT_PORT}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', windowsHide: true });
   if (portLookup.status !== 0) return [];
-  const output = String(portLookup.stdout || '');
-  if (!WIN) return [...new Set(output.split(/\s+/).map(Number).filter(Boolean))];
-  const listeningPort = new RegExp(`^\\s*TCP\\s+\\S+:${COMPAT_PORT}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$`, 'gim');
-  return [...new Set(Array.from(output.matchAll(listeningPort), (match) => Number(match[1])).filter(Boolean))];
+  const output = String(portLookup.stdout);
+  return WIN ? listeningPidsFromNetstat(output, COMPAT_PORT) : [...new Set(output.split(/\s+/).map(Number).filter(Boolean))];
 }
 
 function processNameForIdentifier(processIdentifier) {
@@ -272,13 +293,15 @@ configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, requestS
 //
 // Returns 'user', 'project-only', or 'unknown' when installed_plugins.json is
 // absent (for example, a --plugin-dir development checkout).
-function installScope() {
+function installScope(home = os.homedir()) {
   try {
-    const file = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    const file = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const entries = (data.plugins && data.plugins['model-gateway@eigenwise-toolshed']) || [];
+    const entries = Object.entries(data.plugins || {})
+      .filter(([pluginId]) => pluginId.startsWith('model-gateway@'))
+      .flatMap(([, installs]) => installs);
     if (!entries.length) return 'unknown';
-    return entries.some((e) => e.scope === 'user') ? 'user' : 'project-only';
+    return entries.some((entry) => entry.scope === 'user') ? 'user' : 'project-only';
   } catch { return 'unknown'; }
 }
 
@@ -299,92 +322,12 @@ async function proxyModelsAnswering() {
   } catch { return false; }
 }
 
-function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
-  if (!checks.proxyBinary) return 'binary-missing';
-  if (!checks.proxyModels) return 'proxy-down';
-  if (!checks.codexAuth) return 'auth-missing';
-  if (!checks.shimRunning) return 'shim-down';
-  if (!checks.servingVersionMatches) return 'serving-version-mismatch';
-  if (upstreamBlocked) return 'upstream-blocked';
-  if (upstreamUnavailable) return 'upstream-unavailable';
-  return 'ready';
-}
-
-async function getCodexReadiness({
-  binaryPresent = fs.existsSync(PROXY_BIN),
-  probeProxyModels = proxyModelsAnswering,
-  authStatus = isAuthed,
-  shimHealth = undefined,
-  fetchHealth = fetchShimHealth,
-  now = Date.now(),
-} = {}) {
-  const proxyBinary = Boolean(binaryPresent);
-  const [proxyModels, health] = await Promise.all([
-    proxyBinary ? probeProxyModels() : false,
-    shimHealth === undefined ? fetchHealth() : shimHealth,
-  ]);
-  const codexAuth = proxyBinary ? Boolean(authStatus()) : false;
-  const shimRunning = Boolean(health?.ok);
-  const servingVersion = servingShimVersion(health);
-  const checks = {
-    proxyBinary,
-    proxyModels: Boolean(proxyModels),
-    codexAuth,
-    shimRunning,
-    servingVersion,
-    installedVersion: PLUGIN_VERSION,
-    servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
-  };
-  const upstreamBlocked = readUpstreamBlocked();
-  const upstreamUnavailable = readUpstreamUnavailable(now);
-  const state = readinessState(checks, upstreamBlocked, upstreamUnavailable);
-  return {
-    ready: state === 'ready',
-    state,
-    message: state === 'ready'
-      ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-      : codexReadinessMessage(state),
-    checks,
-    upstreamBlocked,
-    upstreamUnavailable,
-    health,
-  };
-}
-
-function catalogReadiness(readiness) {
-  return {
-    ready: readiness.ready,
-    state: readiness.state,
-    message: readiness.message,
-    checks: readiness.checks,
-    upstreamBlocked: readiness.upstreamBlocked,
-    upstreamUnavailable: readiness.upstreamUnavailable,
-  };
-}
-
 function providerReadiness(readiness) {
   return {
     ready: Boolean(readiness?.ready),
     state: typeof readiness?.state === 'string' ? readiness.state : 'unavailable',
     message: typeof readiness?.message === 'string' ? readiness.message : 'Readiness is unavailable.',
   };
-}
-
-function hasOpenAiRejectionEvidence(statusCode, headers, body) {
-  if (![401, 403, 429].includes(statusCode)) return false;
-  const headerNames = Object.keys(headers || {});
-  if (headerNames.some((name) => name.toLowerCase().startsWith('x-openai-') || name.toLowerCase() === 'openai-processing-ms')) return true;
-  return /\bopenai\b/i.test(Buffer.from(body || '').toString());
-}
-
-function noteCodexUpstreamRejection(statusCode, headers, body) {
-  if (!hasOpenAiRejectionEvidence(statusCode, headers, body)) return false;
-  const headerNames = Object.keys(headers || {}).map((name) => name.toLowerCase())
-    .filter((name) => name.startsWith('x-openai-') || name === 'openai-processing-ms' || name === 'content-type');
-  const evidence = headerNames.length ? `headers:${headerNames.join(',')}` : 'body:openai';
-  setUpstreamBlocked({ statusCode, evidence });
-  console.error(`model-gateway: Codex request had an unambiguous OpenAI rejection (status ${statusCode}; ${evidence}); readiness is upstream-blocked.`);
-  return true;
 }
 
 // ------------------------------------------------------------------- setup
@@ -467,7 +410,7 @@ async function restartProxyIfOutdated({
   return { restarted, onDisk, serving };
 }
 
-async function setup() {
+async function setup({ preserveWiring = false } = {}) {
   mkdirs();
   sweepOldProxyBinaries();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
@@ -511,7 +454,7 @@ async function setup() {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
   const supervisorRestart = proxyRecoveryHandoff ? null : await restartShimIfOutdated({ operation: 'setup' });
-  if (supervisorRestart && !supervisorRestart.ok) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
+  if (supervisorRestart && !supervisorRestart.ok && !supervisorRestart.stillStarting) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
   if (!supervisorRestart && !proxyRecoveryHandoff) {
     const restarting = await restartWorkerWithDrain();
     if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
@@ -521,17 +464,20 @@ async function setup() {
   const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
+  if (supervisorRestart?.stillStarting) return warnShimStillStarting(supervisorRestart);
   // one-shot: start everything, and finish the wiring when auth already works
   const r = await startAll({ lifecycleOperation: 'setup', preserveRunningSupervisor: proxyRecoveryHandoff });
+  if (r.stillStarting) return warnShimStillStarting(r);
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
   clearUpstreamUnavailable();
   if (!isAuthed()) {
-    log(`next: node "${STABLE_COMMAND_PATH}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
+    log(`next: node "${resolveStableCommandPath()}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
     return;
   }
   log('ChatGPT auth: valid');
-  await refreshDetectedPins({ force: true });
+  await refreshDetectedPinsAndWiring({ force: true });
+  if (preserveWiring) return finishUpdateWithoutWiring();
   const { mode } = await resolveIntendedMode();
   if (isWired()) {
     const current = wiredMode();
@@ -539,7 +485,7 @@ async function setup() {
       // Refusing to copy an environment value into settings is deliberate (it may point at someone's dev
       // instance), but saying only that left no route forward, so setup skipped the write on every run and the
       // machine stayed permanently wired by one terminal (SQ-1901). Name the command that does converge it.
-      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to write this project's .claude/settings.local.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
+      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${resolveStableCommandPath()}" env --write-project\` to write this project's .claude/settings.local.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
     } else if (current.mode !== mode) {
       writeEnv(current.scope, false, { mode, quiet: true });
       log(`model-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
@@ -635,6 +581,141 @@ function reportSiblingSupervisorReplacement(stopped, quiet) {
   if (!quiet && stopped.siblingInstallRoot) log(`model-gateway: replaced older sibling shim version at ${stopped.siblingInstallRoot}.`);
 }
 
+function recoveryOutcome(result) {
+  if (result.ok) return 'ready';
+  return result.stillStarting ? 'starting' : 'failed';
+}
+
+function lifecycleRecovery(lifecycleOperation, recordLifecycle) {
+  let attempted = false;
+  return {
+    begin() {
+      if (attempted || !lifecycleOperation) return;
+      attempted = true;
+      recordLifecycle(`${lifecycleOperation}-recovery-started`, {
+        component: lifecycleOperation,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      });
+    },
+    finish(result) {
+      if (attempted && lifecycleOperation) {
+        recordLifecycle(`${lifecycleOperation}-recovery-finished`, {
+          component: lifecycleOperation,
+          pid: process.pid,
+          outcome: recoveryOutcome(result),
+          ...(result.supervisorPid ? { supervisorPid: result.supervisorPid } : {}),
+        });
+      }
+      return { ...result, recoveryAttempted: attempted };
+    },
+  };
+}
+
+// A supervisor that is still starting gets the startup window to answer before anything binds against it (#230,
+// #251). Its old failure file is not evidence about this start, so the wait ignores it.
+async function readSettledShimState(probe, { quiet, report, awaitReadiness, timeout }) {
+  const shim = await probe();
+  if (!quiet) report(describeShimState(shim));
+  if (shim.state !== 'starting') return shim;
+  await awaitReadiness({ timeout, proxyAnswers: async () => true, shimFailureExists: () => false });
+  return probe();
+}
+
+function servingCurrentVersion(shim) {
+  return shim.state === 'running-ours' && !shimNeedsRestart(PLUGIN_VERSION, shim.health);
+}
+
+function shimStartPlan(shim, preserveRunningSupervisor) {
+  if (shim.state === 'running-foreign') return refuseForeignShim;
+  if (servingCurrentVersion(shim)) return keepRunningShim;
+  return preserveRunningSupervisor && shim.state === 'starting' ? waitForRunningShim : replaceShim;
+}
+
+function refuseForeignShim(shim, { lifecycleOperation, recordLifecycle }) {
+  if (shim.owner.state === 'foreign-install') {
+    return { ok: false, reason: `PID ${shim.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${shim.image})` };
+  }
+  const operation = lifecycleOperation || 'start';
+  recordLifecycle(`${operation}-owner-unknown`, { component: operation, pid: process.pid, outcome: 'owner-unknown' });
+  return { ok: false, reason: unknownPortOwnerReason(shim.owner, PUBLIC_SHIM_PORT) };
+}
+
+async function keepRunningShim(shim, context) {
+  if (shim.owner.state === 'same-install') context.reapOrphans(shim.pid);
+  noticeStaleSession(shim.health);
+  // setup handed a replaced proxy to this supervisor, so it waits for that proxy to answer.
+  if (context.preserveRunningSupervisor) return finishStartingShim([], context, shim.pid);
+  return reportShimReady([], context);
+}
+
+function waitForRunningShim(shim, context) {
+  return finishStartingShim([], context, shim.pid);
+}
+
+async function replaceShim(shim, context) {
+  const refused = await clearShimForStart(shim, context);
+  if (refused) return context.recovery.finish(refused);
+  return finishStartingShim(['shim'], context, launchSupervisor(context));
+}
+
+async function clearShimForStart(shim, { quiet, lifecycleOperation, reapOrphans, stopSupervisor, recovery }) {
+  if (shim.state === 'stopped') {
+    reapOrphans(null);
+    return null;
+  }
+  recovery.begin();
+  const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+  if (!stopped.ok) return stopped;
+  reportSiblingSupervisorReplacement(stopped, quiet);
+  return null;
+}
+
+function launchSupervisor({ recovery, spawnSupervisor }) {
+  recovery.begin();
+  try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
+  return spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
+}
+
+async function finishStartingShim(started, context, supervisorPid) {
+  const readiness = await context.awaitReadiness({ timeout: context.timeout });
+  if (readiness.ok) return reportShimReady(started, context);
+  if (!readiness.timedOut) return context.recovery.finish({ ok: false, reason: readiness.reason });
+  const waited = `${Math.ceil(context.timeout / 1000)}s`;
+  // The wait returns early on a failure file, so a timeout with the supervisor alive means it is still starting.
+  const stillStarting = context.supervisorAlive(supervisorPid);
+  return context.recovery.finish({
+    ok: false,
+    reason: stillStarting
+      ? `still starting after ${waited}; supervisor pid ${supervisorPid} is running`
+      : `not healthy after ${waited} (check logs in ${LOGS})`,
+    started,
+    waitCutShort: context.quiet,
+    ...(stillStarting ? { stillStarting, supervisorPid } : {}),
+  });
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+async function reportShimReady(started, { quiet, report, refreshCatalog, recovery }) {
+  if (!quiet && started.length) report(`started: ${started.join(', ')}`);
+  await refreshCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
+  return recovery.finish({ ok: true, started });
+}
+
+function noticeStaleSession(health) {
+  const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
+  if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
+}
+
 async function startAll({
   quiet = false,
   lifecycleOperation = null,
@@ -642,100 +723,25 @@ async function startAll({
   ensureState = mkdirs,
   recordLifecycle = recordGatewayLifecycle,
   resolveOwner = resolvePortOwner,
+  fetchHealth = fetchShimHealth,
+  probeShim = probeShimState,
   reapOrphans = reapGatewayOrphans,
-  shimReady = shimHealthy,
   stopSupervisor = stopRunningSupervisor,
   spawnSupervisor = spawnDetached,
+  supervisorAlive = processAlive,
+  awaitReadiness = waitForStartupReadiness,
+  refreshCatalog = writeCatalog,
+  report = log,
   preserveRunningSupervisor = false,
 } = {}) {
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
-  let recoveryAttempted = false;
-  const finishRecovery = (result) => {
-    if (recoveryAttempted && lifecycleOperation) {
-      recordLifecycle(`${lifecycleOperation}-recovery-finished`, {
-        component: lifecycleOperation,
-        pid: process.pid,
-        outcome: result.ok ? 'ready' : 'failed',
-      });
-    }
-    return { ...result, recoveryAttempted };
-  };
-  const beginRecovery = () => {
-    if (recoveryAttempted || !lifecycleOperation) return;
-    recoveryAttempted = true;
-    recordLifecycle(`${lifecycleOperation}-recovery-started`, {
-      component: lifecycleOperation,
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
-    });
-  };
   ensureState();
-  const owner = await resolveOwner(PUBLIC_SHIM_PORT);
-  if (owner.state === 'foreign-install') {
-    return { ok: false, reason: `PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot})` };
-  }
-  if (owner.state === 'unknown') {
-    if (await shimReady()) return finishRecovery({ ok: true, started: [] });
-    const operation = lifecycleOperation || 'start';
-    recordLifecycle(`${operation}-owner-unknown`, {
-      component: operation,
-      pid: process.pid,
-      outcome: 'owner-unknown',
-    });
-    return { ok: false, reason: unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT) };
-  }
-  const portOwner = owner.pid;
-  const started = [];
-  let waitingForRunningSupervisor = false;
-  const health = await fetchShimHealth();
-  const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
-  if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
-  if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
-    beginRecovery();
-    const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
-    if (!stopped.ok) return finishRecovery(stopped);
-    reportSiblingSupervisorReplacement(stopped, quiet);
-  } else if (health) {
-    reapOrphans(portOwner);
-  } else if (await portListening(PUBLIC_SHIM_PORT)) {
-    if (preserveRunningSupervisor) {
-      waitingForRunningSupervisor = true;
-    } else {
-      beginRecovery();
-      const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
-      if (!stopped.ok) return finishRecovery(stopped);
-      reportSiblingSupervisorReplacement(stopped, quiet);
-    }
-  } else {
-    reapOrphans(null);
-  }
-  if (!(await shimReady()) && !waitingForRunningSupervisor) {
-    beginRecovery();
-    try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-    spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
-    started.push('shim');
-  }
-  const startupWaitMs = startupWaitMsFor(quiet);
-  const readiness = await waitForStartupReadiness({ timeout: startupWaitMs });
-  if (readiness.ok) {
-    if (!quiet && started.length) log(`started: ${started.join(', ')}`);
-    await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
-    return finishRecovery({ ok: true, started });
-  }
-  if (!readiness.timedOut) return finishRecovery({ ok: false, reason: readiness.reason });
-  return finishRecovery({
-    ok: false,
-    reason: `not healthy after ${Math.ceil(startupWaitMs / 1000)}s (check logs in ${LOGS})`,
-    started,
-    waitCutShort: quiet,
-  });
-}
-
-async function fetchShimHealth() {
-  try {
-    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 2000 });
-    return JSON.parse(r.body.toString());
-  } catch { return null; }
+  const context = {
+    quiet, lifecycleOperation, recordLifecycle, reapOrphans, stopSupervisor, spawnSupervisor, supervisorAlive, awaitReadiness, refreshCatalog, report,
+    preserveRunningSupervisor, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
+  };
+  const shim = await readSettledShimState(() => probeShim({ resolveOwner, fetchHealth }), context);
+  return shimStartPlan(shim, preserveRunningSupervisor)(shim, context);
 }
 
 function unknownServingCompatibility(reason) {
@@ -785,10 +791,6 @@ async function requestServingCompatibility({ action = 'probe', expectedSuperviso
   }
 }
 
-function servingShimVersion(health) {
-  return health?.supervisorVersion || health?.version || null;
-}
-
 function shimNeedsRestart(installedVersion, health) {
   if (health?.proxyRecovery !== true) return true;
   const running = parseSemver(servingShimVersion(health));
@@ -829,66 +831,166 @@ async function resolveIntendedMode() {
   return { mode: compat.hostsDetected && compat.port80Bound ? 'compat' : 'default', compat };
 }
 
-async function statusReport({ readiness = null } = {}) {
-  const codex = readiness || await getCodexReadiness();
-  const { checks, health } = codex;
-  log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
-  if (checks.shimRunning) {
-    log(`models advertised to Claude Code: ${health?.models ?? 'unavailable'}`);
-    log(health?.proxyRecovery
-      ? 'proxy recovery: shim supervisor probes /v1/models and restarts an unavailable proxy with bounded backoff'
-      : 'proxy recovery: unavailable until the shim supervisor is refreshed');
-  }
-  log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
-  const owner = await resolvePortOwner(PUBLIC_SHIM_PORT).catch(() => ({ state: 'unknown', pid: null }));
+// The shim serves these while its proxy is unreachable but never persists them as the discovery cache.
+const STAND_IN_CATALOG_NOTES = {
+  fallback: 'fallback catalog (proxy unreachable)',
+  'models.json': 'models.json catalog (proxy unreachable)',
+};
+
+function reportAdvertisedModels(health) {
+  const standIn = STAND_IN_CATALOG_NOTES[health?.catalog];
+  const catalogNote = standIn ? '; ' + standIn : '';
+  log(`models advertised to Claude Code: ${health?.models ?? 'unavailable'}${catalogNote}`);
+  log(health?.proxyRecovery
+    ? 'proxy recovery: shim supervisor probes /v1/models and restarts an unavailable proxy with bounded backoff'
+    : 'proxy recovery: unavailable until the shim supervisor is refreshed');
+}
+
+function reportShimState(shim) {
+  const { owner } = shim;
+  log(describeShimState(shim));
   if (owner.state === 'foreign-install') log(`shim supervisor conflict: PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot || 'unknown'}).`);
   if (owner.identity === 'pid-record') log(`shim supervisor ownership: PID ${owner.pid} matches its recorded start time, but its command line is unavailable. It may be elevated; stop or setup must run from a session with the same privileges.`);
   if (owner.reason === 'unreadable-command') log(`shim supervisor ownership: ${unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT)}.`);
-  const compat = health?.compat;
-  if (compat?.hostsDetected) {
-    log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
-    log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
-    log('  Remote Control transport: this reports local HTTP listener status only, not end-to-end Remote Control.');
-  } else if (compat) {
+}
+
+function reportCompatibilityListener(compat) {
+  if (!compat) return;
+  if (!compat.hostsDetected) {
     log('RC-compatibility hosts entry: not present (default gateway mode)');
+    return;
   }
+  log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
+  log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
+  log('  Remote Control transport: this reports local HTTP listener status only, not end-to-end Remote Control.');
+}
+
+async function statusReport({ readiness = null, probeShim = probeShimState } = {}) {
+  const codex = readiness || await getCodexReadiness();
+  const { checks, health } = codex;
+  log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
+  if (checks.shimRunning) reportAdvertisedModels(health);
+  reportShimState(await probeShim({ fetchHealth: async () => health }));
+  reportCompatibilityListener(health?.compat);
   log(`Codex readiness: ${codex.state}`);
   if (!codex.ready) log(codex.message);
+  reportContextWindows();
   return { ok: codex.ready, health, readiness: codex };
+}
+
+function reportContextWindows() {
+  for (const line of contextWindowReport(readContextWindowSettings(), configuredAutoCompactWindow())) {
+    log(`context window ${line}`);
+  }
+}
+
+// autoCompactWindow is Claude Code's only per-project window knob, so a Claude cap needs project-scoped wiring;
+// written at user scope it would cap every project and every model.
+function applyClaudeWindowChange(previous, next) {
+  if (previous === next) return;
+  const wirings = registeredProjectWirings();
+  if (next !== 'full' && wirings.length === 0) {
+    die('a Claude context window cap is written as autoCompactWindow into each project-wired .claude/settings.local.json, and no project is wired to the gateway at project scope. Run /model-gateway:model-gateway, then use its env --write-project command inside the project first; nothing was saved.', 2);
+  }
+  reportClaudeWindowSync(syncClaudeContextWindow(wirings.map((wiring) => wiring.file), { owned: previous, next }));
+}
+
+function reportClaudeWindowSync(result) {
+  for (const changed of result.changed) log(`updated autoCompactWindow in ${changed.file}`);
+  for (const skipped of result.skipped) log(`skipped ${skipped.file}: ${skipped.reason}`);
+}
+
+// A project wired after the Claude cap was saved gets it at the next refresh, the same way pins reach it.
+// Skips are not reported here: this runs at every session start, and the context-window command already named them.
+function refreshRegisteredClaudeWindow() {
+  const claude = readContextWindowSettings().claude.value;
+  if (claude === 'full') return;
+  const files = registeredProjectWirings().map((wiring) => wiring.file);
+  for (const changed of syncClaudeContextWindow(files, { owned: claude, next: claude }).changed) log(`updated autoCompactWindow in ${changed.file}`);
+}
+
+function contextWindowCommand() {
+  if (!args.length) {
+    reportContextWindows();
+    return;
+  }
+  const current = readContextWindowSettings();
+  const saved = savedContextWindows(current);
+  for (let index = 0; index < args.length; index += 2) {
+    const update = contextWindowUpdate(args[index], args[index + 1]);
+    if (update.error) die(update.error, 2);
+    saveContextWindowUpdate(saved, update);
+  }
+  applyClaudeWindowChange(current.claude.value, saved.claude || 'full');
+  writeContextWindowSettings(saved);
+  log(`saved context windows to ${CONTEXT_WINDOW_PATH}`);
+  reportContextWindows();
+  log('The running gateway serves new Codex and Grok windows after it restarts (stop, then ensure). Restart open Claude Code sessions to pick up a Claude change.');
 }
 
 // -------------------------------------------------------------- env wiring
 
+function reportRegisteredPinSync(result) {
+  for (const wiring of result.changed) log(`updated gateway pins in ${wiring.file}`);
+  for (const wiring of result.skipped) {
+    const detail = wiring.key ? `${wiring.key}=${wiring.value}` : wiring.reason;
+    log(`skipped ${wiring.file}: ${detail} (${wiring.reason})`);
+  }
+  for (const pruned of result.pruned) log(`pruned registered project ${pruned.project}: ${pruned.reason}`);
+}
+
+function refreshRegisteredProjectPins(ownedPins) {
+  return reportRegisteredPinSync(syncRegisteredProjectPins({ ownedPins }));
+}
+
+// Syncs on every refresh, not only when this refresh moved a pin: a release that bumps the
+// shipped default moves the effective pin between plugin versions, and no single refresh sees it.
+// The sync writes nothing when every registered project already agrees.
+async function refreshDetectedPinsAndWiring(options = {}) {
+  const ownedPins = ownedPinValues();
+  await refreshDetectedPins(options);
+  refreshRegisteredProjectPins(ownedPins);
+  refreshRegisteredClaudeWindow();
+}
+
+function reportEffectivePins(label = '', suffix = '') {
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
+  }
+}
+
+function updatePinOverride(overrides, option, value) {
+  const alias = option && option.startsWith('--') ? option.slice(2) : null;
+  if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
+    die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
+  }
+  if (value === 'default') {
+    delete overrides[alias];
+    return;
+  }
+  if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
+  overrides[alias] = value;
+}
+
 function pinCommand() {
   if (args.length === 0) {
-    for (const [alias, pin] of Object.entries(effectivePins())) {
-      log(`${alias}: ${pin.value} (${pinProvenance(pin)})`);
-    }
+    reportEffectivePins();
     return;
   }
 
+  const ownedPins = ownedPinValues();
   const overrides = readPinOverrides();
   for (let index = 0; index < args.length; index += 2) {
-    const option = args[index];
-    const alias = option && option.startsWith('--') ? option.slice(2) : null;
-    const value = args[index + 1];
-    if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
-      die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
-    }
-    if (value === 'default') {
-      delete overrides[alias];
-      continue;
-    }
-    if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
-    overrides[alias] = value;
+    updatePinOverride(overrides, args[index], args[index + 1]);
   }
   writePinOverrides(overrides);
+  refreshRegisteredProjectPins(ownedPins);
   log(`saved Claude alias pins to ${PIN_OVERRIDE_PATH}`);
-  log('Rewire this project with env --write-project, then start a new Claude Code session for the change to apply.');
+  log('Applied the pin change to registered wired projects. Restart open Claude Code sessions to pick it up.');
 }
 
 async function syncGatewayWiring() {
-  await refreshDetectedPins();
+  await refreshDetectedPinsAndWiring();
   const current = wiredMode();
   if (!current?.scope) return;
   const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
@@ -896,6 +998,50 @@ async function syncGatewayWiring() {
   if (Object.entries(expected).some(([key, value]) => env[key] !== value)) {
     writeEnv(current.scope, false, { mode: current.mode, quiet: true });
   }
+}
+
+// Turning the gateway off for Remote Control removes only ANTHROPIC_BASE_URL and
+// keeps the other gateway keys, pins included. syncGatewayWiring never runs for
+// that project again, so without this each alias stayed on the model it meant
+// the day the gateway was turned off, and /model never offered a newer one.
+// Only a file with no ANTHROPIC_BASE_URL that still carries the gateway's
+// discovery flag is touched, and only pins holding a value this plugin wrote.
+// A file naming any base URL belongs to syncGatewayWiring or to someone else.
+async function syncUnwiredPins() {
+  for (const scope of ['project', 'user']) await syncUnwiredPinsIn(settingsPath(scope));
+}
+
+function readSettingsIfPresent(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function isUnwiredGatewayEnv(env) {
+  return Boolean(env)
+    && env.ANTHROPIC_BASE_URL === undefined
+    && env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === STATIC_ENV_BLOCK.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
+    && Object.values(PIN_ALIASES).some((key) => typeof env[key] === 'string');
+}
+
+function readUnwiredGatewaySettings(file) {
+  const settings = readSettingsIfPresent(file);
+  return isUnwiredGatewayEnv(settings?.env) ? settings : null;
+}
+
+function writePinUpdates(file, settings, updates) {
+  if (!updates.length) return;
+  for (const { key, to } of updates) settings.env[key] = to;
+  writeSettings(file, settings);
+  const changes = updates.map(({ key, from, to }) => `${key} ${from} -> ${to}`).join(', ');
+  log(`model-gateway: updated stale Claude alias pins in ${file} (${changes}). Start a new Claude Code session to use them.`);
+}
+
+async function syncUnwiredPinsIn(file) {
+  if (!readUnwiredGatewaySettings(file)) return;
+  await refreshDetectedPinsAndWiring();
+  // The alias probes take seconds and anything may write this file meanwhile,
+  // so decide and write from what is on disk after them, not the first read.
+  const settings = readUnwiredGatewaySettings(file);
+  if (settings) writePinUpdates(file, settings, stalePinUpdates(settings.env));
 }
 
 async function envCommand() {
@@ -917,13 +1063,13 @@ async function envCommand() {
     log('\nor use /model-gateway:model-gateway to run its env --write-project command');
     log('\nProject wiring is the default: this local block keeps this project and its executor worktrees routed after restart.');
     log('Use env --write-user only when you deliberately want the same fallback URL in every project.');
-    log('RC-compatibility mode is opt-in once you add the hosts entry yourself; it configures compatibility transport, not verified end-to-end Remote Control.');
+    log('RC-compatibility mode is opt-in: run remote-control enable, then re-run with --confirm to let it back up and write the hosts entry for you. It configures compatibility transport, not verified end-to-end Remote Control.');
     return;
   }
 
   const scope = writeUser ? 'user' : 'project';
   recordProjectWiring();
-  if (!remove) await refreshDetectedPins({ force: true });
+  if (!remove) await refreshDetectedPinsAndWiring({ force: true });
   writeEnv(scope, remove, { mode: remove ? 'default' : (await resolveIntendedMode()).mode });
   retireWiringModeConfig();
   if (remove || !writeUser) return;
@@ -1054,7 +1200,7 @@ function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
   if (!policy) return null;
   const clientWindow = pickerId.endsWith('[1m]') ? 1000000 : CODEX_UNKNOWN_MODEL_WINDOW;
   const autoCompact = configuredAutoCompactWindow();
-  const sentryPolicy = effectiveCodexSentryPolicy(policy);
+  const sentryPolicy = effectiveSentryPolicy(policy);
   return {
     backend: policy.backend,
     backendId: policy.backend === 'anthropic' ? id.replace(/\[1m\]$/, '') : policy.backendId,
@@ -1062,7 +1208,7 @@ function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
     backendWindow: policy.backendWindow,
     advertisedWindow: gatewayAdvertisedWindow(id),
     clientWindow,
-    clientCompactPoint: Math.min(autoCompact?.window ?? clientWindow, clientWindow) - 33000,
+    clientCompactPoint: 'unverified (native engine headroom)',
     sentry: policy.sentry,
     sentryTrigger: sentryPolicy ? `${sentryPolicy.compactTrigger} (${sentryPolicy.source})` : 'none',
     evidenceDate: evidenceDate(policy.measurement),
@@ -1143,6 +1289,16 @@ async function reportLiveShimModelPolicy() {
   return false;
 }
 
+function reportRegisteredProjectPinDisagreements() {
+  const result = registeredProjectPinDisagreements();
+  for (const pruned of result.pruned) log(`pruned registered project ${pruned.project}: ${pruned.reason}`);
+  for (const disagreement of result.disagreements) {
+    const staleValue = disagreement.staleValue === undefined ? 'missing' : disagreement.staleValue;
+    console.error(`model-gateway: ERROR: registered project pin disagrees in ${disagreement.file}: ${disagreement.key}=${staleValue} (expected ${disagreement.expectedValue}).`);
+  }
+  return result.disagreements.length > 0;
+}
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
@@ -1176,16 +1332,15 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   }
   log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
   if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
-    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${STABLE_COMMAND_PATH}" ensure to replace the stale supervisor.`);
+    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${resolveStableCommandPath()}" ensure to replace the stale supervisor.`);
   }
   const catalog = readCatalog();
   log(catalog && Array.isArray(catalog.models)
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
-  for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`Claude ${alias} pin: ${pin.value} (${pinProvenance(pin)})`);
-  }
+  reportEffectivePins('Claude ', ' pin');
+  if (reportRegisteredProjectPinDisagreements()) process.exitCode = 1;
   await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
@@ -1278,7 +1433,7 @@ function displayName(id, backend = 'codex') {
 const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
+  'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
@@ -1563,6 +1718,13 @@ function providerCatalogReadiness(provider, readiness) {
   return unavailableProviderReadiness(provider);
 }
 
+function catalogContextWindow(id, provider) {
+  const contextWindow = gatewayAdvertisedWindow(id);
+  if (!contextWindow) return {};
+  const contextWindowNote = gatewayWindowNote(provider, contextWindowCap(provider), contextWindowCompactAt(provider), resolveGatewayModelPolicy(id));
+  return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
+}
+
 function buildCatalog(ids, readiness = null) {
   const used = new Set();
   const models = ids
@@ -1573,6 +1735,7 @@ function buildCatalog(ids, readiness = null) {
       id: gatewayClientModelId(id),
       label: details.label,
       provider: details.provider,
+      ...catalogContextWindow(id, details.provider),
     }));
   const providers = Object.fromEntries(
     [...new Set(models.map((model) => model.provider))].map((provider) => [provider, providerCatalogReadiness(provider, readiness)]),
@@ -1662,7 +1825,13 @@ function discoveryCacheBaseUrl() {
   return baseUrl === DEFAULT_BASE_URL ? DEFAULT_BASE_URL : null;
 }
 
-function writeGatewayDiscoveryCache(models) {
+// An older shim reports no catalog source; its list is written as before.
+function writeGatewayDiscoveryCache(models, catalogSource) {
+  const standIn = STAND_IN_CATALOG_NOTES[catalogSource];
+  if (standIn) {
+    log(`discovery cache: kept; the shim is serving its ${standIn}`);
+    return { state: 'skipped', reason: 'stand-in-catalog', modelCount: 0 };
+  }
   const result = syncGatewayDiscoveryCache({ models, baseUrl: discoveryCacheBaseUrl() });
   if (result.state === 'wrote') log(`discovery cache: wrote ${result.modelCount} models`);
   else if (result.state === 'unchanged') log('discovery cache: unchanged');
@@ -1691,17 +1860,46 @@ async function reportGatewayDiscoveryCache() {
 
 async function writeCatalog() {
   const shimModels = await fetchShimModels();
-  writeGatewayDiscoveryCache(shimModels);
+  writeGatewayDiscoveryCache(shimModels, (await fetchShimHealth())?.catalog);
   const ids = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
-  if (!ids.length) return null;
+  // A zero-model catalog would merge straight back to the stored models with a fresh timestamp, so
+  // publishing it would make a shim that advertises nothing routable look like a successful refresh.
+  // Refusing is right; returning null was not, because every caller read that as "nothing to do".
+  if (!ids.length) throw new Error(`shim advertised ${shimModels.length} model(s), none of them a gateway id`);
   const readiness = await getCodexReadiness();
   const catalog = buildCatalog(ids, readiness);
   mkdirs();
   return writeCatalogFile(CATALOG_PATH, catalog);
 }
 
+// setup --preserve-wiring ends here. The stable updater runs from whatever directory
+// /update-toolshed was started in, and that directory is not consent to route it
+// through the gateway (GH-292). Recorded projects already had their pins synced by
+// refreshDetectedPinsAndWiring, and each wired session reconciles itself at SessionStart.
+// A loaded machine can outlast the startup wait while the new supervisor is alive and finishes on its own schedule
+// (GH-360); failing the update or starting a second supervisor would both be wrong.
+function warnShimStillStarting(result) {
+  log(`model-gateway: warning: shim supervisor ${result.reason}; check \`node "${resolveStableCommandPath()}" status\` in a minute.`);
+}
+
+async function finishUpdateWithoutWiring() {
+  log(`model-gateway: update leaves wiring as recorded and never wires the directory it runs from. To wire a project, run node "${resolveStableCommandPath()}" env --write-project inside it.`);
+  await writeCatalog().catch(() => { /* advisory only; the next ensure retries */ });
+  await statusReport();
+}
+
 function readCatalog() {
   return readJsonFile(CATALOG_PATH);
+}
+
+// "Not answering" was the only reason a refresh ever gave, even when /healthz answered with an error or
+// answered too slowly, which sent people hunting for a dead port that was alive (issue #227).
+async function requireShimHealth() {
+  const where = `/healthz on 127.0.0.1:${SHIM_PORT}`;
+  const response = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 3000 }).catch((error) => {
+    throw new Error(`shim is not answering ${where} (${error.message})`);
+  });
+  if (response.status !== 200) throw new Error(`shim ${where} returned ${response.status}`);
 }
 
 async function catalogCommand() {
@@ -1709,10 +1907,22 @@ async function catalogCommand() {
   const refresh = flag('--refresh');
   let catalog = readCatalog();
   const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
-  if ((refresh || stale) && (await shimHealthy())) {
-    catalog = (await writeCatalog().catch(() => null)) || catalog;
+  let refusal = null;
+  if (refresh || stale) {
+    try {
+      await requireShimHealth();
+      catalog = await writeCatalog();
+    } catch (error) {
+      refusal = error.message;
+    }
   }
-  if (!catalog) die('no catalog available yet (run setup or start first)');
+  if (!catalog) die(`no catalog available yet (${refusal || 'run setup or start first'})`);
+  // A refresh that fell back to the stored catalog used to be indistinguishable from one that
+  // wrote: exit 0, no diagnostic, an unchanged file the caller then discards as stale (issue #227).
+  // stdout stays a machine contract, so the reason goes to stderr, and an explicitly requested
+  // refresh also fails the exit code, which is what sidequest's refresh checks.
+  if (refusal) console.error(`model-gateway: catalog refresh did not write (${refusal}); kept the stored catalog from ${catalog.updatedAt || 'an unknown time'}`);
+  if (refusal && refresh) process.exitCode = 1;
   if (jsonOut) process.stdout.write(JSON.stringify(catalog) + '\n');
   else log(JSON.stringify(catalog, null, 2));
 }
@@ -1881,7 +2091,9 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
-const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
+const {
+  catalogReadiness, effectiveSentryPolicy, getCodexReadiness, hasOpenAiRejectionEvidence, noteCodexUpstreamRejection, runWorker,
+} = require('./request-worker.js');
 function createShimRelay({
   httpClient = http,
   getWorker = () => null,
@@ -2422,8 +2634,8 @@ function runShim() {
     void (async () => {
       const owner = error.code === 'EADDRINUSE' ? await processOwningPortAsync(PUBLIC_SHIM_PORT, { probeChildren }) : null;
       const remedy = owner
-        ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${STABLE_COMMAND_PATH}" stop, then node "${STABLE_COMMAND_PATH}" ensure.`
-        : `run node "${STABLE_COMMAND_PATH}" stop, then node "${STABLE_COMMAND_PATH}" ensure.`;
+        ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`
+        : `run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`;
       const message = `model-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
       try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
       console.error(message);
@@ -2455,9 +2667,9 @@ function sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings }
   const currentProjectFile = path.resolve(settingsPath('project'));
   const siblingWiring = projectWirings.find(({ file }) => path.resolve(file) !== currentProjectFile);
   if (siblingWiring) {
-    return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. A recorded project-local wiring exists at ${siblingWiring.file}; run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
+    return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. A recorded project-local wiring exists at ${siblingWiring.file}; run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
   }
-  return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
+  return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
 }
 
 function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
@@ -2468,7 +2680,7 @@ function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
 }
 
 const commands = {
-  setup: () => setup(),
+  setup: () => setup({ preserveWiring: flag('--preserve-wiring') }),
   login: async () => {
     if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
     const mode = flag('--device') ? 'device' : 'login';
@@ -2525,7 +2737,7 @@ const commands = {
         noticeForUser('model-gateway is still starting; retry the Codex model in a few seconds', { toStderr: true });
         finish(0);
       }
-      noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${STABLE_COMMAND_PATH}" doctor\` to see which part is down.`, { toStderr: true });
+      noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${resolveStableCommandPath()}" doctor\` to see which part is down.`, { toStderr: true });
       finish(1);
     }
     const readiness = await getCodexReadiness();
@@ -2541,13 +2753,14 @@ const commands = {
         effectiveWiring,
         projectWirings: registeredProjectWirings(),
       }));
+      await syncUnwiredPins();
     } else {
       // isWired() accepts a base URL exported by the shell, which is how a machine ends up routed only in the
       // terminal that exported it: background sessions and executor worktrees start unwired, and the only place
       // that said so was a per-request stderr line in the worker.
       const wiring = effectiveWiring;
       if (wiring.source === 'env' && !wiring.shadowed.some((definition) => definition.file)) {
-        noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
+        noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${resolveStableCommandPath()}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
       }
       await syncCompatMode();
       await syncGatewayWiring();
@@ -2563,6 +2776,7 @@ const commands = {
   },
   catalog: () => catalogCommand(),
   pin: () => pinCommand(),
+  'context-window': () => contextWindowCommand(),
   env: () => envCommand(),
   doctor: (options) => doctor(options),
   'remote-control': () => remoteControlCommand(),
@@ -2586,16 +2800,21 @@ module.exports = {
   isWired,
   wiredMode,
   writeEnv,
+  syncUnwiredPins,
+  finishUpdateWithoutWiring,
   migrateLegacyProjectSettings,
   effectiveBaseUrl,
   sessionStartWiringNotice,
   loginSuccessMessage,
   startupWaitMsFor,
   startAll,
+  statusReport,
+  compatibilityPortOwnerIdentifiers,
   requestServingCompatibility,
   syncCompatMode,
   waitForStartupReadiness,
   settingsPath,
+  installScope,
   COMPAT_HOST,
   COMPAT_PORT,
   DEFAULT_BASE_URL,
@@ -2603,6 +2822,7 @@ module.exports = {
   SOCKET_PATH,
   WIRING_CONFIG_PATH,
   parseSemver,
+  processAlive,
   semverLt,
   resolveNewestInstalledCliPath,
   staleSessionReloadNotice,

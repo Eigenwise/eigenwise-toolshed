@@ -19,6 +19,12 @@ const RUNTIME = path.join(__dirname, '..', 'lib', 'runtime.js');
 // deterministic; the override test sets it explicitly in its own child env.
 delete process.env.CODEX_GATEWAY_CONTEXT_WINDOW;
 delete process.env.CODEX_GATEWAY_COMPACT_TRIGGER;
+// In-process requires read the saved context-window setting from the home directory; a machine's own
+// setting must not change what these assertions see.
+const inProcessHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-context-window-'));
+process.env.HOME = inProcessHome;
+process.env.USERPROFILE = inProcessHome;
+test.after(() => fs.rmSync(inProcessHome, { recursive: true, force: true }));
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -174,11 +180,11 @@ test('Codex discovery advertises client 1M aliases and forwards backend base ids
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
   assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-gpt-5.2[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-terra[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-luna[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.2[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-5.6-terra[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-5.6-luna[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 272000 },
   ]);
   assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5[1m]'));
   const { resolveGatewayModelPolicy } = require(RUNTIME);
@@ -201,6 +207,7 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
   for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
     if (policy.backendId === 'default') continue;
     assert.equal(policy.pickerAlias.endsWith('[1m]'), policy.backendWindow > 200000);
+    assert.equal(policy.sentry, policy.backendWindow > 200000 ? 'synthetic-413' : 'none');
   }
   assert.equal(MODEL_WINDOW_POLICY['grok-4.5'].pickerAlias, 'claude-grok-4.5[1m]');
   assert.match(MODEL_WINDOW_POLICY.default.measurement, /^unmeasured/);
@@ -211,34 +218,40 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
   });
   assert.equal(gatewayClientModelId('gpt-5.2'), 'claude-gpt-5.2[1m]');
   assert.equal(resolveGatewayModelPolicy('claude-opus-4-8[1m]').sentry, 'none');
-  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 920000);
+  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 272000);
+  assert.match(resolveGatewayModelPolicy('claude-gpt-6.1-sol-fast[1m]').measurement, /^measured 2026-09-30/);
 });
 
 test('Codex sentry derives a headroom-preserving trigger for each policy row', () => {
-  const { effectiveCodexSentryPolicy } = require(WORKER);
+  const { effectiveSentryPolicy } = require(WORKER);
   const { resolveGatewayModelPolicy } = require(RUNTIME);
   const policy = resolveGatewayModelPolicy('gpt-5.2');
 
-  assert.deepEqual(effectiveCodexSentryPolicy(policy, 320000), {
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000, null), {
     backendWindow: 920000,
     compactTrigger: 320000,
     source: 'env',
   });
-  assert.deepEqual(effectiveCodexSentryPolicy(policy, Number.NaN), {
+  assert.deepEqual(effectiveSentryPolicy(policy, Number.NaN, null), {
     backendWindow: 920000,
     compactTrigger: 880000,
     source: 'derived',
   });
-  assert.deepEqual(effectiveCodexSentryPolicy({
+  assert.deepEqual(effectiveSentryPolicy({
     backend: 'codex',
     backendId: 'gpt-test-300k',
     backendWindow: 300000,
-    sentry: 'codex-synthetic-413',
-  }, 320000), {
+    sentry: 'synthetic-413',
+  }, 320000, null), {
     backendWindow: 300000,
     compactTrigger: 260000,
     source: 'derived',
   });
+  assert.throws(() => effectiveSentryPolicy({
+    backendId: 'gpt-test-40k',
+    backendWindow: 40000,
+    sentry: 'synthetic-413',
+  }), /invalid sentry backend window/);
 });
 
 test('Codex sentry logs a startup policy line for every advertised model row', async (t) => {
@@ -292,7 +305,7 @@ test('Codex sentry logs a startup policy line for every advertised model row', a
       assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none$`));
       continue;
     }
-    assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=\\d+ source=(env|derived)$`));
+    assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=\\d+ source=(env|derived|cap)$`));
   }
 });
 
@@ -472,6 +485,39 @@ test('Codex sentry returns one client-distinguishable context-overflow 413', asy
   assert.equal(forwarded, 1);
 });
 
+test('Grok sentry returns a client-distinguishable context-overflow 413', async (t) => {
+  const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-grok-sentry-'));
+  fs.writeFileSync(path.join(authDirectory, 'auth.json'), JSON.stringify({
+    'https://auth.x.ai::fixture-client': { key: 'fixture-token', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3600000, oidc_client_id: 'fixture-client' },
+  }));
+  let forwarded = 0;
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    req.once('end', () => {
+      forwarded++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'resp_fixture', output: [], usage: { input_tokens: 101 } }));
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => { upstream.close(); fs.rmSync(authDirectory, { recursive: true, force: true }); });
+  const shimPort = await spawnShim(t, 0, {
+    CODEX_GATEWAY_COMPACT_TRIGGER: '100',
+    CODEX_GATEWAY_GROK_ENDPOINT: `http://127.0.0.1:${upstreamPort}/v1/responses`,
+    CODEX_GATEWAY_GROK_HOME: authDirectory,
+  });
+  const grokBody = JSON.stringify({ model: 'claude-grok-4.5[1m]', max_tokens: 1, messages: [{ role: 'user', content: 'test' }] });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders)).status, 200);
+  const overflow = await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders);
+  assert.equal(overflow.status, 413);
+  assert.deepEqual(JSON.parse(overflow.body).error, {
+    type: 'request_too_large',
+    message: 'Prompt is too long for the Grok context window; compact and retry. (101 tokens > 100 tokens)',
+  });
+  assert.equal(forwarded, 1);
+});
+
 test('Codex sentry latch lets compaction through and rearms below its low watermark', async (t) => {
   const usages = [101, 20, 101];
   let forwarded = 0;
@@ -576,7 +622,7 @@ test('genuine no-numbers 413 gets usage numbers appended', async (t) => {
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '369000' });
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '369000', CODEX_GATEWAY_CONTEXT_WINDOW: 'full' });
 
   assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
   const response = await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders);
@@ -655,8 +701,11 @@ test('rewrites Codex authentication failures for streaming and non-streaming req
     assert.equal(response.status, expectedStatus);
     const error = JSON.parse(response.body).error;
     assert.equal(error.type, 'authentication_error');
-    assert.match(error.message, /node "[^"]*[\\/]model-gateway[\\/]model-gateway\.js" login/);
-    assert.doesNotMatch(error.message, /plugins[\\/]cache[\\/]/);
+    // This fixture's HOME never ran SessionStart, so the stable launcher does not exist; the message
+    // must fall back to the CLI's own real path instead of naming a launcher that would fail with
+    // MODULE_NOT_FOUND (issue #77), rather than the previous unconditional stable-launcher reference.
+    assert.match(error.message, new RegExp(`node "${CLI.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}" login`));
+    assert.ok(fs.existsSync(CLI), 'the advised fallback command must exist and run');
     assert.doesNotMatch(error.message, /claude-code-proxy\s+codex\s+auth\s+login/i);
     assert.match(error.message, /API Error: 401 Not authenticated\./);
   }
@@ -967,8 +1016,8 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
 
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.
   assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
@@ -1019,6 +1068,12 @@ function installFakeClaude(home) {
     "  }",
     "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, proxies: { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY, all: process.env.ALL_PROXY }, trafficControls: { nonessential: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, autoUpdater: process.env.DISABLE_AUTOUPDATER, telemetry: process.env.DISABLE_TELEMETRY, errorReporting: process.env.DISABLE_ERROR_REPORTING } }) + '\\n');",
     "  if (alias === 'fable' && attempt <= Number(process.env.FAKE_CLAUDE_FABLE_FAILURES || 0)) return;",
+    "  if (alias === 'opus' && process.env.FAKE_CLAUDE_EDIT_SETTINGS) {",
+    "    const file = process.env.FAKE_CLAUDE_EDIT_SETTINGS;",
+    "    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));",
+    "    const edit = JSON.parse(process.env.FAKE_CLAUDE_EDIT_JSON);",
+    "    fs.writeFileSync(file, JSON.stringify({ ...settings, ...edit, env: { ...settings.env, ...edit.env } }));",
+    "  }",
     "  const printInit = () => console.log(JSON.stringify({ type: 'system', subtype: 'init', model: process.env[`FAKE_CLAUDE_${alias.toUpperCase()}`] || `claude-${alias}-9` }));",
     "  if (process.env.FAKE_CLAUDE_EGRESS === '1' && process.env.HTTPS_PROXY) {",
     "    const proxy = new URL(process.env.HTTPS_PROXY);",
@@ -1063,6 +1118,52 @@ function runPinRefreshes(env) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim().split('\n').map(JSON.parse);
 }
+
+test('pin version comparison handles older, equal, newer, and missing minor versions', () => {
+  const { comparePinVersions } = require(PINS);
+  assert.equal(comparePinVersions('claude-opus-5-4[1m]', 'claude-opus-5-5[1m]'), -1);
+  assert.equal(comparePinVersions('claude-opus-5-5[1m]', 'claude-opus-5-5[1m]'), 0);
+  assert.equal(comparePinVersions('claude-opus-6-0[1m]', 'claude-opus-5-5[1m]'), 1);
+  assert.equal(comparePinVersions('claude-opus-5[1m]', 'claude-opus-5-5[1m]'), -1);
+  assert.equal(comparePinVersions('claude-sonnet-5[1m]', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('claude-opus', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('claude-opus-5-alpha', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('other-opus-5', 'claude-opus-5-5[1m]'), null);
+});
+
+test('a CLI alias that lags the shipped default loses to it, and pins and doctor name the lagging detection', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-project-'));
+  const cliVersion = 'Claude Code 2.1.280';
+  const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
+  const lagLine = 'opus: claude-opus-5-5[1m] (shipped default; this CLI resolves claude-opus-5[1m], which it replaces)';
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify({
+    cliVersion,
+    updatedAt: Date.now(),
+    pins: { opus: 'claude-opus-5[1m]' },
+    detectedFor: { opus: cliVersion },
+  }));
+  const { ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS, ...environment } = process.env;
+  const env = { ...environment, HOME: home, USERPROFILE: home };
+  try {
+    const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
+    assert.equal(pins.status, 0, pins.stderr);
+    assert.match(pins.stdout, new RegExp(lagLine.replace(/[.[\]()\\]/g, '\\$&')));
+
+    const doctor = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], { cwd, env, encoding: 'utf8' });
+    assert.match(doctor.stdout, new RegExp(`Claude ${lagLine.replace(/^opus:/, 'opus pin:')}`.replace(/[.[\]()\\]/g, '\\$&')));
+
+    const set = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
+    assert.equal(set.status, 0, set.stderr);
+    const overridden = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
+    assert.equal(overridden.status, 0, overridden.stderr);
+    assert.match(overridden.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; without it claude-opus-5-5\[1m\]\)/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test('a failed alias does not carry a stale pin into a new Claude CLI version', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-pin-home-'));
@@ -1118,10 +1219,17 @@ function probeClaudeAliasWithEnvironment(t, alias, endpoint, environment) {
   });
 }
 
+// These tests assert proxy egress behaviour, not probe latency, so the probe
+// child gets a generous ceiling instead of the production 5s default
+// (CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS) — a cold node start under a loaded
+// release cut can exceed 5s and return a false null pin (SQ-3086).
+const GENEROUS_PROBE_TIMEOUT_MS = '60000';
+
 function probeRealClaudeFable(t, endpoint, environment) {
   return probeClaudeAliasWithEnvironment(t, 'fable', endpoint, {
     ...environment,
     CODEX_GATEWAY_CLAUDE_BIN: 'claude',
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: GENEROUS_PROBE_TIMEOUT_MS,
   });
 }
 
@@ -1132,6 +1240,7 @@ function fakeProbeEnvironment(home, claude, proxyUrl) {
     USERPROFILE: home,
     FAKE_CLAUDE_LOG: claude.logFile,
     CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: GENEROUS_PROBE_TIMEOUT_MS,
     HTTP_PROXY: proxyUrl,
     HTTPS_PROXY: proxyUrl,
     ALL_PROXY: proxyUrl,
@@ -1221,6 +1330,149 @@ test('the proxy observer catches fake Claude egress', async (t) => {
   }
 });
 
+function runSyncUnwiredPins(cwd, env) {
+  const script = `require(${JSON.stringify(COMMANDS)}).syncUnwiredPins().catch((error) => { console.error(error.stack); process.exitCode = 1; });`;
+  const result = spawnGatewayProcessSync(process.execPath, ['-e', script], { cwd, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return result;
+}
+
+test('a project with the gateway turned off keeps its pins current across Claude releases', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unwired-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unwired-project-'));
+  const claude = installFakeClaude(home);
+  const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+  const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  // What "turn the gateway off for this project" leaves behind: every gateway
+  // key except ANTHROPIC_BASE_URL. Fable holds a value the plugin never writes,
+  // and the Sonnet pin was deleted by hand.
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    env: {
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-4-2[1m]',
+      USER_SETTING: 'keep-me',
+    },
+  }));
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    CODEX_GATEWAY_PIN_CACHE_TTL_MS: '1',
+  };
+  try {
+    const first = runSyncUnwiredPins(cwd, env);
+    let settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env;
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-9[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined);
+    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-4-2[1m]');
+    assert.equal(settings.USER_SETTING, 'keep-me');
+    assert.equal(settings.ANTHROPIC_BASE_URL, undefined);
+    assert.match(first.stdout, /ANTHROPIC_DEFAULT_OPUS_MODEL claude-opus-5\[1m\] -> claude-opus-9\[1m\]/);
+
+    // The next release. claude-opus-9[1m] came from this plugin's own probe, so
+    // it is still recognised as ours after claude-opus-10 replaces it.
+    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_OPUS: 'claude-opus-10' });
+    settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env;
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-10[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-4-2[1m]');
+    assert.deepEqual(JSON.parse(fs.readFileSync(cachePath, 'utf8')).retired.opus, ['claude-opus-9[1m]']);
+
+    const unchanged = fs.readFileSync(settingsFile, 'utf8');
+    const repeat = runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_OPUS: 'claude-opus-10' });
+    assert.equal(fs.readFileSync(settingsFile, 'utf8'), unchanged);
+    assert.doesNotMatch(repeat.stdout, /updated stale/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+function unwiredPinProject(prefix) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-home-`));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-project-`));
+  const claude = installFakeClaude(home);
+  const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    env: { CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]' },
+  }));
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    FAKE_CLAUDE_EDIT_SETTINGS: settingsFile,
+  };
+  const cleanup = () => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  };
+  return { cwd, env, settingsFile, cleanup };
+}
+
+// The alias probes run between deciding to sync and writing, so a write made
+// by anything else in that window has to survive the sync.
+test('unwired pin sync keeps a settings edit made while the alias probes run', () => {
+  const { cwd, env, settingsFile, cleanup } = unwiredPinProject('model-gateway-unwired-race');
+  try {
+    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_EDIT_JSON: JSON.stringify({ permissions: { allow: ['Bash(ls)'] } }) });
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] });
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-9[1m]');
+  } finally {
+    cleanup();
+  }
+});
+
+test('unwired pin sync leaves a file that was wired while the alias probes ran', () => {
+  const { cwd, env, settingsFile, cleanup } = unwiredPinProject('model-gateway-unwired-rewired');
+  try {
+    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_EDIT_JSON: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' } }) });
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]', 'a wired file is syncGatewayWiring\'s to update');
+  } finally {
+    cleanup();
+  }
+});
+
+test('pin sync leaves foreign and still-wired settings untouched', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-project-'));
+  const claude = installFakeClaude(home);
+  const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const original = JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]' } });
+  fs.writeFileSync(settingsFile, original);
+  // A file that names a base URL is wired (syncGatewayWiring's job) or routed
+  // somewhere else; either way this path must not rewrite it.
+  const userFile = path.join(home, '.claude', 'settings.json');
+  const wired = JSON.stringify({
+    env: {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764',
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+    },
+  });
+  fs.mkdirSync(path.dirname(userFile), { recursive: true });
+  fs.writeFileSync(userFile, wired);
+  const env = { ...process.env, HOME: home, USERPROFILE: home, FAKE_CLAUDE_LOG: claude.logFile, CODEX_GATEWAY_CLAUDE_BIN: claude.command };
+  try {
+    runSyncUnwiredPins(cwd, env);
+    assert.equal(fs.readFileSync(settingsFile, 'utf8'), original);
+    assert.equal(fs.readFileSync(userFile, 'utf8'), wired);
+    assert.equal(fs.existsSync(claude.logFile), false, 'no alias probe runs for a file this path does not own');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('Claude pin overrides persist outside the plugin and are applied by rewiring', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-pins-home-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-pins-project-'));
@@ -1275,8 +1527,8 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
-    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
-    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
     assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json')), false);
 
@@ -1286,7 +1538,7 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     assert.equal(rewired.status, 0, rewired.stderr);
     const afterOverride = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(afterOverride.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
-    assert.equal(afterOverride.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+    assert.equal(afterOverride.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -1355,13 +1607,13 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
     // anything measured against the user's CLI. Doctor used to print it as a bare "(default)", which is
     // what made a stale guess look identical to a probed pin.
-    assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
+    assert.match(result.stdout, /Claude opus pin: claude-opus-5-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
     assert.match(result.stdout, /project settings\.local\.json: not wired .*\[default write target\]/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
   } finally {
@@ -1403,8 +1655,10 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       encoding: 'utf8',
     });
     assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; native window 325000; exact compaction trigger unverified \(native engine headroom applies\)/);
+    assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -1431,7 +1685,7 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| unverified \(native engine headroom\) \| synthetic-413 \| 115000 \(cap\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -1485,6 +1739,8 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
     assert.equal(shown.status, 0, shown.stderr);
     assert.match(shown.stdout, /Project wiring is the default/);
     assert.match(shown.stdout, /env --write-project/);
+    assert.match(shown.stdout, /remote-control enable.*--confirm.*back up and write the hosts entry for you/);
+    assert.doesNotMatch(shown.stdout, /once you add the hosts entry yourself/);
     assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
     const retired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
@@ -1504,7 +1760,7 @@ test('SessionStart nudges hand off gateway actions to the runnable skill', () =>
   const commandsSource = fs.readFileSync(COMMANDS, 'utf8');
   const runtimeSource = fs.readFileSync(RUNTIME, 'utf8');
   assert.match(commandsSource, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
-  assert.match(commandsSource, /codexReadinessMessage\(state\)/);
+  assert.match(fs.readFileSync(path.join(path.dirname(COMMANDS), 'request-worker.js'), 'utf8'), /codexReadinessMessage\(state, undefined, upstreamBlocked \|\| upstreamUnavailable\)/);
   assert.match(runtimeSource, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
   assert.doesNotMatch(commandsSource, /(?:Run|run):? env --/);
 });

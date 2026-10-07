@@ -25,6 +25,21 @@ export interface WorktreeCreationBindingFailure {
   suppliedWorktree?: string;
   recordedWorktree?: string;
   crossProject?: boolean;
+  ownerRef?: string;
+  ownerClaimHolder?: string;
+  ownerAgentId?: string;
+  checkoutAgentId?: string;
+}
+
+// Every field is filled by the one builder that produces this, so the message below interpolates them
+// directly: a `||` placeholder for a field that is always set is an unreachable branch, and the only thing
+// it ever changes is the complexity of the function carrying it.
+export interface CrossedWorktreeBinding {
+  ref: string;
+  claimHolder: string;
+  boundWorktree: string;
+  actualWorktree: string;
+  owner: { ref: string; claimHolder: string; worktree: string };
 }
 
 function abbreviatedSessionId(value?: string): string {
@@ -84,9 +99,9 @@ export const CLAIM_REFUSAL_MESSAGES: Readonly<Record<string, RefusalMessage>> = 
   not_owner: (ref, claim) => `${ref} is owned by "${refusalOwner(claim)}" rather than you. ${notOwnerRecovery(ref, claim)}`,
   busy: (ref) => `${ref} is temporarily locked by another claim attempt. Retry \`sidequest claim ${ref}\` in a moment.`,
   empty: () => 'No tickets are available on this board. Run `sidequest ready` to inspect the queue.',
-  submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
+  submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${ref}\` -> submittedBy, not a reviewer), then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
   dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\` (MCP \`direct:true\` with \`reason\`).`,
-  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: if it reports prepared or launched with no bound runtime identity, claim, or checkpoint, or stalled because a bound runtime never claimed past the claim-idle backstop, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
+  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: from the session that prepared the dispatch with the host's failure report in hand, or once pulse reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
   prepared_compatibility_stale: (ref) => `${ref}'s prepared Sidequest runtime/version snapshot no longer matches the installed MCP and hooks configuration, so the token-file refusal already retired that dispatch attempt. Stop without claiming. The orchestrator can dispatch ${ref} again for a fresh token file.`,
   unbound_dispatch: (ref) => `${ref} could not bind this executor runtime to its isolated dispatch. Claim it with the dispatched token file and exact executor from its briefing; the token file binds the claiming runtime. If that claim still fails, comment the refusal evidence and release ${ref} with kind \`technical_blocker\` so the orchestrator can redispatch it. Do not hand a command to the user.`,
   executor_mismatch: (ref, ticket, projectPath) => `${ref} has a prepared dispatch for a different executor. A token-file-valid claim from the currently-derived executor self-heals version skew, so re-run the claim from its briefing with that token file. ${dispatchedClaimGuidance(ref, ticket, projectPath)}`,
@@ -107,13 +122,57 @@ export function claimRefusalMessage(reason: string, ref: string, claim: ClaimCon
 const WORKTREE_CREATION_REFUSALS: Readonly<Record<string, (repository: string, failure?: WorktreeCreationBindingFailure) => string>> = Object.freeze({
   project_unavailable: (repository) => `${repository} is not a registered Sidequest board, so this session cannot create a dispatch worktree in it. Register the project, or dispatch with sharedTree:true.`,
   dispatch_binding_unavailable: (_repository, failure) => worktreeBindingComparison(failure),
+  stale_attempt: () => 'A retired dispatch attempt holds this checkout, or this call presented a generation the live attempt does not have. The start binding is scoped to the session and the checkout rather than to a generation, so this refusal is how a late hook finds out a replacement owns the checkout now; nothing was stamped and the live attempt was left untouched. Run `sidequest pulse <ref>` to see which attempt owns it.',
+  missing_attempt: () => 'This checkout is already bound to an attempt whose WorktreeCreate has not finished creating it, so its own hook already holds the attempt generation. A second start binding with no generation is a racing hook, not the owner, and would have acquired that live generation; nothing was stamped. Wait for the owning hook, or retire the attempt with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` once it is past its deadline.',
   dispatch_launch_unrecorded: (repository) => `The board for ${repository} holds a prepared dispatch for this session but no recorded launch, so no launched attempt exists to reserve this checkout, and a prepared attempt never supplies creation authority. Run \`sidequest pulse <ref>\`, then \`sidequest dispatch <ref> --recovery-evidence "WorktreeCreate refused: the dispatch launch was never recorded"\`.`,
   baseline_unavailable: () => 'The launched dispatch recorded no base commit, so its worktree has no revision to check out. Re-dispatch the ticket for a fresh baseline.',
+  checkout_owned_by_live_claim: (_repository, failure) => occupiedCheckoutRefusal(failure),
 });
+
+// The board knows who holds the checkout; what it does NOT always know is who is arriving. A linked checkout
+// is usually named agent-<agentId>, but WorktreeCreate accepts any single path segment, so the name can carry
+// no agent id at all. Saying "it is not that owner re-entering" in that case asserts something the board never
+// read; it can only report that the name told it nothing.
+function occupiedCheckoutRefusal(failure?: WorktreeCreationBindingFailure): string {
+  const ownerAgent = failure?.ownerAgentId
+    ? `and its agent \`${failure.ownerAgentId}\` is bound to it`
+    : 'and it has bound no agent id yet';
+  const arrival = failure?.checkoutAgentId
+    ? `this creation names agent \`${failure.checkoutAgentId}\`, so it is not that owner re-entering its own checkout`
+    : 'the board could not read an agent id from this checkout\'s name, so it cannot confirm this creation as that owner re-entering';
+  return `${failure?.ownerRef} holds this checkout under a live claim by "${failure?.ownerClaimHolder}" ${ownerAgent}, and ${arrival}.`
+    + ' A second executor in an occupied checkout crosses both records and every completion gate then reads the other one\'s tree, so nothing was bound.'
+    + ' Let that claim reach a terminal state, or dispatch this ticket with its own worktree.';
+}
 
 export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
   return `worktree lease refused creation: ${reason || 'dispatch binding is incomplete'}${guidance ? `. ${guidance(repository, failure)}` : ''}`;
+}
+
+// One message for every gate that can see both facts, so an executor standing in a checkout its dispatch is not
+// bound to reads the same diagnosis from commit, submit and verify-capture. Naming the other live claim is the
+// point: without it the refusal reads as "run it from the bound worktree", which is impossible when another
+// executor owns that tree, and the gates downstream answer with that executor's working state instead (GH-235).
+//
+// The remedy has to be one that exists, and each half of it has to work as printed. Live-claim recovery
+// (`recoverLiveClaimDispatch`, reached through `dispatch` with `claimHolder`) moves a crossed binding to the
+// checkout the executor names. Two claims launched together that hold exactly each other's WorktreeCreate
+// checkouts, with neither carrying another ticket's commits, are swapped onto their own checkouts at once
+// (SQ-84, GitHub #298). Outside that exact crossing, `liveClaimRebindDecision` refuses the rebind while another
+// live ticket leases the checkout and its HEAD is not this claim's own commit, or while it carries another
+// ticket's commits (SQ-75), so the rebind is prepared by pinning the executor's own commit as HEAD first. The
+// fallback is real: with no exact crossing to swap and nothing to pin, the sibling's lease wins and the rebind is
+// refused. It is the same handback release #299's rebind refusal prescribes, and it names `--by` and `-s todo` because the CLI's own
+// identity falls back to the environment or host name, and a release without a status leaves the ticket `doing`
+// with no claim.
+export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWorktreeBinding): string {
+  return `${gate}: refused ${crossing.ref}; its dispatch is bound to worktree ${crossing.boundWorktree}, but this call ran from ${crossing.actualWorktree}, and ${crossing.owner.ref} holds ${crossing.owner.worktree} under a live claim by "${crossing.owner.claimHolder}".`
+    + ` One of these checkouts is recorded to another live executor, so this is a crossed worktree binding, not a caller mistake: do not enter the bound tree, and do not expect it to hold this ticket's work - anything the board diffs there reports ${crossing.owner.ref}'s state, test names included.`
+    + ` Remedy: ask the orchestrator to rebind this live claim to the checkout you run in: MCP \`dispatch\` with \`ref:"${crossing.ref}"\`, \`claimHolder:"${crossing.claimHolder}"\`, \`worktree:"${crossing.actualWorktree}"\` and \`recoveryEvidence\` quoting this refusal. When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, that rebind swaps the two records onto their own checkouts at once. Otherwise commit your work there with git first, pin that commit (\`git update-ref refs/sidequest/${crossing.ref} <hash>\`) so the checkout's HEAD is this claim's own commit, and comment the hash as the crossing evidence before asking for the rebind.`
+    + ' The board refuses that rebind while another live ticket leases the checkout, its HEAD is not this claim\'s own commit, and the pair is not an exact crossing, or while the checkout carries another ticket\'s commits.'
+    + ` Fallback, when there is no exact crossing to swap and no commit to pin, or the rebind is refused: release this ticket with kind \`handback\`, quoting this refusal: \`sidequest release ${crossing.ref} --by "${crossing.claimHolder}" -s todo --release-kind handback --reason "crossed worktree binding: <this refusal>"\` (MCP \`release\` with \`kind:"handback"\`, \`status:"todo"\` and the same reason).`
+    + ' The orchestrator then redispatches it onto a checkout of its own and salvages any commit by hash.';
 }
 
 export function routingDisabledMessage(ref: string): string {
@@ -136,13 +195,85 @@ export function candidateReviewRequiredGuidance(): string {
     + ' Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.';
 }
 
+// apply delivery materializes the candidate into the integration working tree on
+// purpose, so the head it records holds none of the delivered bytes. Everything that
+// reads delivered content from that record — per-path supersession lineage above all
+// — would be answering from the pre-delivery tree, so the record stays incomplete
+// until the exact materialized tree is committed on the recorded target and bound
+// through the same verified delivery authority (SQ-2978).
+export function applyDeliveryContentCommitGuidance(ref: string): string {
+  return `${ref} was delivered with mode apply, which leaves the materialized tree uncommitted, so its recorded head contains none of the delivered content.`
+    + ` Commit that exact tree on its recorded integration branch without changing it, then bind it with \`groomClose ${ref}\` passing deliveryCommit (CLI \`--delivery-commit\`) and the same delivery evidence.`
+    + ' That re-runs the merged-tree verifier, checks the committed tree still matches the reviewed candidate on every submitted path, and records it as the delivered content that supersession lineage reads.'
+    + ' A refused binding, a failing verifier included, leaves the recorded delivery exactly as delivered, so bind the same commit again once the cause is fixed.'
+    + ' Do not claim unchanged paths as reviewedReplacements, hand-edit the recorded delivery, or offer an unrelated later head as proof: a commit whose tree differs from the candidate on any submitted path is refused.';
+}
+
+// GH-295, GH-341: an executor that released as technical_blocker or handback leaves no submission, so integrate, done and submit
+// all refuse work the orchestrator then landed by hand, and none of them said which closure still works.
+export function landedWithoutSubmissionGuidance(ref: string): string {
+  return `When the work already landed outside the executor's submit (it released, for example as technical_blocker or handback, and you committed or cherry-picked it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch; for a cherry-pick, pass the cherry-picked commit, not the executor's original.`;
+}
+
+// Why one overlapping submission was not admitted as inherited rejected ancestry.
+// A repair whose history descends from an oracle-rejected candidate keeps the FULL
+// range: review, replay/apply/merge delivery, and per-path supersession lineage all
+// read the submitted commits and changed paths, so moving the base past the
+// inherited commits would silently drop the bytes those authorities exist to see.
+// Only the duplicate classification is narrowed, and only on proof the board wrote
+// itself, so each refusal names the missing half instead of hinting at a base
+// override that would shorten the range (SQ-2972).
+const INHERITED_REJECTED_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
+  not_related: 'that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate.',
+  source_unavailable: 'that ticket or its submission could not be read, so no inherited boundary can be proven.',
+  source_active: 'that ticket still holds a live claim, so its candidate is active work rather than a rejected one.',
+  submission_integrated: 'its submission is already integrated or superseded, so there is nothing parked to inherit.',
+  candidate_unavailable: 'its submission records no immutable candidate identity.',
+  review_unbound: 'its candidate is not bound to a review-audit ticket. Only a bound review can reject a candidate.',
+  review_conflict: 'more than one review ticket addresses that candidate, so the binding is ambiguous and fails closed.',
+  mirror_only: 'only the source-side review mirror exists, with no review ticket bound to that candidate. A mirror lives in the submitting ticket\'s own row and proves nothing on its own.',
+  not_rejected: 'its bound review has not recorded an oracle rejection for that candidate. Record the review evidence, release the review with `kind=oracle`, and let the oracle verdict reject it.',
+  stale_candidate: 'its bound review is pinned to a different candidate than the one that submission now records, so the rejection does not cover the inherited commits.',
+  mirror_mismatch: 'its review mirror and bound review disagree about the rejected candidate.',
+  partial_inheritance: 'this range carries only part of that rejected range. Inherit the whole rejected candidate or none of it; do not reconstruct a subset.',
+});
+
+export function inheritedRejectedDuplicateGuidance(reason?: string): string {
+  const detail = INHERITED_REJECTED_REFUSALS[String(reason || '')];
+  const preamble = 'An inherited range is admitted only when the overlapping ticket is linked `related` to this one and its exact candidate carries an oracle-confirmed review rejection; here ';
+  return detail
+    ? `${preamble}${detail} Keep the full range and the recorded dispatch base: never pass an explicit base or squash to hide the inherited commits, because delivery and supersession read them.`
+    : 'Preserve this candidate and resolve the overlap on the board. A range may inherit another ticket\'s commits only when that ticket is linked `related` to this one and its exact candidate carries an oracle-confirmed review rejection. Keep the full range and the recorded dispatch base: never pass an explicit base or squash to hide the inherited commits, because delivery and supersession read them.';
+}
+
 export function negativeControlRecoveryGuidance(): string {
   return 'Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The assertion ends at its first ';' outside double quotes or backticks, so put the real command, which must not be empty, between that ';' and failed=<n>; a failed=<n> inside the assertion text is not counted. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. For a parameterised test.each/it.each name, report the name with its runtime values filled in or its literal placeholders (%s, %d, $name) kept as-is; either is matched against the table’s own name. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.';
 }
 
+type SnapshotWalkFacts = Readonly<{
+  skipped: readonly string[];
+  skippedTotal: number;
+  counted: readonly Readonly<{ path: string; paths: number }>[];
+}>;
+
+function skippedSnapshotPaths(walk: SnapshotWalkFacts): string {
+  if (!walk.skippedTotal) return 'skipped nothing';
+  const more = walk.skippedTotal > walk.skipped.length ? `, and ${walk.skippedTotal - walk.skipped.length} more` : '';
+  return `skipped ${walk.skipped.join(', ')}${more}`;
+}
+
+// Which directories held the counted paths is what tells a user whether the tree is really too big
+// or the walk counted something it should have left out (GH-334).
+function snapshotWalkFacts(walk: SnapshotWalkFacts = { skipped: [], skippedTotal: 0, counted: [] }): string {
+  const standing = ' The walk leaves out .git, installed and build output directories such as node_modules and dist, and paths the root .gitignore excludes before it counts.';
+  if (!walk.counted.length) return standing;
+  const counted = walk.counted.map((entry) => `${entry.path} (${entry.paths})`).join(', ');
+  return `${standing} This walk ${skippedSnapshotPaths(walk)}; the most paths it counted were under ${counted}.`;
+}
+
 export function filesystemSnapshotLimitGuidance(
   projectPath: string,
-  limit: Readonly<{ bound: string; observed: number; cap: number; path?: string | null }>,
+  limit: Readonly<{ bound: string; observed: number; cap: number; path?: string | null; walk?: SnapshotWalkFacts }>,
 ): string {
   const unit = limit.bound === 'path cap' ? 'paths' : limit.bound === 'byte cap' ? 'bytes' : 'ms';
   const blockingFile = limit.path
@@ -151,7 +282,7 @@ export function filesystemSnapshotLimitGuidance(
   const recourse = limit.bound === 'deadline'
     ? 'point the board at a local directory no sync client mirrors'
     : 'point the board at a smaller directory';
-  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}.`;
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. The cap is fixed and no board setting raises it.${blockingFile}${snapshotWalkFacts(limit.walk)} Initialize a git repository at the project root so dispatch uses the cheaper git adapter (the board switches to git on its next dispatch once a .git exists at or above it), or ${recourse}. When the directory only holds git repositories one level down, do not initialize it: register each repository as its own board and file the ticket there.`;
 }
 
 // The project can be perfectly readable while the child that snapshots it cannot run or answer;

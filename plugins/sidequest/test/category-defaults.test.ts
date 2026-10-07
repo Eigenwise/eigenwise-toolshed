@@ -4,18 +4,43 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES, starterRoutingProfilesFor } = require('../lib/category-defaults.js') as {
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require('../lib/category-defaults.js') as {
   DEFAULT_CATEGORIES: unknown;
   ROUTING_PROFILE_SEED_REVISION: number;
   STARTER_ROUTING_PROFILES: Array<{ id: string; categories: any[] }>;
   starterRoutingProfilesFor(models: Array<{ slug: string; provider: string }>): Array<{ id: string; categories: any[] }>;
+  categoryWithCurrentCodexRoutes(category: object, categoryId?: string): any;
 };
 const snapshotPath = path.join(__dirname, 'fixtures', 'category-defaults.json');
 
 test('seeded categories match the checked-in global category snapshot', () => {
   const snapshot: unknown = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   assert.deepEqual(DEFAULT_CATEGORIES, snapshot);
-  assert.equal(ROUTING_PROFILE_SEED_REVISION, 7);
+  assert.equal(ROUTING_PROFILE_SEED_REVISION, 9);
+});
+
+test('seeded Sol fallbacks name GPT-6.1 Sol and stored rows still on a retired Sol move to it', () => {
+  const coding = starterRoutingProfilesFor([{ slug: 'codex-gpt-6-1-sol', provider: 'codex' }]).find((profile) => profile.id === 'coding')!;
+  for (const [id, effort] of [['experiment', 'high'], ['coding.hard', 'xhigh'], ['spike-investigation', 'high']] as const) {
+    assert.deepEqual(coding.categories.find((category) => category.id === id)!.fallback, { model: 'codex-gpt-6-1-sol', effort }, id);
+  }
+
+  assert.deepEqual(categoryWithCurrentCodexRoutes({ id: 'review-audit', route: { model: 'codex-gpt-6-sol', effort: 'high' }, fallback: null }), {
+    id: 'review-audit', route: { model: 'codex-gpt-6-1-sol', effort: 'high' }, fallback: null,
+  });
+  assert.deepEqual(categoryWithCurrentCodexRoutes({ route: { model: 'opus', effort: 'high' }, fallback: { model: 'codex-gpt-6-astra-fast', effort: 'high' } }, 'music-composition').fallback, {
+    model: 'codex-gpt-6-1-sol-fast', effort: 'high',
+  });
+  assert.equal(categoryWithCurrentCodexRoutes({ id: 'coding.frontier', route: { model: 'codex-gpt-6-astra', effort: 'xhigh' }, fallback: null }), null);
+  assert.equal(categoryWithCurrentCodexRoutes({ id: 'coding.normal', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } }), null);
+});
+
+test('no starter seed route uses fable as the primary model', () => {
+  for (const profile of STARTER_ROUTING_PROFILES) {
+    for (const category of profile.categories) {
+      assert.notEqual(category.route.model, 'fable', `${profile.id}/${category.id} route must not be fable`);
+    }
+  }
 });
 
 test('starter profile routes use only exact ready gateway capabilities', () => {

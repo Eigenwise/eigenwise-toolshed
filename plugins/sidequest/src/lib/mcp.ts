@@ -22,8 +22,6 @@
  * on the same store.
  */
 
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const store = require('./store');
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
@@ -43,56 +41,8 @@ type ToolDefinition = {
 type RpcId = string | number | null | undefined;
 type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any };
 
-type BoardMcpLiveness = { pid: number };
-
 function boardMcpSessionId(): string {
   return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '').trim();
-}
-
-function boardMcpLivenessFile(sessionId: string): string {
-  const home = process.env.SIDEQUEST_HOME || path.join(os.homedir(), '.claude', 'sidequest');
-  return path.join(home, 'tmp', 'state', `board-mcp-${encodeURIComponent(sessionId)}.json`);
-}
-
-function isBoardMcpLiveness(value: unknown): value is BoardMcpLiveness {
-  return value !== null && typeof value === 'object'
-    && Object.hasOwn(value, 'pid') && Number.isInteger(Reflect.get(value, 'pid')) && Reflect.get(value, 'pid') > 0;
-}
-
-function readBoardMcpLiveness(sessionId: string): BoardMcpLiveness | null {
-  try {
-    const value: unknown = JSON.parse(fs.readFileSync(boardMcpLivenessFile(sessionId), 'utf8'));
-    return isBoardMcpLiveness(value) ? value : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function writeBoardMcpLiveness(sessionId = boardMcpSessionId()): void {
-  if (!sessionId) return;
-  const file = boardMcpLivenessFile(sessionId);
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ pid: process.pid } satisfies BoardMcpLiveness));
-  } catch (_) {}
-}
-
-function clearBoardMcpLiveness(sessionId = boardMcpSessionId()): void {
-  if (!sessionId || readBoardMcpLiveness(sessionId)?.pid !== process.pid) return;
-  try {
-    fs.rmSync(boardMcpLivenessFile(sessionId), { force: true });
-  } catch (_) {}
-}
-
-function isBoardMcpLive(sessionId: string): boolean {
-  const marker = sessionId ? readBoardMcpLiveness(sessionId) : null;
-  if (!marker) return false;
-  try {
-    process.kill(marker.pid, 0);
-    return true;
-  } catch (error: unknown) {
-    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
-  }
 }
 
 const SERVER_NAME = 'sidequest';
@@ -110,7 +60,17 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+// Raised from 24100 for add/update verifyCwd (SQ-3118 / GitHub #259): +60 bytes compacted, while preserving
+// the 2.5KB reserve. A nested workspace's gate had no other way to run from its own directory.
+// Raised from 24200 for deniedTools on board_config and category_edit (GH-222): +114 bytes compacted. The two
+// changes landed in one wave, so the cap moved once for both while preserving the 2.5KB reserve.
+// Raised from 24300 for groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route
+// that closes a candidate rebased or squash-merged before it landed: +980 bytes compacted, measured on the
+// wave-3 tree with SQ-3118 and GH-222 already in, so the 2.5KB reserve still holds.
+// Raised from 25400 for update.admitComposition (SQ-3331): +1675 bytes compacted, all of it schema structure,
+// since compactSchema strips its descriptions and update's served description is empty. Trimming other tools
+// could not recover it without dropping callable constraints or pinned contract text, so the 2.5KB reserve holds.
+const MCP_TOOLS_LIST_MAX_BYTES = 27075;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -148,18 +108,32 @@ const MUTATING_TOOLS = new Set([
 const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'category_rm', 'global_fallback', 'profile_create', 'profile_edit', 'profile_retire', 'profile_repoint', 'profile_promote']);
 const mutationTails = new Map<string, Promise<void>>();
 
-function toolMutates(name?: any, args?: any) {
-  if (MUTATING_TOOLS.has(String(name))) return true;
-  if (name === 'new_board_profile') return args.profile !== undefined;
-  if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.worktreeRecoveryRetentionMaxPerAgent !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
-  return false;
+const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
+  verdict: ['correct'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
+  board_config: ['name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
+    'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
+    'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
+};
+const NULL_NONMUTATING_BOARD_FIELDS = new Set(['alwaysInScope', 'integrationMode', 'integrationBranch']);
+
+function toolMutates(name: string, args: Record<string, unknown> = {}) {
+  if (MUTATING_TOOLS.has(name)) return true;
+  const fields = CONDITIONAL_MUTATION_FIELDS[name];
+  if (!fields) return false;
+  return fields.some((field) => {
+    if (args[field] === undefined) return false;
+    if (name === 'board_config' && args[field] === null) return !NULL_NONMUTATING_BOARD_FIELDS.has(field);
+    return true;
+  });
 }
 
 function mutationQueueKey(name?: any, args?: any) {
   if (name === 'new_board_profile') return '<global>';
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return '<global>';
-  return resolveProject(args.project).slug;
+  const board = resolveProject(args.project).slug;
+  // A commit runs the repository's hooks, which can take minutes; in the board-wide queue it held
+  // every other write on the board that long (GH-314). Its own board writes take the ticket lock.
+  return name === 'commit' ? `${board}\0commit\0${args.ref}` : board;
 }
 
 async function enqueueMutation<T>(board: string, operation: () => T | Promise<T>): Promise<T> {
@@ -285,8 +259,16 @@ function assertMutationFreshness(projectArg: unknown) {
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
 
+function groomCloseArgs(tool: ToolDefinition, args: Record<string, unknown>) {
+  if (tool.name !== 'groomClose' || String(args.by || '').trim()) return args;
+  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '').trim();
+  return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
+}
+
 async function runTool(tool: ToolDefinition, rawArgs: any) {
-  const { args, aliases } = validateToolArguments(tool, rawArgs);
+  const validated = validateToolArguments(tool, rawArgs);
+  const args = groomCloseArgs(tool, validated.args);
+  const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
     return acknowledgeAliases(tool.name === 'context_page' ? output : boundedReadPayload(tool.name, output), aliases);
@@ -301,18 +283,20 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 // full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
 // refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
 const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+// A rebased or squash-merged candidate never byte-matches the working tree, and the
+// refusal only reaches an operator who already knows these two properties exist.
+const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
+const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
     limit: 'UTF-8 bytes.',
-    expectedRevision: 'Revision.',
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
-    full: 'Whole bodies.',
     since: 'Comment id or ISO timestamp.',
   },
   list: {
@@ -324,20 +308,26 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     outputTail: 'Required blocker/contradiction output.',
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
-  category_edit: { fallbackModel: 'null clears fallback.' },
+  category_edit: { fallbackModel: 'null clears.' },
   dispatch: {
-    sharedTree: 'Tree.',
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
-    recoveryEvidence: 'unbound or expired bound',
-    worktree: 'Checkout.',
+    recoveryEvidence: 'Unverified; preparer retires now, else latest signal grace; bound name only.',
   },
-  integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
+  integrate: {
+    deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+  },
   groomClose: {
     deliveryCommit: 'Prepared integration target.',
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+    recoveryEvidence: 'Unclaimed: preparing session retires now; others past deadline; CLI too.',
   },
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
+    correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
   },
 };
 
@@ -346,11 +336,12 @@ function toolDescriptor(tool: ToolDefinition) {
   for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
     inputSchema.properties[property].description = description;
   }
+  const description = Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
+    ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
+    : conciseDescription(tool.description);
   return {
     name: tool.name,
-    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
-      ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
-      : conciseDescription(tool.description),
+    ...(description ? { description } : {}),
     inputSchema,
   };
 }
@@ -439,9 +430,6 @@ module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
   boardMcpSessionId,
-  writeBoardMcpLiveness,
-  clearBoardMcpLiveness,
-  isBoardMcpLive,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,

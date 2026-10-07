@@ -8,7 +8,17 @@ const { defaultConfigPath, defaultDataDir, readObservabilityConfig } = require('
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { defaultDatabaseFile } = require('./observer.js');
 const { projectMetadata } = require('../hooks/observability.js');
-const { sessionDirectories, telemetryRoot, wiredProjectId } = require('./project-telemetry.js');
+const {
+  PROJECT_EXPORT_IGNORED_SINCE,
+  claudeUserSettingsPath,
+  installedClaudeVersion,
+  missingUserExport,
+  projectSettingsCanExport,
+  sessionDirectories,
+  telemetryRoot,
+  userExportCommand,
+  wiredProjectId,
+} = require('./project-telemetry.js');
 
 const DEFAULT_WINDOW_HOURS = 6;
 
@@ -93,23 +103,51 @@ async function verifyProjectTelemetry(projectDir, options = {}) {
 // Hook events reach the observer from any directory, but the claude_code_* metrics only
 // exist where Claude Code found the telemetry env. A project with the first and none of
 // the second is half-wired, which is invisible on its dashboard: it just reads empty.
-function observerActivity(databaseFile, since) {
+function readStore(databaseFile, read) {
   if (!fs.existsSync(databaseFile)) return null;
   let store = null;
   try {
     store = openObservabilityStore(databaseFile, { outboxEnabled: false });
-    const rows = store.database.prepare(`
+    return read(store.database);
+  } catch {
+    return null;
+  } finally {
+    try { if (store) store.close(); } catch {}
+  }
+}
+
+function observerActivity(databaseFile, since) {
+  return readStore(databaseFile, (database) => {
+    const rows = database.prepare(`
       SELECT json_extract(attributes_json, '$.project_name') AS project_name, COUNT(*) AS events
       FROM observation
       WHERE event_name LIKE 'hook.%' AND observed_at >= ?
       GROUP BY project_name
     `).all(since);
     return new Map(rows.filter((row) => row.project_name).map((row) => [row.project_name, Number(row.events)]));
-  } catch {
-    return null;
-  } finally {
-    try { if (store) store.close(); } catch {}
-  }
+  });
+}
+
+// Claude Code's own events land as claude_code, its metrics as otel_collector.
+function claudeCodeRows(databaseFile, identifiers, since) {
+  return readStore(databaseFile, (database) => Number(database.prepare(`
+    SELECT COUNT(*) AS count
+    FROM observation
+    WHERE source IN ('claude_code', 'otel_collector') AND observed_at >= ?
+      AND project_id IN (SELECT value FROM json_each(?))
+  `).get(since, JSON.stringify(identifiers)).count));
+}
+
+function directoryState(hasProjectId, exportMissing) {
+  if (!hasProjectId) return 'unwired';
+  return exportMissing.length > 0 ? 'no-export' : 'wired';
+}
+
+function auditVerdict({ directories, exportMissing, claudeCodeRows: rows }) {
+  if (directories.some(({ state }) => state === 'unwired')) return 'unwired';
+  if (exportMissing.length > 0) return 'export-disabled';
+  if (rows === null) return 'unconfirmed';
+  return rows > 0 ? 'wired' : 'no-data';
 }
 
 async function sampledProjects(config, windowHours) {
@@ -122,67 +160,131 @@ async function sampledProjects(config, windowHours) {
   };
 }
 
+function auditWindow(options) {
+  const windowHours = options.windowHours || DEFAULT_WINDOW_HOURS;
+  const now = options.now ? new Date(options.now) : new Date();
+  return { windowHours, since: new Date(now.getTime() - windowHours * 3600 * 1000).toISOString() };
+}
+
+function registeredProjects(config) {
+  return new Map((config.optedInProjects || [])
+    .filter((entry) => typeof entry?.project_name === 'string')
+    .map((entry) => [entry.project_name, entry]));
+}
+
+function projectsMissingSamples(observed, sampled, registered) {
+  if (!observed || !sampled.available) return [];
+  const sentEventsWithoutSamples = ([name, events]) => {
+    const entry = registered.get(name);
+    const identifiers = entry ? projectIdentifiers(entry) : [name];
+    return events > 0 && !identifiers.some((identifier) => sampled.projects.has(identifier));
+  };
+  return [...observed].filter(sentEventsWithoutSamples).map(([name, events]) => ({ project: name, events }));
+}
+
+function sampleSummary(observed, sampled, project) {
+  return {
+    observerEvents: observed ? (observed.get(project.project_name) || 0) : null,
+    nativeSamples: sampled.available ? hasSampledProject(sampled.projects, project) : null,
+    reason: sampled.available ? undefined : sampled.reason,
+  };
+}
+
+// project.id in a directory's settings still attributes a session; turning export on is what
+// moved out of project settings, so both have to hold before a directory counts as wired.
+function exportMissingFor(claudeVersion, config, options) {
+  return projectSettingsCanExport(claudeVersion) ? [] : missingUserExport(config.ports, options);
+}
+
 async function auditProjectTelemetry(projectDir, options = {}) {
   const config = observabilityConfig(options);
   const root = telemetryRoot(projectDir);
   const project = projectMetadata(root);
-  const windowHours = options.windowHours || DEFAULT_WINDOW_HOURS;
-  const now = options.now ? new Date(options.now) : new Date();
-  const since = new Date(now.getTime() - windowHours * 3600 * 1000).toISOString();
-  const observed = observerActivity(options.databaseFile || defaultDatabaseFile(), since);
+  const { windowHours, since } = auditWindow(options);
+  const databaseFile = options.databaseFile || defaultDatabaseFile();
+  const observed = observerActivity(databaseFile, since);
   const sampled = await sampledProjects(config, windowHours);
-  const registered = new Map((config.optedInProjects || [])
-    .filter((entry) => typeof entry?.project_name === 'string')
-    .map((entry) => [entry.project_name, entry]));
+  const registered = registeredProjects(config);
+  const claudeVersion = installedClaudeVersion(options);
+  const exportMissing = exportMissingFor(claudeVersion, config, options);
   const directories = sessionDirectories(root, options).map((directory) => ({
     directory,
-    wired: projectIdentifiers(project).includes(wiredProjectId(directory)),
+    state: directoryState(projectIdentifiers(project).includes(wiredProjectId(directory)), exportMissing),
   }));
-  const active = observed && sampled.available
-    ? [...observed].filter(([name, events]) => {
-      const entry = registered.get(name);
-      const identifiers = entry ? projectIdentifiers(entry) : [name];
-      return events > 0 && !identifiers.some((identifier) => sampled.projects.has(identifier));
-    })
-    : [];
   const byEvents = (left, right) => right.events - left.events || left.project.localeCompare(right.project);
-  const entries = active.map(([name, events]) => ({ project: name, events }));
+  const entries = projectsMissingSamples(observed, sampled, registered);
+  const optedIn = ({ project: name }) => registered.has(name);
 
-  return {
+  const audit = {
     project: project.project_name,
     repositoryRoot: root,
     windowHours,
-    observerEvents: observed ? (observed.get(project.project_name) || 0) : null,
-    nativeSamples: sampled.available ? hasSampledProject(sampled.projects, project) : null,
-    reason: sampled.available ? undefined : sampled.reason,
-    halfWired: entries.filter(({ project: name }) => registered.has(name)).sort(byEvents),
+    claudeVersion,
+    ...sampleSummary(observed, sampled, project),
+    claudeCodeRows: claudeCodeRows(databaseFile, projectIdentifiers(project), since),
+    halfWired: entries.filter(optedIn).sort(byEvents),
     // Names nothing opted in: mostly other repositories, so this is a hint rather than a
     // fault, and only the busiest few are worth a line.
-    unregistered: entries.filter(({ project: name }) => !registered.has(name)).sort(byEvents),
+    unregistered: entries.filter((entry) => !optedIn(entry)).sort(byEvents),
     directories,
+    exportMissing,
+    userSettingsPath: claudeUserSettingsPath(options),
     fixCommand: `node "${path.join(__dirname, 'project-telemetry.js')}" --project "${root}"`,
+    userExportCommand: userExportCommand(),
   };
+  return { ...audit, verdict: auditVerdict(audit) };
+}
+
+const DIRECTORY_LABELS = Object.freeze({ wired: 'wired', 'no-export': 'NO-EXPORT', unwired: 'UNWIRED' });
+
+function countLabel(value) {
+  return value === null ? 'unknown' : value;
+}
+
+function nativeSamplesLabel(audit) {
+  if (audit.nativeSamples === null) return `unknown reason=${audit.reason}`;
+  return audit.nativeSamples ? 'yes' : 'no';
+}
+
+function needsProjectFix(audit) {
+  return audit.directories.some(({ state }) => state === 'unwired')
+    || audit.halfWired.some(({ project }) => project === audit.project);
+}
+
+function exportFixLines(audit) {
+  return [
+    `export: Claude Code ${audit.claudeVersion || '(version unknown)'} ignores telemetry export variables in project settings (since ${PROJECT_EXPORT_IGNORED_SINCE}), and neither ${audit.userSettingsPath} nor the launch environment sets ${audit.exportMissing.join(', ')}`,
+    `fix export, only after the user agrees, since every Claude Code session on this machine then exports (the observer keeps only opted-in projects, but traces and metrics from other projects reach a configured sink or dashboard ungated): ${audit.userExportCommand}`,
+  ];
+}
+
+function fixLines(audit) {
+  const lines = [];
+  if (needsProjectFix(audit)) lines.push(`fix: ${audit.fixCommand}`);
+  if (audit.exportMissing.length > 0) lines.push(...exportFixLines(audit));
+  if (lines.length > 0) return [...lines, 'then restart Claude Code in each of those directories before their metrics appear'];
+  return audit.verdict === 'no-data'
+    ? [`no-data: no claude_code rows for ${audit.project} in ${audit.windowHours}h; restart Claude Code in the wired directories and create activity, and if rows still do not arrive check the collector with node "${path.join(__dirname, '..', 'lib', 'observability', 'ensure.js')}" --health`]
+    : [];
+}
+
+function unregisteredLines(audit) {
+  const busiest = audit.unregistered.slice(0, 3).map(({ project, events }) => `${project} (${events})`).join(', ');
+  if (!busiest) return [];
+  const count = audit.unregistered.length;
+  return [`not opted in: ${count} project name${count === 1 ? '' : 's'} sent observer events with no metrics, busiest ${busiest}`];
 }
 
 function formatAudit(audit) {
   const lines = [
-    `audit project=${audit.project} root=${audit.repositoryRoot} window=${audit.windowHours}h`,
-    `observer-events=${audit.observerEvents === null ? 'unknown' : audit.observerEvents} native-samples=${audit.nativeSamples === null ? `unknown reason=${audit.reason}` : (audit.nativeSamples ? 'yes' : 'no')}`,
-    ...audit.directories.map(({ directory, wired }) => `${wired ? 'wired  ' : 'UNWIRED'} ${directory}`),
+    `audit project=${audit.project} root=${audit.repositoryRoot} window=${audit.windowHours}h claude-code=${audit.claudeVersion || 'unknown'}`,
+    `observer-events=${countLabel(audit.observerEvents)} claude-code-rows=${countLabel(audit.claudeCodeRows)} native-samples=${nativeSamplesLabel(audit)}`,
+    ...audit.directories.map(({ directory, state }) => `${DIRECTORY_LABELS[state]} ${directory}`),
+    `verdict=${audit.verdict}`,
+    ...fixLines(audit),
+    ...audit.halfWired.map(({ project, events }) => `half-wired: opted-in project ${project} has ${events} observer events and no claude_code_* samples in ${audit.windowHours}h; run /observability:enable-project-telemetry from it, then restart Claude Code`),
+    ...unregisteredLines(audit),
   ];
-  const unwired = audit.directories.filter(({ wired }) => !wired);
-  if (unwired.length > 0 || audit.halfWired.some(({ project }) => project === audit.project)) {
-    lines.push(`fix: ${audit.fixCommand}`);
-    lines.push('then restart Claude Code in each of those directories before their metrics appear');
-  }
-  for (const { project, events } of audit.halfWired) {
-    lines.push(`half-wired: opted-in project ${project} has ${events} observer events and no claude_code_* samples in ${audit.windowHours}h; run /observability:enable-project-telemetry from it, then restart Claude Code`);
-  }
-  const unregistered = audit.unregistered.slice(0, 3);
-  if (unregistered.length > 0) {
-    const busiest = unregistered.map(({ project, events }) => `${project} (${events})`).join(', ');
-    lines.push(`not opted in: ${audit.unregistered.length} project name${audit.unregistered.length === 1 ? '' : 's'} sent observer events with no metrics, busiest ${busiest}`);
-  }
   return `${lines.join('\n')}\n`;
 }
 

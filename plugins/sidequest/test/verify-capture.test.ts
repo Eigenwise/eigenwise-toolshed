@@ -4,12 +4,13 @@ import './_sidequest-install-fixture.js';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
-const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture } = require('../lib/verify-capture.js');
+const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture, captureCommand, isFullSuiteCommand } = require('../lib/verify-capture.js');
 const { runProcessVerification } = require('../lib/ports/process.js');
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
@@ -24,13 +25,15 @@ function nodeCommand(scriptPath: string, argument: string) {
   return `"${process.execPath}" "${scriptPath}" "${argument}"`;
 }
 
-function runCaptureProcess(command: string, project: string, ticket: string, options: { worktree?: string; cwd?: string } = {}): Promise<Readonly<{ status: number | null; output: string }>> {
+// A null command omits --base64, so the wrapper loads the ticket's pinned command itself (GH-373).
+function runCaptureProcess(command: string | null, project: string, ticket: string, options: { worktree?: string; cwd?: string; environment?: NodeJS.ProcessEnv } = {}): Promise<Readonly<{ status: number | null; output: string }>> {
   return new Promise((resolve, reject) => {
-    const args = [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), '--base64', Buffer.from(command).toString('base64'), '--project', project, '--ticket', ticket];
+    const commandArguments = command === null ? [] : ['--base64', Buffer.from(command).toString('base64')];
+    const args = [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), ...commandArguments, '--project', project, '--ticket', ticket];
     if (options.worktree) args.push('--worktree', options.worktree);
     const child = spawn(process.execPath, args, {
       cwd: options.cwd || project,
-      env: process.env,
+      env: options.environment || process.env,
       windowsHide: true,
     });
     let output = '';
@@ -118,7 +121,7 @@ function setupIsolatedDispatch(agentId: string) {
   const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId, worktree).ok, true);
   return {
     project,
@@ -127,32 +130,95 @@ function setupIsolatedDispatch(agentId: string) {
     worktree,
     cleanup() {
       execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: project, windowsHide: true });
-      fs.rmSync(project, { recursive: true, force: true });
+      // Windows can report the just-removed worktree's directory as still busy for a
+      // moment after the process that used it as its cwd has already reported closed
+      // (SQ-2874); maxRetries/retryDelay is fs.rmSync's own facility for that.
+      fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }
 
-test('full-suite capture serializes sibling captures and records the queue wait', async () => {
+for (const command of [
+  'npm run test:full',
+  'npm.cmd run test:full',
+  'npm.exe run quality:crap',
+  'npm --prefix plugins/sidequest run test:full',
+  'npm --prefix="path with spaces" run quality:crap',
+  "npm --prefix 'path with spaces' run test:full",
+  'npm.cmd --prefix plugins/sidequest --workspace app run test:full',
+  'npm --workspace=app --workspace "another app" run quality:crap',
+  'npm -w app run test:full',
+  'npm -w=app run quality:crap',
+  'npm --workspaces run test:full',
+  'npm -ws run quality:crap',
+  'cd plugins/sidequest && npm run test:full -- --test-concurrency=2',
+  '(npm run test:full )',
+]) {
+  test(`full-suite classification accepts ${command}`, () => {
+    assert.equal(isFullSuiteCommand(command), true);
+  });
+}
+
+for (const command of [
+  'npm run test:files -- --test-name-pattern=full-suite test/verify-capture.test.ts',
+  'npm --prefix plugins/sidequest run test:files -- test/verify-capture.test.ts',
+  'npm --workspace app test',
+  'npm run test:full:extra',
+  'npm run quality:crap:extra',
+  'npm run typecheck',
+  'node scripts/test-full.mjs',
+  'npx run test:full',
+  'pnpm run test:full',
+  'custom-npm run test:full',
+  'npm --prefix plugins/sidequest install test:full',
+  'npm --prefix plugins/sidequest && node run test:full',
+]) {
+  test(`full-suite classification excludes ${command}`, () => {
+    assert.equal(isFullSuiteCommand(command), false);
+  });
+}
+
+test('full-suite prefixed capture serializes siblings, preserves coverage, and leaves scoped commands outside the slot', async () => {
+  const command = 'npm --prefix "." run test:full';
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-slot-'));
+  const coverageDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-full-suite-coverage-'));
+  const environment = { ...process.env, NODE_V8_COVERAGE: coverageDirectory };
   const started = path.join(project, 'started');
   const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
-  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
+  const observedCoverage = path.join(project, 'observed-coverage');
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js', 'test:files': 'node scoped.js' } }));
   execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
-  fs.writeFileSync(path.join(project, 'blocker.js'), slotBlockerScript(started, observedSiblingCaptures, path.join(captureSlotDirectory(project), 'waiting')));
-  fs.writeFileSync(path.join(project, '.gitignore'), 'started\nobserved-sibling-captures\n');
+  fs.writeFileSync(path.join(project, 'blocker.js'), slotBlockerScript(started, observedSiblingCaptures, path.join(captureSlotDirectory(project), 'waiting'))
+    + ` fs.appendFileSync(${JSON.stringify(observedCoverage)}, process.env.NODE_V8_COVERAGE + '\\n');`);
+  fs.writeFileSync(path.join(project, 'scoped.js'), 'if (process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT !== undefined) process.exit(1);');
+  fs.writeFileSync(path.join(project, '.gitignore'), 'started\nobserved-sibling-captures\nobserved-coverage\n');
   execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
   const boardProject = store.ensureProject(project);
   const ticket = store.createTicket(boardProject.slug, {
     title: 'serialize full-suite verification captures',
     executorVerifyKind: 'command',
-    executorVerify: 'npm run test:full',
+    executorVerify: command,
   });
+  const spawnedCaptures: ReturnType<typeof runCaptureProcess>[] = [];
 
   try {
-    const first = runCaptureProcess('npm run test:full', project, ticket.ref);
+    assert.deepEqual(fs.readdirSync(coverageDirectory), [], 'caller coverage starts empty');
+    const first = runCaptureProcess(command, project, ticket.ref, { environment });
+    spawnedCaptures.push(first);
     await waitForFile(started);
-    const second = runCaptureProcess('npm run test:full', project, ticket.ref);
+    for (const scopedCommand of ['node scoped.js', 'npm --prefix "." run test:files']) {
+      const scopedTicket = store.createTicket(boardProject.slug, { title: 'scoped capture', executorVerifyKind: 'command', executorVerify: scopedCommand });
+      const scopedCapture = runCaptureProcess(scopedCommand, project, scopedTicket.ref);
+      spawnedCaptures.push(scopedCapture);
+      const scoped = await scopedCapture;
+      assert.equal(scoped.status, 0, scoped.output);
+      assert.doesNotMatch(scoped.output, /capture-slot|waiting for/);
+      assert.equal(readRecordedCaptures(project, scopedTicket.ref)[0].queuePosition, undefined);
+      assert.equal(fs.existsSync(path.join(captureSlotDirectory(project), 'active')), true, 'the full-suite owner still holds the slot');
+    }
+    const second = runCaptureProcess(command, project, ticket.ref, { environment });
+    spawnedCaptures.push(second);
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
     assert.equal(firstResult.status, 0, firstResult.output);
@@ -164,8 +230,63 @@ test('full-suite capture serializes sibling captures and records the queue wait'
     assert.ok(waitedCapture, 'the second capture records its slot queue position');
     assert.equal(waitedCapture.queuePosition, 2);
     assert.ok(waitedCapture.waitedForSlotMs >= 500, `waited ${waitedCapture.waitedForSlotMs}ms`);
+    assert.deepEqual(fs.readFileSync(observedCoverage, 'utf8').trim().split(/\r?\n/), [coverageDirectory, coverageDirectory], 'the actual verifier children inherit caller coverage');
+    const coverageScripts = fs.readdirSync(coverageDirectory).flatMap((file: string) => JSON.parse(fs.readFileSync(path.join(coverageDirectory, file), 'utf8')).result);
+    assert.ok(coverageScripts.some((script: { url: string }) => script.url.endsWith('/blocker.js')), 'V8 coverage includes the actual verifier script');
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
+    await Promise.allSettled(spawnedCaptures);
+    // Both captures above ran as separate child processes with this directory as
+    // their own cwd. Node's 'close' event fires once their stdio pipes end, but on
+    // Windows the OS can hold the directory busy for a few more ms while that same
+    // just-closed process finishes tearing down (SQ-2874, reproduced under a loaded
+    // machine: EBUSY clears within one or two 100ms retries every time it fires).
+    // maxRetries/retryDelay is fs.rmSync's own facility for exactly this.
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(coverageDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('full-suite prefixed capture keeps exact command, candidate, dispatch nonce, and cleanliness', async () => {
+  const fixture = setupIsolatedDispatch('full-suite-identity');
+  const command = 'npm --prefix "." run test:full';
+  try {
+    for (const directory of [fixture.project, fixture.worktree]) {
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node -e "process.exit(0)"' } }));
+      execFileSync('git', ['add', 'package.json'], { cwd: directory, windowsHide: true });
+      execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'full-suite fixture'], { cwd: directory, windowsHide: true });
+    }
+    store.updateTicket(fixture.slug, fixture.ticket.ref, { executorVerify: command });
+    const wrongCommand = await runCaptureProcess('npm run test:full', fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(wrongCommand.status, 2, wrongCommand.output);
+    assert.match(wrongCommand.output, /verification_capture_command_mismatch/);
+    assert.doesNotMatch(wrongCommand.output, /^verify=/m, 'a scheduling-equivalent command cannot replace the exact pin');
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+
+    fs.writeFileSync(path.join(fixture.worktree, 'README.md'), 'dirty fixture\n');
+    const dirty = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(dirty.status, 2, dirty.output);
+    assert.match(dirty.output, /verification_capture_dirty_worktree/);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+    execFileSync('git', ['add', 'README.md'], { cwd: fixture.worktree, windowsHide: true });
+    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'clean fixture'], { cwd: fixture.worktree, windowsHide: true });
+
+    const result = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(result.status, 0, result.output);
+    const [capture] = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    assert.deepEqual(captureIdentity(capture), {
+      command,
+      status: 'passed',
+      candidate: { source: 'git', value: commitHead(fixture.worktree) },
+      dispatchNonce: fixture.ticket.dispatchNonce,
+      cleanWorktree: true,
+    });
+    assert.ok(capture.dispatchNonce, 'a real dispatch nonce binds the capture');
+    assert.notEqual(capture.candidate.value, commitHead(fixture.project), 'the capture names the verified linked candidate');
+    assert.equal(capture.queuePosition, 1);
+  } finally {
+    fs.rmSync(captureSlotDirectory(fixture.project), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fixture.cleanup();
   }
 });
 
@@ -179,8 +300,11 @@ test('synchronous full-suite verification uses the capture slot', async () => {
   execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
 
+  // The wrapper runs only a ticket's pinned command (GH-373), so the slot holder needs a real ticket.
+  const { slug } = store.ensureProject(project);
+  const ticket = store.createTicket(slug, { title: 'slot holder', executorVerifyKind: 'suite', executorVerify: 'npm run test:full' });
   try {
-    const first = runCaptureProcess('npm run test:full', project, 'SQ-1');
+    const first = runCaptureProcess(null, project, ticket.ref);
     await waitForFile(started);
     const capture = runFullSuiteVerification('npm run test:full', project, (environment: NodeJS.ProcessEnv) => runProcessVerification(
       { kind: 'command', command: 'npm run test:full', evidenceContract: 'command output' },
@@ -188,14 +312,14 @@ test('synchronous full-suite verification uses the capture slot', async () => {
     ));
     const firstResult = await first;
 
-    assert.equal(firstResult.status, 2, firstResult.output);
+    assert.equal(firstResult.status, 0, firstResult.output);
     assert.deepEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
     assert.equal(capture.queuePosition, 2);
     assert.ok(capture.waitedForSlotMs >= 500, `waited ${capture.waitedForSlotMs}ms`);
     assert.deepEqual(fs.readFileSync(observedSiblingCaptures, 'utf8').trim().split(/\r?\n/).sort(), ['0', '1']);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -218,8 +342,8 @@ test('a failed synchronous slot release still removes its own waiter', () => {
     assert.equal(capture.status, 'could_not_run');
     assert.deepEqual(fs.readdirSync(path.join(slotDirectory, 'waiting')), [], 'the board process must not leave a live-PID waiter behind');
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -275,8 +399,8 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
     assert.ok(recordedWait, 'the EPERM-retried capture records its slot queue position');
   } finally {
     if (releaseTimer) clearTimeout(releaseTimer);
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -333,8 +457,8 @@ test('full-suite capture reclaims a killed owner without waiting for the slot ti
     assert.equal(fs.existsSync(staleWaiterPath), false);
     assert.ok(recorded?.ok, recorded?.reason);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -696,9 +820,191 @@ test('(d) a working-tree-delivery ticket keeps its shared-checkout override unch
       // shared checkout, regardless of where the wrapper was invoked from.
       assert.equal(worktreeLease.canonicalPath(recorded.worktree), worktreeLease.canonicalPath(project));
     } finally {
-      fs.rmSync(outsideCwd, { recursive: true, force: true });
+      fs.rmSync(outsideCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+// GitHub #189: a command the shell could not find, or a shell that never started, must never read as passed.
+test('verify capture reports exit 127 and a shell that never started as failures, with the error text', async () => {
+  const notFound = await runVerifyCapture(`"${process.execPath}" -e "process.exit(127)"`);
+  try {
+    assert.deepStrictEqual({ status: notFound.status, exitCode: notFound.exitCode }, { status: 'toolchain_missing', exitCode: 127 });
+  } finally {
+    deleteLog(notFound);
+  }
+  const missingDirectory = path.join(os.tmpdir(), `sidequest-missing-verify-cwd-${process.pid}-${Date.now()}`);
+  const neverStarted = runProcessVerification({ kind: 'command', command: 'echo unreachable', evidenceContract: 'output' }, { cwd: missingDirectory });
+  try {
+    assert.equal(neverStarted.status, 'could_not_run');
+    assert.match(neverStarted.evidence, /before reporting the suite exit code\. .*ENOENT/);
+  } finally {
+    fs.rmSync(neverStarted.logPath, { force: true });
+  }
+});
+
+// GitHub #290: Git for Windows sh.exe strips the backslashes out of `cd C:\repo\app`.
+test('verify capture runs a backslash path through Command Prompt on Windows and keeps forward slashes on the POSIX shell', { skip: process.platform !== 'win32' }, async () => {
+  const probe = 'node -e "require(\'fs\').accessSync(\'cli-goldens.json\')"';
+  const relative = await runVerifyCapture(`cd test\\fixtures && ${probe}`, SIDEQUEST_DIR);
+  // Command Prompt's `cd` never changes drive, so the absolute case starts elsewhere on the repository's drive (CI keeps the checkout on D: and the temp dir on C:).
+  const elsewhereOnRepositoryDrive = path.parse(SIDEQUEST_DIR).root;
+  const absolute = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures')} && ${probe}`, elsewhereOnRepositoryDrive);
+  const forward = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures').replace(/\\/g, '/')} && ${probe}`, os.tmpdir());
+  try {
+    for (const capture of [relative, absolute]) {
+      assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 }, capture.reason);
+      assert.match(capture.shell || '', /^Command Prompt/);
+    }
+    assert.deepStrictEqual({ status: forward.status, exitCode: forward.exitCode }, { status: 'passed', exitCode: 0 }, forward.reason);
+    assert.match(forward.shell || '', /^POSIX shell/);
+  } finally {
+    for (const capture of [relative, absolute, forward]) deleteLog(capture);
+  }
+});
+
+// Backslashes inside quotes survive sh.exe; Command Prompt would read this script's `\"` as quote toggles and run
+// its `||` as an operator. The `\n` inside the script is a JS escape, not a path, and must not route to Command Prompt.
+test('verify capture keeps a quoted backslash executable with an escaped inline script on the POSIX shell', { skip: process.platform !== 'win32' }, async () => {
+  const command = `"${process.execPath}" -e "const fs=require('node:fs'); const home=process.env.NO_SUCH_HOME||null; process.exit(fs.existsSync(\\"package.json\\")&&'x\\n'.length===2&&home===null?0:7)"`;
+  const capture = await runVerifyCapture(command, SIDEQUEST_DIR);
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 }, capture.reason);
+    assert.match(capture.shell || '', /^POSIX shell/);
+  } finally {
+    deleteLog(capture);
+  }
+});
+
+// GitHub #259: a nested workspace's gate only resolves from its own directory.
+test('a ticket verifyCwd runs the captured command from that directory of the checkout', async () => {
+  const project = initGitRepo('sq-verify-capture-verify-cwd-');
+  fs.mkdirSync(path.join(project, 'packages', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'packages', 'app', 'workspace.marker'), 'nested\n');
+  execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'nested workspace'], { cwd: project, windowsHide: true });
+  const command = 'node -e "require(\'fs\').accessSync(\'workspace.marker\')"';
+  const boardProject = store.ensureProject(project);
+  const rooted = store.createTicket(boardProject.slug, { title: 'root verify', executorVerifyKind: 'command', executorVerify: command });
+  const nested = store.createTicket(boardProject.slug, { title: 'nested verify', executorVerifyKind: 'command', executorVerify: command, executorVerifyCwd: 'packages/app' });
+  try {
+    const fromRoot = await runCapturedVerification(command, { project, ticket: rooted.ref }, project);
+    const fromNested = await runCapturedVerification(command, { project, ticket: nested.ref }, project);
+    try {
+      assert.equal(fromRoot.capture.status, 'failed_suite');
+      assert.equal(fromNested.capture.status, 'passed', fromNested.capture.reason);
+      assert.ok(fromNested.recorded?.ok, fromNested.recorded?.reason);
+      assert.equal(worktreeLease.canonicalPath(readRecordedCaptures(project, nested.ref).at(-1).worktree), worktreeLease.canonicalPath(project));
+    } finally {
+      deleteLog(fromRoot.capture);
+      deleteLog(fromNested.capture);
+    }
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+// GH-373: an executor retyped the briefing's base64 blob, got one character wrong, and ran a
+// different command. With --project/--ticket the wrapper loads the pinned command itself.
+function captureIdentity(capture: { command: string; status: string; candidate: unknown; dispatchNonce: string; cleanWorktree?: boolean }) {
+  return { command: capture.command, status: capture.status, candidate: capture.candidate, dispatchNonce: capture.dispatchNonce, cleanWorktree: capture.cleanWorktree };
+}
+
+test('GH-373: the ticket-loaded command records the same capture identity as the base64 path', async () => {
+  const fixture = setupIsolatedDispatch('gh-373-ticket-loaded');
+  try {
+    const fromTicket = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(fromTicket.status, 0, fromTicket.output);
+    const fromBase64 = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(fromBase64.status, 0, fromBase64.output);
+
+    const [ticketCapture, base64Capture] = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    assert.equal(ticketCapture.command, ISOLATED_DISPATCH_VERIFY_COMMAND);
+    assert.equal(ticketCapture.status, 'passed');
+    assert.deepEqual(captureIdentity(ticketCapture), captureIdentity(base64Capture));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('GH-373: a corrupted --base64 beside --project/--ticket refuses in plain words and runs nothing', async () => {
+  const fixture = setupIsolatedDispatch('gh-373-corrupted-blob');
+  try {
+    const corrupted = 'git rev-parse HEAF';
+    const { status, output } = await runCaptureProcess(corrupted, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(status, 2, output);
+    assert.match(output, /capture=unrecorded reason=verification_capture_command_mismatch/);
+    assert.match(output, /The command passed with --base64 is not the verify command pinned on /);
+    assert.ok(output.includes(`Pinned command: ${JSON.stringify(ISOLATED_DISPATCH_VERIFY_COMMAND)}`), output);
+    assert.ok(output.includes(`Passed command: ${JSON.stringify(corrupted)}`), output);
+    assert.match(output, /Drop --base64/);
+    assert.doesNotMatch(output, /^verify=/m, 'the refused command must never run');
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// Amending a live dispatch's verify re-pins it. The wrapper then runs the amended command and records
+// that, the command that actually ran. The old briefing's blob is refused before it runs, and a capture
+// of the old command that finishes after the amendment is still refused by the store, because the
+// recorded identity comes from what ran, never from a fresh read of the ticket.
+test('GH-373: a verify amended after dispatch records the command that ran and still catches the old one', async () => {
+  const fixture = setupIsolatedDispatch('gh-373-amended-verify');
+  try {
+    const amended = 'git status --short';
+    store.updateTicket(fixture.slug, fixture.ticket.ref, { executorVerify: amended });
+    assert.equal(store.getTicket(fixture.slug, fixture.ticket.ref).dispatch.verificationRequirement.command, amended);
+
+    const oldBlob = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(oldBlob.status, 2, oldBlob.output);
+    assert.ok(oldBlob.output.includes(`Pinned command: ${JSON.stringify(amended)}`), oldBlob.output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+
+    const staleRun = { command: ISOLATED_DISPATCH_VERIFY_COMMAND, status: 'passed', exitCode: 0, logPath: null, shell: 'fixture' };
+    const refused = recordCapture({ project: fixture.project, ticket: fixture.ticket.ref }, staleRun, fixture.worktree);
+    assert.equal(refused.reason, 'verification_capture_command_mismatch');
+
+    const { status, output } = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(status, 0, output);
+    const recorded = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].command, amended);
+    assert.equal(recorded[0].status, 'passed');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('GH-373: a ticket without a pinned verify command refuses and records nothing', async () => {
+  const project = initGitRepo('sq-verify-capture-no-verify-');
+  const { slug } = store.ensureProject(project);
+  const ticket = store.createTicket(slug, { title: 'no pinned verify command' });
+  try {
+    const { status, output } = await runCaptureProcess(null, project, ticket.ref);
+    assert.equal(status, 2, output);
+    assert.match(output, /capture=unrecorded reason=verification_capture_no_pinned_command/);
+    assert.ok(output.includes(`${ticket.ref} has no pinned verify command`), output);
+    assert.equal(recordedCaptureCount(project, ticket.ref), 0);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('GH-373: the wrapper names a missing board or ticket, and keeps --base64 alone working', () => {
+  const project = initGitRepo('sq-verify-capture-missing-target-');
+  const unregistered = initGitRepo('sq-verify-capture-unregistered-');
+  store.ensureProject(project);
+  try {
+    const encoded = ['--base64', Buffer.from('node --version').toString('base64')];
+    assert.deepEqual(captureCommand(encoded, null), { command: 'node --version' });
+    assert.match(captureCommand([], null).refusal, /^Usage: node verify-capture\.js --project <path> --ticket <ref>/);
+    assert.match(captureCommand(encoded, { project, ticket: 'SQ-999999' }).refusal, /reason=not_found\nTicket SQ-999999 does not exist on the board/);
+    assert.match(captureCommand([], { project: unregistered, ticket: 'SQ-1' }).refusal, /reason=project_not_found\nNo Sidequest board is registered for /);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(unregistered, { recursive: true, force: true });
   }
 });

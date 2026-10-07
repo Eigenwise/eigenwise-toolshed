@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { COMPAT_BASE_URL, COMPAT_HOST, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, gatewayClientModelId, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
-const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
+const { effectivePins, isGatewayModelId, ourBaseUrls, ownedPinValues } = require('./pins.js');
 
 // Project-local wiring is the default so each repository opts into the
 // machine-local gateway endpoint independently. Claude Code still lets a local
@@ -124,40 +124,113 @@ function writeProjectWiringRegistry(projects) {
   fs.writeFileSync(PROJECT_WIRING_REGISTRY_PATH, JSON.stringify({ projects }, null, 2) + '\n', { mode: 0o600 });
 }
 
-function registeredProjectWirings() {
-  let recorded = [];
-  let registryExists = false;
-  let registryNeedsRewrite = false;
+function recordedWiringProjects() {
   try {
-    registryExists = true;
     const parsed = JSON.parse(fs.readFileSync(PROJECT_WIRING_REGISTRY_PATH, 'utf8'));
-    if (Array.isArray(parsed.projects)) recorded = parsed.projects;
-    else registryNeedsRewrite = true;
+    return Array.isArray(parsed.projects)
+      ? { projects: parsed.projects, rewrite: false, exists: true }
+      : { projects: [], rewrite: true, exists: true };
   } catch (error) {
-    if (error?.code === 'ENOENT') registryExists = false;
-    else registryNeedsRewrite = true;
+    return { projects: [], rewrite: error?.code !== 'ENOENT', exists: error?.code !== 'ENOENT' };
   }
+}
 
-  const seen = new Set();
-  const valid = [];
-  for (const entry of recorded) {
-    if (typeof entry !== 'string' || !path.isAbsolute(entry)) continue;
-    const project = path.normalize(entry);
-    const key = registryKey(project);
-    if (seen.has(key)) continue;
-    let baseUrl;
-    try {
-      if (!fs.statSync(project).isDirectory()) continue;
-      baseUrl = JSON.parse(fs.readFileSync(projectSettingsFile(project), 'utf8')).env?.ANTHROPIC_BASE_URL;
-    } catch { continue; }
-    if (!ourBaseUrls().includes(baseUrl)) continue;
+function registeredProjectSettingsFile(project) {
+  try {
+    return fs.statSync(project).isDirectory()
+      ? { file: projectSettingsFile(project) }
+      : { reason: 'directory is missing' };
+  } catch { return { reason: 'directory is missing' }; }
+}
+
+function isAbsoluteProjectPath(entry) {
+  return typeof entry === 'string' && path.isAbsolute(entry);
+}
+
+function registeredProjectWiring(entry, seen) {
+  if (!isAbsoluteProjectPath(entry)) return null;
+  const project = path.normalize(entry);
+  const key = registryKey(project);
+  if (seen.has(key)) return null;
+  const candidate = registeredProjectSettingsFile(project);
+  if (!candidate.file) return { pruned: { project, reason: candidate.reason } };
+  try {
+    const value = JSON.parse(fs.readFileSync(candidate.file, 'utf8')).env?.ANTHROPIC_BASE_URL;
+    if (!ourBaseUrls().includes(value)) return null;
     seen.add(key);
-    valid.push({ project, file: projectSettingsFile(project), value: baseUrl });
-  }
+    return { wiring: { project, file: candidate.file, value } };
+  } catch { return null; }
+}
 
-  const projects = valid.map(({ project }) => project);
-  if (registryExists && (registryNeedsRewrite || JSON.stringify(projects) !== JSON.stringify(recorded))) writeProjectWiringRegistry(projects);
-  return valid;
+function registeredProjectWiringReport() {
+  const recorded = recordedWiringProjects();
+  const seen = new Set();
+  const results = recorded.projects.map((entry) => registeredProjectWiring(entry, seen));
+  const wirings = results.flatMap((result) => result?.wiring ? [result.wiring] : []);
+  const pruned = results.flatMap((result) => result?.pruned ? [result.pruned] : []);
+  const projects = wirings.map(({ project }) => project);
+  if (recorded.exists && (recorded.rewrite || JSON.stringify(projects) !== JSON.stringify(recorded.projects))) writeProjectWiringRegistry(projects);
+  return { wirings, pruned };
+}
+
+function registeredProjectWirings() {
+  return registeredProjectWiringReport().wirings;
+}
+
+function pinValuesNotOwned(env, valuesByKey) {
+  return Object.entries(valuesByKey).find(([key, values]) => (
+    env[key] !== undefined && !values.has(String(env[key]))
+  )) || null;
+}
+
+function effectivePinValues() {
+  return Object.fromEntries(Object.entries(effectivePins()).map(([alias, pin]) => [PIN_ALIASES[alias], pin.value]));
+}
+
+// Only a pin the project already holds is rewritten: adding missing pins is wiring, and a
+// refresh runs at every SessionStart, where it must not rewire a project nobody asked about.
+function stalePinsIn(env, expected) {
+  return Object.entries(expected).filter(([key, value]) => env[key] !== undefined && env[key] !== value);
+}
+
+function syncProjectPins(wiring, expected, ownedPins) {
+  let settings;
+  try {
+    settings = readSettingsForWrite(wiring.file);
+  } catch (error) {
+    return { skipped: { ...wiring, reason: error.message } };
+  }
+  const env = settings.env || {};
+  const unowned = pinValuesNotOwned(env, ownedPins);
+  if (unowned) return { skipped: { ...wiring, key: unowned[0], value: env[unowned[0]], reason: 'pin value is not gateway-owned' } };
+  const stalePins = stalePinsIn(env, expected);
+  if (stalePins.length === 0) return {};
+  settings.env = { ...env, ...Object.fromEntries(stalePins) };
+  writeSettings(wiring.file, settings);
+  return { changed: wiring };
+}
+
+function syncRegisteredProjectPins({ ownedPins = ownedPinValues() } = {}) {
+  const { wirings, pruned } = registeredProjectWiringReport();
+  const expected = effectivePinValues();
+  const results = wirings.map((wiring) => syncProjectPins(wiring, expected, ownedPins));
+  return {
+    changed: results.flatMap((result) => result.changed ? [result.changed] : []),
+    pruned,
+    skipped: results.flatMap((result) => result.skipped ? [result.skipped] : []),
+  };
+}
+
+function registeredProjectPinDisagreements() {
+  const { wirings, pruned } = registeredProjectWiringReport();
+  const expected = effectivePinValues();
+  const disagreements = wirings.flatMap((wiring) => {
+    const env = readSettingsForWrite(wiring.file).env || {};
+    return Object.entries(expected)
+      .filter(([key, value]) => env[key] !== value)
+      .map(([key, value]) => ({ ...wiring, key, staleValue: env[key], expectedValue: value }));
+  });
+  return { disagreements, pruned };
 }
 
 function recordProjectWiring(projectDirectory = process.cwd()) {
@@ -327,6 +400,6 @@ function wiredMode() {
 module.exports = {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isUnsupportedRemoteControlHttpsUrl, isWired,
   migrateLegacyProjectSettings, processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings,
-  recordProjectWiring, registeredProjectWirings, retireWiringModeConfig, selectedWiringScope,
-  settingsPath, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
+  recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings, retireWiringModeConfig, selectedWiringScope,
+  settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 };

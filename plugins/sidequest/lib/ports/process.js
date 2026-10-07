@@ -20,7 +20,8 @@ var process_exports = {};
 __export(process_exports, {
   createProcessPort: () => createProcessPort,
   runProcessVerification: () => runProcessVerification,
-  shellCommand: () => shellCommand
+  shellCommand: () => shellCommand,
+  verifierEnvironment: () => verifierEnvironment
 });
 module.exports = __toCommonJS(process_exports);
 const fs = require("node:fs");
@@ -50,6 +51,18 @@ function shellDefinition(platform = process.platform) {
   const posixShell = process.env.SHELL || "/bin/sh";
   return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: ".sh" });
 }
+const WINDOWS_BACKSLASH_PATH = /(?:^|[\s=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+const QUOTED_SEGMENT = /"(?:\\.|[^"\\])*"|'[^']*'/g;
+function unquotedText(command) {
+  return command.replace(QUOTED_SEGMENT, " ");
+}
+function commandPromptShell() {
+  const commandPrompt = process.env.ComSpec || "cmd.exe";
+  return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd" });
+}
+function verifierShell(command, platform = process.platform) {
+  return platform === "win32" && WINDOWS_BACKSLASH_PATH.test(unquotedText(command)) ? commandPromptShell() : shellDefinition(platform);
+}
 function commandForShell(scriptPath, shell) {
   const arguments_ = shell.scriptExtension === ".cmd" ? Object.freeze(["/d", "/s", "/c", scriptPath]) : Object.freeze([scriptPath]);
   return Object.freeze({ ...shell, arguments: arguments_ });
@@ -77,7 +90,7 @@ exit "$sidequest_exit_code"
 `;
 }
 function temporaryScript(command) {
-  const shell = shellDefinition();
+  const shell = verifierShell(command);
   const scriptPath = path.join(os.tmpdir(), `sidequest-verify-${process.pid}-${randomUUID()}${shell.scriptExtension}`);
   fs.writeFileSync(scriptPath, shellScript(command, shell), { encoding: "utf8", flag: "wx", mode: 448 });
   return Object.freeze({ scriptPath, shell: commandForShell(scriptPath, shell) });
@@ -123,6 +136,13 @@ function shellCannotParsePosixSyntax(logPath, exitCode, shell) {
   if (exitCode !== 1 || shell.scriptExtension !== ".cmd") return false;
   return /^'!' is not recognized as an internal or external command,$/m.test(fs.readFileSync(logPath, "utf8"));
 }
+function verifierEnvironment(environment) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+}
+function shellExitReason(shell, shellExitCode, spawnError) {
+  const reason = `The ${shell.label} exited ${shellExitCode ?? "without a code"} before reporting the suite exit code.`;
+  return spawnError ? `${reason} ${spawnError.message}` : reason;
+}
 function processTimedOut(error) {
   return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
 }
@@ -163,7 +183,7 @@ function runProcessVerification(requirement, options = {}) {
     try {
       outcome = spawnSync(shell.executable, shell.arguments, {
         cwd: options.cwd || process.cwd(),
-        env: options.environment,
+        env: verifierEnvironment(options.environment || process.env),
         windowsHide: true,
         timeout: timeoutMilliseconds,
         stdio: ["ignore", log, log]
@@ -184,7 +204,7 @@ function runProcessVerification(requirement, options = {}) {
   const exitCode = markerExitCode(logPath);
   if (exitCode === null) {
     const shellExitCode = outcome?.status ?? (outcome?.error ? 2 : null);
-    return failedResult(requirement, "could_not_run", command, logPath, `The ${shell.label} exited ${shellExitCode ?? "without a code"} before reporting the suite exit code.`, shellExitCode, tail, void 0, shell.label);
+    return failedResult(requirement, "could_not_run", command, logPath, shellExitReason(shell, shellExitCode, outcome?.error), shellExitCode, tail, void 0, shell.label);
   }
   if (shellCannotParsePosixSyntax(logPath, exitCode, shell)) {
     return failedResult(requirement, "could_not_run", command, logPath, `The ${shell.label} fallback could not parse POSIX syntax while running ${JSON.stringify(command)} (exit code ${exitCode}).`, exitCode, tail, void 0, shell.label);
@@ -206,5 +226,6 @@ function createProcessPort() {
 0 && (module.exports = {
   createProcessPort,
   runProcessVerification,
-  shellCommand
+  shellCommand,
+  verifierEnvironment
 });

@@ -1,8 +1,8 @@
 # Release fragments
 
-`.release/unreleased/` is the queue of changes that have landed but are not published yet. The orchestrator keeps one fragment per integrated ticket and cuts the release from `main` at `HEAD`. The fragment is the repository-owned record of what the board integrated.
+`.release/unreleased/` is the queue of changes that have landed but are not published yet. The orchestrator normally prepares the release from `develop` at its selected revision (`HEAD` by default, or `--sha <rev>` to pin a descendant), with `--base-branch` available when another base is intentional. A reviewed promotion PR moves the prepared release to `main`. The fragment is the repository-owned record of what the board integrated.
 
-`cut.mjs` owns marketplace and plugin version bumps, changelogs, release tags, and fragment consumption. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. See [`scripts/release/README.md`](../scripts/release/README.md) for the release lifecycle and recovery steps.
+`cut.mjs` owns marketplace and plugin version bumps, changelogs, and fragment consumption. In this repository's protected flow, `finalize.mjs` creates the release tags after the promotion PR merges and its exact main commit passes Test. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. See [`scripts/release/README.md`](../scripts/release/README.md) for the release lifecycle and recovery steps.
 
 Write one with `node scripts/release/note.mjs`, never by hand if you can avoid it, because the script validates what it writes:
 
@@ -95,3 +95,7 @@ Two switches, either one stops publication:
 - `hold: true` in a fragment holds that one change. The rest of the window still ships.
 - A `.release/HOLD` file holds the whole window. Its contents are the reason, printed by the cut.
   A hotfix still runs during a HOLD, because an urgent fix has to be able to ship.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of the release-fragment tooling. Donations are never required to use the files in this directory.

@@ -1,0 +1,37 @@
+{
+  "skill_name": "user-story",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "You are running wave 2 of story SQ-9001 under standing user authorization for this story's delegated work. Ticket SQ-9003 reports it is blocked on SQ-9002 ('add shared cache invalidation hook'), an existing ticket in this story, fully specified, ready, with every dependency it needs already met. Separately, an unrelated CI check on an unrelated branch is still running in the background. What do you do next?",
+      "expected_output": "Dispatch the existing ticket SQ-9002 now that it is confirmed ready, without filing a duplicate ticket, and continue the wave. The unrelated CI run is not treated as a dependency and does not delay the dispatch.",
+      "expectations": [
+        "Dispatches the existing ticket SQ-9002 rather than filing or proposing a duplicate ticket",
+        "Does not wait on or cite the unrelated CI run as a reason to hold the dispatch",
+        "Does not stop at a status report when the ticket is already ready to dispatch"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Ticket SQ-9010 reports it is blocked: it needs a new field on the story contract, and contract edits are orchestrator-only authority, not something the executor can do itself. No ticket yet exists for this prerequisite piece, but adding the field is inside your delegated authority for this story. What do you do?",
+      "expected_output": "Record the concrete dependency (the missing contract field), the responsible owner (the orchestrator, since contract edits are orchestrator-only), and the condition for resuming SQ-9010 (once the field is pinned). Then start that authorized prerequisite preparation itself rather than ending with only a status report.",
+      "expectations": [
+        "States the concrete dependency blocking SQ-9010",
+        "Names the responsible owner for resolving it",
+        "States the condition under which SQ-9010 can resume",
+        "Begins the authorized prerequisite preparation instead of stopping at a report",
+        "Does not bypass required review or permission boundaries to clear the blocker"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Mid-wave, ticket SQ-9020 reports that it noticed unrelated ticket SQ-9021, owned by a different story and outside your delegated scope for this story, appears broken. What do you do?",
+      "expected_output": "Report the finding and, where warranted, seek the user's authorization before acting on it. Do not dispatch or claim SQ-9021, do not mutate its board or any consumer of it, and do not treat raising its priority or acknowledging the report as taking it on.",
+      "expectations": [
+        "Does not dispatch, claim, or escalate SQ-9021 as if it were delegated work",
+        "Does not mutate SQ-9021's board, ticket, or any consumer",
+        "Surfaces the finding for the user's authorization rather than acting unilaterally"
+      ]
+    }
+  ]
+}

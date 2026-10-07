@@ -10,7 +10,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
 const { commandIncludesFile, commandResultAsync, createProxyRecovery, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, processIsOwnedByThisInstall, probeTimeoutMs, recordedGatewayPid, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
-const { startAll } = require('../lib/commands.js');
+const { PLUGIN_VERSION, startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
@@ -513,7 +513,7 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
     recordLifecycle: (event, details) => lifecycle.push({ event, details }),
     resolveOwner: async () => owner,
     reapOrphans: () => calls.push('cleanup'),
-    shimReady: async () => false,
+    fetchHealth: async () => null,
     stopSupervisor: async () => calls.push('stop'),
     spawnSupervisor: () => calls.push('start'),
   });
@@ -537,7 +537,8 @@ test('startup leaves a healthy command-hidden listener running', async () => {
     proxyExists: () => true,
     reapOrphans: () => calls.push('cleanup'),
     resolveOwner: async () => ({ state: 'unknown', pid: 701, reason: 'unreadable-command' }),
-    shimReady: async () => true,
+    fetchHealth: async () => ({ ok: true, proxyRecovery: true, supervisorVersion: PLUGIN_VERSION }),
+    refreshCatalog: async () => {},
     spawnSupervisor: () => calls.push('start'),
     stopSupervisor: async () => calls.push('stop'),
   });
@@ -582,7 +583,7 @@ test('proxy command identity resolves the physical executable path', (t) => {
 
 test('gateway fixture processes isolate outer body, socket, and Codex state', async (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
-  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   let defaultContacts = 0;
   const defaultEndpoint = http.createServer((request, response) => {
     defaultContacts += 1;
@@ -619,7 +620,7 @@ test('gateway fixture processes isolate outer body, socket, and Codex state', as
   assert.notEqual(isolatedEnvironment.MODEL_GATEWAY_REQUEST_BODY_DIR, outer.bodyDirectory);
   assert.notEqual(isolatedEnvironment.CODEX_HOME, outer.codexHome);
   assert.equal(isolatedEnvironment.ANTHROPIC_UNIX_SOCKET, undefined);
-  started.child.kill();
+  killProcessTree(started.child.pid);
   await waitForExit(started.child);
 
   const negativeControl = await startGateway(t, 'serve-shim', {
@@ -627,14 +628,14 @@ test('gateway fixture processes isolate outer body, socket, and Codex state', as
     CODEX_GATEWAY_REQUEST_LOG: '0',
   }, { isolatedOverrides: { MODEL_GATEWAY_REQUEST_BODY_DIR: outer.bodyDirectory } });
   assert.equal(await request(negativeControl.port, codexMessage()), 200);
-  negativeControl.child.kill();
+  killProcessTree(negativeControl.child.pid);
   await waitForExit(negativeControl.child);
   assert.throws(() => assertNoBodyRecord(outer.bodyDirectory), /true !== false/);
 });
 
 test('sync gateway fixture cleanup removes helper-owned homes and preserves supplied homes', (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
-  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const outer = setOuterGatewayEnvironment(t, outerHome, 9);
   const before = testHomes(outer.temporaryDirectory);
 
@@ -650,6 +651,20 @@ test('sync gateway fixture cleanup removes helper-owned homes and preserves supp
   });
   assert.equal(suppliedResult.status, 0, suppliedResult.stderr);
   assert.equal(fs.existsSync(suppliedHome), true);
+});
+
+test('gateway fixture home teardown stops a supervisor even after later commands reused its home', async (t) => {
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_REQUEST_LOG: '0' });
+  let supervisorPid = null;
+  // Runs after the home teardown and before startGateway's own stop hook, so it sees what
+  // the home teardown alone left behind.
+  t.after(() => {
+    assert.equal(processIsRunning(supervisorPid), false, 'home teardown stopped the supervisor before removing its home');
+    assert.equal(fs.existsSync(environment.HOME), false);
+  });
+  supervisorPid = (await startGateway(t, 'serve-shim', environment)).child.pid;
+  const status = spawnGatewayProcess(t, process.execPath, [CLI, 'status'], { env: environment, stdio: 'ignore' });
+  await waitForExit(status);
 });
 
 test('isolated ensure preserves a foreign serve-shim process and cleans its own supervisor', async (t) => {
@@ -747,6 +762,9 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
   await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
   fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
+  // The older supervisor's own exit can lag ensure's exit on a slow runner; give it
+  // a bounded window before asserting it is gone rather than checking instantly.
+  await waitForProcessesToExit([olderShim.pid], 5000);
   assert.equal(processIsRunning(olderShim.pid), false, 'ensure stopped the previous sibling supervisor');
   assert.equal(processIsRunning(replacementWorkerPid), true, 'ensure launched the replacement worker');
   assert.equal(processIsRunning(replacementProxyPid), true, 'ensure launched the replacement proxy');

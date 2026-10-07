@@ -17,10 +17,14 @@ file. Those reference pages are generated output, so never edit them by hand. Ed
 manifest or generator instead.
 
 The screenshot command runs `docs/screenshots/capture.mjs`. It seeds an isolated Sidequest board with
-fixed synthetic records, starts disposable local services, and captures six images into
+fixed synthetic records, starts disposable local services, and captures fourteen images into
 `src/assets/screenshots/`. The fixture privacy gate rejects environment-derived paths and usernames.
 Never capture a live board or dashboard for committed docs images.
 
 `npm run build` type-checks and builds the static site into `dist/`. The `docs.yml` workflow deploys
 that directory to GitHub Pages after a push to `main` when docs, the docs workflow, or reference
 sources under `plugins/` and `.claude-plugin/marketplace.json` changed. It can also run manually.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of this documentation site. Donations are never required to use the files in this directory.

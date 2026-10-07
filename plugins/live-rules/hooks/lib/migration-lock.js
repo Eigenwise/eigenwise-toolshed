@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 
 const STALE_LOCK_MS = 60 * 1000;
 
@@ -13,21 +14,47 @@ function stale(lockPath) {
   }
 }
 
+function lockAcquisitionError(lockPath, cause) {
+  const error = new Error('Could not create lock file ' + lockPath + ': ' + cause.code + ' ' + cause.message);
+  error.code = cause.code;
+  error.cause = cause;
+  return error;
+}
+
+function ensureLockDirectory(lockPath) {
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  } catch (error) {
+    throw lockAcquisitionError(lockPath, error);
+  }
+}
+
+function claimLockFile(lockPath) {
+  try {
+    const fd = fs.openSync(lockPath, 'wx');
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: crypto.randomBytes(8).toString('hex') }) + '\n');
+    fs.closeSync(fd);
+    return true;
+  } catch (error) {
+    if (!error || error.code !== 'EEXIST') throw lockAcquisitionError(lockPath, error);
+    return false;
+  }
+}
+
+function clearStaleLock(lockPath) {
+  try {
+    fs.renameSync(lockPath, lockPath + '.stale-' + process.pid + '-' + crypto.randomBytes(4).toString('hex'));
+  } catch (error) {
+    throw lockAcquisitionError(lockPath, error);
+  }
+}
+
 function acquire(lockPath) {
+  ensureLockDirectory(lockPath);
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = fs.openSync(lockPath, 'wx');
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: crypto.randomBytes(8).toString('hex') }) + '\n');
-      fs.closeSync(fd);
-      return true;
-    } catch (error) {
-      if (!error || error.code !== 'EEXIST' || !stale(lockPath)) return false;
-      try {
-        fs.renameSync(lockPath, lockPath + '.stale-' + process.pid + '-' + crypto.randomBytes(4).toString('hex'));
-      } catch (_) {
-        return false;
-      }
-    }
+    if (claimLockFile(lockPath)) return true;
+    if (!stale(lockPath)) return false;
+    clearStaleLock(lockPath);
   }
   return false;
 }

@@ -33,8 +33,17 @@ var import_node_fs = __toESM(require("node:fs"));
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
+var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
+var DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
+var READ_ONLY_DISCOVERED_MODEL_PREFIX = "sidequest-exec-readonly-model-";
+var TICKET_PREFIX = "sidequest-sq-";
+var LEGACY_TICKET_PREFIX = "sidequest-ticket-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
+function isEffort(value) {
+  return typeof value === "string" && EFFORTS.includes(value);
+}
 var DISPATCH_NAME = "sidequest-exec-dispatch";
 var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
@@ -42,6 +51,17 @@ function stableClaudeName(effort) {
 }
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
+}
+var DISCOVERED_MODEL_SUFFIX_RE = /^[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)$/;
+function discoveredModelEffort(name, prefix) {
+  const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
+  return name.startsWith(prefix) && isEffort(effort) ? effort : null;
+}
+function classifyDiscoveredModel(name) {
+  const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
+  if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
+  const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
+  return effort ? { kind: "discovered_model", effort } : null;
 }
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
@@ -55,6 +75,38 @@ function canonicalExecutorName(name) {
   if (!name.startsWith(PLUGIN_NAMESPACE)) return name;
   const unqualifiedName = name.slice(PLUGIN_NAMESPACE.length);
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
+}
+function classify(value) {
+  if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
+  const name = canonicalExecutorName(value);
+  if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
+  if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
+  const discoveredModel = classifyDiscoveredModel(name);
+  if (discoveredModel) return discoveredModel;
+  if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
+    const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
+    if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(READ_ONLY_CLAUDE_PREFIX)) {
+    const effort = name.slice(READ_ONLY_CLAUDE_PREFIX.length);
+    if (isEffort(effort)) return { kind: "read_only_claude_builtin", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(DISPATCH_PREFIX)) {
+    const effort = name.slice(DISPATCH_PREFIX.length);
+    if (isEffort(effort)) return { kind: "codex_dispatch", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(CLAUDE_PREFIX)) {
+    const effort = name.slice(CLAUDE_PREFIX.length);
+    if (isEffort(effort)) return { kind: "claude_builtin", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(TICKET_PREFIX)) return { kind: "ticket", effort: null };
+  if (name.startsWith(LEGACY_TICKET_PREFIX)) return { kind: "legacy_ticket", effort: null };
+  return { kind: "unknown", effort: null };
 }
 
 // src/hooks/shared/input.ts
@@ -497,31 +549,69 @@ function foreignWorktrees(location, roots, now) {
   }
   return [...byPath.values()];
 }
+function boundAgentWorktree(input) {
+  const agentId = stringField(input, "agent_id", "agentId");
+  if (!agentId) return "";
+  try {
+    const store = require(runtimeModule("store"));
+    return store.agentDispatchWorktrees(stringField(input, "session_id", "sessionId"), agentId)[0]?.worktree || "";
+  } catch (_) {
+    return "";
+  }
+}
+function ownWorktreeSentence(ownWorktree) {
+  return ownWorktree ? `Your own worktree is ${import_node_path5.default.basename(ownWorktree)}.` : "";
+}
+function rootsSentence(roots, ownWorktree) {
+  return `${ownWorktree ? "Nothing else" : "Nothing"} under ${roots.join(" or ")} is yours.`;
+}
+function plural(count, singular, pluralForm) {
+  return count === 1 ? singular : pluralForm;
+}
+function goneSentence(gone) {
+  if (!gone.length) return "";
+  return `${gone.length} of those ${plural(gone.length, "paths is", "paths are")} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`;
+}
+function liveClaimSentence(live) {
+  if (!live.length) return "";
+  return `${live.length} ${plural(live.length, "holds", "hold")} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`;
+}
+function candidateSentence(candidates) {
+  if (!candidates.length) return "";
+  return `Actionable exception: ${refList(candidates)} ${plural(candidates.length, "holds", "hold")} a candidate awaiting integration, so a diagnostic in that worktree outweighs an executor's \`verify passed\` and is worth reading before you integrate.`;
+}
 function refList(worktrees) {
   const refs = worktrees.map((entry) => entry.ref).filter(Boolean).sort();
   return refs.length ? refs.join(", ") : "an unnamed dispatch";
 }
-function warningFor(worktrees, roots) {
+function warningFor(worktrees, roots, ownWorktree) {
   const live = worktrees.filter((entry) => entry.lifecycle === "live");
   const candidates = worktrees.filter((entry) => entry.lifecycle === "candidate");
   const gone = worktrees.filter((entry) => !entry.onDisk);
-  const sentences = [
-    `sidequest: ${worktrees.length} foreign agent worktree${worktrees.length === 1 ? "" : "s"} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
-    `Nothing under ${roots.join(" or ")} is yours.`
-  ];
-  if (gone.length) sentences.push(`${gone.length} of those ${gone.length === 1 ? "paths is" : "paths are"} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`);
-  if (live.length) sentences.push(`${live.length} hold${live.length === 1 ? "s" : ""} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`);
-  if (candidates.length) sentences.push(`Actionable exception: ${refList(candidates)} hold${candidates.length === 1 ? "s" : ""} a candidate awaiting integration, so a diagnostic in that worktree outweighs an executor's \`verify passed\` and is worth reading before you integrate.`);
-  sentences.push("Keep error-severity diagnostics in your own files actionable.");
-  return sentences.join(" ");
+  return [
+    `sidequest: ${worktrees.length} foreign agent ${plural(worktrees.length, "worktree", "worktrees")} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
+    ownWorktreeSentence(ownWorktree),
+    "Keep error-severity diagnostics in your own files actionable.",
+    goneSentence(gone),
+    liveClaimSentence(live),
+    candidateSentence(candidates),
+    rootsSentence(roots, ownWorktree)
+  ].filter(Boolean).join(" ");
 }
-function diagnosticWorktreeWarning(input, now = Date.now()) {
+function receivingCheckout(input) {
   const start = stringField(input, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const location = checkoutLocation(start);
+  return location && { ...location, checkoutRoot: boundAgentWorktree(input) || location.checkoutRoot };
+}
+function ownAgentWorktree(location) {
+  return comparablePath(location.checkoutRoot) === comparablePath(location.projectRoot) ? "" : location.checkoutRoot;
+}
+function diagnosticWorktreeWarning(input, now) {
+  const location = receivingCheckout(input);
   if (!location) return "";
   const roots = agentWorktreeRoots(location.projectRoot);
-  const worktrees = foreignWorktrees(location, roots, now);
-  return worktrees.length ? warningFor(worktrees, roots) : "";
+  const worktrees = foreignWorktrees(location, roots, now ?? Date.now());
+  return worktrees.length ? warningFor(worktrees, roots, ownAgentWorktree(location)) : "";
 }
 
 // src/lib/plugin-freshness.ts
@@ -705,6 +795,21 @@ function nudgeOff() {
   const value = String(process.env.SIDEQUEST_NUDGE || "").trim().toLowerCase();
   return value === "off" || value === "0" || value === "false" || value === "no";
 }
+function sessionRole(data) {
+  if (process.env.SIDEQUEST_AGENT || classify(stringField(data, "agent_type", "agentType")).kind !== "unknown") return "executor";
+  return projectHasBoard(data) ? "orchestrator" : "plain";
+}
+function projectHasBoard(data) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.findProject(store.nearestRepoRoot(sessionProjectStart(data))).ok;
+  } catch (_) {
+    return true;
+  }
+}
+function sessionProjectStart(data) {
+  return stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
 function checkpointingGuidance(data) {
   const model = stringField(data, "model").toLowerCase();
   const tier = model.includes("haiku") ? "Haiku" : model.includes("sonnet") ? "Sonnet" : "";
@@ -757,50 +862,65 @@ function hasMidWaveBoard(data) {
     return false;
   }
 }
+function briefingWithheld(data, notice) {
+  if (nudgeOff()) return true;
+  if (sessionRole(data) === "orchestrator") return false;
+  if (notice) writeContext("SessionStart", notice);
+  return true;
+}
 function emit(context, notice, initialUserMessage = "") {
   const output = notice ? `${notice}
 ${context}` : context;
   writeContext("SessionStart", withWorkforce(output), initialUserMessage);
 }
-async function main() {
-  const data = readStdin();
-  if (!data) return;
-  const primarySession = isPrimarySession(data);
-  if (primarySession) {
-    const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
-    initializeCompactionState(sessionId3, data.transcript_path || data.transcriptPath);
-  }
-  reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
-  const freshnessNotice = sidequestReloadWarning(stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
+function isRestoredContext(source) {
+  return source === "compact" || source === "resume";
+}
+function startCompactionTracking(data) {
+  const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+  initializeCompactionState(sessionId3, data.transcript_path || data.transcriptPath);
+}
+async function restartNoticeFor(data, primarySession) {
+  const freshnessNotice = sidequestReloadWarning(sessionProjectStart(data), { pluginRoot: pluginRoot() });
   registerSweepSession(data);
-  let sweepNotices = primarySession ? lostLaunchNotices(data) : [];
+  const sweepNotices = primarySession ? lostLaunchNotices(data) : [];
   try {
     sweepNotices.push(...await runSweep(data));
   } catch (error) {
     sweepNotices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const source = stringField(data, "source");
-  const restartNotice = [
+  return [
     freshnessNotice,
-    source === "compact" || source === "resume" ? "" : diagnosticWorktreeWarning(data),
+    isRestoredContext(stringField(data, "source")) ? "" : diagnosticWorktreeWarning(data),
     ...sweepNotices
   ].filter(Boolean).join("\n");
-  if (nudgeOff()) return;
+}
+var ROUTED_GUIDANCE = {
+  standingAuthorization: "A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation.\n",
+  boardAuthorization: "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it.",
+  inlineBoundary: "",
+  fanoutGuidance: ""
+};
+var UNROUTED_GUIDANCE = {
+  standingAuthorization: "",
+  boardAuthorization: "Sidequest has no usable project route here, so substantive work may stay inline. Use board_config to enable a category with an available executor before asking for board dispatch.",
+  inlineBoundary: "Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.",
+  fanoutGuidance: "For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together."
+};
+function emitOrchestratorBriefing(data, restartNotice) {
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; ticket alerts default to dispatches prepared by this session plus unowned and terminal tickets, while failed GitHub CI runs stay project-wide. Use --all for project-wide ticket alerts. Skip it if Monitor is unavailable.`;
-  const dispatchAdmission = dispatchAdmissionStatus(data);
-  const boardAuthorization = dispatchAdmission === "routed" ? "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it." : "Sidequest has no usable project route here, so substantive work may stay inline. The first Board MCP call auto-registers this project; then use board_config to enable a category with an available executor before asking for board dispatch.";
-  const inlineBoundary = dispatchAdmission === "routed" ? "" : "Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.";
-  const fanoutGuidance = dispatchAdmission === "routed" ? "" : "For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.";
+  const { standingAuthorization, boardAuthorization, inlineBoundary, fanoutGuidance } = dispatchAdmissionStatus(data) === "routed" ? ROUTED_GUIDANCE : UNROUTED_GUIDANCE;
   const upstreamDefects = `If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits. ${upstreamDefectDestination()}`;
-  const checkpoint = checkpointingGuidance(data);
+  const checkpointGuidance = checkpointingGuidance(data);
+  const checkpoint = checkpointGuidance ? `${checkpointGuidance} ` : "";
   const recovery = "Context is UTF-8 bounded. Omitted details name a typed board retrieval call.";
   const initialUserMessage = hasMidWaveBoard(data) ? "/sidequest:sidequest" : "";
-  if (source === "compact" || source === "resume") {
+  if (isRestoredContext(stringField(data, "source"))) {
     emit(
       `=== sidequest (active — context restored) ===
-${recovery}
-ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. If Board MCP is unavailable, stop and tell the user to run /mcp and reconnect plugin:sidequest:board, or restart Claude Code; do not retry. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }) if still registered; a "No task found" or "not running (status: completed)" reply means it already exited, needing no retry or investigation. TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback.`,
+${standingAuthorization}${recovery}
+ROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. If Board MCP is unavailable, stop and tell the user to run /mcp and reconnect plugin:sidequest:board, or restart Claude Code; do not retry. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only when pulse still shows one alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback.`,
       restartNotice,
       initialUserMessage
     );
@@ -808,11 +928,21 @@ ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} $
   }
   emit(
     `=== sidequest (active) ===
-${recovery}
-ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }) if still registered; a "No task found" or "not running (status: completed)" reply means it already exited, needing no retry or investigation. TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
+${standingAuthorization}${recovery}
+ROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only when pulse still shows one alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
     restartNotice,
     initialUserMessage
   );
+}
+async function main() {
+  const data = readStdin();
+  if (!data) return;
+  const primarySession = isPrimarySession(data);
+  if (primarySession) startCompactionTracking(data);
+  reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
+  const restartNotice = await restartNoticeFor(data, primarySession);
+  if (briefingWithheld(data, restartNotice)) return;
+  emitOrchestratorBriefing(data, restartNotice);
 }
 main().catch((error) => {
   console.error(`sidequest: session-start failed: ${error instanceof Error ? error.message : String(error)}`);

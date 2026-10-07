@@ -25,6 +25,8 @@ interface CatalogModel {
   id?: unknown;
   label?: unknown;
   provider?: unknown;
+  contextWindow?: unknown;
+  contextWindowNote?: unknown;
 }
 
 export interface ExternalModel {
@@ -33,6 +35,8 @@ export interface ExternalModel {
   label: string;
   provider: string;
   source: string;
+  contextWindow?: number;
+  contextWindowNote?: string;
 }
 
 export interface ProviderReadiness {
@@ -131,14 +135,15 @@ function newestGatewayCatalogCommand(): string | null {
   return newest?.command ?? null;
 }
 
-function gatewayRefreshSucceeded(command: string): boolean {
-  try {
-    return spawnSync(process.execPath, [command, 'catalog', '--refresh', '--json'], {
-      encoding: 'utf8', timeout: 5000, windowsHide: true,
-    }).status === 0;
-  } catch {
-    return false;
-  }
+// The gateway prints why it declined to write on stderr; keeping its last line is what lets a dispatch
+// refusal say why the catalog is stale instead of only that it is (GH-227).
+function gatewayRefreshFailure(command: string): string | null {
+  const result = spawnSync(process.execPath, [command, 'catalog', '--refresh', '--json'], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+  });
+  if (result.status === 0) return null;
+  const reason = String(result.stderr || result.error?.message || '').trim().split(/\r?\n/).pop();
+  return reason || `the refresh command exited with status ${result.status}`;
 }
 
 export const CATALOG_STALE_MS = 5 * 60 * 1000;
@@ -146,26 +151,51 @@ export const CATALOG_STALE_MS = 5 * 60 * 1000;
 // a gateway that is down would otherwise spawn a child process per route resolution.
 const REFRESH_RETRY_MS = 30 * 1000;
 
-const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean }>();
+interface GatewayRefreshAttempt {
+  at: number;
+  refreshed: boolean;
+  failure: string | null;
+}
 
-// Run the refresh for its side effect and re-read the file, which is the authority. Parsing the gateway CLI's
-// stdout made this return null the moment that CLI printed a diagnostic line ahead of the JSON, so the refresh
-// silently did nothing in the exact case it exists for (SQ-2208). Its exit code is not the authority either: it
-// exits 0 printing the stored catalog when the proxy is down, so an attempt only counts as a refresh when the
-// file it left behind is current. Attempts are remembered per catalog file, so readiness and model listing
-// share one child process rather than spawning one each.
+const gatewayRefreshAttempts = new Map<string, GatewayRefreshAttempt>();
+
+function gatewayRefreshDue(attempt: GatewayRefreshAttempt | undefined): boolean {
+  if (!attempt) return true;
+  return Date.now() - attempt.at > (attempt.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS);
+}
+
+function runGatewayRefresh(catalogPath: string): unknown {
+  const command = newestGatewayCatalogCommand();
+  const failure = command === null ? 'no installed model-gateway command was found' : gatewayRefreshFailure(command);
+  const written = failure === null ? readCatalogSafe(catalogPath) : null;
+  gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: refreshedCatalogStaysCurrent(written), failure });
+  return written;
+}
+
+// Run the refresh for its side effect and re-read the file to get the written catalog. Parsing the gateway
+// CLI's stdout made this return null the moment that CLI printed a diagnostic line ahead of the JSON, so the
+// refresh silently did nothing in the exact case it exists for (SQ-2208). The exit code is the authority now:
+// it exits non-zero with a stderr reason when it declines to write, so a 0 means the catalog file is current
+// and safe to read back. Attempts are remembered per catalog file, so readiness and model listing share one
+// child process rather than spawning one each.
 function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
   if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
-  const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
-  if (!attempt || Date.now() - attempt.at > window) {
-    const command = newestGatewayCatalogCommand();
-    const written = command !== null && gatewayRefreshSucceeded(command) ? readCatalogSafe(catalogPath) : null;
-    gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
-    return isRecord(written) ? written as CatalogData : null;
-  }
-  const catalog = attempt.refreshed ? readCatalogSafe(catalogPath) : null;
+  let catalog: unknown = null;
+  if (gatewayRefreshDue(attempt)) catalog = runGatewayRefresh(catalogPath);
+  else if (attempt?.refreshed) catalog = readCatalogSafe(catalogPath);
   return isRecord(catalog) ? catalog as CatalogData : null;
+}
+
+// A refreshed catalog that still reports Codex unready is asked again after the short retry window, not the
+// whole catalog window: a transient upstream failure lifts within seconds, and pinning that refusal for five
+// minutes held dispatch long after the gateway had recovered (GH-175).
+function refreshedCatalogStaysCurrent(written: unknown): boolean {
+  return catalogWithinFreshnessWindow(written) && catalogProviderReadiness(written as CatalogData, 'codex')?.ready === true;
+}
+
+export function gatewayCatalogRefreshFailure(): string | null {
+  return gatewayRefreshAttempts.get(path.join(claudeHome(), 'model-gateway', 'catalog.json'))?.failure ?? null;
 }
 
 function catalogWithinFreshnessWindow(data: unknown): boolean {
@@ -235,19 +265,31 @@ function currentCatalog(catalogPath: string, schemas: ReadonlySet<number>): Cata
   return usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
 }
 
+function catalogText(value: unknown, fallback = ''): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text || fallback;
+}
+
+function catalogProvider(model: CatalogModel, schema: number): string {
+  if (schema < 4) return 'codex';
+  const provider = model.provider;
+  return typeof provider === 'string' && provider === provider.toLowerCase() && SLUG_RE.test(provider) ? provider : '';
+}
+
+function catalogContextWindow(model: CatalogModel): Pick<ExternalModel, 'contextWindow' | 'contextWindowNote'> {
+  const contextWindow = model.contextWindow;
+  if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return {};
+  const contextWindowNote = catalogText(model.contextWindowNote);
+  return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
+}
+
 function validateEntry(raw: unknown, source: string, schema: number): ExternalModel | null {
-  if (!isRecord(raw)) return null;
-  const model = raw as CatalogModel;
-  const slug = typeof model.slug === 'string' ? model.slug.trim().toLowerCase() : '';
-  if (!SLUG_RE.test(slug)) return null;
-  const id = typeof model.id === 'string' ? model.id.trim() : '';
-  if (!id) return null;
-  const provider = schema >= 4
-    ? typeof model.provider === 'string' && model.provider === model.provider.toLowerCase() && SLUG_RE.test(model.provider) ? model.provider : ''
-    : 'codex';
-  if (!provider) return null;
-  const label = typeof model.label === 'string' && model.label.trim() ? model.label.trim() : slug;
-  return { slug, id, label, provider, source };
+  const model: CatalogModel = isRecord(raw) ? raw : {};
+  const slug = catalogText(model.slug).toLowerCase();
+  const id = catalogText(model.id);
+  const provider = catalogProvider(model, schema);
+  if (!SLUG_RE.test(slug) || !id || !provider) return null;
+  return { slug, id, label: catalogText(model.label, slug), provider, source, ...catalogContextWindow(model) };
 }
 
 export function configuredExternalModelProvider(slug: string): string | null {

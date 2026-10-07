@@ -5,12 +5,51 @@ const { classifyVerificationKind, verificationRequirement } = require('../kernel
 const { resolveSuite } = require('../suite-resolver.js');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require('../kernel/review-binding');
 const { compareSemver } = require('../plugin-freshness.js');
+const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
+const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require('./composition-admission.js');
+import type { CompositionDispatch, CompositionTicket } from './composition-admission';
+
+type NativeCheckoutCreation = CompositionDispatch & {
+  sessionId?: string | null; worktreeBindingSource?: string;
+  worktreeCommonGitDirectory?: string; worktreeObservedRevision?: string;
+  worktreeCreationCompletedAt?: string; worktreeBoundAt?: string; agentId?: string;
+};
+type NativeCheckoutBindingRequest = { sessionId: string; worktree: string; repository: string; attempt: string; checkoutAgentId: string };
+type NativeCheckoutBinding = {
+  ok: true; ref: string; attempt: string; baseline: string; repository: string; worktree: string;
+  creationCompleted?: boolean; expectedGitDirectory?: string | null; expectedCommonGitDirectory?: string | null;
+  expectedCheckoutInstance?: string | null; expectedRevision?: string | null;
+};
+type NativeCheckoutBindingResult = NativeCheckoutBinding | { ok: false; reason: string };
+type NativeCheckoutFacts = {
+  gitDirectory: string; commonGitDirectory: string; checkoutInstance: string; revision: string;
+};
+type NativeCheckoutCompletion = { ok: true; alreadyCompleted: boolean } | { ok: false; reason: string };
 
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket)
     && !normalizeFiles(ticket?.files).length
     && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
+}
+
+function undeclaredWriteScopeRefusal(ref: string) {
+  return `prepare dispatch: ${ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to give the executor the whole tree as its write scope (isolated worktree only).`;
+}
+
+// GH-341: an unscoped dispatch used to bind only the board's alwaysInScope paths, so
+// the executor silently got docs/ and nothing else. Board paths ride beside the whole
+// tree; they never stand in for it.
+function unscopedWriteScopeLine(alwaysInScope: unknown) {
+  const boardPaths = Array.isArray(alwaysInScope) ? alwaysInScope : [];
+  return `write scope: unscoped (whole tree)${boardPaths.length ? `, always-in-scope: ${boardPaths.join(', ')}` : ''}`;
+}
+
+// A whole-tree commit in the shared checkout would sweep every other dirty path into
+// this ticket, so the refusal comes before the work instead of at submit.
+function unscopedSharedTreeRefusal(ref: string, boardPaths: readonly string[]) {
+  const boardOnly = boardPaths.length ? ` Board policy alone would give it only ${boardPaths.join(', ')}.` : '';
+  return `prepare dispatch: ${ref} has no declared file scope and would run in the shared checkout, where an unscoped (whole tree) write scope would commit every dirty path in it.${boardOnly} Declare the paths it needs (\`sidequest update ${ref} --file <path>\`), or dispatch it into an isolated worktree.`;
 }
 
 function namedSuiteForTicket(ticket: any, projectPath: string) {
@@ -49,7 +88,7 @@ function requirementsMatch(left: any, right: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
 
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
@@ -124,6 +163,58 @@ function ticketEvidenceDirectory(slug?: any, ref?: any, projectPath?: any) {
   return insideRepository
     ? path.join(path.dirname(path.resolve(repository)), '.sidequest-verification', safeSlug, safeRef)
     : directory;
+}
+
+// Board-owned verification evidence is not repository content: dispatch creates the directory above,
+// the briefing sends executors there, and on a machine that keeps ~/.claude in a dotfiles repository
+// the whole subtree sits inside a Git checkout no dispatch holds a lease for. A write lease answers
+// for a repository, so letting the isolation guard resolve that enclosing checkout refused the board's
+// own directory while the same write through Bash, which no hook gates, went through (GH-163).
+//
+// The exemption is keyed to the caller's own resolved dispatch rather than to a path shape. A shape
+// match on `projects/<anything>/verification/**` cannot tell a registered ticket's directory from an
+// invented slug, and it cannot recognize ticketEvidenceDirectory's relocated form at all, since that
+// form lands beside the project repository rather than under the home. Comparing against the
+// evidenceDirectory the store actually recorded for the matched dispatch answers both at once: only
+// that one directory, wherever prepareDispatch resolved it to, is exempt.
+//
+// A dedicated lookup rather than a field folded into dispatchIsolationExpectation: that function
+// already scans every project and ticket to answer a much bigger question (worktree and lease facts
+// for every candidate dispatch), and this only ever needs one ticket's recorded directory once the
+// guard already knows which dispatch it is asking about.
+function dispatchEvidenceDirectory(project?: any, ref?: any) {
+  const state = dispatchState(getTicket(project, ref));
+  return state && state.evidenceDirectory ? String(state.evidenceDirectory) : null;
+}
+
+function segmentsUnder(root: string, target: string): string[] {
+  const relative = path.relative(canonicalPath(root), canonicalPath(path.resolve(target))).replace(/\\/g, '/');
+  // path.relative returns exactly '..' (no trailing slash) for root's immediate parent, so matching
+  // only the '../' prefix let that one directory - here, the verification directory itself, one level
+  // above any ticket's evidence directory - through as if it were nested inside root.
+  const outside = !relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative);
+  return outside ? [] : relative.split('/');
+}
+
+function trimmedString(value?: any): string {
+  return String(value || '').trim();
+}
+
+// `canonicalPath` realpaths only the longest existing prefix, so a symlink at the final path
+// component that does not resolve to anything yet stays unresolved and containment above would follow
+// it out of the evidence directory once the write actually creates something there. Refusing whenever
+// the requested path is itself a symlink, dangling or not, closes that; a live symlink pointing outside
+// the directory was already refused by the containment check.
+function boardVerificationEvidencePath(target?: any, evidenceDirectory?: any) {
+  const requested = trimmedString(target);
+  const root = trimmedString(evidenceDirectory);
+  if (!requested || !root) return false;
+  try {
+    if (fs.lstatSync(requested).isSymbolicLink()) return false;
+  } catch (_) {
+    // Not there yet: the common case is exactly the write that will create it.
+  }
+  return segmentsUnder(root, requested).length > 0;
 }
 
 function writeDispatchTokenFile(ticket?: any) {
@@ -253,12 +344,17 @@ function repositoryIdentity(cwd?: any) {
 // spawning checkout, the lease never binds, and the executor dies before it
 // starts (SQ-2570, SQ-2884). Refuse that case while the caller can still wait or
 // choose sharedTree. Linked worktrees of the project share its common git dir, so
-// they are NOT a mismatch; that case is the existing stale-cwd warning's.
-function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
-  if (!runtimeCwd || !projectPath) return null;
+// they are NOT a mismatch; that case is the existing stale-cwd warning's. A runtime
+// outside any repository is a mismatch too: the hook has no checkout to fall back
+// to there, so it would crash after the launch was recorded (GH-269).
+function runtimeOutsideProjectRepository(projectPath?: any, runtimeCwd?: any) {
+  if (!runtimeCwd || !projectPath) return false;
   const project = repositoryIdentity(projectPath);
-  const runtime = repositoryIdentity(runtimeCwd);
-  if (!project || !runtime || project === runtime) return null;
+  return Boolean(project) && project !== repositoryIdentity(runtimeCwd);
+}
+
+function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
+  if (!runtimeOutsideProjectRepository(projectPath, runtimeCwd)) return null;
   const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug);
   if (!competing.length) return null;
   return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry: any) => entry.path).join(', ')}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;
@@ -573,66 +669,212 @@ function pulseDispatchState(state?: any) {
 // message asserting it was bound, claimed, checkpointed, or terminal when it was none of those.
 const PRE_RUNTIME_DISPATCH_OUTCOMES = new Set(['prepared', 'launched']);
 
-function supersedableUnboundAttempt(ticket?: any, state?: any) {
+// Every dispatch-state timestamp a RUNTIME can produce before its first claim, newest wins; the eighth
+// signal is its own board writes, which live on the ticket rather than here. Measuring the
+// grace from `boundAt` alone retired executors that were demonstrably alive: SubagentStart stamps it
+// before the model's first turn, so a slow gateway turn, a briefing fetch, or a pre-claim skill load all
+// happen inside a window that counted as silence (SQ-2932 finding 1). `preparedAt` is deliberately absent:
+// it is the board stamping its own token, not a runtime saying anything, and an attempt that produced none
+// of these has nothing alive to protect.
+const PRE_CLAIM_RUNTIME_SIGNALS: ReadonlyArray<readonly [string, string]> = [
+  ['launchedAt', 'launch recorded'],
+  ['worktreeBoundAt', 'worktree creation started'],
+  ['worktreeCreationCompletedAt', 'worktree checkout recorded'],
+  ['worktreeProvisionedAt', 'worktree provisioning finished'],
+  ['boundAt', 'runtime bound'],
+  ['briefedAt', 'briefing fetched'],
+  ['claimedAt', 'claim recorded'],
+];
+
+// The eighth signal, and the only one the runtime produces with its own hands instead of a hook: a board
+// write. Two bound-unclaimed executors were posting comments while all seven stamps were two hours old, and
+// retireOnly and groomClose retired both mid-write (SQ-2953 finding 2).
+//
+// The launcher session is the trust boundary, and on its own it is far too wide: fan-out siblings and the
+// orchestrator all write on that one session, and the MCP transport carries no per-agent identity, so
+// matching the session alone let the orchestrator's own progress comments hold a dead attempt open forever
+// (SQ-2959 finding 1). So a comment speaks for the runtime only when it arrived on the launcher session the
+// dispatch recorded, on this attempt's own ticket, after its launch, before any claim, and under the exact
+// runtime name SubagentStart bound. A same-session caller that deliberately writes under that bound name is
+// trusted as that runtime; any other `by` - the orchestrator's identity included - is somebody else. An
+// attempt whose bind recorded only an agent id has no name to match, so no board write can speak for it.
+// After a claim the claim liveness rules take over and this stops being consulted at all.
+function lastAttributedBoardWriteAt(ticket?: any, state?: any) {
+  const sessionId = String(state?.sessionId || '').trim();
+  // Exact means byte-for-byte: a `by` that differs only by whitespace is somebody else (SQ-2964).
+  const agentName = typeof state?.agentName === 'string' ? state.agentName : '';
+  const launchedAt = Date.parse(state?.launchedAt);
+  if (!sessionId || !agentName.trim() || !Number.isFinite(launchedAt)) return null;
+  if (state.claimedAt || ticket?.claim?.by) return null;
+  let latest: number | null = null;
+  for (const comment of Array.isArray(ticket?.comments) ? ticket.comments : []) {
+    if (String(comment?.sourceSession || '').trim() !== sessionId) continue;
+    if (comment?.by !== agentName) continue;
+    const at = Date.parse(comment?.at);
+    if (!Number.isFinite(at) || at < launchedAt) continue;
+    if (latest === null || at > latest) latest = at;
+  }
+  return latest;
+}
+
+function lastRuntimeSignalAt(ticket?: any, state?: any): { at: number; label: string } | null {
+  let latest: { at: number; label: string } | null = null;
+  for (const [field, label] of PRE_CLAIM_RUNTIME_SIGNALS) {
+    const at = Date.parse(state?.[field]);
+    // An unparsable stamp is one missing signal, never a NaN that poisons the whole comparison.
+    if (!Number.isFinite(at)) continue;
+    if (!latest || at >= latest.at) latest = { at, label };
+  }
+  const wroteAt = lastAttributedBoardWriteAt(ticket, state);
+  if (wroteAt !== null && (!latest || wroteAt >= latest.at)) latest = { at: wroteAt, label: 'board write recorded' };
+  return latest;
+}
+
+// WorktreeCreate records its completed checkout identity BEFORE it runs provisioning, and a cold `npm ci`
+// runs for minutes after that with nothing else reaching the board, so neither the reservation nor the
+// completion proves the hook is finished. Only the provisioning stamp does, or SubagentStart binding a
+// runtime, which cannot happen until the hook returns (SQ-2932 finding 2).
+function worktreeProvisioningInFlight(state?: any) {
+  return Boolean(state?.worktreeBindingSource === 'worktree-create' && state.worktree
+    && !state.worktreeProvisionedAt && !state.boundAt);
+}
+
+// THE retirement authority. Every evidence path - prepareDispatch, retireOnly, clearUnclaimedDispatch,
+// pulse, the CLI and the refusal text - asks this and nothing else when an unclaimed attempt becomes
+// retirable, so the printed deadline is always the one the gate uses. It never returns null: three
+// reviews in a row found a caller that had invented its own answer for the missing case (SQ-2949).
+function unclaimedRetirement(ticket?: any, state?: any, now = Date.now()) {
+  const signal = lastRuntimeSignalAt(ticket, state);
+  const provisioning = worktreeProvisioningInFlight(state);
+  if (!signal) {
+    // Nothing alive ever reported in. Falling back to the board's own prepare stamp keeps the instant
+    // stable across repeated calls while leaving it in the past, which is the "retirable at once" the
+    // refusal text and the MCP description have always promised.
+    const preparedAt = Date.parse(state?.preparedAt);
+    return {
+      retirableAt: Number.isFinite(preparedAt) ? preparedAt : now,
+      signal: null,
+      provisioning,
+      reason: 'no_readable_signal' as const,
+    };
+  }
+  // A bound runtime's FIRST action is its tokened claim, so an attempt silent for a whole claim grace is
+  // not winding down, it is gone. An in-flight WorktreeCreate is the exception: the board cannot tell a
+  // cancelled hook from a running install, so it only ever reaches the idle backstop.
+  return provisioning
+    ? { retirableAt: signal.at + claimIdleMs(), signal, provisioning, reason: 'idle_backstop' as const }
+    : { retirableAt: signal.at + claimGraceMs(), signal, provisioning, reason: 'grace' as const };
+}
+
+// The deadline protects a runtime still starting from anyone who cannot see it. The session that prepared the
+// attempt spawned it, so it holds what the board never gets for a launch that dies before its first tool call:
+// the host's failure report, or the Agent call returning with no claim. Its evidence retires at once; every
+// other caller still waits for the deadline (SQ-3110, SQ-3071).
+function preparingSessionAttests(state?: any, sessionId?: any) {
+  const caller = String(sessionId || '').trim();
+  return Boolean(caller) && caller === String(state?.preparedBy?.sessionId || '').trim();
+}
+
+// The shape half of the decision: an attempt nobody claimed, checkpointed or ended. Whether it is retirable
+// YET is the authority's call, never this predicate's.
+function unclaimedEvidenceAttempt(ticket?: any, state?: any) {
   return Boolean(
     state
+    && ticket?.dispatchNonce
     && PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)
     && !state.terminalAt
-    && !state.boundAt
-    && !state.agentId
     && !state.claimedAt
-    && !(ticket?.claim && ticket.claim.by)
-    && !ticket?.checkpoint
-    && ticket?.dispatchNonce,
+    && !ticket.claim?.by
+    && !ticket.checkpoint,
   );
 }
 
-// A bound runtime's FIRST action is its tokened claim, so a bound attempt that has not claimed within the
-// claim-idle backstop is not winding down, it is gone. WorktreeCreate has an earlier terminal fact: once it
-// reserved a checkout but could not record that checkout's identity, the hook was interrupted before a runtime
-// could claim. Recovery evidence must retire that attempt immediately rather than wait for an unrelated sweep.
-function strandedBoundAttempt(ticket?: any, state?: any) {
-  if (!state || !ticket?.dispatchNonce || !PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return false;
-  if (state.terminalAt || state.claimedAt || ticket.claim?.by || ticket.checkpoint) return false;
-  if (state.worktreeBindingSource === 'worktree-create' && state.worktree && !state.worktreeCreationCompletedAt) return true;
-  const boundMs = Date.parse(state.boundAt);
-  return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
+// An attempt that never reached a runtime at all, which is a launch that never arrived rather than a
+// stranded one. A WorktreeCreate holding the checkout counts as reached: the hook is the runtime.
+function unboundEvidenceAttempt(state?: any) {
+  return Boolean(state && !state.boundAt && !state.agentId && !worktreeProvisioningInFlight(state));
 }
 
-const EVIDENCE_SUPERSEDED_FAILURE_SHAPES = new Set(['unclaimed_launch_superseded', 'stranded_bound_launch_superseded']);
-
-function evidenceRetirableAttempt(ticket?: any, state?: any) {
-  return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state);
+function evidenceRetirableAttempt(ticket?: any, state?: any, now = Date.now(), sessionId?: any) {
+  if (!unclaimedEvidenceAttempt(ticket, state)) return false;
+  return preparingSessionAttests(state, sessionId) || now >= unclaimedRetirement(ticket, state, now).retirableAt;
 }
 
-function describeMinutes(ms: number) {
-  const minutes = Math.max(1, Math.round(ms / 60000));
+// A stop hook that beat the evidence to it already retired the attempt, so the same recovery call has nothing
+// left to do rather than a reason to refuse (GH-69: the evidence call had no window in that shape).
+function terminalUnclaimedAttempt(ticket?: any, state?: any) {
+  return Boolean(state?.terminalAt && !ticket?.dispatchNonce && !ticket?.claim?.by && !pendingSubmission(ticket));
+}
+
+function preparingSessionClause(state?: any) {
+  const preparingSession = String(state?.preparedBy?.sessionId || '').trim();
+  return preparingSession
+    ? `The session that prepared it (${preparingSession}) can retire it now with that evidence: it spawned the runtime, so the host's failure report or the Agent call returning without a claim is proof the board never gets.`
+    : 'No preparing session was recorded, so evidence waits for the deadline.';
+}
+
+// Every refusal that meets an attempt nobody claimed names this one recovery, never a release (there is no
+// claim holder) and never TaskStop (the host has already ended the runtime or will on its own).
+function unclaimedAttemptRecoveryGuidance(ticket?: any, state?: any) {
+  if (!unclaimedEvidenceAttempt(ticket, state)) return '';
+  const ref = ticket.ref;
+  return ` Nobody claimed this attempt, so there is no claim to release. The one recovery is recovery evidence: close it with \`groomClose ${ref} --recoveryEvidence "<the host's failure report>"\` (add \`--deliveryCommit <sha> --deliveryMethod manual\` for work landed by hand, reachable from the recorded integration branch), which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). ${preparingSessionClause(state)} From any other session both refuse with the countdown to the retirement deadline.`;
+}
+
+function minuteCount(minutes: number) {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
-function boundRuntimeBlocker(state?: any) {
-  if (state?.worktreeBindingSource === 'worktree-create' && state.worktree && !state.worktreeCreationCompletedAt) {
-    return 'bound by WorktreeCreate without a completed checkout identity and is immediately retirable on recovery evidence';
-  }
-  const boundMs = Date.parse(state?.boundAt);
-  if (!Number.isFinite(boundMs)) return 'bound to a runtime';
-  const waited = Date.now() - boundMs;
-  return `bound to a runtime ${describeMinutes(waited)} ago and still unclaimed, which becomes retirable on evidence in ${describeMinutes(claimIdleMs() - waited)} unless its terminal hook fires first`;
+// Elapsed rounds down and remaining rounds up, so the two halves of the refusal always sum to the grace
+// rather than each claiming a minute the other already spent, and the countdown only reads "1 minute"
+// inside the final minute. The old pair rounded and clamped both halves at one minute, which reported
+// "60 minutes" the instant an attempt bound and "1 minute" for every minute after the deadline passed.
+function describeElapsed(ms: number) {
+  return minuteCount(Math.max(0, Math.floor(ms / 60000)));
 }
 
-function evidenceSupersessionBlocker(ticket?: any, state?: any) {
-  // Retiring an attempt clears its token, so repeating the evidence command answered "not an active attempt"
-  // while describing the exact case that had just been retired (SQ-2537). Name the retirement instead.
-  if (state?.terminalAt && EVIDENCE_SUPERSEDED_FAILURE_SHAPES.has(state.failureShape)) {
-    return `already retired on recovery evidence at ${state.terminalAt}, so dispatch again without recoveryEvidence to prepare the replacement`;
+function describeRemaining(ms: number) {
+  return minuteCount(Math.ceil(ms / 60000));
+}
+
+function unclaimedRuntimeBlocker(ticket?: any, state?: any, now = Date.now()) {
+  const boundMs = Date.parse(state?.boundAt);
+  const waited = Number.isFinite(boundMs)
+    ? `bound to a runtime ${describeElapsed(now - boundMs)} ago and still unclaimed, which`
+    : worktreeProvisioningInFlight(state)
+      ? 'still inside the WorktreeCreate that reserved its checkout, and unclaimed, which'
+      : 'unbound and unclaimed, which';
+  const retirement = unclaimedRetirement(ticket, state, now);
+  // Naming the signal is what stops an operator reading the deadline as arbitrary: it is the difference
+  // between "bound 20 minutes ago, still not retirable" and "its briefing fetch was 2 minutes ago".
+  const measured = retirement.signal
+    ? `last runtime signal: ${retirement.signal.label} at ${new Date(retirement.signal.at).toISOString()}`
+    : 'no runtime ever recorded a signal on this attempt, so its own prepare stamp is the deadline';
+  const window = retirement.provisioning
+    ? 'its WorktreeCreate has not recorded finished provisioning, so only the idle backstop applies'
+    : 'the claim grace runs from that signal';
+  const remaining = retirement.retirableAt - now;
+  if (remaining > 0) {
+    return `${waited} becomes retirable on evidence at ${new Date(retirement.retirableAt).toISOString()}, in ${describeRemaining(remaining)}, unless its terminal hook fires first (${measured}; ${window}). ${preparingSessionClause(state)}`;
   }
+  return `${waited} passed that deadline at ${new Date(retirement.retirableAt).toISOString()} but is not retirable in dispatch state ${pulseDispatchState(state)} (${measured})`;
+}
+
+// clearUnclaimedDispatch is a second door onto the same attempt, so it owes the caller the same countdown
+// rather than its own verdict: groomClose retired a fresh unbound attempt inside grace because it never
+// asked the authority at all (SQ-2949 finding 1).
+function unclaimedRetirementRefusal(ticket?: any, state?: any, now = Date.now()) {
+  return `${ticket?.ref || 'This attempt'} cannot be retired on recovery evidence yet because its dispatch is ${unclaimedRuntimeBlocker(ticket, state, now)}.`;
+}
+
+function evidenceSupersessionBlocker(ticket?: any, state?: any, now = Date.now()) {
   if (!state || !ticket?.dispatchNonce) return 'not an active attempt';
   if (state.terminalAt) return `already terminal (${state.outcome || 'terminal'})`;
   if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
   if (state.claimedAt) return 'claimed';
   if (ticket.checkpoint) return 'checkpointed';
-  if (state.boundAt || state.agentId) return boundRuntimeBlocker(state);
-  return `in unrecognized state ${pulseDispatchState(state)}`;
+  if (!PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return `in unrecognized state ${pulseDispatchState(state)}`;
+  return unclaimedRuntimeBlocker(ticket, state, now);
 }
 
 function retirePreparedCompatibilityStaleAttempt(slug?: any, ticket?: any, source = 'tokened-claim-refusal') {
@@ -710,15 +952,19 @@ function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     const state = dispatchState(ticket);
-    if (!evidenceRetirableAttempt(ticket, state)) {
+    const now = Date.now();
+    if (terminalUnclaimedAttempt(ticket, state)) return { ok: true, ticket, alreadyTerminal: true };
+    if (!evidenceRetirableAttempt(ticket, state, now, opts?.sessionId)) {
       return {
         ok: false,
         reason: 'unclaimed_launch_not_supersedable',
         ticket,
-        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. Evidence retires an attempt whose runtime is gone: one that minted a token and never reached a runtime, or one bound and unclaimed past the claim-idle backstop. Anything past that waits for its own terminal record.`,
+        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. Evidence retires an unclaimed attempt at once from the session that prepared it, and from any other session once it has no readable runtime signal or its latest runtime signal is past its retirement deadline. A claimed attempt waits for its own terminal record.`,
       };
     }
-    const strandedBound = strandedBoundAttempt(ticket, state);
+    // What the runtime reached, not what the gate allowed: an attempt that bound or reserved a checkout
+    // is stranded, and one that never left the token is a launch that never arrived.
+    const strandedBound = !unboundEvidenceAttempt(state);
     setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', {
       slug,
       failureShape: strandedBound ? 'stranded_bound_launch_superseded' : 'unclaimed_launch_superseded',
@@ -1155,6 +1401,29 @@ function continuationFallback(reason?: any, worktree?: any, details?: any) {
   };
 }
 
+// Selection runs before the dispatch base is known, and an explicitly named older base passes the
+// ancestry check against a checkout built on a newer one, so the override never reached the executor (GH-125).
+function explicitBaseContinuation(released: any, explicit: boolean, target: any, baseCommit: string) {
+  if (!explicit || !released?.continuation) return released;
+  return retainedAgainstExplicitBase(released.continuation, `the dispatch explicitly names integration base ${target.branch} at ${baseCommit}`, baseCommit);
+}
+
+// Committed checkpoints replay onto the named base in a fresh checkout. Uncommitted work exists only in
+// its checkout, so that one stays retained and is told to move.
+function retainedAgainstExplicitBase(continuation: any, named: string, baseCommit: string) {
+  if (continuation.baseCommit === baseCommit) return { continuation: { ...continuation, retainReason: `${named}, which is the retained checkout's own base` } };
+  const differs = `${named} while retained checkout ${continuation.sourceWorktree} is built on ${continuation.baseCommit}`;
+  if (continuation.mode === 'dirty_worktree_resume') {
+    return { continuation: { ...continuation, retainReason: `${differs}; its uncommitted changes exist nowhere else, so it is still retained and they move onto ${baseCommit} before any work` } };
+  }
+  const { sourceBranch, commit, commits } = continuation;
+  return {
+    fallback: continuationFallback('released_worktree_base_differs_from_explicit_integration_base', continuation.sourceWorktree, {
+      sourceBranch, commit, commits, cause: `${differs}, so its checkpoint commits replay onto the named base in a fresh checkout`,
+    }),
+  };
+}
+
 function gitDirectory(repository?: any, directory?: any) {
   const value = nativeGitPath(directory);
   return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(repository || ''), value));
@@ -1201,6 +1470,115 @@ function reportsRegisteredProjectCheckout(slug?: any, worktree?: any) {
   return Boolean(projectPath && reportedWorktree && canonicalPath(projectPath) === canonicalPath(reportedWorktree));
 }
 
+function normalizedText(value?: any) {
+  return String(value || '').trim();
+}
+
+function pinnedCandidateLines(repository?: any): string[] {
+  try {
+    return gitOutput(repository, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/sidequest/']).split('\n');
+  } catch (_: any) {
+    return [];
+  }
+}
+
+function pinnedCandidateRevisions(repository?: any) {
+  const pinned = new Map<string, string>();
+  for (const line of pinnedCandidateLines(repository)) {
+    const [name, object] = line.trim().split(' ');
+    if (name && object && name.startsWith('refs/sidequest/')) pinned.set(name.slice('refs/sidequest/'.length), object.toLowerCase());
+  }
+  return pinned;
+}
+
+function ticketRecordedRevisions(ticket?: any, state?: any, pinned?: Map<string, string>): string[] {
+  const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
+  return [
+    ...(Array.isArray(state?.sanctionedCommits) ? state.sanctionedCommits : []),
+    ticket?.checkpoint?.commit,
+    ticket?.submission?.commit,
+    attempts[attempts.length - 1]?.commit,
+    pinned?.get(String(ticket?.ref || '')),
+  ].map((commit?: any) => normalizedText(commit).toLowerCase()).filter(Boolean);
+}
+
+function isOtherTicket(other?: any, ticket?: any) {
+  return Boolean(other) && other.id !== ticket?.id;
+}
+
+function recordsRevision(recorded: string[], commit: string) {
+  return recorded.some((revision: string) => sameRevision(revision, commit));
+}
+
+function foreignCommit(commit: string, recorded: string[], own: string[]) {
+  return recordsRevision(recorded, commit) && !recordsRevision(own, commit);
+}
+
+function carriesForeignCommit(other?: any, range?: string[], own?: string[], pinned?: Map<string, string>) {
+  const recorded = ticketRecordedRevisions(other, dispatchState(other), pinned);
+  return recorded.length > 0 && range!.some((commit: string) => foreignCommit(commit, recorded, own!));
+}
+
+// A crossed checkout carries its sibling's commits (GitHub #298), and nothing about the tree itself says whose they
+// are. The board does: a claim's board commits, its checkpoint and submission, and its pinned candidate. A checkout
+// counts as this ticket's only when its HEAD is one of those and no commit in its range is another ticket's (SQ-75).
+function checkoutRangeOwnership(slug?: any, ticket?: any, state?: any, repository?: any, commits?: string[]) {
+  const range = Array.isArray(commits) ? commits : [];
+  const pinned = pinnedCandidateRevisions(repository);
+  const own = ticketRecordedRevisions(ticket, state, pinned);
+  const foreignTickets = listTickets(slug)
+    .filter((other?: any) => isOtherTicket(other, ticket))
+    .filter((other?: any) => carriesForeignCommit(other, range, own, pinned))
+    .map((other?: any) => String(other.ref))
+    .sort();
+  const head = range[range.length - 1];
+  return { ownHead: Boolean(head && recordsRevision(own, head)), foreignTickets };
+}
+
+function liveIsolatedLease(ticket?: any) {
+  const state = dispatchState(ticket);
+  return ticket.status !== 'done' && state?.sharedTree === false && !state.terminalAt && Boolean(state.worktree);
+}
+
+function leasesCheckout(other?: any, ticket?: any, target?: any) {
+  return isOtherTicket(other, ticket) && liveIsolatedLease(other) && canonicalPath(dispatchState(other).worktree) === target;
+}
+
+function liveCheckoutHolders(slug?: any, ticket?: any, worktree?: any): string[] {
+  const target = canonicalPath(worktree);
+  return listTickets(slug)
+    .filter((other?: any) => leasesCheckout(other, ticket, target))
+    .map((other?: any) => String(other.ref))
+    .sort();
+}
+
+function registeredProjectCheckout(facts?: any) {
+  try {
+    return Boolean(facts && registeredWorktrees(facts.repository).includes(facts.worktree));
+  } catch (_: any) {
+    return false;
+  }
+}
+
+// A binding the release dropped (SQ-75), or a checkout that is gone, leaves nothing to resume.
+function retainedBindingFallback(state?: any, recordedWorktree?: any) {
+  if (state.retainedWorktreeDropped) {
+    return continuationFallback('released_worktree_binding_dropped', recordedWorktree, { observedWorktree: state.retainedWorktreeDropped.observed || null });
+  }
+  if (!recordedWorktree || !fs.existsSync(recordedWorktree)) return continuationFallback('released_worktree_missing', recordedWorktree);
+  return null;
+}
+
+// Only a checkout whose HEAD this ticket committed, carrying no other ticket's commits, resumes (SQ-75).
+function retainedOwnershipFallback(slug?: any, ticket?: any, state?: any, repository?: any, range?: any) {
+  const ownership = checkoutRangeOwnership(slug, ticket, state, repository, range.commits);
+  if (ownership.foreignTickets.length) {
+    return continuationFallback('retained_worktree_carries_another_tickets_commits', range.worktree, { commit: range.commit, commits: range.commits, foreignTickets: ownership.foreignTickets });
+  }
+  if (!ownership.ownHead) return continuationFallback('retained_worktree_head_is_not_this_tickets', range.worktree, { commit: range.commit, commits: range.commits });
+  return null;
+}
+
 function retainedWorktreeContinuationState(slug?: any, ticket?: any, state?: any) {
   const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
   const attempt = attempts[attempts.length - 1] || null;
@@ -1208,9 +1586,8 @@ function retainedWorktreeContinuationState(slug?: any, ticket?: any, state?: any
   const checkpointedTerminalFailure = Boolean(state?.terminalAt && checkpointCommit && ['failed', 'died'].includes(state.outcome));
   if (!state || (!checkpointedTerminalFailure && state.outcome !== 'released') || !state.terminalAt || state.sharedTree !== false) return null;
   const recordedWorktree = String(state.worktree || '').trim();
-  if (!recordedWorktree || !fs.existsSync(recordedWorktree)) {
-    return { fallback: continuationFallback('released_worktree_missing', recordedWorktree) };
-  }
+  const bindingFallback = retainedBindingFallback(state, recordedWorktree);
+  if (bindingFallback) return { fallback: bindingFallback };
   let worktree = recordedWorktree;
   try {
     const recordedGitDirectory = String(state.worktreeGitDirectory || '').trim();
@@ -1273,6 +1650,8 @@ function retainedWorktreeContinuationState(slug?: any, ticket?: any, state?: any
     }
     if (!commits.length) return { fallback: continuationFallback('released_worktree_has_no_committed_progress', worktree) };
     if (commits.length > 128) return { fallback: continuationFallback('released_worktree_commit_range_is_too_large', worktree) };
+    const ownershipFallback = retainedOwnershipFallback(slug, ticket, state, worktreeFacts.repository, { worktree, commit: observedRevision, commits });
+    if (ownershipFallback) return { fallback: ownershipFallback };
     return {
       continuation: {
         mode: 'retained_worktree_resume', ticketRef: ticket.ref, sourceWorktree: worktree, sourceBranch, baseCommit, commit: observedRevision, commits,
@@ -1325,6 +1704,101 @@ function checkoutBelongsToAnotherDispatchAgent(slug?: any, projectPath?: any, ti
   });
 }
 
+function agentNamesCheckout(repository: string, agentId: unknown, target: string) {
+  const id = String(agentId || '').trim();
+  return Boolean(id) && agentWorktreeCandidates(repository, id).some((candidate: string) => canonicalPath(candidate) === target);
+}
+
+function liveCheckoutHolder(ticket?: any) {
+  const state = dispatchState(ticket);
+  return Boolean(ticket?.claim?.by) || Boolean(state && !state.terminalAt);
+}
+
+function recordsCheckout(repository: string, ticket: any, target: string) {
+  const state = dispatchState(ticket);
+  if (state?.worktree && canonicalPath(state.worktree) === target) return true;
+  return [state?.agentId, ticket.claim?.runtime?.agentId].some((agentId) => agentNamesCheckout(repository, agentId, target));
+}
+
+function siblingHoldsCheckout(repository: string, ticket: any, candidate: any, target: string) {
+  return candidate.id !== ticket.id && liveCheckoutHolder(candidate) && recordsCheckout(repository, candidate, target);
+}
+
+// A retired attempt's own record can name a sibling's checkout down to the sibling's agent id, because both
+// creation order and runtime binding can cross (SQ-3132: SQ-3104's recovery removed SQ-3101's live tree).
+// A live claim or dispatch that records the path, or whose agent the path is named after, outranks it.
+function liveSiblingHoldingCheckout(slug: string, projectPath: string, ticket: any, state: any) {
+  if (!projectPath || !state?.worktree) return null;
+  const target = canonicalPath(state.worktree);
+  return listTickets(slug).find((candidate: any) => siblingHoldsCheckout(projectPath, ticket, candidate, target)) || null;
+}
+
+function crossBoundCheckoutRefusal(ref: string, siblingRef: string, worktree: string) {
+  return `${ref} did not remove ${worktree}: its retired attempt's binding was a cross-bind onto ${siblingRef}'s live checkout, not a tree ${ref} created. The checkout stays with ${siblingRef}, and only ${ref}'s binding was cleared.`;
+}
+
+function unsettledSiblingCheckoutRefusal(ref: string, siblingRef: string, worktree: string) {
+  return `${ref} did not remove ${worktree}: ${siblingRef} from the same dispatch session has not claimed yet, and creation order can hand one sibling's checkout to the other's reservation, so this may be the tree ${siblingRef}'s executor runs in. The checkout stays, and only ${ref}'s binding was cleared.`;
+}
+
+// Creation only ever attributes a checkout to an isolated reservation on its own board, so a shared-tree or
+// other-board sibling can never be the crossed one (SQ-3147).
+function guessedSessionSibling(entry: { slug: string; ticket: any }, slug: string, ticket: any, sessionId: string) {
+  const state = dispatchState(entry.ticket);
+  return entry.slug === slug && entry.ticket.id !== ticket.id && state?.sharedTree === false && guessedReservation(entry.ticket, state, sessionId);
+}
+
+// Creation order and SubagentStart both bind by guess, so until every sibling of this session has claimed, the
+// retired record can name a live executor's checkout with nothing on the sibling's own record to say so (SQ-3139).
+function unsettledSessionSibling(slug: string, ticket: any, state: any) {
+  const sessionId = normalizedText(state?.sessionId);
+  const sibling = sessionId && ticketsMentioningSession(sessionId).find((entry) => guessedSessionSibling(entry, slug, ticket, sessionId));
+  return sibling ? sibling.ticket : null;
+}
+
+// Creation order may have bound this reservation for a sibling's executor, and the failing executor's ticket is
+// unknowable from the hook, so failing it cleared the token a live executor still needed to claim (SQ-3139). While a
+// sibling of this session is unsettled, the reservation only loses the binding; whichever attempt never claims retires.
+function holdUncreatedFailureForSibling(slug: string, ticket: any, state: any, sessionId: string) {
+  const sibling = guessedReservation(ticket, state, sessionId) ? unsettledSessionSibling(slug, ticket, state) : null;
+  if (!sibling) return null;
+  releaseCrossedCreationBinding(state, sibling.ref, new Date().toISOString(), 'worktree_create_failed');
+  stampDispatchEvent(ticket, 'worktree-create-failure-held');
+  putTicket(slug, ticket);
+  return { ok: true, ticket, heldFor: sibling.ref };
+}
+
+function siblingKeepingCheckout(slug: string, projectPath: string, ticket: any, state: any) {
+  if (!state?.worktree) return null;
+  const holder = liveSiblingHoldingCheckout(slug, projectPath, ticket, state);
+  if (holder) return { sibling: holder, message: crossBoundCheckoutRefusal(ticket.ref, holder.ref, state.worktree) };
+  const unsettled = unsettledSessionSibling(slug, ticket, state);
+  if (!unsettled) return null;
+  return { sibling: unsettled, message: unsettledSiblingCheckoutRefusal(ticket.ref, unsettled.ref, state.worktree), parkedCheckout: parkedCreationRecord(state) };
+}
+
+// The binding is cleared, but the executor running in the kept checkout may be the unsettled sibling's, and only its
+// claim can say so. The retired creation record stays on the ticket so that claim can take the checkout on an exact
+// checkout-instance match (SQ-3139).
+function parkedCreationRecord(state: any) {
+  const record: any = { sessionId: state.sessionId, baseCommit: state.baseCommit };
+  for (const field of CHECKOUT_BINDING_FIELDS) record[field] = state[field] === undefined ? null : state[field];
+  return record;
+}
+
+function reclaimRetiredAttemptCheckout(slug: string, projectPath: string, ticket: any, state: any, facts?: any) {
+  const kept = siblingKeepingCheckout(slug, projectPath, ticket, state);
+  if (!kept) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+  return {
+    worktree: state.worktree,
+    reclaimed: false,
+    reason: 'cross_bound_worktree',
+    sibling: kept.sibling.ref,
+    message: kept.message,
+    parkedCheckout: kept.parkedCheckout,
+  };
+}
+
 function unclaimedWorktreeRecoveryFacts(projectPath?: any, ticket?: any, state?: any) {
   const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || '').trim();
   if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1347,76 +1821,127 @@ function reusablePreparedRecovery(ticket: any, current: any) {
   return Boolean(current && current.recovery && current.outcome === 'prepared' && ticket.dispatchNonce && canonicalPreparedDispatchExecutor(ticket));
 }
 
-function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
-  opts = opts || {};
-  if (opts.retireOnly === true) {
-    const ticket = getTicket(slug, idOrRef);
-    const state = dispatchState(ticket);
-    if (!evidenceRetirableAttempt(ticket, state)) {
-      throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts the same unclaimed attempt shapes as recovery evidence: prepared or launched before runtime binding, or bound and unclaimed past the claim-idle backstop.`);
-    }
-    const superseded = supersedeUnboundAttempt(slug, idOrRef, {
-      evidence: opts.recoveryEvidence,
-      source: opts.source || opts.transport || 'dispatch',
-    });
-    if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${idOrRef} has no unbound dispatch attempt to retire (${superseded.reason}).`}`);
-    return Object.assign(superseded, { retired: true });
-  }
+// Only live-claim recovery reads `worktree`. A fresh attempt used to drop it silently, so a workingTreeDelivery
+// ticket got a lease on the registered checkout and its executor then refused to write anywhere else (GH-162).
+function dispatchWorktreeOverrideRefusal(ticket: any, worktree: unknown, projectPath: string): string | null {
+  if (worktree == null || String(worktree).trim() === '') return null;
+  const placement = ticket.workingTreeDelivery === true
+    ? `${ticket.ref} declares workingTreeDelivery, so it runs and delivers in the board's registered checkout ${projectPath}; to deliver from a linked worktree instead, clear workingTreeDelivery so the ticket runs in an isolated worktree and submits a commit.`
+    : 'sharedTree:true runs in the board\'s registered checkout and sharedTree:false in a board-provisioned worktree.';
+  return `prepare dispatch: worktree only names a resumed executor's checkout for live-claim recovery with claimHolder; it cannot choose where a new attempt runs. ${placement}`;
+}
+
+// Ticket and dispatch rows are untyped persisted JSON throughout this store (getTicket and dispatchState return any).
+// Typing them only inside these phases would be a partial schema the rest of the store never honours.
+type StoredRecord = any;
+type DispatchOptions = StoredRecord;
+type DispatchTokenFiles = { prior: string | null; staged: string | null };
+type InstallFacts = { installPath: string | null; identity: string | null; version: string | null };
+type DispatchPreflight = {
+  projectPath: string; preparedCompatibility: StoredRecord | null; servingCompatibilityWarning: string | null;
+  pythonIoEncoding: { written: boolean }; sourceRevisionAdapterSwitch: StoredRecord; snapshotPreflight: StoredRecord | null;
+};
+type GuardedDispatch = {
+  crossBoundWorktree: CrossBoundWorktree | null; repeatFailure: string | null; unboundAttemptsSkipped: boolean;
+  retainedContinuation: StoredRecord | null; resolvedPolicy: StoredRecord | null;
+};
+type CrossBoundWorktree = { sibling: string; worktree: string; message: string; parkedCheckout?: Record<string, unknown> };
+type DispatchIsolation = {
+  readonly: boolean; wholeTreeScope: boolean; reducedAgentSchema: boolean; reviewTargetState: StoredRecord | null;
+  sharedTree: boolean; nonRepoOutput: boolean; worktreeWarning: string | null;
+};
+type ConfiguredIntegration = { integrationMode: string; worktreeBase: string };
+type DirtyBaselines = { artifactDirtyBaseline: StoredRecord | null; dirtyBaselineCapture: StoredRecord | null; workingTreeDirtyBaseline: StoredRecord | null };
+
+function dispatchSource(opts: DispatchOptions, fallback: string): string {
+  return opts.source || opts.transport || fallback;
+}
+
+function retireUnboundDispatchOnly(slug: string, idOrRef: string, opts: DispatchOptions) {
+  const superseded = supersedeUnboundAttempt(slug, idOrRef, {
+    evidence: opts.recoveryEvidence,
+    source: dispatchSource(opts, 'dispatch'),
+    sessionId: opts.sessionId,
+  });
+  if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${idOrRef} has no unbound dispatch attempt to retire (${superseded.reason}).`}`);
+  return Object.assign(superseded, { retired: true });
+}
+
+function undeclaredScopeRefusal(slug: string, ticket: StoredRecord, opts: DispatchOptions): string | null {
+  const noDeclaredFileScope = unscopedWriteCannotAutoApprove(ticket, {
+    dispatchReadOnly,
+    normalizeFiles,
+    autoApproveScope: boardConfig(slug)?.autoApproveScope,
+  });
+  return noDeclaredFileScope && opts.allowUnscoped !== true ? undeclaredWriteScopeRefusal(ticket.ref) : null;
+}
+
+function dispatchTicketRefusal(slug: string, found: StoredRecord, opts: DispatchOptions, projectPath: string): string | null {
+  return dispatchWorktreeOverrideRefusal(found, opts.worktree, projectPath)
+    || executorClaimDispatchRefusal(slug, opts.sessionId)
+    || undeclaredScopeRefusal(slug, found, opts)
+    || dispatchVerifyCommandError(found, projectPath);
+}
+
+function dispatchableTicket(slug: string, idOrRef: string, opts: DispatchOptions) {
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
   // A fresh native Agent session resolves plugins from Claude Code's registry
   // independently of whatever MCP roster this conversation happens to have
   // loaded, so a claim-first spawn spec is worthless unless the target
   // project actually has a runnable, board-MCP-capable install (SQ-1017).
-  const projectPath = readMeta(slug)?.path;
+  const projectPath: string = readMeta(slug)?.path;
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
-  const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
-  if (executorClaimRefusal) throw new Error(executorClaimRefusal);
-  const initialNoDeclaredFileScope = unscopedWriteCannotAutoApprove(found, {
-    dispatchReadOnly,
-    normalizeFiles,
-    autoApproveScope: boardConfig(slug)?.autoApproveScope,
+  const refusal = dispatchTicketRefusal(slug, found, opts, projectPath);
+  if (refusal) throw new Error(refusal);
+  return { projectPath, found };
+}
+
+function installFacts(install: Partial<InstallFacts> | null | undefined): InstallFacts {
+  const facts = install ?? {};
+  return { installPath: facts.installPath || null, identity: facts.identity || null, version: facts.version || null };
+}
+
+function preparedCompatibilityRecord(plugin: InstallFacts, serving: InstallFacts) {
+  if (!plugin.installPath || !plugin.identity) return null;
+  return Object.freeze({
+    pluginInstall: plugin.installPath,
+    identity: plugin.identity,
+    version: plugin.version,
+    ...(serving.installPath && serving.version ? { servingInstall: serving.installPath, servingVersion: serving.version } : {}),
   });
-  if (initialNoDeclaredFileScope && opts.allowUnscoped !== true) {
-    throw new Error(`prepare dispatch: ${found.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
-  }
-  const verifyError = dispatchVerifyCommandError(found, projectPath);
-  if (verifyError) throw new Error(verifyError);
+}
+
+function assertServingNotOlder(ref: string, preparedCompatibility: StoredRecord | null, installCheck: StoredRecord | null, plugin: InstallFacts, serving: InstallFacts): void {
+  if (!preparedCompatibility || !preparedCompatibilityHasProvenMismatch({ preparedCompatibility }, installCheck)) return;
+  throw new Error(`prepare dispatch: ${ref} refused; serving Sidequest ${serving.version || 'unknown'} is older than prepared ${plugin.version || 'unknown'}. Restart Claude Code so the board serves the prepared build, then dispatch again.`);
+}
+
+function preparedInstallCompatibility(found: StoredRecord, projectPath: string) {
   const installCheck = projectPath ? assertSidequestInstall(projectPath) : null;
-  const preparedPluginInstall = installCheck?.installPath || null;
-  const preparedPluginIdentity = installCheck?.identity || null;
-  const preparedPluginVersion = installCheck?.version || null;
-  const servingSnapshot = servingInstall();
-  const preparedServingInstall = servingSnapshot?.installPath || null;
-  const preparedServingVersion = servingSnapshot?.version || null;
-  const preparedCompatibility = preparedPluginInstall && preparedPluginIdentity
-    ? Object.freeze({
-      pluginInstall: preparedPluginInstall,
-      identity: preparedPluginIdentity,
-      version: preparedPluginVersion,
-      ...(preparedServingInstall && preparedServingVersion ? { servingInstall: preparedServingInstall, servingVersion: preparedServingVersion } : {}),
-    })
-    : null;
-  if (preparedCompatibility && preparedCompatibilityHasProvenMismatch({ preparedCompatibility }, installCheck)) {
-    throw new Error(`prepare dispatch: ${found.ref} refused; serving Sidequest ${preparedServingVersion || 'unknown'} is older than prepared ${preparedPluginVersion || 'unknown'}. Restart Claude Code so the board serves the prepared build, then dispatch again.`);
-  }
-  const servingCompatibilityWarning = preparedCompatibility
-    ? preparedCompatibilityWarning({ preparedCompatibility }, installCheck)
-    : null;
-  if (opts.recoveryEvidence) {
-    const superseded = supersedeUnboundAttempt(slug, found.id, {
-      evidence: opts.recoveryEvidence,
-      source: opts.source || opts.transport || 'dispatch',
-    });
-    if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
-  }
-  // Registry install proves a future session; it does not prove THIS
-  // invocation's session has the board MCP connected (SQ-1017 correction).
-  // Only CLI transport needs to prove anything here — omitted/'mcp' callers
-  // are trusted, matching every direct `prepareDispatch` caller that predates
-  // this transport concept.
-  assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
+  const plugin = installFacts(installCheck);
+  const serving = installFacts(servingInstall());
+  const preparedCompatibility = preparedCompatibilityRecord(plugin, serving);
+  assertServingNotOlder(found.ref, preparedCompatibility, installCheck, plugin, serving);
+  return {
+    preparedCompatibility,
+    servingCompatibilityWarning: preparedCompatibility ? preparedCompatibilityWarning({ preparedCompatibility }, installCheck) : null,
+  };
+}
+
+function supersedeEvidencedAttempt(slug: string, found: StoredRecord, opts: DispatchOptions): void {
+  if (!opts.recoveryEvidence) return;
+  const superseded = supersedeUnboundAttempt(slug, found.id, {
+    evidence: opts.recoveryEvidence,
+    source: dispatchSource(opts, 'dispatch'),
+    sessionId: opts.sessionId,
+  });
+  if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
+}
+
+function preparedDispatchEnvironment(slug: string, found: StoredRecord, idOrRef: string, projectPath: string) {
   const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
+  const sourceRevisionAdapterSwitch = takeSourceRevisionAdapterSwitch(slug);
   const captureFilesystemSnapshot = withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
@@ -1425,379 +1950,800 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const snapshotPreflight = captureFilesystemSnapshot
     ? dispatchFilesystemSnapshotPreflight(slug, found, new Date().toISOString())
     : null;
-  let priorTokenFile: string | null = null;
-  let stagedTokenFile: string | null = null;
+  return { pythonIoEncoding, sourceRevisionAdapterSwitch, snapshotPreflight };
+}
+
+function pendingCandidateIdentity(submission: StoredRecord): string {
+  return String(submission.commit || submission.sourceRevision?.value || '').trim();
+}
+
+// A pending submission is a terminal outcome parked for the publish transaction, so preparing over it
+// minted a second attempt that outranked the submitted one in pulse while the submission stayed valid
+// (SQ-2117). Anything reading current dispatch.agentId then reads an executor that never touched the
+// candidate. Rework is the path that dispatches again: it clears the submission first.
+function assertNoPendingSubmission(t: StoredRecord): void {
+  if (!pendingSubmission(t)) return;
+  const candidate = pendingCandidateIdentity(t.submission);
+  throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ''} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || '<candidate-owner>'} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
+}
+
+function hasClaimHolder(t: StoredRecord): boolean {
+  return Boolean(t.claim?.by);
+}
+
+function unclaimedRetiredIsolatedAttempt(t: StoredRecord, current: StoredRecord): boolean {
+  return Boolean(current?.terminalAt) && current.sharedTree === false && !current.claimedAt && !hasClaimHolder(t);
+}
+
+// A composition admission adopts exact C into a genuinely new checkout, so it never reclaims or resumes the
+// released attempt's retained checkout: that checkout and its proofs stay untouched.
+function reclaimsRetiredCheckout(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): boolean {
+  if (t.compositionAdmission) return false;
+  return unclaimedRetiredIsolatedAttempt(t, current) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current);
+}
+
+function retainedRecoveryBlocked(recovery: StoredRecord): boolean {
+  return Boolean(recovery) && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true;
+}
+
+function checkpointRecoveryHint(t: StoredRecord, current: StoredRecord): string {
+  const checkpointCommit = String(t.checkpoint?.commit || '').trim();
+  return checkpointCommit
+    ? ` Restore ${current.worktree} to checkpoint ${checkpointCommit}, then dispatch again; the board will resume that retained checkout without creating another.`
+    : '';
+}
+
+function unretryableRecoveryMessage(t: StoredRecord, current: StoredRecord, recovery: StoredRecord): string {
+  const reason = recovery.message || `immutable recovery fact ${recovery.reason || 'is unreadable'}`;
+  return `prepare dispatch: ${t.ref} cannot retry because ${reason}${checkpointRecoveryHint(t, current)}`;
+}
+
+function assertRetainedRecoveryContinues(slug: string, t: StoredRecord, current: StoredRecord, recovery: StoredRecord): void {
+  if (retainedRecoveryBlocked(recovery) && !retainedWorktreeContinuationState(slug, t, current)?.continuation) {
+    throw new Error(unretryableRecoveryMessage(t, current, recovery));
+  }
+}
+
+function reclaimRetiredCheckout(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): CrossBoundWorktree | null {
+  if (!reclaimsRetiredCheckout(slug, projectPath, t, current)) return null;
+  const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
+  const recovery = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
+    checkpointCommit: recoveryFacts.checkpointCommit,
+  });
+  if (recovery?.reason === 'cross_bound_worktree') {
+    releaseCrossedCreationBinding(current, recovery.sibling, new Date().toISOString(), 'cross_bound_supersede');
+    return { sibling: recovery.sibling, worktree: recovery.worktree, message: recovery.message, parkedCheckout: recovery.parkedCheckout };
+  }
+  assertRetainedRecoveryContinues(slug, t, current, recovery);
+  return null;
+}
+
+function liveUnclaimedRuntimeAttempt(t: StoredRecord, current: StoredRecord): boolean {
+  return Boolean(current) && !current.terminalAt && !hasClaimHolder(t) && Boolean(current.launchedAt || current.boundAt);
+}
+
+function liveAttemptRecoveryHint(t: StoredRecord, current: StoredRecord, sessionId: string | undefined): string {
+  const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
+  if (!evidenceRetirableAttempt(t, current, Date.now(), sessionId)) {
+    return ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
+  }
+  return unboundEvidenceAttempt(current)
+    ? ` It is unbound and unclaimed, ${evidenceCall}`
+    : ` It never claimed, so if you observed the host report that runtime gone: ${evidenceCall}`;
+}
+
+function assertNoLiveRuntimeAttempt(t: StoredRecord, current: StoredRecord, opts: DispatchOptions): void {
+  if (!liveUnclaimedRuntimeAttempt(t, current)) return;
+  throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${liveAttemptRecoveryHint(t, current, opts.sessionId)}`);
+}
+
+// A composition needs a genuine new checkout instance at C, so it never continues a retained one.
+function retainedContinuationCandidate(slug: string, t: StoredRecord, current: StoredRecord): StoredRecord | null {
+  return t.compositionAdmission ? null : retainedWorktreeContinuationState(slug, t, current);
+}
+
+function assertNoLiveClaim(t: StoredRecord): void {
+  if (hasClaimHolder(t) && !claimReclaimable(t)) {
+    throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
+  }
+}
+
+function applyFreshPolicyRoute(t: StoredRecord, current: StoredRecord, resolvedPolicy: StoredRecord | null): void {
+  if (current?.recovery || !resolvedPolicy) return;
+  t.model = resolvedPolicy.model;
+  t.effort = resolvedPolicy.effort;
+  t.exec = execProjection(resolvedPolicy.exec);
+}
+
+function resolveDispatchRoutePolicy(slug: string, t: StoredRecord, current: StoredRecord): StoredRecord | null {
+  rederiveUnlaunchedPreparedRoute(t, slug);
+  const resolvedPolicy = resolveTicketRoute(t, getCategory(ticketCategory(t), { project: slug }));
+  applyFreshPolicyRoute(t, current, resolvedPolicy);
+  if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
+  return resolvedPolicy;
+}
+
+// A record prepared before launch naming existed still has to hand back a
+// usable name, and reusing it must not renumber the sequence.
+function ensurePreparedLaunchName(t: StoredRecord, current: StoredRecord): void {
+  if (!current.launchSeq) current.launchSeq = 1;
+  if (current.launchName) return;
+  const route = current.route || { model: t.model, effort: t.effort };
+  current.launchName = dispatchLaunchName(t.ref, t.title, resolveExec(route.model, route.effort), route.effort, current.launchSeq);
+}
+
+function reusePreparedRecovery(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions) {
+  if (opts.sessionId) current.sessionId = String(opts.sessionId);
+  ensurePreparedLaunchName(t, current);
+  putTicket(slug, t);
+  return {
+    ok: true,
+    ticket: t,
+    token: t.dispatchNonce,
+    reused: true,
+    recovery: current.recovery,
+  };
+}
+
+function pendingRecoveryFallback(current: StoredRecord, currentRoute: StoredRecord | null): boolean {
+  return Boolean(current?.recovery) && !current.terminalAt && !currentRoute;
+}
+
+function applyRecoveryFallback(t: StoredRecord, current: StoredRecord, currentRoute: StoredRecord | null): void {
+  if (!pendingRecoveryFallback(current, currentRoute)) return;
+  const replacement = resolveCategoryFallback(t.category, current.recovery.failedModel);
+  if (!replacement) throw new Error(`prepare dispatch: no fallback remains available for ${current.recovery.failedModel}.`);
+  t.model = replacement.model;
+  t.effort = replacement.effort;
+  t.exec = execProjection(replacement.exec);
+  current.recovery = Object.assign({}, current.recovery, {
+    fallbackSource: replacement.source,
+    model: replacement.model,
+    effort: replacement.effort,
+  });
+}
+
+function guardLockedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, projectPath: string) {
+  assertNoPendingSubmission(t);
+  const crossBoundWorktree = reclaimRetiredCheckout(slug, projectPath, t, current);
+  assertNoLiveRuntimeAttempt(t, current, opts);
+  const repeatFailure = repeatNoCommitDispatchError(t, current);
+  const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
+  if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
+  const retainedContinuation = retainedContinuationCandidate(slug, t, current);
+  assertNoLiveClaim(t);
+  return { crossBoundWorktree, repeatFailure, unboundAttemptsSkipped, retainedContinuation };
+}
+
+function prepareLockedDispatch(slug: string, idOrRef: string, found: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, tokenFiles: DispatchTokenFiles) {
+  const t = getTicket(slug, found.id);
+  if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+  const current = dispatchState(t);
+  const guarded = guardLockedDispatch(slug, t, current, opts, preflight.projectPath);
+  const resolvedPolicy = resolveDispatchRoutePolicy(slug, t, current);
+  const currentRoute = activeDispatchRoute(t);
+  if (reusablePreparedRecovery(t, current)) return reusePreparedRecovery(slug, t, current, opts);
+  applyRecoveryFallback(t, current, currentRoute);
+  return mintPreparedDispatch(slug, t, current, opts, preflight, tokenFiles, { ...guarded, resolvedPolicy });
+}
+
+function blankEffort(effort: unknown): boolean {
+  return effort == null || String(effort).trim() === '';
+}
+
+function defaultClaudeEffort(t: StoredRecord): void {
+  const backend = availableRoute(t.model);
+  if (backend?.backend !== 'claude' || !blankEffort(t.effort)) return;
+  t.effort = 'low';
+  t.exec = execProjection(resolveExec(t.model, t.effort));
+}
+
+function preparedExecutableRoute(slug: string, t: StoredRecord, opts: DispatchOptions) {
+  const refusal = dispatchRouteRefusal({ model: t.model, effort: t.effort });
+  if (refusal) throw new Error(refusal);
+  const preparedExec = resolveExec(t.model, t.effort);
+  if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
+  const scopeRefusal = undeclaredScopeRefusal(slug, t, opts);
+  if (scopeRefusal) throw new Error(scopeRefusal);
+  return preparedExec;
+}
+
+function policyFallbackReason(current: StoredRecord, resolvedPolicy: StoredRecord | null): string | null {
+  return !current?.recovery && resolvedPolicy?.fallbackReason || null;
+}
+
+function routedRecovery(t: StoredRecord, current: StoredRecord): StoredRecord | null {
+  return current?.recovery && activeDispatchRoute(t) ? current.recovery : null;
+}
+
+function priorAttemptHistory(current: StoredRecord) {
+  return {
+    attempts: Array.isArray(current?.attempts) ? current.attempts.slice() : [],
+    supersededTokens: Array.isArray(current?.supersededTokens) ? current.supersededTokens.slice() : [],
+  };
+}
+
+function liveDispatchToken(t: StoredRecord, current: StoredRecord): boolean {
+  return Boolean(current) && !current.terminalAt && Boolean(t.dispatchNonce);
+}
+
+function supersedeLiveToken(projectPath: string, t: StoredRecord, current: StoredRecord, supersededTokens: StoredRecord[], now: string): void {
+  if (!liveDispatchToken(t, current)) return;
+  if (current.outcome === 'prepared' && current.sharedTree === false) {
+    reclaimUnclaimedDispatchWorktree(projectPath, current);
+  }
+  supersededTokens.push({
+    digest: dispatchTokenDigest(t.dispatchNonce),
+    tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+    at: now,
+  });
+}
+
+// A released dispatch hands its binding to the next attempt so a
+// continuation keeps the same worktree scope. An EMPTY released binding
+// must not be inherited: it pinned the first attempt's missing scope onto
+// every re-dispatch, so the ticket's files were never re-read and editing
+// them changed nothing. A STALE one has the same disease: files expanded
+// between a handback and the re-dispatch must reach the new binding, so the
+// carryover unions with the current effective scope instead of replacing it
+// (the-bot-resurrection SQ-825: a path granted after a handback never
+// entered the redispatch binding and had to ship as an out-of-band commit).
+function releasedDeclaredBinding(current: StoredRecord): string[] | null {
+  return current?.outcome === 'released' && Array.isArray(current.declaredFiles) && current.declaredFiles.length
+    ? current.declaredFiles.filter((file: string) => file !== WHOLE_TREE_SCOPE)
+    : null;
+}
+
+function dispatchEffectiveFiles(slug: string, t: StoredRecord, current: StoredRecord): string[] {
+  const releasedBinding = releasedDeclaredBinding(current);
+  return releasedBinding
+    ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t)]))
+    : effectiveScope(slug, t);
+}
+
+function wholeTreeScopeOverride(t: StoredRecord, opts: DispatchOptions, readonly: boolean): boolean {
+  return !readonly && opts.allowUnscoped === true && !normalizeFiles(t.files).length;
+}
+
+function requestedSharedTree(opts: DispatchOptions, current: StoredRecord): boolean {
+  return opts.sharedTree === true || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
+}
+
+function requestedReducedAgentSchema(opts: DispatchOptions, current: StoredRecord): boolean {
+  return opts.reducedAgentSchema === true || (!Object.hasOwn(opts, 'reducedAgentSchema') && current?.reducedAgentSchema === true);
+}
+
+function initialSharedTree(reviewTargetState: StoredRecord | null, worktreeIsolation: boolean, requested: boolean): boolean {
+  if (reviewTargetState) return false;
+  return worktreeIsolation ? requested : true;
+}
+
+function isolatedCheckoutWarning(slug: string, sharedTree: boolean, readonly: boolean, effectiveFiles: readonly string[]): string | null {
+  return !sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null;
+}
+
+function isolationWarning(slug: string, worktreeIsolation: boolean, explicitIsolation: boolean, sharedTree: boolean, readonly: boolean, effectiveFiles: readonly string[]): string | null {
+  if (!worktreeIsolation && explicitIsolation) {
+    return `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}`;
+  }
+  return isolatedCheckoutWarning(slug, sharedTree, readonly, effectiveFiles);
+}
+
+function assertReviewCheckoutIsolation(t: StoredRecord, reviewTargetState: StoredRecord | null, opts: DispatchOptions, worktreeWarning: string | null): void {
+  if (!reviewTargetState) return;
+  if (opts.sharedTree === true) {
+    throw new Error(`prepare dispatch: ${t.ref} reviews candidate ${reviewTargetState.candidate.value} and requires an isolated immutable checkout.`);
+  }
+  if (worktreeWarning) throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
+}
+
+function dispatchIsolation(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, effectiveFiles: readonly string[]): DispatchIsolation {
+  const readonly = dispatchReadOnly(t);
+  const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
+  const reviewTargetState = reviewDispatchTarget(slug, t);
+  const sharedTree = initialSharedTree(reviewTargetState, worktreeIsolation, requestedSharedTree(opts, current));
+  const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;
+  const worktreeWarning = isolationWarning(slug, worktreeIsolation, explicitIsolation, sharedTree, readonly, effectiveFiles);
+  assertReviewCheckoutIsolation(t, reviewTargetState, opts, worktreeWarning);
+  return {
+    readonly,
+    wholeTreeScope: wholeTreeScopeOverride(t, opts, readonly),
+    reducedAgentSchema: requestedReducedAgentSchema(opts, current),
+    reviewTargetState,
+    sharedTree: sharedTree || Boolean(worktreeWarning),
+    nonRepoOutput: nonRepoExternalOutput(t, effectiveFiles),
+    worktreeWarning,
+  };
+}
+
+function writableIsolatedRepositoryCheckout(isolation: DispatchIsolation): boolean {
+  return !(isolation.sharedTree || isolation.readonly || isolation.nonRepoOutput || isolation.wholeTreeScope);
+}
+
+function assertCompositionCheckout(t: StoredRecord, isolation: DispatchIsolation): void {
+  if (t.compositionAdmission && !writableIsolatedRepositoryCheckout(isolation)) {
+    throw new Error(`prepare dispatch: ${t.ref} composition admission requires a scoped writable native isolated repository checkout.`);
+  }
+}
+
+function sharedTreeScopeRefusal(t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: readonly string[]): string | null {
+  if (isolation.wholeTreeScope && isolation.sharedTree) return unscopedSharedTreeRefusal(t.ref, effectiveFiles);
+  if (t.workingTreeDelivery === true && !isolation.sharedTree) {
+    return `prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`;
+  }
+  return null;
+}
+
+function dispatchRuntimeRefusal(slug: string, t: StoredRecord, sharedTree: boolean, projectPath: string, opts: DispatchOptions): string | null {
+  return sharedTree
+    ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd)
+    : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd, slug, opts.sessionId);
+}
+
+function assertDispatchCheckoutShape(slug: string, t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: readonly string[], projectPath: string, opts: DispatchOptions): void {
+  assertCompositionCheckout(t, isolation);
+  const refusal = sharedTreeScopeRefusal(t, isolation, effectiveFiles) || dispatchRuntimeRefusal(slug, t, isolation.sharedTree, projectPath, opts);
+  if (refusal) throw new Error(refusal);
+}
+
+function workingTreeDeliveryRequested(t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]): boolean {
+  return sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
+}
+
+function deliveryVerification(slug: string, t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]) {
+  const workingTreeDelivery = workingTreeDeliveryRequested(t, sharedTree, effectiveFiles);
+  const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
+  if (workingTreeDelivery && verificationRequirement.kind === 'review') {
+    throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
+  }
+  return { workingTreeDelivery, verificationRequirement };
+}
+
+function dispatchArtifactRoot(slug: string, t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]): string | null {
+  return sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t)
+    ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), effectiveFiles[0])
+    : null;
+}
+
+function dispatchWriteScope(t: StoredRecord, effectiveFiles: string[], wholeTreeScope: boolean, artifactMode: boolean) {
+  const writeScope = wholeTreeScope ? [WHOLE_TREE_SCOPE, ...effectiveFiles] : effectiveFiles;
+  const declaredFiles: string[] = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(writeScope, t.files, t.ref);
+  const boardAddedFiles = declaredFiles.filter((file: string) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
+  return { declaredFiles, boardAddedFiles };
+}
+
+function workingTreeDirtyBaseline(dirtyBaselineCapture: StoredRecord | null, workingTreeDelivery: boolean): StoredRecord | null {
+  return workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
+}
+
+function dispatchDirtyBaselines(slug: string, sharedTree: boolean, artifactMode: boolean, artifactScope: string | null | undefined, workingTreeDelivery: boolean): DirtyBaselines {
+  const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
+  const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
+  return { artifactDirtyBaseline, dirtyBaselineCapture, workingTreeDirtyBaseline: workingTreeDirtyBaseline(dirtyBaselineCapture, workingTreeDelivery) };
+}
+
+function dispatchArtifactScope(slug: string, t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: string[], workingTreeDelivery: boolean) {
+  const artifactRoot = dispatchArtifactRoot(slug, t, isolation.sharedTree, effectiveFiles);
+  const artifactMode = Boolean(artifactRoot);
+  const artifactScope = artifactMode ? effectiveFiles[0] : null;
+  return {
+    artifactRoot, artifactMode, artifactScope,
+    ...dispatchWriteScope(t, effectiveFiles, isolation.wholeTreeScope, artifactMode),
+    ...dispatchDirtyBaselines(slug, isolation.sharedTree, artifactMode, artifactScope, workingTreeDelivery),
+  };
+}
+
+function storyDispatchFacts(slug: string, t: StoredRecord) {
+  const story = t.storyId ? getStory(slug, t.storyId) : null;
+  const storyLogRevision = Number(story?.logRevision) || 0;
+  t.storyLogSeenSeq = storyLogRevision;
+  return { contract: storyExecutionContract(story), storyLogRevision, contractDrift: t.storyContractDrift || null };
+}
+
+function configuredIntegration(slug: string): ConfiguredIntegration {
+  return {
+    integrationMode: String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase(),
+    worktreeBase: boardConfig(slug)?.worktreeBase || 'auto',
+  };
+}
+
+function explicitIntegrationTargetRequested(opts: DispatchOptions): boolean {
+  return opts.integrationBranch != null || opts.integrationMode != null;
+}
+
+function isolatedRepositoryDispatch(isolation: DispatchIsolation): boolean {
+  return !isolation.sharedTree && !isolation.readonly && !isolation.nonRepoOutput;
+}
+
+function automaticWorktreeBaseEligible(isolation: DispatchIsolation, worktreeBase: string): boolean {
+  return isolatedRepositoryDispatch(isolation)
+    || (!isolation.sharedTree && isolation.readonly && !isolation.nonRepoOutput && worktreeBase !== 'auto');
+}
+
+function remoteIntegrationTarget(slug: string, worktreeBase: string) {
   try {
-    const prepared = withTicketLock(slug, found.id, () => {
-    const t = getTicket(slug, found.id);
-    if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
-    const current = dispatchState(t);
-    // A pending submission is a terminal outcome parked for the publish transaction, so preparing over it
-    // minted a second attempt that outranked the submitted one in pulse while the submission stayed valid
-    // (SQ-2117). Anything reading current dispatch.agentId then reads an executor that never touched the
-    // candidate. Rework is the path that dispatches again: it clears the submission first.
-    if (pendingSubmission(t)) {
-      const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || '').trim();
-      throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ''} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || '<candidate-owner>'} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
-    }
-    if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)
-      && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
-      const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-      const recovery = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
-        checkpointCommit: recoveryFacts.checkpointCommit,
-      });
-      if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
-        const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
-        if (!retainedContinuation?.continuation) {
-          const checkpointCommit = String(t.checkpoint?.commit || '').trim();
-          const checkpointRecovery = checkpointCommit
-            ? ` Restore ${current.worktree} to checkpoint ${checkpointCommit}, then dispatch again; the board will resume that retained checkout without creating another.`
-            : '';
-          throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery.message || `immutable recovery fact ${recovery.reason || 'is unreadable'}`}${checkpointRecovery}`);
-        }
-      }
-    }
-    const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by)
-      && Boolean(current.launchedAt || current.boundAt);
-    if (activeRuntimeAttempt) {
-      const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
-      let recovery = ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
-      if (supersedableUnboundAttempt(t, current)) recovery = ` It is unbound and unclaimed, ${evidenceCall}`;
-      else if (strandedBoundAttempt(t, current)) recovery = ` It bound a runtime and never claimed, and a claim is a bound runtime's first action, so that runtime is gone: ${evidenceCall}`;
-      throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery}`);
-    }
-    const repeatFailure = repeatNoCommitDispatchError(t, current);
-    const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
-    if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-    const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
-    if (t.claim && t.claim.by && !claimReclaimable(t)) {
-      throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
-    }
-    rederiveUnlaunchedPreparedRoute(t, slug);
-    const policyCategory = getCategory(ticketCategory(t), { project: slug });
-    const resolvedPolicy = resolveTicketRoute(t, policyCategory);
-    if (!current?.recovery && resolvedPolicy) {
-      t.model = resolvedPolicy.model;
-      t.effort = resolvedPolicy.effort;
-      t.exec = execProjection(resolvedPolicy.exec);
-    }
-    if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
-    const currentRoute = activeDispatchRoute(t);
-    if (reusablePreparedRecovery(t, current)) {
-      if (opts.sessionId) current.sessionId = String(opts.sessionId);
-      // A record prepared before launch naming existed still has to hand back a
-      // usable name, and reusing it must not renumber the sequence.
-      if (!current.launchSeq) current.launchSeq = 1;
-      if (!current.launchName) {
-        const route = current.route || { model: t.model, effort: t.effort };
-        current.launchName = dispatchLaunchName(t.ref, t.title, resolveExec(route.model, route.effort), route.effort, current.launchSeq);
-      }
-      putTicket(slug, t);
-      return {
-        ok: true,
-        ticket: t,
-        token: t.dispatchNonce,
-        reused: true,
-        recovery: current.recovery,
-      };
-    }
-    if (current && current.recovery && !current.terminalAt && !currentRoute) {
-      const replacement = resolveCategoryFallback(t.category, current.recovery.failedModel);
-      if (!replacement) throw new Error(`prepare dispatch: no fallback remains available for ${current.recovery.failedModel}.`);
-      t.model = replacement.model;
-      t.effort = replacement.effort;
-      t.exec = execProjection(replacement.exec);
-      current.recovery = Object.assign({}, current.recovery, {
-        fallbackSource: replacement.source,
-        model: replacement.model,
-        effort: replacement.effort,
-      });
-    }
-    const now = new Date().toISOString();
-    const backend = availableRoute(t.model);
-    if (backend && backend.backend === 'claude' && (t.effort == null || String(t.effort).trim() === '')) {
-      t.effort = 'low';
-      t.exec = execProjection(resolveExec(t.model, t.effort));
-    }
-    const refusal = dispatchRouteRefusal({ model: t.model, effort: t.effort });
-    if (refusal) throw new Error(refusal);
-    const preparedExec = resolveExec(t.model, t.effort);
-    if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
-    const noDeclaredFileScope = unscopedWriteCannotAutoApprove(t, {
-      dispatchReadOnly,
-      normalizeFiles,
-      autoApproveScope: boardConfig(slug)?.autoApproveScope,
-    });
-    if (noDeclaredFileScope && opts.allowUnscoped !== true) {
-      throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
-    }
-    const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
-    const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
-    const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
-    const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
-    if (current && !current.terminalAt && t.dispatchNonce) {
-      if (current.outcome === 'prepared' && current.sharedTree === false) {
-        reclaimUnclaimedDispatchWorktree(projectPath, current);
-      }
-      supersededTokens.push({
-        digest: dispatchTokenDigest(t.dispatchNonce),
-        tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-        at: now,
-      });
-    }
-    priorTokenFile = dispatchTokenFile(t);
-    // A released dispatch hands its binding to the next attempt so a
-    // continuation keeps the same worktree scope. An EMPTY released binding
-    // must not be inherited: it pinned the first attempt's missing scope onto
-    // every re-dispatch, so the ticket's files were never re-read and editing
-    // them changed nothing. A STALE one has the same disease: files expanded
-    // between a handback and the re-dispatch must reach the new binding, so the
-    // carryover unions with the current effective scope instead of replacing it
-    // (the-bot-resurrection SQ-825: a path granted after a handback never
-    // entered the redispatch binding and had to ship as an out-of-band commit).
-    const releasedBinding = current?.outcome === 'released' && Array.isArray(current.declaredFiles) && current.declaredFiles.length
-      ? current.declaredFiles.slice()
-      : null;
-    const effectiveFiles = releasedBinding
-      ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t)]))
-      : effectiveScope(slug, t);
-    const readonly = dispatchReadOnly(t);
-    const requestedSharedTree = opts.sharedTree === true
-      || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
-    const reducedAgentSchema = opts.reducedAgentSchema === true
-      || (!Object.hasOwn(opts, 'reducedAgentSchema') && current?.reducedAgentSchema === true);
-    const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;
-    const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
-    const reviewTargetState = reviewDispatchTarget(slug, t);
-    if (reviewTargetState && opts.sharedTree === true) {
-      throw new Error(`prepare dispatch: ${t.ref} reviews candidate ${reviewTargetState.candidate.value} and requires an isolated immutable checkout.`);
-    }
-    let sharedTree = reviewTargetState ? false : (worktreeIsolation ? requestedSharedTree : true);
-    const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
-    const worktreeWarning = !worktreeIsolation && explicitIsolation
-      ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}`
-      : (!sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null);
-    if (reviewTargetState && worktreeWarning) {
-      throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
-    }
-    if (worktreeWarning) sharedTree = true;
-    if (t.workingTreeDelivery === true && !sharedTree) {
-      throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
-    }
-    const runtimeRefusal = sharedTree
-      ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd)
-      : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd, slug, opts.sessionId);
-    if (runtimeRefusal) throw new Error(runtimeRefusal);
-    const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
-    const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
-    if (workingTreeDelivery && verificationRequirement.kind === 'review') {
-      throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
-    }
-    const category = getCategory(ticketCategory(t), { project: slug });
-    const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t)
-      ? categoryArtifactRoot(category, effectiveFiles[0])
-      : null;
-    const artifactMode = Boolean(artifactRoot);
-    const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
-    const artifactScope = artifactMode ? effectiveFiles[0] : null;
-    const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
-    const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
-    const workingTreeDirtyBaseline = workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
-    t.dispatchExecutor = stableExecutorName(t, artifactMode || workingTreeDelivery);
-    const launchSeq = nextDispatchLaunchSeq(current);
-    const story = t.storyId ? getStory(slug, t.storyId) : null;
-    const contract = storyExecutionContract(story);
-    const storyLogRevision = Number(story?.logRevision) || 0;
-    t.storyLogSeenSeq = storyLogRevision;
-    const contractDrift = t.storyContractDrift || null;
-    const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase();
-    const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || 'auto';
-    const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
-    const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
-    const automaticWorktreeBaseEligible = isolatedRepositoryDispatch
-      || (!sharedTree && readonly && !nonRepoOutput && configuredWorktreeBase !== 'auto');
-    const remoteIntegrationTarget = () => {
-      try {
-        return integrationTarget(slug, { mode: 'remote' });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
-      }
-    };
-    const automaticWorktreeBase = automaticWorktreeBaseEligible && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
-      ? configuredWorktreeBase === 'local-main'
-        ? integrationTarget(slug, { mode: 'local' })
-        : configuredWorktreeBase === 'origin-main'
-          ? hasOriginRemote(readMeta(slug)?.path || '')
-            ? remoteIntegrationTarget()
-            : null
-          : (() => {
-            const projectPath = readMeta(slug)?.path || '';
-            if (!hasOriginRemote(projectPath)) return null;
-            let localTarget;
-            try {
-              localTarget = integrationTarget(slug, { mode: 'local' });
-            } catch (_: unknown) {
-              return remoteIntegrationTarget();
-            }
-            return localAheadOfUpstreamWarning(projectPath, localTarget.branch)
-              ? localTarget
-              : remoteIntegrationTarget();
-          })()
-      : null;
-    const useIntegrationTarget = explicitIntegrationTarget
-      || (isolatedRepositoryDispatch && configuredIntegrationMode !== 'auto')
-      || Boolean(automaticWorktreeBase);
-    const integrationTargetState = explicitIntegrationTarget
-      ? integrationTarget(slug, {
-        ...(opts.integrationBranch != null ? { branch: opts.integrationBranch } : {}),
-        ...(opts.integrationMode != null ? { mode: opts.integrationMode } : {}),
-      })
-      : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
-    const localAheadWarning = !sharedTree && integrationTargetState
-      ? localAheadOfUpstreamWarning(
-        readMeta(slug)?.path || '',
-        integrationTargetState.branch,
-        integrationTargetState.mode === 'local' ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream,
-      )
-      : null;
-    delete t.storyContractDrift;
-    const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
-    fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
-    const baseCommit = reviewTargetState?.candidate.source === 'git'
-      ? reviewTargetState.candidate.value
-      : integrationTargetState
-        ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
-        : commitScope.headCommit(readMeta(slug)?.path || '');
-    // A direct cut (cut.mjs --push without --prepare) tags its release commit
-    // before it runs the release suites and only pushes once they pass, so between
-    // those two moments local main sits on a tip that may still be rewound.
-    // Baselining a dispatch there hands the executor a checkout forked from a
-    // commit the branch rewinds past, and the candidate's submission range then
-    // comes back as [release commit, candidate] and fails outside_scope (SQ-2776
-    // reproduced it). Refusing is the conservative half of the fix: silently
-    // baselining somewhere other than the branch the board recorded is its own
-    // class of confusion, and the window is minutes. The prepare/finalize flow
-    // cannot produce this state: preparation creates no tag at all, and finalize
-    // only tags a commit the remote publish branch already carries.
-    const releaseTip = projectPath
-      ? commitScope.unpublishedReleaseTip(
-        projectPath,
-        baseCommit,
-        `refs/remotes/origin/${integrationTargetState?.branch || boardConfig(slug)?.integrationBranch || 'main'}`,
-      )
-      : null;
-    if (releaseTip) {
-      throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(', ')} and not yet on the remote branch. A direct release cut tags its commit before running its suites, so this is either a direct cut still in flight or one that failed and left its commit live. The prepare/finalize flow never reaches this state: preparation creates no tag, and finalize only tags a commit the remote branch already has. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
-    }
-    const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
-    // Everything above this line only validates. Minting the replacement token
-    // any earlier meant a later refusal — a changed project registration, an
-    // unresolvable integration target, an unreadable evidence directory — left
-    // SQLite pointing at a token file that had already been deleted, so the
-    // still-authoritative dispatch could no longer authenticate (SQ-2691).
-    t.dispatchNonce = mintDispatchToken();
-    t.dispatch = {
-      lifecycleAttempt: prepareAttempt(
-        dispatchBaseline,
-        Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: 'prepare', sessionId: opts.sessionId ? String(opts.sessionId) : null }),
-        preparedCompatibility
-          ? Object.freeze({ pluginInstall: preparedCompatibility.pluginInstall, identity: preparedCompatibility.identity })
-          : undefined,
-        verificationRequirement,
-      ),
-      verificationRequirement,
-      evidenceDirectory,
-      sessionId: opts.sessionId ? String(opts.sessionId) : null,
-      preparedBy: dispatchPreparationAttribution(opts),
-      ...(preparedCompatibility ? { preparedCompatibility } : {}),
-      sharedTree,
-      ...(reducedAgentSchema ? { reducedAgentSchema: true } : {}),
-      ...(worktreeWarning ? { worktreeWarning } : {}),
-      ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
-      ...(opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {}),
-      declaredFiles,
-      ...(!sharedTree && releasedContinuation?.continuation ? {
-        continuation: releasedContinuation.continuation,
-        worktree: releasedContinuation.continuation.sourceWorktree,
-        worktreeGitDirectory: releasedContinuation.continuation.lease.boundGitDirectory,
-        worktreeCommonGitDirectory: releasedContinuation.continuation.lease.boundCommonGitDirectory,
-        worktreeCheckoutInstance: releasedContinuation.continuation.lease.boundCheckoutInstance,
-        worktreeObservedRevision: releasedContinuation.continuation.lease.boundRevision,
-        worktreeBindingSource: 'continuation',
-      } : {}),
-      ...(releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {}),
-      ...(sharedTree && releasedContinuation?.continuation
-        ? { continuationFallback: continuationFallback('continuation_checkpoint_requires_isolated_worktree', releasedContinuation.continuation.sourceWorktree) }
-        : {}),
-      // Record the integration target commit so an isolated executor can bring
-      // its harness-created worktree forward before changing it.
-      baseCommit,
-      ...(reviewTargetState ? { reviewTarget: t.reviewTarget } : {}),
-      ...(integrationTargetState ? { integrationTarget: integrationTargetState } : {}),
-      ...(localAheadWarning ? { localAheadWarning } : {}),
-      readonly,
-      ...(noDeclaredFileScope ? {
-        unscopedOverride: {
-          at: now,
-          source: opts.source || opts.transport || 'store',
-        },
-      } : {}),
-      ...(nonRepoOutput ? { nonRepoOutput: true } : {}),
-      artifactMode,
-      artifactRoot,
-      artifactScope,
-      ...(artifactMode ? { artifactDirtyBaseline } : {}),
-      ...(dirtyBaselineCapture?.warning ? { dirtyBaselineWarning: dirtyBaselineCapture.warning } : {}),
-      ...(workingTreeDelivery ? { workingTreeDelivery: true, workingTreeDirtyBaseline } : {}),
-      ...(sharedTree ? { dirtyBaseline: artifactDirtyBaseline || dirtyBaselineCapture?.baseline || null } : {}),
-      tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-      tokenFile: newDispatchTokenFile(),
-      executor: t.dispatchExecutor,
-      description: spawnDescription(t, preparedExec),
-      launchSeq,
-      launchName: dispatchLaunchName(t.ref, t.title, preparedExec, t.effort, launchSeq),
-      route: dispatchRouteState(t.model, t.effort, preparedExec),
-      ...(repeatFailure ? {
-        repeatFailureOverride: {
-          at: now,
-          source: opts.source || opts.transport || 'store',
-          priorAttempts: recentNoCommitAttempts(current).length,
-        },
-      } : {}),
-      ...(unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {}),
-      ...(fallbackReason ? { fallbackReason } : {}),
-      storyContract: contract,
-      storyLogRevision,
-      ...(contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {}),
-      preparedAt: now,
-      launchedAt: null,
-      boundAt: null,
-      claimedAt: null,
-      terminalAt: null,
-      outcome: 'prepared',
-      ...(attempts.length ? { attempts } : {}),
-      ...(supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {}),
-      ...(recovery ? { recovery } : {}),
-    };
-    stagedTokenFile = dispatchTokenFile(t);
-    t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
-    stampDispatchEvent(t, 'dispatch', now);
-    writeDispatchTokenFile(t);
-    putTicket(slug, t);
-    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning].filter(Boolean);
-    return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(warnings.length ? { warnings } : {}) };
-    });
-    if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
-      try { fs.unlinkSync(priorTokenFile); } catch (_: unknown) {}
-    }
+    return integrationTarget(slug, { mode: 'remote' });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message} The configured worktreeBase is "${worktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
+  }
+}
+
+function aheadLocalOrRemoteTarget(slug: string, projectPath: string, worktreeBase: string) {
+  let localTarget;
+  try {
+    localTarget = integrationTarget(slug, { mode: 'local' });
+  } catch (_: unknown) {
+    return remoteIntegrationTarget(slug, worktreeBase);
+  }
+  return localAheadOfUpstreamWarning(projectPath, localTarget.branch)
+    ? localTarget
+    : remoteIntegrationTarget(slug, worktreeBase);
+}
+
+function autoSelectedIntegrationTarget(slug: string, worktreeBase: string) {
+  const projectPath = readMeta(slug)?.path || '';
+  if (!hasOriginRemote(projectPath)) return null;
+  return aheadLocalOrRemoteTarget(slug, projectPath, worktreeBase);
+}
+
+function originMainIntegrationTarget(slug: string, worktreeBase: string) {
+  return hasOriginRemote(readMeta(slug)?.path || '') ? remoteIntegrationTarget(slug, worktreeBase) : null;
+}
+
+function configuredWorktreeBaseTarget(slug: string, worktreeBase: string) {
+  if (worktreeBase === 'local-main') return integrationTarget(slug, { mode: 'local' });
+  if (worktreeBase === 'origin-main') return originMainIntegrationTarget(slug, worktreeBase);
+  return autoSelectedIntegrationTarget(slug, worktreeBase);
+}
+
+function automaticWorktreeBase(slug: string, isolation: DispatchIsolation, configured: ConfiguredIntegration) {
+  return automaticWorktreeBaseEligible(isolation, configured.worktreeBase) && configured.integrationMode === 'auto'
+    ? configuredWorktreeBaseTarget(slug, configured.worktreeBase)
+    : null;
+}
+
+function explicitIntegrationTargetSelection(opts: DispatchOptions) {
+  return {
+    ...(opts.integrationBranch != null ? { branch: opts.integrationBranch } : {}),
+    ...(opts.integrationMode != null ? { mode: opts.integrationMode } : {}),
+  };
+}
+
+function dispatchIntegrationTarget(slug: string, opts: DispatchOptions, isolation: DispatchIsolation) {
+  if (explicitIntegrationTargetRequested(opts)) return integrationTarget(slug, explicitIntegrationTargetSelection(opts));
+  const configured = configuredIntegration(slug);
+  const automatic = automaticWorktreeBase(slug, isolation, configured);
+  const configuredTarget = isolatedRepositoryDispatch(isolation) && configured.integrationMode !== 'auto';
+  return automatic || (configuredTarget ? integrationTarget(slug) : null);
+}
+
+function integrationTargetLabel(integrationTargetState: StoredRecord): string {
+  return integrationTargetState.mode === 'local' ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream;
+}
+
+function localAheadIntegrationWarning(slug: string, sharedTree: boolean, integrationTargetState: StoredRecord | null): StoredRecord | null {
+  return !sharedTree && integrationTargetState
+    ? localAheadOfUpstreamWarning(readMeta(slug)?.path || '', integrationTargetState.branch, integrationTargetLabel(integrationTargetState))
+    : null;
+}
+
+function integrationBaseCommit(slug: string, integrationTargetState: StoredRecord | null): string {
+  const projectPath = readMeta(slug)?.path || '';
+  return integrationTargetState ? integrationTargetCommit(projectPath, integrationTargetState) : commitScope.headCommit(projectPath);
+}
+
+// A composition keeps its ORIGINAL BASE as the range floor for every control, capture, submit and integrate
+// consumer. Only native checkout creation reads C, from the separate dispatch.compositionAdmission fence.
+function dispatchBaseCommit(slug: string, t: StoredRecord, reviewTargetState: StoredRecord | null, integrationTargetState: StoredRecord | null): string {
+  if (t.compositionAdmission) return t.compositionAdmission.base;
+  if (reviewTargetState?.candidate.source === 'git') return reviewTargetState.candidate.value;
+  return integrationBaseCommit(slug, integrationTargetState);
+}
+
+function publishBranchRef(slug: string, integrationTargetState: StoredRecord | null): string {
+  return `refs/remotes/origin/${integrationTargetState?.branch || boardConfig(slug)?.integrationBranch || 'main'}`;
+}
+
+// A direct cut (cut.mjs --push without --prepare) tags its release commit
+// before it runs the release suites and only pushes once they pass, so between
+// those two moments local main sits on a tip that may still be rewound.
+// Baselining a dispatch there hands the executor a checkout forked from a
+// commit the branch rewinds past, and the candidate's submission range then
+// comes back as [release commit, candidate] and fails outside_scope (SQ-2776
+// reproduced it). Refusing is the conservative half of the fix: silently
+// baselining somewhere other than the branch the board recorded is its own
+// class of confusion, and the window is minutes. The prepare/finalize flow
+// cannot produce this state: preparation creates no tag at all, and finalize
+// only tags a commit the remote publish branch already carries.
+function assertPublishedReleaseBaseline(slug: string, t: StoredRecord, projectPath: string, baseCommit: string, integrationTargetState: StoredRecord | null): void {
+  const releaseTip = projectPath ? commitScope.unpublishedReleaseTip(projectPath, baseCommit, publishBranchRef(slug, integrationTargetState)) : null;
+  if (releaseTip) {
+    throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(', ')} and not yet on the remote branch. A direct release cut tags its commit before running its suites, so this is either a direct cut still in flight or one that failed and left its commit live. The prepare/finalize flow never reaches this state: preparation creates no tag, and finalize only tags a commit the remote branch already has. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
+  }
+}
+
+function planPreparedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, tokenFiles: DispatchTokenFiles, guarded: GuardedDispatch) {
+  const now = new Date().toISOString();
+  defaultClaudeEffort(t);
+  const preparedExec = preparedExecutableRoute(slug, t, opts);
+  const fallbackReason = policyFallbackReason(current, guarded.resolvedPolicy);
+  const recovery = routedRecovery(t, current);
+  const history = priorAttemptHistory(current);
+  supersedeLiveToken(preflight.projectPath, t, current, history.supersededTokens, now);
+  tokenFiles.prior = dispatchTokenFile(t);
+  const effectiveFiles = dispatchEffectiveFiles(slug, t, current);
+  const isolation = dispatchIsolation(slug, t, current, opts, effectiveFiles);
+  assertDispatchCheckoutShape(slug, t, isolation, effectiveFiles, preflight.projectPath, opts);
+  const delivery = deliveryVerification(slug, t, isolation.sharedTree, effectiveFiles);
+  const artifact = dispatchArtifactScope(slug, t, isolation, effectiveFiles, delivery.workingTreeDelivery);
+  t.dispatchExecutor = stableExecutorName(t, artifact.artifactMode || delivery.workingTreeDelivery);
+  const launchSeq = nextDispatchLaunchSeq(current);
+  const story = storyDispatchFacts(slug, t);
+  const integrationTargetState = dispatchIntegrationTarget(slug, opts, isolation);
+  const localAheadWarning = localAheadIntegrationWarning(slug, isolation.sharedTree, integrationTargetState);
+  delete t.storyContractDrift;
+  const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, preflight.projectPath);
+  fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
+  const baseCommit = dispatchBaseCommit(slug, t, isolation.reviewTargetState, integrationTargetState);
+  const releasedContinuation = explicitBaseContinuation(guarded.retainedContinuation, explicitIntegrationTargetRequested(opts), integrationTargetState, baseCommit);
+  assertPublishedReleaseBaseline(slug, t, preflight.projectPath, baseCommit, integrationTargetState);
+  const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, isolation.nonRepoOutput, preflight.snapshotPreflight);
+  return {
+    now, preparedExec, fallbackReason, recovery, history, effectiveFiles, isolation, delivery, artifact, launchSeq, story,
+    integrationTargetState, localAheadWarning, evidenceDirectory, baseCommit, releasedContinuation, dispatchBaseline, guarded,
+  };
+}
+
+type PreparedDispatchPlan = ReturnType<typeof planPreparedDispatch>;
+
+function preparingSessionId(opts: DispatchOptions): string | null {
+  return opts.sessionId ? String(opts.sessionId) : null;
+}
+
+function preparationProvenanceFields(plan: PreparedDispatchPlan, opts: DispatchOptions, preparedCompatibility: StoredRecord | null) {
+  return {
+    lifecycleAttempt: prepareAttempt(
+      plan.dispatchBaseline,
+      Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: 'prepare', sessionId: preparingSessionId(opts) }),
+      preparedCompatibility
+        ? Object.freeze({ pluginInstall: preparedCompatibility.pluginInstall, identity: preparedCompatibility.identity })
+        : undefined,
+      plan.delivery.verificationRequirement,
+    ),
+    verificationRequirement: plan.delivery.verificationRequirement,
+    evidenceDirectory: plan.evidenceDirectory,
+    sessionId: preparingSessionId(opts),
+    preparedBy: dispatchPreparationAttribution(opts),
+    ...(preparedCompatibility ? { preparedCompatibility } : {}),
+  };
+}
+
+function runtimeEnvironmentFields(pythonIoEncoding: { written: boolean }, opts: DispatchOptions) {
+  return {
+    ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
+    ...(opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {}),
+  };
+}
+
+function checkoutPlacementFields(plan: PreparedDispatchPlan, preflight: DispatchPreflight, opts: DispatchOptions) {
+  return {
+    sharedTree: plan.isolation.sharedTree,
+    ...(plan.isolation.reducedAgentSchema ? { reducedAgentSchema: true } : {}),
+    ...(plan.isolation.worktreeWarning ? { worktreeWarning: plan.isolation.worktreeWarning } : {}),
+    ...(plan.guarded.crossBoundWorktree ? { crossBoundWorktree: plan.guarded.crossBoundWorktree } : {}),
+    ...runtimeEnvironmentFields(preflight.pythonIoEncoding, opts),
+  };
+}
+
+function isolatedContinuationFields(sharedTree: boolean, releasedContinuation: StoredRecord | null) {
+  const continuation = releasedContinuation?.continuation;
+  if (sharedTree || !continuation) return {};
+  return {
+    continuation,
+    worktree: continuation.sourceWorktree,
+    worktreeGitDirectory: continuation.lease.boundGitDirectory,
+    worktreeCommonGitDirectory: continuation.lease.boundCommonGitDirectory,
+    worktreeCheckoutInstance: continuation.lease.boundCheckoutInstance,
+    worktreeObservedRevision: continuation.lease.boundRevision,
+    worktreeBindingSource: 'continuation',
+  };
+}
+
+function sharedTreeContinuationFallback(sharedTree: boolean, releasedContinuation: StoredRecord | null) {
+  return sharedTree && releasedContinuation?.continuation
+    ? { continuationFallback: continuationFallback('continuation_checkpoint_requires_isolated_worktree', releasedContinuation.continuation.sourceWorktree) }
+    : {};
+}
+
+function continuationFields(sharedTree: boolean, releasedContinuation: StoredRecord | null) {
+  return {
+    ...isolatedContinuationFields(sharedTree, releasedContinuation),
+    ...(releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {}),
+    ...sharedTreeContinuationFallback(sharedTree, releasedContinuation),
+  };
+}
+
+function integrationFields(t: StoredRecord, plan: PreparedDispatchPlan) {
+  return {
+    // Record the integration target commit so an isolated executor can bring
+    // its harness-created worktree forward before changing it.
+    baseCommit: plan.baseCommit,
+    ...(plan.isolation.reviewTargetState ? { reviewTarget: t.reviewTarget } : {}),
+    ...(plan.integrationTargetState ? { integrationTarget: plan.integrationTargetState } : {}),
+    ...(plan.localAheadWarning ? { localAheadWarning: plan.localAheadWarning } : {}),
+  };
+}
+
+function unscopedOverrideFields(slug: string, wholeTreeScope: boolean, opts: DispatchOptions, now: string) {
+  if (!wholeTreeScope) return {};
+  return {
+    unscopedOverride: {
+      at: now,
+      source: dispatchSource(opts, 'store'),
+      writeScope: unscopedWriteScopeLine(boardConfig(slug)?.alwaysInScope),
+    },
+  };
+}
+
+function artifactFields(plan: PreparedDispatchPlan) {
+  return {
+    ...(plan.isolation.nonRepoOutput ? { nonRepoOutput: true } : {}),
+    artifactMode: plan.artifact.artifactMode,
+    artifactRoot: plan.artifact.artifactRoot,
+    artifactScope: plan.artifact.artifactScope,
+    ...(plan.artifact.artifactMode ? { artifactDirtyBaseline: plan.artifact.artifactDirtyBaseline } : {}),
+  };
+}
+
+function sharedTreeDirtyBaseline(artifact: DirtyBaselines): StoredRecord | null {
+  return artifact.artifactDirtyBaseline || artifact.dirtyBaselineCapture?.baseline || null;
+}
+
+function dirtyBaselineFields(plan: PreparedDispatchPlan) {
+  return {
+    ...(plan.artifact.dirtyBaselineCapture?.warning ? { dirtyBaselineWarning: plan.artifact.dirtyBaselineCapture.warning } : {}),
+    ...(plan.delivery.workingTreeDelivery ? { workingTreeDelivery: true, workingTreeDirtyBaseline: plan.artifact.workingTreeDirtyBaseline } : {}),
+    ...(plan.isolation.sharedTree ? { dirtyBaseline: sharedTreeDirtyBaseline(plan.artifact) } : {}),
+  };
+}
+
+function launchFields(t: StoredRecord, plan: PreparedDispatchPlan) {
+  return {
+    tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+    tokenFile: newDispatchTokenFile(),
+    executor: t.dispatchExecutor,
+    description: spawnDescription(t, plan.preparedExec),
+    launchSeq: plan.launchSeq,
+    launchName: dispatchLaunchName(t.ref, t.title, plan.preparedExec, t.effort, plan.launchSeq),
+    route: dispatchRouteState(t.model, t.effort, plan.preparedExec),
+  };
+}
+
+function repeatFailureFields(plan: PreparedDispatchPlan, current: StoredRecord, opts: DispatchOptions) {
+  if (!plan.guarded.repeatFailure) return {};
+  return {
+    repeatFailureOverride: {
+      at: plan.now,
+      source: dispatchSource(opts, 'store'),
+      priorAttempts: recentNoCommitAttempts(current).length,
+    },
+  };
+}
+
+function routeHistoryFields(plan: PreparedDispatchPlan, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight) {
+  return {
+    ...repeatFailureFields(plan, current, opts),
+    ...(plan.guarded.unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {}),
+    ...(plan.fallbackReason ? { fallbackReason: plan.fallbackReason } : {}),
+    ...(preflight.sourceRevisionAdapterSwitch ? { sourceRevisionAdapterSwitch: preflight.sourceRevisionAdapterSwitch } : {}),
+  };
+}
+
+function storyFields(plan: PreparedDispatchPlan) {
+  return {
+    storyContract: plan.story.contract,
+    storyLogRevision: plan.story.storyLogRevision,
+    ...(plan.story.contractDrift ? { storyContractDrift: Object.assign({}, plan.story.contractDrift, { rebasedAt: plan.now }) } : {}),
+  };
+}
+
+function priorAttemptFields(plan: PreparedDispatchPlan) {
+  return {
+    ...(plan.history.attempts.length ? { attempts: plan.history.attempts } : {}),
+    ...(plan.history.supersededTokens.length ? { supersededTokens: plan.history.supersededTokens.slice(-8) } : {}),
+    ...(plan.recovery ? { recovery: plan.recovery } : {}),
+  };
+}
+
+function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRecord, plan: PreparedDispatchPlan, opts: DispatchOptions, preflight: DispatchPreflight) {
+  return {
+    ...preparationProvenanceFields(plan, opts, preflight.preparedCompatibility),
+    ...checkoutPlacementFields(plan, preflight, opts),
+    declaredFiles: plan.artifact.declaredFiles,
+    boardAddedFiles: plan.artifact.boardAddedFiles,
+    ...continuationFields(plan.isolation.sharedTree, plan.releasedContinuation),
+    ...integrationFields(t, plan),
+    readonly: plan.isolation.readonly,
+    ...unscopedOverrideFields(slug, plan.isolation.wholeTreeScope, opts, plan.now),
+    ...artifactFields(plan),
+    ...dirtyBaselineFields(plan),
+    ...launchFields(t, plan),
+    ...routeHistoryFields(plan, current, opts, preflight),
+    ...storyFields(plan),
+    preparedAt: plan.now,
+    launchedAt: null,
+    boundAt: null,
+    claimedAt: null,
+    terminalAt: null,
+    outcome: 'prepared',
+    ...priorAttemptFields(plan),
+  };
+}
+
+function preparedDispatchWarnings(plan: PreparedDispatchPlan, preflight: DispatchPreflight): string[] {
+  return [plan.localAheadWarning?.message, plan.artifact.dirtyBaselineCapture?.warning, preflight.servingCompatibilityWarning, plan.guarded.crossBoundWorktree?.message]
+    .filter((warning): warning is string => Boolean(warning));
+}
+
+function mintPreparedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, tokenFiles: DispatchTokenFiles, guarded: GuardedDispatch) {
+  const plan = planPreparedDispatch(slug, t, current, opts, preflight, tokenFiles, guarded);
+  // Everything above this line only validates. Minting the replacement token
+  // any earlier meant a later refusal — a changed project registration, an
+  // unresolvable integration target, an unreadable evidence directory — left
+  // SQLite pointing at a token file that had already been deleted, so the
+  // still-authoritative dispatch could no longer authenticate (SQ-2691).
+  t.dispatchNonce = mintDispatchToken();
+  t.dispatch = preparedDispatchRecord(slug, t, current, plan, opts, preflight);
+  consumePreparedComposition(t, dispatchTokenDigest(t.dispatchNonce));
+  tokenFiles.staged = dispatchTokenFile(t);
+  t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
+  stampDispatchEvent(t, 'dispatch', plan.now);
+  writeDispatchTokenFile(t);
+  putTicket(slug, t);
+  const warnings = preparedDispatchWarnings(plan, preflight);
+  return { ok: true, ticket: t, token: t.dispatchNonce, recovery: plan.recovery, ...(warnings.length ? { warnings } : {}) };
+}
+
+function discardReplacedTokenFile(tokenFiles: DispatchTokenFiles): void {
+  if (tokenFiles.prior && tokenFiles.staged && tokenFiles.prior !== tokenFiles.staged) {
+    try { fs.unlinkSync(tokenFiles.prior); } catch (_: unknown) {}
+  }
+}
+
+function discardUncommittedTokenFile(tokenFiles: DispatchTokenFiles): void {
+  if (tokenFiles.staged && tokenFiles.staged !== tokenFiles.prior) {
+    try { fs.unlinkSync(tokenFiles.staged); } catch (_: unknown) {}
+  }
+}
+
+function prepareUnderDispatchLocks(slug: string, idOrRef: string, found: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight) {
+  const tokenFiles: DispatchTokenFiles = { prior: null, staged: null };
+  try {
+    const prepared = dependencies.withCompositionDispatchPreparation(slug, found.id,
+      () => prepareLockedDispatch(slug, idOrRef, found, opts, preflight, tokenFiles));
+    discardReplacedTokenFile(tokenFiles);
     return prepared;
   } catch (error) {
-    if (stagedTokenFile && stagedTokenFile !== priorTokenFile) {
-      try { fs.unlinkSync(stagedTokenFile); } catch (_: unknown) {}
-    }
+    discardUncommittedTokenFile(tokenFiles);
     throw error;
   }
+}
+
+function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
+  if (opts.retireOnly === true) return retireUnboundDispatchOnly(slug, idOrRef, opts);
+  const { projectPath, found } = dispatchableTicket(slug, idOrRef, opts);
+  const install = preparedInstallCompatibility(found, projectPath);
+  supersedeEvidencedAttempt(slug, found, opts);
+  // Registry install proves a future session; it does not prove THIS
+  // invocation's session has the board MCP connected (SQ-1017 correction).
+  // Only CLI transport needs to prove anything here — omitted/'mcp' callers
+  // are trusted, matching every direct `prepareDispatch` caller that predates
+  // this transport concept.
+  assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
+  const preflight: DispatchPreflight = { projectPath, ...install, ...preparedDispatchEnvironment(slug, found, idOrRef, projectPath) };
+  return prepareUnderDispatchLocks(slug, idOrRef, found, opts, preflight);
 }
 
 function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?: any) {
@@ -1810,66 +2756,132 @@ function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?
   if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
     return { ok: false, reason: 'token' };
   }
+  // A briefing fetch is the running executor saying it got this far, and for a slow first turn it is the
+  // only thing it says before claiming, so record it as runtime liveness (SQ-2934).
+  const briefed = withTicketLock(slug, ticket.id, () => {
+    const current = getTicket(slug, ticket.id);
+    const currentState = dispatchState(current);
+    if (!currentState || currentState.terminalAt || !dispatchTokenMatches(current.dispatchNonce, receivedToken)) return null;
+    currentState.briefedAt = new Date().toISOString();
+    stampDispatchEvent(current, 'briefing-served', currentState.briefedAt);
+    putTicket(slug, current);
+    return current;
+  });
   // The renderer still validates the resolved credential. Returning only the
   // ticket made every token-file briefing fail after authentication (SQ-1866).
-  return { ok: true, ticket, token: receivedToken };
+  return { ok: true, ticket: briefed || ticket, token: receivedToken };
 }
 
-function recoverLiveClaimDispatch(slug?: any, idOrRef?: any, opts?: any) {
-  const by = String(opts?.by || '').trim();
-  const executor = String(opts?.executor || '').trim();
-  const worktree = String(opts?.worktree || '').trim();
-  const evidence = String(opts?.recoveryEvidence || '').trim();
-  const sessionId = String(opts?.sessionId || '').trim();
+type LiveClaimRecoveryRequest = { by: string; executor: string; worktree: string; evidence: string; sessionId: string };
+type LiveClaimRecoveryOptions = Partial<Record<'by' | 'executor' | 'worktree' | 'recoveryEvidence' | 'sessionId', unknown>>;
+type RecoverableClaim = { by?: string; runtime?: { executor?: string } };
+type RecoverableClaimTicket = CompositionTicket & { claim?: RecoverableClaim | null };
+type LiveClaimedTicket = RecoverableClaimTicket & { claim: RecoverableClaim };
+type RecoverableClaimDispatch = { terminalAt?: string | null; sharedTree?: boolean; outcome?: string; executor?: string };
+type LiveClaimRecoveryRefusal = { ok: false; reason: string; ticket: RecoverableClaimTicket | null; message: string };
+
+function trimmedRecoveryText(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function liveClaimRecoveryRequest(opts: LiveClaimRecoveryOptions = {}): LiveClaimRecoveryRequest {
+  return { by: trimmedRecoveryText(opts.by), executor: trimmedRecoveryText(opts.executor), worktree: trimmedRecoveryText(opts.worktree),
+    evidence: trimmedRecoveryText(opts.recoveryEvidence), sessionId: trimmedRecoveryText(opts.sessionId) };
+}
+
+function isLiveClaimedBy(ticket: RecoverableClaimTicket | null, by: string): ticket is LiveClaimedTicket {
+  return ticket?.claim?.by === by;
+}
+
+function liveClaimHolderRefusal(ticket: RecoverableClaimTicket | null, idOrRef: string, by: string): LiveClaimRecoveryRefusal {
+  return { ok: false, reason: 'not_claim_holder', ticket, message: `${ticket?.ref || idOrRef} is not live-claimed by ${by}.` };
+}
+
+function isLiveIsolatedClaim(state: RecoverableClaimDispatch | null): state is RecoverableClaimDispatch {
+  return state?.outcome === 'claimed' && state.sharedTree === false && !state.terminalAt;
+}
+
+// A claim without a recorded runtime executor matches whatever executor the dispatch stored.
+function claimRuntimeExecutor(ticket: LiveClaimedTicket, executor: string): string {
+  return ticket.claim.runtime?.executor || executor;
+}
+
+function liveClaimExecutorRefusal(ticket: LiveClaimedTicket, state: RecoverableClaimDispatch, executor: string): LiveClaimRecoveryRefusal | null {
+  if (state.executor !== executor || claimRuntimeExecutor(ticket, executor) !== executor) {
+    return { ok: false, reason: 'executor_mismatch', ticket, message: `${ticket.ref} requires executor ${state.executor || '(unavailable)'}, not ${executor}.` };
+  }
+  return null;
+}
+
+// The consumed composition grant names this claim's dispatch nonce. Re-minting it would leave every later claim,
+// capture and submit refused as stale_generation, and the consumed grant also refuses a redispatch.
+function consumedCompositionRecoveryRefusal(ticket: RecoverableClaimTicket): LiveClaimRecoveryRefusal | undefined {
+  const consumed = consumedAdmissionRefusal(ticket);
+  return consumed && { ok: false, reason: consumed.reason, ticket,
+    message: `${ticket.ref}: ${consumed.message} Live-claim recovery would re-mint the dispatch nonce that consumed it, so it is refused and nothing was written. The live claim holder keeps its existing dispatch token and bound native checkout; this composition generation cannot be re-minted or redispatched.` };
+}
+
+function liveClaimRecoveryRefusal(ticket: RecoverableClaimTicket | null, state: RecoverableClaimDispatch | null, request: LiveClaimRecoveryRequest, idOrRef: string) {
+  if (!isLiveClaimedBy(ticket, request.by)) return liveClaimHolderRefusal(ticket, idOrRef, request.by);
+  if (!isLiveIsolatedClaim(state)) {
+    return { ok: false, reason: 'dispatch_unavailable', ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
+  }
+  return liveClaimExecutorRefusal(ticket, state, request.executor) || consumedCompositionRecoveryRefusal(ticket);
+}
+
+function resumeLiveClaim(ticket: StoredRecord, state: StoredRecord, facts: StoredRecord, request: LiveClaimRecoveryRequest, now: string) {
+  state.sessionId = request.sessionId;
+  state.agentId = null;
+  state.continuation = {
+    mode: 'live_claim_resume',
+    ticketRef: ticket.ref,
+    sourceWorktree: facts.worktree,
+    baseCommit: state.baseCommit,
+    commit: facts.revision,
+  };
+  bindCheckoutFacts(state, facts);
+  state.worktreeBindingSource = 'live-claim-recovery';
+  state.worktreeBoundAt = now;
+  state.resumedAt = now;
+  state.liveClaimRecovery = { at: now, by: request.by, executor: request.executor, evidence: request.evidence };
+  ticket.dispatchNonce = mintDispatchToken();
+  state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
+  writeDispatchTokenFile(ticket);
+  syncClaimRuntimeIdentity(ticket, state);
+  stampDispatchEvent(ticket, 'live-claim-recovery', now);
+}
+
+function recoverLockedLiveClaim(slug: string, id: string, idOrRef: string, request: LiveClaimRecoveryRequest, lockKeys: TicketKey[]) {
+  const ticket = getTicket(slug, id);
+  const state = dispatchState(ticket);
+  const refusal = liveClaimRecoveryRefusal(ticket, state, request, idOrRef);
+  if (refusal) return refusal;
+  const facts = immutableWorktreeFacts(slug, request.worktree);
+  if (!facts) {
+    return { ok: false, reason: 'invalid_worktree', ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
+  }
+  const now = new Date().toISOString();
+  const rebind = liveClaimRebind(slug, ticket, state, facts, lockKeys, now);
+  if (!rebind.ok) return { ok: false, reason: rebind.reason, ticket, message: rebind.message };
+  resumeLiveClaim(ticket, state, facts, request, now);
+  putTicket(slug, ticket);
+  return {
+    ok: true,
+    ticket,
+    token: ticket.dispatchNonce,
+    recovery: Object.assign({ kind: 'live_claim_resume', at: now, worktree: facts.worktree }, rebind.recovery),
+  };
+}
+
+function recoverLiveClaimDispatch(slug?: any, idOrRef?: any, opts?: LiveClaimRecoveryOptions) {
+  const request = liveClaimRecoveryRequest(opts);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  if (!by || !executor || !worktree || !evidence || !sessionId) {
+  if (Object.values(request).some((value) => !value)) {
     return { ok: false, reason: 'missing_recovery_facts', message: 'Live-claim recovery requires claimHolder, executor, worktree, recoveryEvidence, and a connected session.' };
   }
-  return withTicketLock(slug, found.id, () => {
-    const ticket = getTicket(slug, found.id);
-    const state = dispatchState(ticket);
-    if (!ticket?.claim?.by || ticket.claim.by !== by) {
-      return { ok: false, reason: 'not_claim_holder', ticket, message: `${ticket?.ref || idOrRef} is not live-claimed by ${by}.` };
-    }
-    if (!state || state.terminalAt || state.sharedTree !== false || state.outcome !== 'claimed') {
-      return { ok: false, reason: 'dispatch_unavailable', ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
-    }
-    if (state.executor !== executor || ticket.claim.runtime?.executor && ticket.claim.runtime.executor !== executor) {
-      return { ok: false, reason: 'executor_mismatch', ticket, message: `${ticket.ref} requires executor ${state.executor || '(unavailable)'}, not ${executor}.` };
-    }
-    const facts = immutableWorktreeFacts(slug, worktree);
-    if (!facts) {
-      return { ok: false, reason: 'invalid_worktree', ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
-    }
-    if (state.worktree && canonicalPath(state.worktree) !== facts.worktree) {
-      return { ok: false, reason: 'worktree_mismatch', ticket, message: `${ticket.ref} is bound to a different worktree and cannot be rebound.` };
-    }
-    const now = new Date().toISOString();
-    state.sessionId = sessionId;
-    state.agentId = null;
-    state.worktree = facts.worktree;
-    state.worktreeGitDirectory = facts.gitDirectory;
-    state.worktreeCommonGitDirectory = facts.commonGitDirectory;
-    state.worktreeCheckoutInstance = facts.checkoutInstance;
-    state.worktreeObservedRevision = facts.revision;
-    state.worktreeBindingSource = 'live-claim-recovery';
-    state.worktreeBoundAt = now;
-    state.resumedAt = now;
-    state.liveClaimRecovery = { at: now, by, executor, evidence };
-    ticket.dispatchNonce = mintDispatchToken();
-    state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
-    writeDispatchTokenFile(ticket);
-    syncClaimRuntimeIdentity(ticket, state);
-    stampDispatchEvent(ticket, 'live-claim-recovery', now);
-    putTicket(slug, ticket);
-    return {
-      ok: true,
-      ticket,
-      token: ticket.dispatchNonce,
-      recovery: { kind: 'live_claim_resume', at: now, worktree: facts.worktree },
-    };
-  });
+  const lockKeys = recoveryLockKeys(slug, found, request.worktree);
+  return withLockedTickets(lockKeys, () => recoverLockedLiveClaim(slug, found.id, idOrRef, request, lockKeys));
 }
 
 function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
@@ -2156,59 +3168,322 @@ function unavailableWorktreeBinding(slug?: any, candidates: any[] = [], sessionI
   };
 }
 
-function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any) {
-  const normalizedSessionId = String(sessionId || '').trim();
-  const target = String(worktree || '').trim();
-  const meta = readMeta(slug);
-  if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: 'missing_binding_facts' };
-  const repository = canonicalPath(meta.path);
-  const boundWorktree = canonicalPath(target);
-  const bindingCandidates = listTickets(slug)
-    .map((candidate: any) => ({ candidate, state: dispatchState(candidate) }))
-    .filter(({ state }: any) => Boolean(state));
-  for (const candidate of listTickets(slug)) {
-    const state = dispatchState(candidate);
-    if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== 'launched'
-      || state.terminalAt || state.worktreeBindingSource !== 'worktree-create' || !state.worktree
-      || canonicalPath(state.worktree) !== boundWorktree) continue;
-    const baseline = String(state.baseCommit || '').trim();
-    if (baseline) return {
-      ok: true,
-      ref: candidate.ref,
-      baseline,
-      repository,
-      worktree: boundWorktree,
-      creationCompleted: Boolean(state.worktreeCreationCompletedAt),
-      expectedGitDirectory: state.worktreeGitDirectory || null,
-      expectedCommonGitDirectory: state.worktreeCommonGitDirectory || null,
-      expectedCheckoutInstance: state.worktreeCheckoutInstance || null,
-      expectedRevision: state.worktreeObservedRevision || null,
-    };
-  }
-  for (const candidate of listTickets(slug)) {
-    if (!dispatchCreationCandidate(dispatchState(candidate), normalizedSessionId)) continue;
-    const result = withTicketLock(slug, candidate.id, () => {
-      const ticket = getTicket(slug, candidate.id);
-      const state = dispatchState(ticket);
-      if (!dispatchCreationCandidate(state, normalizedSessionId)) return { ok: false, reason: 'already_bound' };
-      const baseline = String(state.baseCommit || '').trim();
-      if (!baseline) return { ok: false, reason: 'baseline_unavailable' };
-      state.worktree = boundWorktree;
-      state.worktreeBindingSource = 'worktree-create';
-      state.worktreeBoundAt = new Date().toISOString();
-      stampDispatchEvent(ticket, 'worktree-create-binding', state.worktreeBoundAt);
-      putTicket(slug, ticket);
-      return { ok: true, ref: ticket.ref, baseline, repository, worktree: boundWorktree };
-    });
-    if (result?.ok) return result;
-  }
-  if (unlaunchedSessionDispatch(slug, normalizedSessionId)) {
-    return { ok: false, reason: 'dispatch_launch_unrecorded' };
-  }
-  return unavailableWorktreeBinding(slug, bindingCandidates, normalizedSessionId, boundWorktree);
+// A WorktreeCreate callback carries only the session and the checkout path, and a replacement dispatch
+// reuses both, so a prior generation's late hook landed its stamp on the live attempt and shortened the
+// replacement's protection (SQ-2949 finding 3). `preparedAt` is the attempt's own generation stamp: the
+// binding hands it out and every later callback hands it back, so a stale one stamps nothing.
+//
+// The token is mandatory. Treating a missing one as current was the same corruption with an easier
+// trigger: every recorder stamped the replacement whenever a caller simply omitted it (SQ-2953 finding 1).
+// So the generation is the FIRST thing each recorder checks, before any state predicate, which is what
+// makes `dispatch_binding_unavailable` reachable only once the generation is known to be current.
+function missingWorktreeCallbackAttempt(attempt?: any) {
+  return !String(attempt || '').trim();
 }
 
-function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any) {
+function worktreeCallbackGenerationRefusal(state?: any, attempt?: any) {
+  const claimed = String(attempt || '').trim();
+  if (!claimed) return { ok: false, reason: 'missing_attempt' };
+  return claimed === String(state?.preparedAt || '').trim() ? null : { ok: false, reason: 'stale_attempt' };
+}
+
+function liveIsolatedDispatch(state?: any) {
+  return Boolean(state && state.sharedTree === false && !state.terminalAt);
+}
+
+function liveSessionDispatch(state?: any, sessionId?: any) {
+  return liveIsolatedDispatch(state) && state.sessionId === sessionId;
+}
+
+function recordedAtCheckout(state?: any, checkout?: string) {
+  return Boolean(state?.worktree) && canonicalPath(state.worktree) === checkout;
+}
+
+// The occupancy fact both sides of this change read: a live isolated dispatch whose ticket is claimed and whose
+// record names this exact checkout. Creation asks it of the checkout a WorktreeCreate is arriving at; the
+// completion gates ask it of the two checkouts they can see.
+function liveClaimOccupiesCheckout(candidate?: any, state?: any, checkout?: string) {
+  return Boolean(candidate?.claim?.by) && liveIsolatedDispatch(state) && recordedAtCheckout(state, checkout);
+}
+
+// Whether an arrival at an occupied checkout is that owner's own dispatch coming back rather than a second
+// executor. The binding the board already holds is read first, because it is the stronger fact: a binding that
+// did not come from creation-order attribution was proven against the checkout itself - live-claim recovery
+// clears the agent id, keeps the checkout, and moves the record to the recovering session, so its replacement
+// runtime would otherwise be accused of intruding on its own tree. Only then does the checkout name decide, and
+// when the name carries no agent id at all - WorktreeCreate accepts any single path segment - the record's own
+// bound identity is the last thing left to read.
+function reentrantCheckoutOwner(state?: any, checkoutAgentId?: string, sessionId?: string) {
+  if (state?.worktreeBindingSource !== 'worktree-create') return state?.sessionId === sessionId;
+  if (checkoutAgentId) return String(state.agentId || '') === checkoutAgentId;
+  return Boolean(state.agentId) && state.sessionId === sessionId;
+}
+
+function occupiedCheckoutFailure(candidate?: any, state?: any, checkoutAgentId?: string) {
+  return {
+    ownerRef: candidate.ref,
+    ownerClaimHolder: String(candidate.claim.by),
+    ownerAgentId: String(state.agentId || '').trim(),
+    checkoutAgentId: String(checkoutAgentId || ''),
+  };
+}
+
+// A checkout an active claim occupies is never re-attributed to another reservation. The live-owner scan in
+// `bindDispatchWorktreeCreation` only covers a holder whose outcome is still `launched`, so a holder that had
+// already CLAIMED its ticket fell through to creation-order attribution and the occupied checkout was handed to
+// a sibling reservation; every completion gate then read a tree that belongs to somebody else's live executor
+// (GH-235). The checkout name is the one per-agent discriminator a WorktreeCreate payload carries: a linked
+// checkout is named agent-<agentId>, so the owner's own bound agent id is the one arrival the name can confirm,
+// and any other arrival is a second agent landing in an occupied tree.
+function occupiedCheckoutOwner(slug?: any, boundWorktree?: string, checkoutAgentId?: string, sessionId?: string) {
+  for (const candidate of listTickets(slug)) {
+    const state = dispatchState(candidate);
+    if (!liveClaimOccupiesCheckout(candidate, state, boundWorktree)) continue;
+    if (reentrantCheckoutOwner(state, checkoutAgentId, sessionId)) continue;
+    return occupiedCheckoutFailure(candidate, state, checkoutAgentId);
+  }
+  return null;
+}
+
+// The start binding is scoped to the session and the checkout, not to a generation, because the hook learns its
+// generation from this very call.
+function holdsThisCheckout(state?: any, sessionId?: string, checkout?: string) {
+  return Boolean(state && state.sessionId === sessionId
+    && state.sharedTree === false && state.worktreeBindingSource === 'worktree-create')
+    && recordedAtCheckout(state, checkout);
+}
+
+// A live owner of this checkout that a start callback can still bind to: one still launched, or one whose ticket
+// is already claimed and whose own dispatch is re-entering. Admitting the re-entry here rather than only
+// excusing it from the refusal matters: an unadmitted callback falls through to creation-order attribution,
+// which is exactly how an occupied checkout reaches a sibling reservation.
+function checkoutOwnerArrival(state?: any, checkoutAgentId?: string, sessionId?: string) {
+  if (state?.outcome === 'launched') return true;
+  return state?.outcome === 'claimed' && reentrantCheckoutOwner(state, checkoutAgentId, sessionId);
+}
+
+// Nothing a start callback may bind to still holds this checkout: either a retired attempt does, or a live claim
+// occupies it and the arrival is not that owner's own dispatch coming back.
+function unbindableCheckoutHolder(slug?: any, sessionId?: string, boundWorktree?: string, checkoutAgentId?: string) {
+  for (const candidate of listTickets(slug)) {
+    const state = dispatchState(candidate);
+    if (holdsThisCheckout(state, sessionId, boundWorktree) && state.terminalAt) return { ok: false, reason: 'stale_attempt' };
+  }
+  const occupied = occupiedCheckoutOwner(slug, boundWorktree, checkoutAgentId, sessionId);
+  return occupied ? {
+    ok: false,
+    reason: 'checkout_owned_by_live_claim',
+    binding: { suppliedSessionId: sessionId, suppliedWorktree: boundWorktree, ...occupied },
+  } : null;
+}
+
+// The start recorder is the one callback that CANNOT present a generation: the hook learns its generation
+// from this very call, and nothing in a WorktreeCreate payload (a session id, a cwd, and a worktree name that
+// is just the checkout path again) tells two generations of the same session and checkout apart. So this
+// binding is session-and-checkout scoped, not generation-scoped, and the docs say so - but a caller that DOES
+// know its generation is held to it, and the two shapes a generation-blind caller could have hijacked are
+// closed (SQ-2959 finding 2):
+//   - A checkout whose attempt is already bound and still creating has a hook inside its creation window, and
+//     that hook already holds the generation. A second caller arriving there with none is a racing hook, not
+//     the owner, so it never acquires the live generation. Once creation is COMPLETE the same call is a
+//     re-entry that stamps nothing - `createWorktree` no-ops on an intact checkout - so it stays allowed.
+//   - A retired attempt still holding this checkout answers `stale_attempt`, rather than falling through and
+//     handing its late hook some other live attempt in the same session.
+//   - A holder whose ticket is already CLAIMED answers `checkout_owned_by_live_claim` unless the binding the
+//     board already holds, or the checkout name, says the owner's own dispatch is re-entering, rather than
+//     letting attribution hand an occupied tree to a sibling reservation (GH-235).
+//
+// Attribution itself still has no per-dispatch discriminator when every sibling reservation is unbound: the
+// payload's only per-agent fact is the checkout name, and at that moment no dispatch has bound an agent id to
+// compare it against. So creation order remains the guess, and `exchangeCrossedCreationBinding` at SubagentStart
+// remains the fact that settles it.
+function nativeCheckoutBindingRequest(slug: string, sessionId?: string, worktree?: string, attempt?: string): NativeCheckoutBindingRequest | null {
+  const identity = nativeCheckoutCallbackIdentity(sessionId, worktree);
+  const meta = readMeta(slug);
+  if (!identity || !meta?.path) return null;
+  const repository = canonicalPath(meta.path);
+  return { ...identity, repository, attempt: String(attempt || '').trim(),
+    checkoutAgentId: agentIdFromWorktreePath(repository, identity.worktree) };
+}
+
+function existingNativeCheckoutOwner(ticket: CompositionTicket, request: NativeCheckoutBindingRequest): boolean {
+  const state: NativeCheckoutCreation | undefined = dispatchState(ticket);
+  if (!state || state.terminalAt) return false;
+  return holdsThisCheckout(state, request.sessionId, request.worktree)
+    && checkoutOwnerArrival(state, request.checkoutAgentId, request.sessionId);
+}
+
+function createdCheckoutExpectations(state: NativeCheckoutCreation): Pick<NativeCheckoutBinding, 'expectedGitDirectory' | 'expectedCommonGitDirectory' | 'expectedCheckoutInstance' | 'expectedRevision'> {
+  return { expectedGitDirectory: state.worktreeGitDirectory ?? null, expectedCommonGitDirectory: state.worktreeCommonGitDirectory ?? null,
+    expectedCheckoutInstance: state.worktreeCheckoutInstance ?? null, expectedRevision: state.worktreeObservedRevision ?? null };
+}
+
+function nativeCheckoutBindingResponse(ticket: CompositionTicket, state: NativeCheckoutCreation, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
+  const baseline = String(compositionCheckoutCommit(state)).trim();
+  if (!baseline) return { ok: false, reason: 'baseline_unavailable' };
+  return { ok: true, ref: ticket.ref, attempt: state.preparedAt ?? '', baseline,
+    repository: request.repository, worktree: request.worktree, creationCompleted: Boolean(state.worktreeCreationCompletedAt),
+    ...createdCheckoutExpectations(state) };
+}
+
+// An already-bound checkout replays only its own prepared attempt, or completes without one after creation finished.
+function nativeCallbackAttemptRefusal(attempt: string, state: NativeCheckoutCreation): NativeCheckoutBindingResult | undefined {
+  if (attempt && attempt !== state.preparedAt) return { ok: false, reason: 'stale_attempt' };
+  if (!attempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: 'missing_attempt' };
+}
+
+function existingNativeCheckoutBinding(slug: string, ticketId: string, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
+  const ticket: CompositionTicket = getTicket(slug, ticketId);
+  if (!ticket || !existingNativeCheckoutOwner(ticket, request)) return { ok: false, reason: 'dispatch_binding_unavailable' };
+  const state: NativeCheckoutCreation = dispatchState(ticket);
+  return nativeCallbackAttemptRefusal(request.attempt, state) ?? nativeCheckoutBindingResponse(ticket, state, request);
+}
+
+function retainedCompositionCheckoutRefusal(ticket: CompositionTicket, worktree: string): NativeCheckoutBindingResult | undefined {
+  const admission = ticket.compositionAdmission;
+  if (!admission) return;
+  if (admission.releasedDispatch.worktree && canonicalPath(admission.releasedDispatch.worktree) === worktree) {
+    return { ok: false, reason: 'composition_checkout_reused' };
+  }
+  if (fs.existsSync(worktree)) return { ok: false, reason: 'composition_checkout_occupied' };
+}
+
+function recordNativeCheckoutBinding(slug: string, ticket: CompositionTicket, state: NativeCheckoutCreation, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
+  const response = nativeCheckoutBindingResponse(ticket, state, request);
+  if (!response.ok) return response;
+  state.worktree = request.worktree;
+  state.worktreeBindingSource = 'worktree-create';
+  state.worktreeBoundAt = new Date().toISOString();
+  stampDispatchEvent(ticket, 'worktree-create-binding', state.worktreeBoundAt);
+  putTicket(slug, ticket);
+  return { ok: true, ref: response.ref, attempt: response.attempt, baseline: response.baseline,
+    repository: response.repository, worktree: response.worktree };
+}
+
+function freshNativeCheckoutBinding(slug: string, ticketId: string, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
+  const ticket: CompositionTicket = getTicket(slug, ticketId);
+  const state: NativeCheckoutCreation = dispatchState(ticket);
+  if (!dispatchCreationCandidate(state, request.sessionId)) return { ok: false, reason: 'already_bound' };
+  if (request.attempt && request.attempt !== state.preparedAt) return { ok: false, reason: 'stale_attempt' };
+  return retainedCompositionCheckoutRefusal(ticket, request.worktree)
+    ?? recordNativeCheckoutBinding(slug, ticket, state, request);
+}
+
+function bindAvailableNativeCheckout(slug: string, request: NativeCheckoutBindingRequest, tickets: readonly CompositionTicket[]): NativeCheckoutBindingResult {
+  const candidate = tickets.find(ticket => dispatchCreationCandidate(dispatchState(ticket), request.sessionId));
+  if (candidate) return dependencies.withCompositionGenerationLock(slug, candidate.id,
+    () => freshNativeCheckoutBinding(slug, candidate.id, request));
+  if (unlaunchedSessionDispatch(slug, request.sessionId)) return { ok: false, reason: 'dispatch_launch_unrecorded' };
+  const candidates = tickets.map(candidate => ({ candidate, state: dispatchState(candidate) })).filter(candidate => Boolean(candidate.state));
+  return { ...unavailableWorktreeBinding(slug, candidates, request.sessionId, request.worktree), ok: false };
+}
+
+function bindDispatchWorktreeCreation(slug: string, sessionId?: string, worktree?: string, attempt?: string): NativeCheckoutBindingResult {
+  const request = nativeCheckoutBindingRequest(slug, sessionId, worktree, attempt);
+  if (!request) return { ok: false, reason: 'missing_binding_facts' };
+  const tickets: readonly CompositionTicket[] = listTickets(slug);
+  const existing = tickets.find(ticket => existingNativeCheckoutOwner(ticket, request));
+  if (existing) return dependencies.withCompositionGenerationLock(slug, existing.id,
+    () => existingNativeCheckoutBinding(slug, existing.id, request));
+  const refusal = unbindableCheckoutHolder(slug, request.sessionId, request.worktree, request.checkoutAgentId);
+  if (refusal) return { ...refusal, ok: false };
+  return bindAvailableNativeCheckout(slug, request, tickets);
+}
+
+function nativeCheckoutCallbackIdentity(sessionId?: string, worktree?: string): { sessionId: string; worktree: string } | null {
+  const normalizedSessionId = String(sessionId || '').trim();
+  const target = String(worktree || '').trim();
+  if (!normalizedSessionId || !target) return null;
+  return { sessionId: normalizedSessionId, worktree: canonicalPath(target) };
+}
+
+function launchedNativeCheckoutMatches(state: NativeCheckoutCreation | null | undefined, binding: { sessionId: string; worktree: string }): state is NativeCheckoutCreation {
+  if (!state) return false;
+  return [state.sessionId === binding.sessionId, state.sharedTree === false, state.outcome === 'launched', !state.terminalAt,
+    state.worktreeBindingSource === 'worktree-create', Boolean(state.worktree), canonicalPath(state.worktree ?? '') === binding.worktree].every(Boolean);
+}
+
+function createdCheckoutIdentityMatches(state: NativeCheckoutCreation, facts: NativeCheckoutFacts): boolean {
+  return [canonicalPath(state.worktreeGitDirectory ?? '') === facts.gitDirectory,
+    canonicalPath(state.worktreeCommonGitDirectory ?? '') === facts.commonGitDirectory,
+    state.worktreeCheckoutInstance === facts.checkoutInstance, state.worktreeObservedRevision === facts.revision].every(Boolean);
+}
+
+function recordCreatedCheckoutIdentity(state: NativeCheckoutCreation, facts: NativeCheckoutFacts): void {
+  state.worktreeGitDirectory = facts.gitDirectory;
+  state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+  state.worktreeCheckoutInstance = facts.checkoutInstance;
+  state.worktreeObservedRevision = facts.revision;
+  state.worktreeCreationCompletedAt = new Date().toISOString();
+}
+
+function recordNativeCheckoutCompletion(slug: string, ticket: CompositionTicket, current: NativeCheckoutCreation, facts: NativeCheckoutFacts): NativeCheckoutCompletion {
+  if (current.worktreeCreationCompletedAt) {
+    return createdCheckoutIdentityMatches(current, facts)
+      ? { ok: true, alreadyCompleted: true } : { ok: false, reason: 'worktree_identity_mismatch' };
+  }
+  recordCreatedCheckoutIdentity(current, facts);
+  stampDispatchEvent(ticket, 'worktree-create-complete', current.worktreeCreationCompletedAt);
+  putTicket(slug, ticket);
+  return { ok: true, alreadyCompleted: false };
+}
+
+function compositionCheckoutWasReused(previous: CompositionDispatch, worktree: string, facts: NativeCheckoutFacts): boolean {
+  return [previous.worktree && canonicalPath(previous.worktree) === worktree,
+    previous.worktreeGitDirectory && canonicalPath(previous.worktreeGitDirectory) === facts.gitDirectory,
+    previous.worktreeCheckoutInstance === facts.checkoutInstance].some(Boolean);
+}
+
+function cleanCompositionCheckoutRefusal(worktree: string): NativeCheckoutCompletion | undefined {
+  try {
+    if (gitOutput(worktree, ['status', '--porcelain'])) return { ok: false, reason: 'composition_checkout_dirty' };
+  } catch {
+    return { ok: false, reason: 'composition_checkout_unobservable' };
+  }
+}
+
+function compositionCheckoutIdentityRefusal(ticket: CompositionTicket, worktree: string, facts: NativeCheckoutFacts): NativeCheckoutCompletion | undefined {
+  const admission = ticket.compositionAdmission;
+  if (!admission) return;
+  if (compositionCheckoutWasReused(admission.releasedDispatch, worktree, facts)) return { ok: false, reason: 'composition_checkout_reused' };
+  return cleanCompositionCheckoutRefusal(worktree);
+}
+
+function nativeCheckoutCompletionFacts(slug: string, worktree: string, state: NativeCheckoutCreation): NativeCheckoutFacts | { ok: false; reason: string } {
+  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
+  if (!facts) return { ok: false, reason: 'invalid_worktree_binding' };
+  if (facts.revision !== String(compositionCheckoutCommit(state)).trim()) return { ok: false, reason: 'worktree_revision_mismatch' };
+  return facts;
+}
+
+function completeNativeCheckoutForTicket(slug: string, id: string, binding: { sessionId: string; worktree: string }, attempt?: string): NativeCheckoutCompletion {
+  const ticket = getTicket(slug, id);
+  const current: NativeCheckoutCreation | undefined = dispatchState(ticket);
+  const generation = worktreeCallbackGenerationRefusal(current, attempt);
+  if (generation) return { ...generation, ok: false };
+  if (!launchedNativeCheckoutMatches(current, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
+  const facts = nativeCheckoutCompletionFacts(slug, binding.worktree, current);
+  if ('ok' in facts) return facts;
+  return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts)
+    ?? recordNativeCheckoutCompletion(slug, ticket, current, facts);
+}
+
+function completeDispatchWorktreeCreation(slug: string, sessionId?: string, worktree?: string, attempt?: string) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
+  const binding = nativeCheckoutCallbackIdentity(sessionId, worktree);
+  if (!binding) return { ok: false, reason: 'missing_binding_facts' };
+  for (const candidate of listTickets(slug)) {
+    if (!launchedNativeCheckoutMatches(dispatchState(candidate), binding)) continue;
+    return dependencies.withCompositionGenerationLock(slug, candidate.id,
+      () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt));
+  }
+  return { ok: false, reason: 'dispatch_binding_unavailable' };
+}
+
+// Creation completion is recorded before provisioning starts, so without this the board had no way to tell
+// a cold `npm ci` still running from a WorktreeCreate that died, and retired live ones (SQ-2932 finding 2).
+function recordDispatchWorktreeProvisioned(slug?: any, sessionId?: any, worktree?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   if (!normalizedSessionId || !target) return { ok: false, reason: 'missing_binding_facts' };
@@ -2221,36 +3496,23 @@ function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?
     return withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const current = dispatchState(ticket);
-      if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
-        || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
+      if (!current || current.sessionId !== normalizedSessionId || current.terminalAt
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
         return { ok: false, reason: 'dispatch_binding_unavailable' };
       }
-      const facts = immutableWorktreeFacts(slug, boundWorktree);
-      if (!facts) return { ok: false, reason: 'invalid_worktree_binding' };
-      const baseline = String(current.baseCommit || '').trim();
-      if (!baseline || facts.revision !== baseline) return { ok: false, reason: 'worktree_revision_mismatch' };
-      if (current.worktreeCreationCompletedAt) {
-        const unchanged = canonicalPath(String(current.worktreeGitDirectory || '')) === facts.gitDirectory
-          && canonicalPath(String(current.worktreeCommonGitDirectory || '')) === facts.commonGitDirectory
-          && String(current.worktreeCheckoutInstance || '') === facts.checkoutInstance
-          && String(current.worktreeObservedRevision || '') === facts.revision;
-        return unchanged ? { ok: true, alreadyCompleted: true } : { ok: false, reason: 'worktree_identity_mismatch' };
-      }
-      current.worktreeGitDirectory = facts.gitDirectory;
-      current.worktreeCommonGitDirectory = facts.commonGitDirectory;
-      current.worktreeCheckoutInstance = facts.checkoutInstance;
-      current.worktreeObservedRevision = facts.revision;
-      current.worktreeCreationCompletedAt = new Date().toISOString();
-      stampDispatchEvent(ticket, 'worktree-create-complete', current.worktreeCreationCompletedAt);
+      current.worktreeProvisionedAt = new Date().toISOString();
+      stampDispatchEvent(ticket, 'worktree-provisioned', current.worktreeProvisionedAt);
       putTicket(slug, ticket);
-      return { ok: true, alreadyCompleted: false };
+      return { ok: true };
     });
   }
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
-function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, worktree?: any, failure?: any) {
+function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, worktree?: any, failure?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   const command = String(failure?.command || '').trim();
@@ -2265,6 +3527,8 @@ function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, 
     return withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const current = dispatchState(ticket);
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
       if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
         || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt) {
@@ -2293,10 +3557,11 @@ function normalizedOwnedDependencyLink(worktree: string, dependency?: any) {
   if (normalizedRelativePath !== relativePath || normalizedRelativePath.split('/').some((segment: string) => !segment || segment === '.' || segment === '..')) return null;
   const outsideWorktree = path.relative(worktree, linkPath);
   if (outsideWorktree === '..' || outsideWorktree.startsWith(`..${path.sep}`) || path.isAbsolute(outsideWorktree)) return null;
-  return { relativePath, target: canonicalPath(target) };
+  return { relativePath, target: canonicalPath(target), mode: dependency?.mode === 'copy' ? 'copy' : 'link' };
 }
 
-function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, worktree?: any, dependency?: any) {
+function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, worktree?: any, dependency?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   if (!normalizedSessionId || !target) return { ok: false, reason: 'missing_dependency_link_facts' };
@@ -2311,6 +3576,8 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
     return withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const current = dispatchState(ticket);
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
       if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
         || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt
@@ -2322,6 +3589,7 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
       const record = {
         relativePath: link.relativePath,
         target: link.target,
+        mode: link.mode,
         worktree: canonicalPath(current.worktree),
         gitDirectory: canonicalPath(current.worktreeGitDirectory),
         commonGitDirectory: canonicalPath(current.worktreeCommonGitDirectory),
@@ -2342,7 +3610,55 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
-function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any) {
+function recordRecoveredCheckoutIdentity(slug: string, state: NativeCheckoutCreation, worktree: string): void {
+  if (state.worktreeCreationCompletedAt) return;
+  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
+  const checkoutCommit = String(compositionCheckoutCommit(state)).trim();
+  if (facts && checkoutCommit && facts.revision === checkoutCommit) recordCreatedCheckoutIdentity(state, facts);
+}
+
+// A hook that failed before its checkout existed must not leave the attempt naming a path it never
+// created: whatever sits there later is someone else's, and retry cleanup would reclaim it (SQ-3132).
+function holdOrReleaseUncreatedCheckout(slug: string, ticket: CompositionTicket, state: NativeCheckoutCreation, sessionId: string, created?: boolean) {
+  if (created !== false) return;
+  const held = holdUncreatedFailureForSibling(slug, ticket, state, sessionId);
+  if (held) return held;
+  releaseCrossedCreationBinding(state, null, new Date().toISOString(), 'worktree_create_failed');
+}
+
+type ExecutorDispatchedTicket = CompositionTicket & { dispatchExecutor?: string | null };
+
+function terminalizeFailedCheckoutCreation(slug: string, ticket: ExecutorDispatchedTicket, error: unknown): void {
+  setDispatchTerminal(ticket, 'failed', 'worktree-create-recovery', {
+    slug,
+    error,
+    failureShape: 'worktree_create_failed',
+  });
+  ticket.dispatchNonce = null;
+  ticket.dispatchExecutor = null;
+  stampDispatchEvent(ticket, 'worktree-create-recovery');
+  putTicket(slug, ticket);
+}
+
+function recoverLaunchedCheckout(slug: string, id: string, binding: { sessionId: string; worktree: string }, error: unknown, attempt?: string, options?: { created?: boolean }) {
+  const ticket: ExecutorDispatchedTicket = getTicket(slug, id);
+  const state: NativeCheckoutCreation | undefined = dispatchState(ticket);
+  const generation = worktreeCallbackGenerationRefusal(state, attempt);
+  if (generation) return generation;
+  if (!launchedNativeCheckoutMatches(state, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
+  recordRecoveredCheckoutIdentity(slug, state, binding.worktree);
+  const held = holdOrReleaseUncreatedCheckout(slug, ticket, state, binding.sessionId, options?.created);
+  if (held) return held;
+  terminalizeFailedCheckoutCreation(slug, ticket, error);
+  return { ok: true, ticket };
+}
+
+// Recovery is the hook's failure path, and it is generation-scoped for the same reason the recorders are:
+// a retired hook that caught its own correct `stale_attempt` used to land here and terminalize the live
+// replacement, clearing its nonce and marking it failed while the hook's own stderr said the live attempt
+// was untouched (SQ-2953 finding 1, hook-race-probe.json).
+function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any, attempt?: any, options?: { created?: boolean }) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   const meta = readMeta(slug);
@@ -2355,36 +3671,9 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
       && state.worktree && canonicalPath(state.worktree) === boundWorktree);
   });
   if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous_binding' : 'dispatch_binding_unavailable' };
-  const terminal = withTicketLock(slug, matches[0].id, () => {
-    const ticket = getTicket(slug, matches[0].id);
-    const state = dispatchState(ticket);
-    if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false
-      || state.outcome !== 'launched' || state.terminalAt || state.worktreeBindingSource !== 'worktree-create'
-      || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) {
-      return { ok: false, reason: 'dispatch_binding_unavailable' };
-    }
-    const facts = immutableWorktreeFacts(slug, boundWorktree);
-    const baseline = String(state.baseCommit || '').trim();
-    if (!state.worktreeCreationCompletedAt && facts && baseline && facts.revision === baseline) {
-      state.worktreeGitDirectory = facts.gitDirectory;
-      state.worktreeCommonGitDirectory = facts.commonGitDirectory;
-      state.worktreeCheckoutInstance = facts.checkoutInstance;
-      state.worktreeObservedRevision = facts.revision;
-      state.worktreeCreationCompletedAt = new Date().toISOString();
-    }
-    setDispatchTerminal(ticket, 'failed', 'worktree-create-recovery', {
-      slug,
-      error,
-      failureShape: 'worktree_create_failed',
-    });
-    ticket.dispatchNonce = null;
-    ticket.dispatchExecutor = null;
-    stampDispatchEvent(ticket, 'worktree-create-recovery');
-    putTicket(slug, ticket);
-    return { ok: true, ticket };
-  });
-  if (!terminal?.ok) return terminal;
-  const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+  const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options));
+  if (!terminal?.ok || terminal.heldFor) return terminal;
+  const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };
 }
 
@@ -2444,6 +3733,60 @@ function dispatchesForObservedWorktree(candidates: any[], observedWorktree: stri
     // path under the worktree still names that dispatch and nothing else.
     return observed === expected || observed.startsWith(`${expected}/`);
   });
+}
+
+function canonicalCheckout(value?: any) {
+  const trimmed = String(value || '').trim();
+  return trimmed ? canonicalPath(trimmed) : '';
+}
+
+// The two checkouts a completion gate can compare, once both are known and they disagree. Nothing here is a
+// crossing yet: an isolated dispatch running somewhere other than its bound tree is the ordinary shape of a
+// relocation too.
+function mismatchedGateCheckouts(state?: any, actualWorktree?: any) {
+  const actual = canonicalCheckout(actualWorktree);
+  const bound = canonicalCheckout(state?.worktree);
+  if (state?.sharedTree !== false || !actual || !bound || actual === bound) return null;
+  return { boundWorktree: bound, actualWorktree: actual };
+}
+
+// The other side of a crossing, asked of one checkout: the same occupancy fact creation reads, minus the ticket
+// being gated. A holder that has not claimed is deliberately not one - see `crossedWorktreeBinding`.
+function otherLiveClaimOnCheckout(slug?: any, ref?: string, checkout?: string) {
+  for (const candidate of listTickets(slug)) {
+    if (candidate?.ref === ref) continue;
+    const state = dispatchState(candidate);
+    if (!liveClaimOccupiesCheckout(candidate, state, checkout)) continue;
+    return { ref: candidate.ref, claimHolder: String(candidate.claim.by), worktree: String(checkout) };
+  }
+  return null;
+}
+
+// The completion gates are the first authority that learns where an executor ACTUALLY is: commit, submit and
+// verify-capture are all handed the caller's own worktree root, while everything downstream of the dispatch
+// record reads the bound one. When those disagree and one of the two checkouts belongs to a different live
+// claim, the disagreement is a crossing, not a caller mistake, and the gates have to say so: reading the bound
+// tree instead answers with another ticket's working state - the shape that listed a sibling's 27 test names
+// back at an executor as if they were its own (GH-235).
+//
+// Narrowed to a proven crossing on purpose. A mismatch with no other live claim behind it can be an ordinary
+// relocation, a continuation resuming its source checkout among them, and refusing those would strand work the
+// board has no reason to doubt. The cost of that narrowing is real and accepted: between a sibling's creation
+// binding and its claim there is a window in which the other side holds no claim, so a gate running in that
+// window still reads the foreign tree and is not refused. A claim is the only per-record fact that marks a
+// checkout as somebody's live working tree, and refusing every unclaimed mismatch would cost far more.
+function crossedWorktreeBinding(slug?: any, ticket?: any, actualWorktree?: any) {
+  const checkouts = mismatchedGateCheckouts(dispatchState(ticket), actualWorktree);
+  if (!checkouts) return null;
+  const owner = otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.actualWorktree)
+    || otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.boundWorktree);
+  return owner ? { ref: ticket.ref, claimHolder: gatedClaimHolder(ticket), ...checkouts, owner } : null;
+}
+
+// The printed remedy names the claim it acts on: the CLI's own identity falls back to the environment or the host
+// name, so a release without `--by` is answered as somebody else's claim and the crossed claim stays live.
+function gatedClaimHolder(ticket?: any) {
+  return ticket?.claim?.by ? String(ticket.claim.by) : '<your claim id>';
 }
 
 function dispatchIsolationExpectation(identity?: any) {
@@ -2739,6 +4082,19 @@ function unclaimedCreationReservation(ticket?: any, state?: any, sessionId?: any
     && state.worktreeBindingSource === 'worktree-create' && state.worktree);
 }
 
+// Who a crossed creation order can still take a checkout back FROM. A claim is not proof of which checkout a
+// record holds - the claim carries no path, and a runtime identity is the only fact that binds one - so a sibling
+// that claimed before anybody's SubagentStart corrected the crossing used to freeze it permanently: the reporting
+// agent found no eligible holder, its own bind was refused `worktree_binding_mismatch`, and both records kept a
+// checkout the other executor was running in, which is what every completion gate then read (GH-235). Identity is
+// the line that matters, so a holder that has never bound an agent id is still exchangeable, claimed or not,
+// while a holder whose agent proved its checkout keeps it.
+function crossedCreationHolder(state?: any, sessionId?: any) {
+  return liveSessionDispatch(state, sessionId)
+    && !state.continuation?.sourceWorktree && !state.agentId
+    && state.worktreeBindingSource === 'worktree-create' && Boolean(state.worktree);
+}
+
 // What the checkout carries rather than the record: the completion stamp downstream binds require, and the
 // links provisioning made inside it, which cleanup reads from whichever dispatch owns the checkout.
 function movedCreationRecord(state?: any) {
@@ -2750,7 +4106,7 @@ function movedCreationRecord(state?: any) {
   };
 }
 
-function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
+function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any, reason = 'creation_order') {
   const from = canonicalPath(state.worktree);
   Object.assign(state, movedCreationRecord(null), {
     worktreeBindingSource: null,
@@ -2760,7 +4116,7 @@ function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
     worktreeCheckoutInstance: null,
     worktreeObservedRevision: null,
     worktreeBoundAt: null,
-    worktreeBindingExchange: { at: now, from, with: otherRef, reason: 'creation_order' },
+    worktreeBindingExchange: { at: now, from, with: otherRef, reason },
   });
 }
 
@@ -2781,9 +4137,11 @@ function applyExchangedCreationBinding(state?: any, facts?: any, otherRef?: any,
 // reservation holding a sibling's checkout (SQ-2190). This bind is the first fact that can settle it, because the
 // agent reports the checkout it is actually running in, and an observation outranks a guess.
 //
-// Confined to two reservations of the same session that are both still unclaimed and identity-unbound, so a
-// checkout is never taken from an executor that has proven it owns one, and a path no reservation in this session
-// created still matches nothing and is still refused. Both records are rewritten under one transaction, with the
+// Confined to two reservations of the same session that are both still identity-unbound - the reporting side also
+// still unclaimed, the holder claimed or not - so a checkout is never taken from an executor that has proven it
+// owns one, and a path no reservation in this session created still matches nothing and is still refused. A
+// holder's claim cannot stand in for that proof: it names no checkout, so waiting for it only freezes the
+// crossing (GH-235). Both records are rewritten under one transaction, with the
 // locks taken in id order so two siblings exchanging at once cannot deadlock and the loser finds nothing to do.
 //
 // The crossing is not always a pair. When a sibling's WorktreeCreate died before it reserved anything, creation
@@ -2798,7 +4156,7 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
   const held = targetState.worktree ? canonicalPath(targetState.worktree) : '';
   if (held === reported) return null;
   const holder = listTickets(slug).find((candidate?: any) => candidate.id !== target.id
-    && unclaimedCreationReservation(candidate, dispatchState(candidate), sessionId)
+    && crossedCreationHolder(dispatchState(candidate), sessionId)
     && canonicalPath(dispatchState(candidate).worktree) === reported);
   if (!holder) return null;
   const baseline = String(targetState.baseCommit || '').trim();
@@ -2818,7 +4176,7 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
       const state = dispatchState(ticket);
       const eligible = id === target.id
         ? attributableCreationReservation(ticket, state, sessionId)
-        : unclaimedCreationReservation(ticket, state, sessionId);
+        : crossedCreationHolder(state, sessionId);
       if (!eligible) return null;
       const facts = factsFor.get(id);
       if (facts && state.worktree && canonicalPath(state.worktree) === facts.worktree) return null;
@@ -2830,6 +4188,630 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
     }
     return { ok: true, exchangedWith: holder.ref };
   }));
+}
+
+// Everything a sibling launch leaves before any claim: launched, still live, and nobody holding its claim.
+function unclaimedLaunchedReservation(ticket?: any, state?: any, sessionId?: any) {
+  return state?.sessionId === sessionId && state.outcome === 'launched' && !state.terminalAt && !ticket?.claim?.by;
+}
+
+// A runtime identity no token has vouched for yet: SubagentStart attached it by session, executor, name or
+// reported checkout, all of which siblings launched together share or can cross.
+function guessedRuntimeIdentity(ticket?: any, state?: any, sessionId?: any, executor?: any) {
+  return unclaimedLaunchedReservation(ticket, state, sessionId) && state.executor === executor
+    && state.bindSource !== 'claim_runtime_identity';
+}
+
+type ClaimAdmission = () => boolean;
+type ClaimAdmissionCheck = (slug: any, ticketId: any, opts: any) => any;
+type LockedWork = () => any;
+type TicketKey = { slug: string; id: string };
+
+// Only a token admits an exchange: a direct claim proves nothing about which reservation this runtime is.
+function tokenAdmission(admission: ClaimAdmissionCheck, slug?: any, ticketId?: any, opts?: any): ClaimAdmission {
+  return () => admittedByToken(admission(slug, ticketId, opts));
+}
+
+function admittedByToken(result?: any) {
+  return Boolean(result?.ok && result.token);
+}
+
+function nestedTicketLocks(keys: TicketKey[], fn: LockedWork): LockedWork {
+  return () => withLockedTickets(keys, fn);
+}
+
+// Every exchange that rewrites two records takes both locks in one order, so two callers locking the same pair
+// can never each hold one and wait on the other.
+function withLockedTickets(keys: TicketKey[], fn: LockedWork): any {
+  const [first, ...rest] = [...keys].sort((left, right) => `${left.slug}/${left.id}`.localeCompare(`${right.slug}/${right.id}`));
+  return withTicketLock(first!.slug, first!.id, rest.length ? nestedTicketLocks(rest, fn) : fn);
+}
+
+function claimIdentity(sessionId?: any, executor?: any, agentId?: any) {
+  const identity = { sessionId: normalizedText(sessionId), executor: normalizedText(executor), agentId: normalizedText(agentId) };
+  return Object.values(identity).every(Boolean) ? identity : null;
+}
+
+function guessedClaimTarget(slug?: any, ticketId?: any, identity?: any) {
+  const target = identity ? getTicket(slug, ticketId) : null;
+  return target && guessedRuntimeIdentity(target, dispatchState(target), identity.sessionId, identity.executor) ? target : null;
+}
+
+function holdsClaimingRuntime(entry?: any, slug?: any, target?: any, identity?: any) {
+  const state = dispatchState(entry.ticket);
+  return !(entry.slug === slug && entry.ticket.id === target.id) && !state?.terminalAt && normalizedText(state?.agentId) === identity.agentId;
+}
+
+// Live reservations of this session, other than the claimed one, that hold the claiming runtime's id.
+function runtimeHolders(slug?: any, target?: any, identity?: any) {
+  return ticketsMentioningSession(identity.sessionId).filter((entry: any) => holdsClaimingRuntime(entry, slug, target, identity));
+}
+
+// The reservation holding the claiming runtime must itself still be a guess; with no holder, only a displaced id moves.
+function exchangeCandidate(exchange: any) {
+  if (!exchange.holder) return exchange.displaced ? exchange : null;
+  const holderState = dispatchState(exchange.holder.ticket);
+  return guessedRuntimeIdentity(exchange.holder.ticket, holderState, exchange.identity.sessionId, exchange.identity.executor) ? exchange : null;
+}
+
+function guessedIdentityExchange(slug?: any, ticketId?: any, identity?: any) {
+  const target = guessedClaimTarget(slug, ticketId, identity);
+  if (!target) return null;
+  const displaced = normalizedText(dispatchState(target).agentId);
+  const holders = runtimeHolders(slug, target, identity);
+  if (displaced === identity.agentId || holders.length > 1) return null;
+  return exchangeCandidate({ slug, target, displaced, holder: holders[0] || null, identity });
+}
+
+function identityExchangeStillHolds(exchange: any, current?: any, currentHolder?: any) {
+  const { identity } = exchange;
+  const stillGuessed = (ticket?: any, agentId?: any) => guessedRuntimeIdentity(ticket, dispatchState(ticket), identity.sessionId, identity.executor)
+    && normalizedText(dispatchState(ticket).agentId) === agentId;
+  return stillGuessed(current, exchange.displaced) && (!exchange.holder || stillGuessed(currentHolder, identity.agentId));
+}
+
+// A stop held while the runtime's reservation was still a guess belongs to the runtime, not to the record, so it
+// moves with the agent id.
+function moveRuntimeIdentity(slug?: any, ticket?: any, agentId?: any, deferredStop?: any, exchange?: any) {
+  const state = dispatchState(ticket);
+  state.agentId = agentId || null;
+  state.deferredStop = deferredStop;
+  state.runtimeIdentityExchange = exchange;
+  stampDispatchEvent(ticket, 'claim-identity-exchange', exchange.at);
+  putTicket(slug, ticket);
+}
+
+function swapRuntimeIdentity(exchange: any, current?: any, currentHolder?: any) {
+  const at = new Date().toISOString();
+  const withRef = currentHolder ? currentHolder.ref : null;
+  const displacedStop = dispatchState(current).deferredStop;
+  moveRuntimeIdentity(exchange.slug, current, exchange.identity.agentId, undefined, { at, from: exchange.displaced || null, with: withRef, reason: 'claim_token' });
+  if (currentHolder) {
+    moveRuntimeIdentity(exchange.holder.slug, currentHolder, exchange.displaced, displacedStop, { at, from: exchange.identity.agentId, with: current.ref, reason: 'claim_token' });
+  }
+  return { ok: true, exchangedWith: withRef };
+}
+
+function applyGuessedIdentityExchange(exchange: any, admitted?: ClaimAdmission) {
+  const current = getTicket(exchange.slug, exchange.target.id);
+  const currentHolder = exchange.holder ? getTicket(exchange.holder.slug, exchange.holder.ticket.id) : null;
+  if (!identityExchangeStillHolds(exchange, current, currentHolder) || !admitted?.()) return null;
+  return swapRuntimeIdentity(exchange, current, currentHolder);
+}
+
+// SubagentStart cannot tell same-executor siblings of one session apart (hook stdin carries agent_id, never the
+// agent name), so it can attach a runtime to its sibling's reservation. Every hook then resolves that runtime to the
+// sibling: its writes are judged against the sibling's lease, and it is told to stop when the sibling closes
+// (SQ-53, GitHub #298). The dispatch token presented at claim is the first fact that names the runtime's own ticket,
+// so it settles the guess. Only guessed identities move: a reservation some token already bound, a claimed one, or a
+// terminal one is never rewritten, and the admission is re-checked under both locks, taken in a fixed order so two
+// siblings claiming at once cannot deadlock and the loser finds nothing left to exchange.
+function exchangeGuessedClaimIdentity(slug?: any, ticketId?: any, sessionId?: any, executor?: any, agentId?: any, admitted?: ClaimAdmission) {
+  const exchange = guessedIdentityExchange(slug, ticketId, claimIdentity(sessionId, executor, agentId));
+  if (!exchange) return null;
+  const keys = [{ slug, id: exchange.target.id }, ...(exchange.holder ? [{ slug: exchange.holder.slug, id: exchange.holder.ticket.id }] : [])];
+  return withLockedTickets(keys, () => applyGuessedIdentityExchange(exchange, admitted));
+}
+
+// Everything a reservation records about the checkout it holds. These describe the checkout, not the ticket, so when
+// a binding moves they move as one unit and the checkout-instance identity is never re-derived.
+const CHECKOUT_BINDING_FIELDS = [
+  'worktree', 'worktreeGitDirectory', 'worktreeCommonGitDirectory', 'worktreeCheckoutInstance', 'worktreeObservedRevision',
+  'worktreeBoundAt', 'worktreeCreationCompletedAt', 'worktreeProvisionedAt', 'ownedDependencyLinks', 'worktreeProvisioningFailure',
+  'worktreeBindingSource',
+];
+
+const CHECKOUT_IDENTITY_FIELDS = ['worktree', 'gitDirectory', 'commonGitDirectory', 'checkoutInstance'];
+
+const TOKEN_BIND_SOURCES = ['claim_token', 'claim_runtime_identity'];
+
+// A checkout lease WorktreeCreate recorded for an isolated reservation, not one a continuation spawn inherited.
+function worktreeCreateLease(state?: any) {
+  return state?.sharedTree === false && state.worktreeBindingSource === 'worktree-create' && !state.continuation?.sourceWorktree;
+}
+
+function crossedClaimCheckoutReservation(ticket?: any, state?: any, sessionId?: any) {
+  return unclaimedLaunchedReservation(ticket, state, sessionId) && !state.claimedAt && worktreeCreateLease(state) && Boolean(state.worktree);
+}
+
+// A sibling's checkout binding is still WorktreeCreate's guess only while no token has vouched for its runtime.
+function guessedSiblingCheckout(ticket?: any, state?: any, sessionId?: any) {
+  return crossedClaimCheckoutReservation(ticket, state, sessionId) && !TOKEN_BIND_SOURCES.includes(state.bindSource);
+}
+
+function observedCheckoutMatchesRecord(state?: any, facts?: any) {
+  const recorded: any = completedWorktreeCreationFacts(state);
+  return Boolean(recorded && facts) && CHECKOUT_IDENTITY_FIELDS.every((field) => recorded[field] === facts[field]);
+}
+
+// A checkout is cut at its reservation's baseline and submission ranges are computed against it, so only reservations
+// sharing one baseline can trade checkouts.
+function sameBaseline(state?: any, other?: any) {
+  const baseline = normalizedText(state?.baseCommit);
+  return Boolean(baseline) && baseline === normalizedText(other?.baseCommit);
+}
+
+function exchangeCheckoutRecords(left?: any, right?: any) {
+  for (const field of CHECKOUT_BINDING_FIELDS) {
+    const held = left[field];
+    left[field] = right[field] === undefined ? null : right[field];
+    right[field] = held === undefined ? null : held;
+  }
+}
+
+function observedClaimCheckout(sessionId?: any, observedWorktree?: any) {
+  const claim = { sessionId: normalizedText(sessionId), observed: normalizedText(observedWorktree) };
+  return claim.sessionId && claim.observed ? { sessionId: claim.sessionId, observed: canonicalPath(claim.observed) } : null;
+}
+
+// An isolated reservation holding no checkout: the checkout its executor runs in is named by some other record, or
+// was parked by a supersede (SQ-3139), so it can only arrive one way.
+function checkoutlessReservation(ticket?: any, state?: any, sessionId?: any) {
+  return unclaimedLaunchedReservation(ticket, state, sessionId) && !state.claimedAt && state.sharedTree === false
+    && !state.worktree && !state.continuation?.sourceWorktree;
+}
+
+// Only a binding a pre-creation failure released is traded with a live holder at claim time. A reservation that never
+// held one is the one-sided crossing its holder's agent report settles (GH-235), and trading it at claim time emptied
+// the holder's record that the SQ-3132 retry route reads to keep the claimed sibling's tree (GH-305, SQ-3147).
+function releasedCheckoutReservation(ticket?: any, state?: any, sessionId?: any) {
+  return checkoutlessReservation(ticket, state, sessionId) && state.worktreeBindingExchange?.reason === 'worktree_create_failed';
+}
+
+function leasesAnotherCheckout(ticket?: any, state?: any, claim?: any) {
+  return crossedClaimCheckoutReservation(ticket, state, claim.sessionId) && canonicalPath(state.worktree) !== claim.observed;
+}
+
+function claimExchangesObservedCheckout(ticket?: any, state?: any, claim?: any) {
+  return leasesAnotherCheckout(ticket, state, claim) || releasedCheckoutReservation(ticket, state, claim.sessionId);
+}
+
+function claimAdoptsObservedCheckout(ticket?: any, state?: any, claim?: any) {
+  return leasesAnotherCheckout(ticket, state, claim) || checkoutlessReservation(ticket, state, claim.sessionId);
+}
+
+function crossedCheckoutTarget(slug: any, ticketId: any, claim: any, takesCheckout: typeof claimAdoptsObservedCheckout) {
+  const target = getTicket(slug, ticketId);
+  return takesCheckout(target, dispatchState(target), claim) ? target : null;
+}
+
+function recordedCheckout(state?: any) {
+  return state?.worktree ? canonicalPath(state.worktree) : null;
+}
+
+function recordsObservedCheckout(candidate?: any, target?: any, claim?: any) {
+  return candidate.id !== target.id && guessedSiblingCheckout(candidate, dispatchState(candidate), claim.sessionId)
+    && canonicalPath(dispatchState(candidate).worktree) === claim.observed;
+}
+
+// Exactly one unvouched sibling records the checkout this executor runs in, on this claim's baseline.
+function crossedCheckoutHolder(slug?: any, target?: any, claim?: any) {
+  const holders = listTickets(slug).filter((candidate?: any) => recordsObservedCheckout(candidate, target, claim));
+  const holder = holders.length === 1 ? holders[0] : null;
+  return holder && sameBaseline(dispatchState(target), dispatchState(holder)) ? holder : null;
+}
+
+function crossedCheckoutExchange(slug?: any, ticketId?: any, sessionId?: any, observedWorktree?: any) {
+  const claim = observedClaimCheckout(sessionId, observedWorktree);
+  const target = claim ? crossedCheckoutTarget(slug, ticketId, claim, claimExchangesObservedCheckout) : null;
+  const holder = target ? crossedCheckoutHolder(slug, target, claim) : null;
+  const facts = holder ? immutableWorktreeFacts(slug, claim!.observed) : null;
+  return observedCheckoutMatchesRecord(dispatchState(holder), facts) ? { slug, target, holder, facts, ...claim! } : null;
+}
+
+function crossedCheckoutStillHolds(exchange: any, current?: any, currentHolder?: any) {
+  return claimExchangesObservedCheckout(current, dispatchState(current), exchange)
+    && recordedCheckout(dispatchState(current)) === recordedCheckout(dispatchState(exchange.target))
+    && guessedSiblingCheckout(currentHolder, dispatchState(currentHolder), exchange.sessionId)
+    && observedCheckoutMatchesRecord(dispatchState(currentHolder), exchange.facts);
+}
+
+function applyCrossedCheckoutExchange(exchange: any, admitted?: ClaimAdmission) {
+  const current = getTicket(exchange.slug, exchange.target.id);
+  const currentHolder = getTicket(exchange.slug, exchange.holder.id);
+  if (!crossedCheckoutStillHolds(exchange, current, currentHolder) || !admitted?.()) return null;
+  const currentState = dispatchState(current);
+  const holderState = dispatchState(currentHolder);
+  const now = new Date().toISOString();
+  const from = recordedCheckout(currentState);
+  exchangeCheckoutRecords(currentState, holderState);
+  currentState.worktreeBindingExchange = { at: now, from, with: currentHolder.ref, reason: 'claim_token' };
+  holderState.worktreeBindingExchange = { at: now, from: exchange.observed, with: current.ref, reason: 'claim_token' };
+  stampDispatchEvent(current, 'claim-worktree-exchange', now);
+  stampDispatchEvent(currentHolder, 'claim-worktree-exchange', now);
+  putTicket(exchange.slug, current);
+  putTicket(exchange.slug, currentHolder);
+  return { ok: true, exchangedWith: currentHolder.ref, worktree: currentState.worktree, from };
+}
+
+// WorktreeCreate attributes each new checkout to a reservation in creation order, and nothing in its payload names the
+// executor type, so siblings spawned in one Agent message can each be leased to the other's checkout (SQ-55, GitHub
+// #298). The harness confines each executor to the checkout it created for it, so a crossed lease refuses every write
+// the executor can make. exchangeGuessedClaimIdentity cannot settle this: siblings of different executor types never
+// cross agent ids, only checkouts. The claim is the first call that pairs the token naming the executor's own ticket
+// with the checkout the executor is actually running in, so it settles the checkout guess the same way the token
+// settles the agent id. The observed checkout must be the exact instance the sibling's creation recorded (Git
+// directories and checkout-instance marker), the sibling must still be an unclaimed, non-terminal reservation that no
+// token has vouched for, and both must share one baseline. The whole checkout record swaps under both locks.
+function exchangeCrossedClaimCheckout(slug?: any, ticketId?: any, sessionId?: any, observedWorktree?: any, admitted?: ClaimAdmission) {
+  const exchange = crossedCheckoutExchange(slug, ticketId, sessionId, observedWorktree);
+  if (!exchange) return adoptParkedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted);
+  return withLockedTickets([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
+}
+
+function parkedCheckoutOf(ticket?: any) {
+  return dispatchState(ticket)?.crossBoundWorktree?.parkedCheckout || null;
+}
+
+function parksObservedCheckout(entry: { slug: string; ticket: any }, slug: string, target: any, claim: any) {
+  const parked = entry.slug === slug && entry.ticket.id !== target.id ? parkedCheckoutOf(entry.ticket) : null;
+  return parked?.sessionId === claim.sessionId && recordedCheckout(parked) === claim.observed;
+}
+
+// Exactly one superseded attempt of this session parked the checkout this executor runs in, on this claim's baseline.
+function parkedCheckoutHolder(slug: string, target: any, claim: any) {
+  const parkers = ticketsMentioningSession(claim.sessionId).filter((entry) => parksObservedCheckout(entry, slug, target, claim));
+  const parker = parkers.length === 1 ? parkers[0]?.ticket : null;
+  return parker && sameBaseline(dispatchState(target), parkedCheckoutOf(parker)) ? parker : null;
+}
+
+function parkedCheckoutAdoption(slug: string, ticketId: string, sessionId: string, observedWorktree: string) {
+  const claim = observedClaimCheckout(sessionId, observedWorktree);
+  const target = claim ? crossedCheckoutTarget(slug, ticketId, claim, claimAdoptsObservedCheckout) : null;
+  const parker = target ? parkedCheckoutHolder(slug, target, claim) : null;
+  const facts = parker ? immutableWorktreeFacts(slug, claim!.observed) : null;
+  return observedCheckoutMatchesRecord(parkedCheckoutOf(parker), facts) ? { slug, target, parker, facts, ...claim! } : null;
+}
+
+function parkedCheckoutStillHolds(adoption: any, current: any, parker: any) {
+  return claimAdoptsObservedCheckout(current, dispatchState(current), adoption)
+    && recordedCheckout(dispatchState(current)) === recordedCheckout(dispatchState(adoption.target))
+    && observedCheckoutMatchesRecord(parkedCheckoutOf(parker), adoption.facts);
+}
+
+// In a rotation of three or more, the record the claim gives up can be the checkout a still-unsettled sibling runs
+// in, and dropping it left that sibling leased to a dead tree with nothing naming its own (SQ-3147).
+function reparkDisplacedCheckout(slug: string, claimant: any, parker: any, displaced: any) {
+  const crossBound = dispatchState(parker).crossBoundWorktree;
+  if (displaced.worktree && unsettledSessionSibling(slug, claimant, dispatchState(claimant))) crossBound.parkedCheckout = displaced;
+  else delete crossBound.parkedCheckout;
+}
+
+function applyParkedCheckoutAdoption(adoption: any, admitted?: ClaimAdmission) {
+  const current = getTicket(adoption.slug, adoption.target.id);
+  const parker = getTicket(adoption.slug, adoption.parker.id);
+  if (!parkedCheckoutStillHolds(adoption, current, parker) || !admitted?.()) return null;
+  const state = dispatchState(current);
+  const parked = parkedCheckoutOf(parker);
+  const now = new Date().toISOString();
+  const from = recordedCheckout(state);
+  const displaced = parkedCreationRecord(state);
+  for (const field of CHECKOUT_BINDING_FIELDS) state[field] = parked[field];
+  state.worktreeBindingExchange = { at: now, from, with: parker.ref, reason: 'claim_parked_checkout' };
+  reparkDisplacedCheckout(adoption.slug, current, parker, displaced);
+  stampDispatchEvent(current, 'claim-worktree-adopted', now);
+  stampDispatchEvent(parker, 'claim-worktree-adopted', now);
+  putTicket(adoption.slug, current);
+  putTicket(adoption.slug, parker);
+  return { ok: true, adoptedFrom: parker.ref, worktree: state.worktree, from };
+}
+
+// A supersede that kept a checkout for an unsettled sibling cleared the only live record naming it, so no sibling is
+// left to exchange with (SQ-3139). The claim then takes the retired attempt's parked creation record instead, under
+// the same proof the exchange demands: the token's own ticket, the exact checkout instance the creation recorded, and
+// one baseline. The dead sibling's checkout the claim leaves behind is nobody's lease, which is what sweep reclaims.
+function adoptParkedClaimCheckout(slug: string, ticketId: string, sessionId: string, observedWorktree: string, admitted?: ClaimAdmission) {
+  const adoption = parkedCheckoutAdoption(slug, ticketId, sessionId, observedWorktree);
+  if (!adoption) return null;
+  return withLockedTickets([{ slug, id: adoption.target.id }, { slug, id: adoption.parker.id }], () => applyParkedCheckoutAdoption(adoption, admitted));
+}
+
+// No token has vouched for this reservation's runtime yet, so the agent id and the checkout it holds may be a
+// sibling's (GitHub #298).
+function guessedReservation(ticket?: any, state?: any, sessionId?: any) {
+  return unclaimedLaunchedReservation(ticket, state, sessionId) && !TOKEN_BIND_SOURCES.includes(state.bindSource);
+}
+
+// A held stop still names the runtime its reservation holds, or, for a stop matched by launch name, still no runtime.
+function deferredStopApplies(state?: any) {
+  return Boolean(state?.deferredStop) && normalizedText(state.deferredStop.agentId) === normalizedText(state.agentId);
+}
+
+// Only completed WorktreeCreate records cut at one baseline can be traded by a claim-time checkout exchange.
+function tradableCheckouts(state?: any, other?: any) {
+  return worktreeCreateLease(state) && worktreeCreateLease(other)
+    && Boolean(completedWorktreeCreationFacts(state) && completedWorktreeCreationFacts(other)) && sameBaseline(state, other);
+}
+
+// A runtime id crosses only onto a sibling of one executor type that holds a live runtime of its own, and a checkout
+// only onto a tradable one. A launch that never bound anything cannot settle a guess, so it never holds a stop.
+function bindingsCanCross(state?: any, other?: any) {
+  return (state.executor === other.executor && Boolean(other.agentId)) || tradableCheckouts(state, other);
+}
+
+// A sibling whose own claim can still settle which runtime, or which checkout, a guessed record really holds.
+function unsettledSibling(entry?: any, slug?: any, ticket?: any, sessionId?: any) {
+  const other = dispatchState(entry.ticket);
+  return !(entry.slug === slug && entry.ticket.id === ticket.id) && guessedReservation(entry.ticket, other, sessionId)
+    && !deferredStopApplies(other) && bindingsCanCross(dispatchState(ticket), other);
+}
+
+function awaitsSiblingClaim(slug?: any, ticket?: any, sessionId?: any) {
+  return guessedReservation(ticket, dispatchState(ticket), sessionId)
+    && ticketsMentioningSession(sessionId).some((entry) => unsettledSibling(entry, slug, ticket, sessionId));
+}
+
+function holdStopOnRuntime(slug?: any, id?: any, stop?: any, heldAgentId?: any) {
+  const ticket = getTicket(slug, id);
+  const state = dispatchState(ticket);
+  if (normalizedText(state?.agentId) !== heldAgentId || !awaitsSiblingClaim(slug, ticket, stop.sessionId)) return null;
+  const at = new Date().toISOString();
+  // A stop matched by launch name is the reservation's own runtime, so it records that runtime as an ended stop would.
+  state.agentId = heldAgentId || stop.agentId || null;
+  state.deferredStop = { agentId: state.agentId, at };
+  stampDispatchEvent(ticket, 'subagent-stop-deferred', at);
+  putTicket(slug, ticket);
+  return { ok: true, stopped: true, deferred: true, tickets: [], deferredRefs: [ticket.ref] };
+}
+
+function runtimeHeldBy(state?: any, stop?: any) {
+  return Boolean(stop.agentId) && state?.executor === stop.executor && state.agentId === stop.agentId;
+}
+
+// A reservation SubagentStart never bound is reachable only by the launch name the host recorded beside the transcript.
+function unboundLaunchNamed(state?: any, stop?: any) {
+  return Boolean(stop.launchName) && state?.executor === stop.executor && state.agentName === stop.launchName && !state.agentId;
+}
+
+// The one reservation this stop lands on: the one holding its runtime id, or else the unbound one its launch name names.
+function stoppedReservation(candidates: any[], stop: any) {
+  const byRuntime = candidates.filter((entry: any) => runtimeHeldBy(dispatchState(entry.ticket), stop));
+  const byLaunchName = candidates.filter((entry: any) => unboundLaunchNamed(dispatchState(entry.ticket), stop));
+  const held = byRuntime.length ? byRuntime : byLaunchName;
+  return held.length === 1 ? held[0] : null;
+}
+
+// A runtime that stops before claiming may stop on a sibling's record, because SubagentStart binds by guess (GitHub
+// #298). Ending that record failed the live sibling's dispatch and cleared its token, so the live executor could no
+// longer claim its own ticket. Even a record that is the stopped runtime's own can hold the live sibling's checkout by
+// creation order, and ending it left that crossing for nobody to settle. While a sibling whose claim can still settle
+// the guess is unclaimed, the stop is held on the runtime id instead: it follows that id through the claim-time
+// exchange, and settleDeferredStops ends whichever reservation holds it once no unsettled sibling is left.
+function deferGuessedStop(candidates: any[], stop: any) {
+  const held = stoppedReservation(candidates, stop);
+  if (!held || !awaitsSiblingClaim(held.slug, held.ticket, stop.sessionId)) return null;
+  const heldAgentId = normalizedText(dispatchState(held.ticket).agentId);
+  return withTicketLock(held.slug, held.ticket.id, () => holdStopOnRuntime(held.slug, held.ticket.id, stop, heldAgentId));
+}
+
+function settleDeferredStop(slug?: any, id?: any, sessionId?: any) {
+  const ticket = getTicket(slug, id);
+  const state = dispatchState(ticket);
+  if (!deferredStopApplies(state) || !guessedReservation(ticket, state, sessionId) || awaitsSiblingClaim(slug, ticket, sessionId)) return null;
+  setDispatchTerminal(ticket, 'failed', 'subagent-stop', { slug, failureShape: 'stopped_before_claim' });
+  ticket.dispatchNonce = null;
+  ticket.dispatchExecutor = null;
+  stampDispatchEvent(ticket, 'subagent-stop', new Date().toISOString());
+  putTicket(slug, ticket);
+  return ticket;
+}
+
+// Once a claim has vouched for a runtime, or a stop has ended a sibling, a held stop with no unsettled sibling left
+// belongs to whichever reservation holds its runtime id, and that reservation ends as a stop before claim.
+function settleDeferredStops(sessionId?: any) {
+  const normalizedSessionId = normalizedText(sessionId);
+  if (!normalizedSessionId) return;
+  for (const { slug, ticket } of ticketsMentioningSession(normalizedSessionId)) {
+    if (deferredStopApplies(dispatchState(ticket))) withTicketLock(slug, ticket.id, () => settleDeferredStop(slug, ticket.id, normalizedSessionId));
+  }
+}
+
+// A mutual swap rewrites the holder's record as well, so a recovery that names a checkout exactly one other live
+// ticket leases takes that ticket's lock too, in the order every multi-record exchange takes them.
+function recoveryLockKeys(slug?: any, ticket?: any, worktree?: any): TicketKey[] {
+  const facts = immutableWorktreeFacts(slug, worktree);
+  const holders = facts ? liveCheckoutHolders(slug, ticket, facts.worktree) : [];
+  const holder = holders.length === 1 ? getTicket(slug, holders[0]) : null;
+  return [{ slug, id: ticket.id }, ...(holder ? [{ slug, id: holder.id }] : [])];
+}
+
+function movedCheckout(state?: any, facts?: any) {
+  const recorded = state.worktree ? canonicalPath(state.worktree) : '';
+  return recorded !== facts.worktree ? recorded : '';
+}
+
+function commitsSinceBaseline(worktree?: any, baseCommit?: any, revision?: any): string[] {
+  try {
+    return gitOutput(worktree, ['rev-list', '--reverse', normalizedText(baseCommit) + '^{commit}..' + revision, '--']).split('\n').filter(Boolean);
+  } catch (_: any) {
+    return [];
+  }
+}
+
+function checkoutOwnershipSinceBaseline(slug?: any, ticket?: any, state?: any, facts?: any) {
+  const commits = commitsSinceBaseline(facts.worktree, state.baseCommit, facts.revision);
+  return commits.length ? checkoutRangeOwnership(slug, ticket, state, facts.repository, commits) : { ownHead: false, foreignTickets: [] as string[] };
+}
+
+// The way out that always exists: a released ticket's redispatch resumes only a checkout its own commit heads.
+function handbackFallback(ticket?: any) {
+  return ' Fallback: release ' + ticket.ref + ' with kind `handback` and status `todo` (MCP `release`), quoting this refusal;'
+    + " its redispatch resumes a checkout only when that checkout's HEAD is this ticket's own commit, and otherwise gets a fresh checkout of its own.";
+}
+
+function leasedCheckoutRefusal(ticket?: any, facts?: any, holders?: string[]) {
+  return `${ticket.ref} cannot be rebound to ${facts.worktree}: it is leased to ${holders!.join(', ')}, a live ticket, and its HEAD is not a commit this claim made.`
+    + " Two claims crossed onto each other's checkouts are swapped instead, but only while both still hold the WorktreeCreate records of one session and baseline and neither checkout carries another ticket's commits."
+    + handbackFallback(ticket);
+}
+
+function claimedCreationLease(ticket?: any, state?: any) {
+  return Boolean(ticket?.claim?.by) && !state?.terminalAt && worktreeCreateLease(state);
+}
+
+function sameCreationWave(ticket?: any, state?: any, holder?: any, holderState?: any) {
+  return claimedCreationLease(ticket, state) && claimedCreationLease(holder, holderState)
+    && holderState.sessionId === state.sessionId && sameBaseline(state, holderState);
+}
+
+// The checkout this claim records must be free for the holder to take: the instance creation recorded, leased by no
+// other live ticket, and carrying no commits but the holder's own.
+function recordedCheckoutReturnable(slug?: any, ticket?: any, state?: any, holder?: any, holderState?: any) {
+  const recorded = immutableWorktreeFacts(slug, state.worktree);
+  return observedCheckoutMatchesRecord(state, recorded) && !liveCheckoutHolders(slug, ticket, recorded!.worktree).length
+    && !checkoutOwnershipSinceBaseline(slug, holder, holderState, recorded).foreignTickets.length;
+}
+
+function crossedClaimPair(slug?: any, ticket?: any, state?: any, holder?: any, facts?: any) {
+  const holderState = dispatchState(holder);
+  return sameCreationWave(ticket, state, holder, holderState) && observedCheckoutMatchesRecord(holderState, facts)
+    && recordedCheckoutReturnable(slug, ticket, state, holder, holderState);
+}
+
+// Siblings that both claimed before anything settled a crossing each hold the other's checkout (GitHub #298). Neither
+// can commit where it runs, because that checkout is leased to the other, so neither can ever earn the own-commit
+// rebind. When the pair is exactly crossed, trading the two records is the only move that gives both claims their own.
+function mutualCheckoutSwap(slug?: any, ticket?: any, state?: any, facts?: any, lease?: any) {
+  if (lease.holders.length !== 1 || lease.ownership.foreignTickets.length) return null;
+  const holder = getTicket(slug, lease.holders[0]);
+  const locked = lease.lockKeys.some((key: TicketKey) => key.id === holder?.id);
+  return locked && crossedClaimPair(slug, ticket, state, holder, facts) ? { holderId: holder.id, holderRef: holder.ref } : null;
+}
+
+function leasedCheckoutDecision(slug?: any, ticket?: any, state?: any, facts?: any, lease?: any) {
+  const swap = mutualCheckoutSwap(slug, ticket, state, facts, lease);
+  if (swap) return { ok: true, basis: 'mutual_swap', swap };
+  return { ok: false, reason: 'worktree_mismatch', message: leasedCheckoutRefusal(ticket, facts, lease.holders) };
+}
+
+function unleasedRebindDecision(ticket?: any, facts?: any, holders?: string[], ownership?: any) {
+  if (ownership.foreignTickets.length) {
+    return { ok: false, reason: 'worktree_mismatch', message: `${ticket.ref} cannot be rebound to ${facts.worktree}: it carries commits of ${ownership.foreignTickets.join(', ')}.` + handbackFallback(ticket) };
+  }
+  return { ok: true, basis: holders!.length ? 'own_commits' : 'free_lease' };
+}
+
+// A recorded binding can be the creation-order guess of a crossed sibling (GitHub #298), so the claim holder may
+// move it to the checkout it names. The move is refused only where it would take a checkout from another live
+// ticket: one leased to a live dispatch whose HEAD is not this claim's own commit, or one carrying another ticket's
+// commits (SQ-75). An exactly crossed claimed pair trades records instead.
+function liveClaimRebindDecision(slug?: any, ticket?: any, state?: any, facts?: any, lockKeys?: TicketKey[]) {
+  if (!registeredProjectCheckout(facts)) {
+    return { ok: false, reason: 'invalid_worktree', message: `${ticket.ref} recovery requires a registered linked worktree from this board project.` };
+  }
+  const holders = liveCheckoutHolders(slug, ticket, facts.worktree);
+  const ownership = checkoutOwnershipSinceBaseline(slug, ticket, state, facts);
+  if (holders.length && !ownership.ownHead) return leasedCheckoutDecision(slug, ticket, state, facts, { holders, ownership, lockKeys });
+  return unleasedRebindDecision(ticket, facts, holders, ownership);
+}
+
+function swapCheckoutRecords(slug?: any, ticket?: any, state?: any, swap?: any, now?: any) {
+  const holder = getTicket(slug, swap.holderId);
+  const holderState = dispatchState(holder);
+  const from = canonicalPath(holderState.worktree);
+  exchangeCheckoutRecords(state, holderState);
+  holderState.worktreeCorrection = { at: now, from, to: holderState.worktree, reason: 'live_claim_mutual_swap', swappedWith: ticket.ref };
+  stampDispatchEvent(holder, 'live-claim-mutual-swap', now);
+  putTicket(slug, holder);
+}
+
+// Runs under the recovery's locks, before the recovered binding is written. The move is recorded on the claim as
+// worktreeCorrection and returned with the recovery.
+function liveClaimRebind(slug?: any, ticket?: any, state?: any, facts?: any, lockKeys?: TicketKey[], now?: any) {
+  const from = movedCheckout(state, facts);
+  if (!from) return { ok: true, recovery: {} };
+  const decision: any = liveClaimRebindDecision(slug, ticket, state, facts, lockKeys);
+  if (!decision.ok) return decision;
+  if (decision.swap) swapCheckoutRecords(slug, ticket, state, decision.swap, now);
+  state.worktreeCorrection = { at: now, from, to: facts.worktree, reason: 'live_claim_recovery', basis: decision.basis, swappedWith: decision.swap?.holderRef };
+  return { ok: true, recovery: { worktreeCorrection: state.worktreeCorrection } };
+}
+
+function bindCheckoutFacts(state?: any, facts?: any) {
+  state.worktree = facts.worktree;
+  state.worktreeGitDirectory = facts.gitDirectory;
+  state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+  state.worktreeCheckoutInstance = facts.checkoutInstance;
+  state.worktreeObservedRevision = facts.revision;
+}
+
+function releaseObservation(opts?: any) {
+  const observation = { by: normalizedText(opts?.by), agentId: normalizedText(opts?.agentId), worktree: normalizedText(opts?.observedWorktree) };
+  return Object.values(observation).every(Boolean) ? { ...observation, worktree: canonicalPath(observation.worktree) } : null;
+}
+
+// Only the harness confines an executor to a checkout, so only a WorktreeCreate binding's own bound runtime can
+// report where it really ran. A continuation spawn has no isolation and its cwd proves nothing (SQ-75).
+function releaseObservationApplies(ticket?: any, state?: any, observation?: any) {
+  return ticket?.claim?.by === observation.by && state?.agentId === observation.agentId && !state.terminalAt && worktreeCreateLease(state);
+}
+
+function recordObservedReleaseCheckout(slug?: any, id?: any, observation?: any) {
+  const ticket = getTicket(slug, id);
+  const state = dispatchState(ticket);
+  if (!releaseObservationApplies(ticket, state, observation)) return { ok: false, reason: 'release_observation_unavailable', ticket };
+  if (state.worktree && canonicalPath(state.worktree) === observation.worktree) return { ok: true, unchanged: true, ticket };
+  state.releaseObservedCheckout = { worktree: observation.worktree, by: observation.by, agentId: observation.agentId, at: new Date().toISOString() };
+  putTicket(slug, ticket);
+  return { ok: true, ticket };
+}
+
+function recordReleaseObservedCheckout(slug?: any, idOrRef?: any, opts?: any) {
+  const observation = releaseObservation(opts);
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  if (!observation) return { ok: false, reason: 'missing_release_observation' };
+  return withTicketLock(slug, found.id, () => recordObservedReleaseCheckout(slug, found.id, observation));
+}
+
+function releaseObservationStillHolds(state?: any, observation?: any, by?: any) {
+  return Boolean(by) && observation.by === by && observation.agentId === state.agentId && state.sharedTree === false && !state.terminalAt;
+}
+
+// An observation that is not a registered linked checkout of this project cannot establish where the work is, so the
+// retained binding is dropped and the next dispatch gets a fresh checkout.
+function applyReleaseObservedCheckout(slug?: any, state?: any, observed?: any) {
+  const recorded = state.worktree ? canonicalPath(state.worktree) : null;
+  if (!observed || observed === recorded) return;
+  const now = new Date().toISOString();
+  const facts = immutableWorktreeFacts(slug, observed);
+  if (!registeredProjectCheckout(facts)) {
+    state.retainedWorktreeDropped = { at: now, reason: 'release_observed_checkout_unverified', recorded, observed };
+    return;
+  }
+  bindCheckoutFacts(state, facts);
+  state.worktreeCorrection = { at: now, from: recorded, to: state.worktree, reason: 'release_observed_checkout' };
+}
+
+// Runs inside the release lock, before the terminal revision is captured, so the retained continuation is keyed to
+// the checkout the releasing executor ran in.
+function rekeyReleasedCheckout(slug?: any, ticket?: any, by?: any) {
+  const state = dispatchState(ticket);
+  const observation = state?.releaseObservedCheckout;
+  if (!observation) return;
+  delete state.releaseObservedCheckout;
+  if (!releaseObservationStillHolds(state, observation, by)) return;
+  applyReleaseObservedCheckout(slug, state, canonicalPath(observation.worktree));
 }
 
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any, worktree?: any) {
@@ -2960,24 +4942,39 @@ function terminalAttemptMatchesStopIdentity(state?: any, sessionId?: any, execut
   }) || null;
 }
 
+function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any, launchName?: any, terminalReason?: any) {
+  const stop = {
+    sessionId: normalizedText(sessionId),
+    executor: normalizedText(executor),
+    agentId: normalizedText(agentId),
+    agentName: normalizedText(agentName),
+    launchName: normalizedText(launchName),
+    terminalReason: normalizedText(terminalReason),
+  };
+  if (!stop.sessionId || !stop.executor) return { ok: false, reason: 'missing_identity' };
+  const candidates = ticketsMentioningSession(stop.sessionId);
+  const deferred = deferGuessedStop(candidates, stop);
+  if (deferred) return deferred;
+  const stopped = stopByRuntimeOrLaunchName(candidates, stop);
+  settleDeferredStops(stop.sessionId);
+  return stopped;
+}
+
+function fallbackLaunchName(stop: any) {
+  return stop.launchName === stop.agentName ? '' : stop.launchName;
+}
+
 // SubagentStop carries agent_id and never agent_name, so an attempt whose cancellable SubagentStart
 // never recorded an agentId is unreachable by its own terminal hook: 36 attempts on this board were
 // stranded that way, median 129s and worst 3.2 hours before an orchestrator retired them by hand.
 // The host writes the launch name into agent-<id>.meta.json beside the transcript, so the hook can
 // recover it. It is applied strictly second, and only when the id-keyed pass found nothing to touch,
 // so every stop that matches on agent_id today takes the identical path it takes now.
-function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any, launchName?: any, terminalReason?: any) {
-  const normalizedSessionId = String(sessionId || '').trim();
-  const normalizedExecutor = String(executor || '').trim();
-  const normalizedAgentId = String(agentId || '').trim();
-  const normalizedAgentName = String(agentName || '').trim();
-  const normalizedLaunchName = String(launchName || '').trim();
-  const normalizedTerminalReason = String(terminalReason || '').trim();
-  if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: 'missing_identity' };
-  const candidates = ticketsMentioningSession(normalizedSessionId);
-  const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName, normalizedTerminalReason);
-  if (byRuntimeIdentity.ok || !normalizedLaunchName || normalizedLaunchName === normalizedAgentName) return byRuntimeIdentity;
-  const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName, normalizedTerminalReason);
+function stopByRuntimeOrLaunchName(candidates: any[], stop: any) {
+  const byRuntimeIdentity = stopMatchingDispatches(candidates, stop.sessionId, stop.executor, stop.agentId, stop.agentName, stop.terminalReason);
+  const launchName = fallbackLaunchName(stop);
+  if (byRuntimeIdentity.ok || !launchName) return byRuntimeIdentity;
+  const byLaunchName = stopMatchingDispatches(candidates, stop.sessionId, stop.executor, stop.agentId, launchName, stop.terminalReason);
   return byLaunchName.ok ? byLaunchName : byRuntimeIdentity;
 }
 
@@ -3037,6 +5034,27 @@ function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, 
   return { ok: true, ticket: tickets[0], tickets, stopped };
 }
 
+function isolatedDispatchOfAgent(state: any, sessionId: string, agentId: string): boolean {
+  return state?.sessionId === sessionId && state.agentId === agentId && state.sharedTree === false && Boolean(state.worktree);
+}
+
+// Native subagents share their parent's session id, so anything keyed on the session alone answers the same for
+// the orchestrator and every sibling executor. The agent id SubagentStart bound to a dispatch tells them apart
+// (GH-155, GH-150).
+function agentDispatchWorktrees(sessionId: string, agentId: string) {
+  if (!sessionId || !agentId) return [];
+  const owned: { ref: string; worktree: string; outcome: string | null; terminalAt: string | null }[] = [];
+  for (const { ticket } of ticketsMentioningSession(sessionId)) {
+    const state = dispatchState(ticket);
+    if (isolatedDispatchOfAgent(state, sessionId, agentId)) owned.push(agentDispatchWorktree(ticket.ref, state));
+  }
+  return owned;
+}
+
+function agentDispatchWorktree(ref: string, state: any) {
+  return { ref, worktree: String(state.worktree), outcome: state.outcome || null, terminalAt: state.terminalAt || null };
+}
+
 function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
   const reconciled: any[] = [];
   if (!sessionId) return { ok: true, reconciled };
@@ -3083,7 +5101,10 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     rederiveUnlaunchedPreparedRoute,
     stampDispatchEvent,
     pulseDispatchState,
-    supersedableUnboundAttempt,
+    unclaimedEvidenceAttempt,
+    unclaimedRetirementRefusal,
+    preparingSessionAttests,
+    unclaimedAttemptRecoveryGuidance,
     retirePreparedCompatibilityStaleAttempt,
     preparedCompatibilityHasProvenMismatch,
     preparedCompatibilityWarning,
@@ -3108,17 +5129,24 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     syncLiveDispatchVerification,
     readDispatchBriefing,
     recoverLiveClaimDispatch,
+    recordReleaseObservedCheckout,
+    rekeyReleasedCheckout,
     recordDispatchLaunch,
     recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
+    recordDispatchWorktreeProvisioned,
     recordDispatchWorktreeProvisioningFailure,
+    unclaimedRetirement,
     recordDispatchWorktreeDependencyLink,
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
+    crossedWorktreeBinding,
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
+    boardVerificationEvidencePath,
+    dispatchEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
@@ -3127,9 +5155,14 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchCanBindRuntimeIdentity,
     recordDispatchRuntimeIdentity,
     bindDispatchClaimToken,
+    exchangeGuessedClaimIdentity,
+    exchangeCrossedClaimCheckout,
+    settleDeferredStops,
+    tokenAdmission,
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,
+    agentDispatchWorktrees,
     reconcileLaunchedDispatches,
   };
 }

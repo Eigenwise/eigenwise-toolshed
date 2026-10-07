@@ -380,8 +380,8 @@ function deliveryTicket(label: string, opts: any = {}) {
   return { fixture, slug, ticket, runCli: runner.runCli };
 }
 
-test('one passing wave delivers its exact Git participant set before recording delivery', () => {
-  const fixture = makeRepo('wave-delivery');
+function assembledTwoCandidateWave(label: string) {
+  const fixture = makeRepo(label);
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
   git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
   const secondCommit = commitFile(secondWorktree, 'second.txt', 'second executor work\n');
@@ -422,6 +422,11 @@ test('one passing wave delivers its exact Git participant set before recording d
   });
   assert.equal(wave.ok, true, JSON.stringify(wave));
   assert.equal(wave.gate.state, 'gate_passed');
+  return { fixture, slug, first, second, target };
+}
+
+test('one passing wave delivers its exact Git participant set before recording delivery', () => {
+  const { fixture, slug, first, second, target } = assembledTwoCandidateWave('wave-delivery');
   const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
   assert.equal(individual.ok, false);
   assert.equal(individual.reason, 'assembled_wave_delivery_required');
@@ -1048,13 +1053,13 @@ function makeUnmergedTarget(repo: string, label: string) {
   assert.throws(() => git(['merge', competingBranch], repo));
 }
 
+// Staged and unmerged state blocks anywhere; an untracked file blocks where the delivery writes (feature.txt).
 const dirtyIntegrationTargetStates = [
-  ['unstaged', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'unstaged target edit\n')],
   ['staged', (fixture: any) => {
     fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'staged target edit\n');
     git(['add', 'README.md'], fixture.repo);
   }],
-  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'target-scratch.log'), 'untracked target file\n')],
+  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'untracked target file\n')],
   ['unmerged', (fixture: any, ticket: any) => makeUnmergedTarget(fixture.repo, ticket.ref)],
 ] as const;
 
@@ -1070,13 +1075,103 @@ for (const [state, dirtyTarget] of dirtyIntegrationTargetStates) {
 
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'integration_target_dirty');
-    if (state === 'untracked') assert.match(result.message, /target-scratch\.log/);
+    if (state === 'untracked') assert.match(result.message, /feature\.txt/);
     assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), checkoutBefore);
     assert.equal(head(fixture.repo), headBefore);
     assert.deepEqual(store.getTicket(slug, ticket.ref).submission, submissionBefore);
     assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
   });
 }
+
+// GH-340: a service rewriting files in the registered checkout keeps it dirty; paths the delivery never writes stay put.
+function dirtyOutsideDelivery(repo: string) {
+  fs.writeFileSync(path.join(repo, 'README.md'), 'service rewrote this\n');
+  fs.writeFileSync(path.join(repo, 'service.log'), 'service log line\n');
+}
+
+function assertOutsideDeliveryDirtKept(repo: string) {
+  assert.equal(fs.readFileSync(path.join(repo, 'README.md'), 'utf8'), 'service rewrote this\n');
+  assert.equal(fs.readFileSync(path.join(repo, 'service.log'), 'utf8'), 'service log line\n');
+}
+
+function failsOnMainVerify() {
+  return nodeVerify("const {execFileSync}=require('node:child_process'); if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main') process.exit(7)");
+}
+
+for (const mode of ['merge', 'apply']) {
+  test(`GH-340: integrate ${mode} goes around unstaged and untracked paths the delivery never writes and reports them`, () => {
+    const { fixture, slug, ticket } = deliveryTicket(`dirty-target-disjoint-${mode}`);
+    dirtyOutsideDelivery(fixture.repo);
+
+    const result = store.integrateSubmission(slug, ticket.ref, { mode, target: fixture.target });
+
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(result.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+    assert.deepEqual(result.integration.deliveredFiles, ['feature.txt']);
+    assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+    assertOutsideDeliveryDirtKept(fixture.repo);
+  });
+}
+
+test('GH-340: a failed post-merge verification rolls back without reverting dirt outside the delivery', () => {
+  const fixture = makeRepo('post-merge-dirty-disjoint');
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'rollback around unrelated dirt',
+    category: 'codebase-exploration',
+    description: 'A delivery fixture whose post-merge verifier fails while the checkout holds unrelated edits.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture);
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'suite', executorVerify: failsOnMainVerify() });
+  dirtyOutsideDelivery(fixture.repo);
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.reason, 'verification_failed_suite_post_merge', result.message);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.rollback.strategy, 'merge-reset-delivery-head');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
+
+test('GH-340: a wave refuses dirt on a participant path, naming only it, then delivers around dirt outside the delivery', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-dirty-target');
+  dirtyOutsideDelivery(fixture.repo);
+  fs.writeFileSync(path.join(fixture.repo, 'second.txt'), 'operator copy\n');
+  const before = head(fixture.repo);
+
+  const refused = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(refused.reason, 'integration_target_dirty', refused.message);
+  assert.deepEqual(refused.checkoutState, ['? second.txt']);
+  assert.deepEqual(refused.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+  assert.match(refused.message, /: second\.txt\. Commit, stash, or remove those paths.* 2 other dirty path\(s\) sit outside the delivery and were ignorable\./);
+  assert.equal(head(fixture.repo), before);
+
+  fs.rmSync(path.join(fixture.repo, 'second.txt'));
+  const delivered = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.deepEqual(delivered.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
+
+test('GH-340: a wave whose delivery verification fails rolls back without reverting dirt outside the delivery', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-dirty-rollback');
+  store.updateTicket(slug, first.ref, { executorVerifyKind: 'suite', executorVerify: failsOnMainVerify() });
+  dirtyOutsideDelivery(fixture.repo);
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(result.reason, 'verification_failed_suite_wave_delivery', result.message);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
 
 function makeGreenfieldRepo(label: string, locked = true) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-greenfield-${label}-`));
@@ -1166,4 +1261,188 @@ test('integration does not derive an unlocked greenfield suite after submission'
   assert.equal(payload.verify.status, 'passed');
   assert.equal(payload.verify.kind, 'custom');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
+});
+
+// GH-308. A sibling that submits while the post-merge suite runs records the delivery merge as its expected
+// upstream. Rolling the target back without rewriting that record left the sibling refused as diverged forever.
+test('a post-merge rollback restores a sibling expected upstream that recorded the rolled-back merge', () => {
+  const fixture = makeRepo('post-merge-sibling-upstream');
+  const { slug } = store.ensureProject(fixture.repo);
+  const first = store.createTicket(slug, { title: 'rolled back delivery', category: 'codebase-exploration', files: ['feature.txt'] });
+  submitFixture(slug, first, fixture);
+  const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-sibling');
+  git(['worktree', 'add', '-b', 'worktree-agent-sibling', siblingWorktree, 'main'], fixture.repo);
+  const siblingCommit = commitFile(siblingWorktree, 'sibling.txt', 'sibling work\n');
+  const sibling = store.createTicket(slug, { title: 'sibling submitted mid-suite', category: 'codebase-exploration', files: ['sibling.txt'] });
+  const siblingRef = `refs/sidequest/${sibling.ref}`;
+  git(['update-ref', siblingRef, siblingCommit], siblingWorktree);
+  assert.equal(store.claimTicket(slug, sibling.ref, 'sibling-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
+  const libDirectory = path.join(__dirname, '..', 'lib');
+  const verifier = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-sibling-verify-')), 'verify.js');
+  fs.writeFileSync(verifier, `
+process.env.SIDEQUEST_HOME = ${JSON.stringify(SIDEQUEST_HOME)};
+const { execFileSync } = require('node:child_process');
+if (execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim() !== 'main') process.exit(0);
+const store = require(${JSON.stringify(path.join(libDirectory, 'store.js'))});
+const commitScope = require(${JSON.stringify(path.join(libDirectory, 'commit-scope.js'))});
+const worktree = ${JSON.stringify(siblingWorktree)};
+const range = commitScope.submissionRange(worktree, { commit: ${JSON.stringify(siblingCommit)}, gitRef: ${JSON.stringify(siblingRef)}, upstream: 'main', integrationBranch: 'main' });
+const submitted = store.submitTicket(${JSON.stringify(slug)}, ${JSON.stringify(sibling.ref)}, 'sibling-worker', { commit: ${JSON.stringify(siblingCommit)}, gitRef: ${JSON.stringify(siblingRef)}, range, worktree });
+if (!submitted.ok) { console.error(JSON.stringify(submitted)); process.exit(3); }
+process.exit(7);
+`);
+  store.updateTicket(slug, first.ref, { executorVerifyKind: 'suite', executorVerify: `"${process.execPath}" "${verifier}"` });
+  const before = head(fixture.repo);
+
+  const rolledBack = store.integrateSubmission(slug, first.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(rolledBack.reason, 'verification_failed_suite_post_merge', rolledBack.message);
+  assert.equal(rolledBack.verify.exitCode, 7, 'the sibling submitted from inside the post-merge suite');
+  assert.equal(head(fixture.repo), before);
+  assert.equal(store.getTicket(slug, sibling.ref).submission.upstreamCommit, before);
+  const delivered = store.integrateSubmission(slug, sibling.ref, { mode: 'merge', target: fixture.target });
+  assert.equal(delivered.ok, true, delivered.message);
+});
+
+// GH-246 / GH-247 / GH-273: the gate verifier reports where it ran and what it saw, so each case proves
+// the tree and environment instead of trusting an exit code that any directory could produce.
+function gateProbeVerify(passCondition: string) {
+  return nodeVerify(`const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const tree=execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(); console.log('SQ_GATE_PROBE '+JSON.stringify({cwd:process.cwd(),pluginRoot:process.env.CLAUDE_PLUGIN_ROOT||null,pluginData:process.env.CLAUDE_PLUGIN_DATA||null,sidequestHome:process.env.SIDEQUEST_HOME||null,path:Boolean(process.env.PATH||process.env.Path),tree})); process.exit(${passCondition}?0:7)`);
+}
+
+function gateProbe(verification: any) {
+  const line = fs.readFileSync(verification.logPath, 'utf8').split(/\r?\n/).find((entry: string) => entry.startsWith('SQ_GATE_PROBE '));
+  assert.ok(line, `the gate log must carry the probe line: ${verification.outputTail || verification.evidence}`);
+  return JSON.parse(line.slice('SQ_GATE_PROBE '.length));
+}
+
+function twoCandidateWave(label: string, verify: string) {
+  const fixture = makeRepo(label);
+  const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
+  git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
+  const secondCommit = commitFile(secondWorktree, 'second.txt', 'second executor work\n');
+  const { slug } = store.ensureProject(fixture.repo);
+  const [first, second] = ['feature.txt', 'second.txt'].map((file) => store.createTicket(slug, {
+    title: `wave gate candidate ${file}`,
+    category: 'codebase-exploration',
+    description: `Adds ${file} for the composed-tree gate.`,
+    files: [file],
+  }));
+  submitFixture(slug, first, fixture, verify);
+  submitFixture(slug, second, { executor: secondWorktree, submitted: secondCommit }, verify);
+  return { fixture, slug, secondWorktree, refs: [first.ref, second.ref] };
+}
+
+function samePath(left: string, right: string) {
+  return path.resolve(left).toLowerCase() === fs.realpathSync.native(right).toLowerCase();
+}
+
+test('GH-273: a multi-ticket gate runs the pinned command in the composed wave tree, not the un-merged project root', () => {
+  const { fixture, slug, secondWorktree, refs } = twoCandidateWave('wave-gate-composed', gateProbeVerify("fs.existsSync('feature.txt')&&fs.existsSync('second.txt')"));
+  const projectHead = head(fixture.repo);
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+  const probe = gateProbe(wave.gate.verification);
+  for (const uncomposed of [fixture.repo, fixture.executor, secondWorktree]) {
+    assert.equal(samePath(probe.cwd, uncomposed), false, `the gate ran in ${probe.cwd}, an un-composed tree`);
+  }
+  assert.equal(wave.gate.verification.verifiedTree, probe.tree, 'the gate result names the tree it verified');
+  assert.equal(store.getTicket(slug, refs[0]).submission.wave.gate.verification.verifiedTree, probe.tree);
+  assert.equal(fs.existsSync(probe.cwd), false, 'the composed checkout is removed after the gate');
+  assert.doesNotMatch(git(['worktree', 'list', '--porcelain'], fixture.repo), /wave-gates/);
+  assert.equal(head(fixture.repo), projectHead, 'the gate never moves the project checkout');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+});
+
+test('GH-246: a multi-ticket gate fails when the composed candidates fail even though the baseline passes', () => {
+  const { slug, refs } = twoCandidateWave('wave-gate-baseline-passes', gateProbeVerify("!fs.existsSync('second.txt')"));
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, false, JSON.stringify(wave));
+  assert.equal(wave.reason, 'assembled_wave_gate_failed');
+  assert.equal(wave.gate.verification.status, 'failed_suite');
+  assert.equal(wave.gate.verification.verifiedTree, gateProbe(wave.gate.verification).tree);
+});
+
+test('a multi-ticket gate whose candidates conflict refuses without a verdict and leaves no checkout behind', () => {
+  const fixture = makeRepo('wave-gate-conflict');
+  const conflictWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-conflict');
+  git(['worktree', 'add', '-b', 'worktree-agent-conflict', conflictWorktree, 'main'], fixture.repo);
+  const conflictCommit = commitFile(conflictWorktree, 'feature.txt', 'conflicting executor work\n');
+  const { slug } = store.ensureProject(fixture.repo);
+  const verify = gateProbeVerify('true');
+  const [first, second] = ['first', 'second'].map((label) => store.createTicket(slug, {
+    title: `${label} conflicting gate candidate`,
+    category: 'codebase-exploration',
+    description: 'Both candidates rewrite feature.txt.',
+    files: ['feature.txt'],
+  }));
+  submitFixture(slug, first, fixture, verify);
+  submitFixture(slug, second, { executor: conflictWorktree, submitted: conflictCommit }, verify);
+  const projectHead = head(fixture.repo);
+
+  const wave = store.assembleSubmissionWave(slug, [first.ref, second.ref]);
+
+  assert.equal(wave.ok, false, JSON.stringify(wave));
+  assert.equal(wave.reason, 'assembled_wave_compose_failed');
+  assert.match(wave.message, /Conflicted paths: feature\.txt/);
+  assert.match(wave.message, /No candidate was rejected/);
+  assert.equal(store.getTicket(slug, first.ref).submission.wave, undefined, 'no gate verdict is stamped on the candidates');
+  assert.doesNotMatch(git(['worktree', 'list', '--porcelain'], fixture.repo), /wave-gates/);
+  assert.equal(head(fixture.repo), projectHead);
+});
+
+test('a composed wave gate provisions linked dependencies and its cleanup leaves the linked source intact', () => {
+  const dependencyName = 'gate-dependency';
+  const { fixture, slug, refs } = twoCandidateWave('wave-gate-linked-dependency', gateProbeVerify(`fs.existsSync('${dependencyName}/sentinel')&&fs.existsSync('second.txt')`));
+  fs.mkdirSync(path.join(fixture.repo, dependencyName));
+  fs.writeFileSync(path.join(fixture.repo, dependencyName, 'sentinel'), 'ready\n');
+  store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: dependencyName, mode: 'link' }] });
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+  assert.equal(fs.existsSync(gateProbe(wave.gate.verification).cwd), false);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, dependencyName, 'sentinel'), 'utf8'), 'ready\n', 'removing the composed checkout must not empty the linked source');
+});
+
+test('GH-157: a composed wave gate copies ignored dependency files but never overwrites what the candidates carry', () => {
+  const { fixture, slug, refs } = twoCandidateWave('wave-gate-copied-dependency', gateProbeVerify("fs.readFileSync('.claude/gate-env/api.env','utf8')==='KEY=secret\\n'&&fs.readFileSync('README.md','utf8')==='advance fixture\\n'"));
+  fs.mkdirSync(path.join(fixture.repo, '.claude', 'gate-env'), { recursive: true });
+  fs.writeFileSync(path.join(fixture.repo, '.claude', 'gate-env', 'api.env'), 'KEY=secret\n');
+  fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'uncommitted local edit\n');
+  store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '.claude/gate-env', mode: 'copy' }, { path: 'README.md', mode: 'copy' }] });
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+});
+
+test('GH-247: the gate verifier does not inherit the board process plugin-host variables', () => {
+  const saved = { root: process.env.CLAUDE_PLUGIN_ROOT, data: process.env.CLAUDE_PLUGIN_DATA };
+  process.env.CLAUDE_PLUGIN_ROOT = path.join(__dirname, '..');
+  process.env.CLAUDE_PLUGIN_DATA = path.join(os.tmpdir(), 'sidequest-plugin-data');
+  try {
+    const { slug, refs } = twoCandidateWave('wave-gate-environment', gateProbeVerify('!process.env.CLAUDE_PLUGIN_ROOT'));
+
+    const wave = store.assembleSubmissionWave(slug, refs);
+
+    assert.equal(wave.ok, true, JSON.stringify(wave));
+    const probe = gateProbe(wave.gate.verification);
+    assert.equal(probe.pluginRoot, null);
+    assert.equal(probe.pluginData, null);
+    assert.equal(probe.sidequestHome, SIDEQUEST_HOME, 'the board keeps its own SIDEQUEST_* variables');
+    assert.equal(probe.path, true, 'PATH survives the scrub');
+  } finally {
+    for (const [name, value] of [['CLAUDE_PLUGIN_ROOT', saved.root], ['CLAUDE_PLUGIN_DATA', saved.data]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });

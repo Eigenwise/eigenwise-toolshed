@@ -76,6 +76,7 @@ async function cmdDispatch(opts: any, positional: any) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
+    ...(dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {}),
     warnings: presentedWarnings,
     spawn,
     guidance: prepared.recovery
@@ -253,7 +254,6 @@ async function cmdBoardConfig(opts: any) {
   if (opts['worktree-base'] != null) patch.worktreeBase = opts['worktree-base'];
   if (opts['not-integrated-salvage-age-hours'] != null) patch.notIntegratedSalvageAgeHours = opts['not-integrated-salvage-age-hours'];
   if (opts['worktree-recovery-retention-age-hours'] != null) patch.worktreeRecoveryRetentionAgeHours = opts['worktree-recovery-retention-age-hours'];
-  if (opts['worktree-recovery-retention-max-per-agent'] != null) patch.worktreeRecoveryRetentionMaxPerAgent = opts['worktree-recovery-retention-max-per-agent'];
   if (opts['auto-approve-test-scope'] !== undefined) patch.autoApproveTestScope = opts['auto-approve-test-scope'];
   if (opts['auto-approve-scope'] != null) patch.autoApproveScope = opts['auto-approve-scope'];
   if (opts['worktree-setup'] != null) patch.worktreeSetup = opts['worktree-setup'];
@@ -279,7 +279,7 @@ async function cmdBoardConfig(opts: any) {
   console.log(`worktree isolation: ${payload.worktreeIsolation ? 'enabled' : 'disabled'}`);
   console.log(`worktree base: ${payload.worktreeBase}`);
   console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
-  console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h, ${payload.worktreeRecoveryRetentionMaxPerAgent} entries per agent`);
+  console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h`);
   console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? 'enabled' : 'disabled'}`);
   console.log(`configured scope auto-approval: ${payload.autoApproveScope.length ? payload.autoApproveScope.join(', ') : '(none)'}`);
   console.log(`worktree setup command: ${payload.worktreeSetup || '(none)'}`);
@@ -287,7 +287,7 @@ async function cmdBoardConfig(opts: any) {
 }
 
 async function cmdProjects(opts: any) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + '\n');
     return;
@@ -329,6 +329,18 @@ function resolveExplicitBoard(opts: any, positional: any, action: any) {
   return found;
 }
 
+function keptArchivedNote(candidateRefs: any): string {
+  const kept = candidateRefs.keptArchived?.length || 0;
+  return kept ? `, ${kept} kept under refs/sidequest-archived/ because another board holds the live name` : '';
+}
+
+// Archive and restore move the board's refs/sidequest/SQ-n candidates aside and back (GitHub #378).
+function candidateRefsNote(candidateRefs: any): string {
+  if (!candidateRefs) return '';
+  if (candidateRefs.error) return `; candidate refs left in place: ${candidateRefs.error}`;
+  return `; moved ${candidateRefs.moved.length} candidate ref(s)${keptArchivedNote(candidateRefs)}`;
+}
+
 async function cmdArchiveBoard(opts: any, positional: any) {
   const board = resolveExplicitBoard(opts, positional, 'archive-board');
   const res = store.archiveProject(board.slug);
@@ -337,7 +349,7 @@ async function cmdArchiveBoard(opts: any, positional: any) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + '\n');
     return;
   }
-  console.log(`✓ ${res.alreadyArchived ? 'already archived' : 'archived'} board ${board.meta.name}`);
+  console.log(`✓ ${res.alreadyArchived ? 'already archived' : 'archived'} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 
 async function cmdUnarchiveBoard(opts: any, positional: any) {
@@ -348,7 +360,7 @@ async function cmdUnarchiveBoard(opts: any, positional: any) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + '\n');
     return;
   }
-  console.log(`✓ ${res.wasArchived ? 'restored' : 'already active'} board ${board.meta.name}`);
+  console.log(`✓ ${res.wasArchived ? 'restored' : 'already active'} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 
 // Turn a findProject failure into a one-line reason for the merge error text.

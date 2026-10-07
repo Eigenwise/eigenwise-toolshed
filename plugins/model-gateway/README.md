@@ -6,6 +6,8 @@ Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Cl
 
 ## Install
 
+Model Gateway uses your supported ChatGPT/Codex or Grok subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.
+
 Run these in Claude Code:
 
 ```text
@@ -38,10 +40,16 @@ Claude Desktop's own native Gateway configuration can point at Model Gateway's e
 In Claude Code v2.1.129+, open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
 new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
+The cache is written only from a model list the proxy actually answered. While the proxy is unreachable
+the shim serves a short built-in list, keeps the previous cache, and `status` reports
+`fallback catalog (proxy unreachable)`.
 
-- `lib/runtime.js`'s `MODEL_WINDOW_POLICY` is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured at 920,012 accepted and 935,012 refused on 2026-09-05, so the gateway advertises 920k. Other Codex proxy rows use the table's explicit unmeasured 920k default until measured.
-- A gateway row above Claude Code's 200k unknown-model window gets a `[1m]` picker alias. That alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. The optional `325000` setting is a cap, and with that cap the client compacts around `292000`. The alias is removed before forwarding to Codex or Grok, and it does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- `lib/runtime.js`'s `MODEL_WINDOW_POLICY` is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra were measured at 920,012 accepted and 935,012 refused on 2026-09-05, and GPT-6.1 Sol measured the same on 2026-09-30, so the gateway advertises 920k. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets. Other Codex proxy rows use the table's explicit unmeasured 920k default until measured.
+- A gateway row above Claude Code's 200k unknown-model window gets a `[1m]` picker alias. That alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead. The alias is removed before forwarding to Codex or Grok, and it does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - Claude models keep using Anthropic normally.
+- `context-window` saves separate backend windows: Claude `full` (1M), Codex `272000`, Grok `full`. Without an explicit maximum, a gateway cap keeps its legacy trigger at cap minus 85000 (Codex 187000). `--codex-compact-at <tokens|cap>` and `--grok-compact-at <tokens|cap>` save a positive whole maximum before compaction; `cap` removes it. Explicit maxima skip that hidden reserve and are limited by the cap and actual backend window minus 40000. Saved maxima survive cap-only changes and override the legacy `CODEX_GATEWAY_COMPACT_TRIGGER`, whose ignored value is reported unchanged.
+- `context-window --codex-compact-at 242000` leaves the 272000 cap unchanged. OpenAI bills input above 272k at 2x; the crossing turn and compaction request can still exceed 272k and pay double. Existing installations keep their defaults until explicitly configured. Restart the gateway (`stop`, then `ensure`) after adoption.
+- Claude keeps the supported `--claude <tokens|full>` native window and existing project-wired `autoCompactWindow` sync. Native engine headroom applies; the exact trigger and same-model role split are unverified. Claude compact-at flags and saved fields are refused without writing. One backend policy applies to main and subagents. See the setup guide for effective-limit reporting and native-session reloads.
 
 Codex rejects some JSON Schema regex Unicode property escapes such as `\p{Cc}` and `\P{Cf}`. After a deferred tool resolves, Model Gateway applies a narrow Codex-only compatibility copy. It accepts a missing dialect or Draft 2020-12 and only a `pattern` reached through `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, or `unevaluatedProperties`/`unevaluatedItems`. The pattern must place each real property atom as a standalone member of a negated character class, without ranges, set syntax, captures, backreferences, or a negative regex context. It removes only those atoms and leaves every other pattern byte unchanged. Other affected shapes get a local 400 that names the tool, JSON Pointer, and reason code before anything is forwarded or rerouted. This changes Codex's provider hint only. Claude Code keeps the original schema and validation, and Anthropic requests remain byte-identical.
 
@@ -62,7 +70,7 @@ For each session, usage observability also keeps a small high-water file under `
 When the gateway disappears or restarts, ask Claude to run `doctor`. It names the lifecycle evidence at `~/.claude/model-gateway/logs/lifecycle.jsonl` and distinguishes an observed supervisor, worker, or proxy exit from no exit evidence. The bounded records identify PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown.
 
 Doctor also prints a model-window table for Codex, Grok, and native Claude pins: backend and picker ids,
-backend and advertised windows, Claude Code's client window and compaction point, sentry mode and trigger,
+backend and advertised windows, Claude Code's client window and unverified native compaction point, sentry mode and effective trigger,
 and the measurement date. It compares the live shim ids with the installed policy when those ids are
 available, but a `PASS` does not prove that every supported model is present. In particular, an older
 claude-code-proxy can omit GPT-6 Astra while the check still passes. If Astra is missing from `/model`,
@@ -77,7 +85,7 @@ Running this plugin's test suite uses its own gateway home and never touches the
 
 ## Claude model pins
 
-Pins follow the installed Claude CLI's resolved alias. Pin detection runs an isolated local probe that disables Claude Code's nonessential network traffic while preserving proxy observation and bypassing the local endpoint. If one alias probe misses, that alias uses its shipped known-good pin and is marked stale so the next refresh probes it again automatically.
+Pins follow the installed Claude CLI's resolved alias. Pin detection runs an isolated local probe that disables Claude Code's nonessential network traffic while preserving proxy observation and bypassing the local endpoint. If one alias probe misses, that alias uses its shipped known-good pin and is marked stale so the next refresh probes it again automatically. A detected alias only wins when it's at least as new as the shipped known-good pin and isn't a value the plugin retired; otherwise the shipped pin wins. A saved `pin --<alias>` override beats both.
 
 Already-wired projects need `model-gateway env --write-project` (or update-toolshed), then a new Claude Code session, to pick up a changed pin.
 
@@ -107,13 +115,13 @@ Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagn
 
 ### Turn the gateway off for this project
 
-To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
+To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. Session start keeps the Claude model pins among those settings current, so the project still gets new Claude releases. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
 
 That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A process-exported `ANTHROPIC_BASE_URL` still wins over the file edit. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
 ## Support
 
-If Model Gateway saves you time, you can support its maintenance through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Model Gateway's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 

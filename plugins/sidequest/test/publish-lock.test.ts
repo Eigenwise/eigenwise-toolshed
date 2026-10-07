@@ -52,10 +52,10 @@ test('acquire, contention, and owner release', async () => {
   assert.strictEqual(again.released, null);
 });
 
-test('the same session re-acquires (crash recovery for an interrupted transaction)', async () => {
+test('the same worker re-acquires across MCP runtime sessions after an interrupted transaction', async () => {
   const repo = tempRepo();
   assert.strictEqual((await publish.acquirePublishLock(repo, { by: 'orch-a', sessionId: 'sess-a' })).ok, true);
-  const resumed = await publish.acquirePublishLock(repo, { by: 'orch-a-later', sessionId: 'sess-a' });
+  const resumed = await publish.acquirePublishLock(repo, { by: 'orch-a', sessionId: 'sess-b' });
   assert.strictEqual(resumed.ok, true);
   assert.strictEqual(resumed.reacquired, true);
 });
@@ -84,11 +84,11 @@ test('release-window status counts held fragments and reports the latest release
   assert.strictEqual(await publish.releaseWindow(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-no-fragments-')), 'dev'), null);
 });
 
-test('a publish lock only authorizes its owning session', async () => {
+test('a publish lock accepts its worker across sessions and refuses another worker', async () => {
   const repo = tempRepo();
   await publish.acquirePublishLock(repo, { by: 'orch-a', sessionId: 'session-a', transient: true });
-  assert.strictEqual(publish.publishLockOwnedBySession(repo, 'session-a'), true);
-  assert.strictEqual(publish.publishLockOwnedBySession(repo, 'session-b'), false);
+  assert.strictEqual(publish.publishLockOwnedBySession(repo, { by: 'orch-a', sessionId: 'session-b' }), true);
+  assert.strictEqual(publish.publishLockOwnedBySession(repo, { by: 'orch-b', sessionId: 'session-a' }), false);
 });
 
 test('integrate names both sessions when a matching worker has a stale lock session', async () => {

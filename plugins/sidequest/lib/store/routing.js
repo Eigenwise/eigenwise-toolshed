@@ -1,4 +1,6 @@
 "use strict";
+const { normalizeDeniedTools } = require("../denied-tools.js");
+const { discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName } = require("../exec-names.js");
 function createRouting(dependencies) {
   const {
     activeDispatchRoute,
@@ -9,6 +11,7 @@ function createRouting(dependencies) {
     db,
     dispatchReadOnly,
     discoverExternalModels,
+    gatewayCatalogRefreshFailure,
     invalidateStoreCaches,
     listProjects,
     projectRoutingEnabled,
@@ -24,17 +27,26 @@ function createRouting(dependencies) {
     dispatchState
   } = dependencies;
   const CLAUDE_RUNTIMES = ["haiku", "sonnet", "opus", "fable"];
-  const CLAUDE_RUNTIME_LABELS = {
-    haiku: "Claude Haiku",
-    sonnet: "Claude Sonnet",
-    opus: "Claude Opus 5",
-    fable: "Claude Fable"
-  };
   const VALID_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
   const BACKEND_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
   const BACKEND_KEY_RE = /^([a-z0-9][a-z0-9-]{0,31}):([a-z0-9][a-z0-9-]{1,31})$/;
   const HAIKU_BACKEND_EFFORT = "medium";
   const ROUTING_FALLBACK_DEFAULT = Object.freeze({ model: "sonnet", effort: "high" });
+  function resolvedClaudeRuntimeId(runtime) {
+    return process.env[`ANTHROPIC_DEFAULT_${runtime.toUpperCase()}_MODEL`]?.trim() || runtime;
+  }
+  function formatClaudeRuntimeLabel(model) {
+    const parts = model.replace(/\[1m\]$/, "").replace(/^claude-/, "").split("-");
+    const versionStart = parts.findIndex((part) => /^\d/.test(part));
+    const nameParts = versionStart < 0 ? parts : parts.slice(0, versionStart);
+    const versionParts = versionStart < 0 ? [] : parts.slice(versionStart);
+    const name = nameParts.map((part) => part.replace(/^./, (initial) => initial.toUpperCase())).join(" ");
+    return `Claude ${name}${versionParts.length ? ` ${versionParts.join(".")}` : ""}`;
+  }
+  function claudeRuntimeCatalogEntry(slug) {
+    const id = resolvedClaudeRuntimeId(slug);
+    return { backend: "claude", source: null, slug, id, label: formatClaudeRuntimeLabel(id) };
+  }
   const CLAUDE_QUOTA_FAILURES = Object.freeze([
     Object.freeze({ matcher: /You've reached your (Fable|Opus|Sonnet|Haiku)(?: \d+(?:\.\d+)*)? limit\b/ })
   ]);
@@ -62,9 +74,15 @@ function createRouting(dependencies) {
     for (const entry of discoverExternalModels()) if (!(entry.slug in out)) out[entry.slug] = entry;
     return out;
   }
+  const GATEWAY_SHIM_PROVIDERS = /* @__PURE__ */ new Set(["codex", "grok"]);
+  function discoveredModelBackends() {
+    const discovered = discoverExternalModels();
+    return discovered.map((entry) => resolvedBackend(entry, discovered)).filter((backend) => backend.backend !== "codex");
+  }
   function resolvedBackend(entry, discovered) {
     const agentSlug = discovered.filter((candidate) => candidate.slug === entry.slug).length > 1 ? `${entry.source}-${entry.slug}` : entry.slug;
-    return { backend: "codex", provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
+    const backend = GATEWAY_SHIM_PROVIDERS.has(entry.provider) ? "codex" : entry.provider;
+    return { backend, provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
   }
   function normalizeRouteModel(model) {
     if (typeof model !== "string") return null;
@@ -76,7 +94,7 @@ function createRouting(dependencies) {
     const normalized = normalizeRouteModel(model);
     if (!normalized) return null;
     if (CLAUDE_RUNTIMES.includes(normalized)) {
-      return { backend: "claude", source: null, slug: normalized, id: normalized, label: CLAUDE_RUNTIME_LABELS[normalized] };
+      return claudeRuntimeCatalogEntry(normalized);
     }
     const catalog = discoveredByKey();
     const discovered = Object.values(catalog);
@@ -128,14 +146,20 @@ function createRouting(dependencies) {
       ...exec && exec.dispatchModel ? { marker: exec.dispatchModel } : {}
     };
   }
+  function gatewayMarkerExec(backend, effort) {
+    const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
+    return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: "codex", source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: "native-agent" };
+  }
+  function discoveredModelExec(backend, effort) {
+    const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
+    return { agent: discoveredModelExecutorName(backend.agentSlug, resolvedEffort), readOnlyAgent: readOnlyDiscoveredModelExecutorName(backend.agentSlug, resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, backend: backend.backend, source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
+  }
   function execFromBackend(backend, effort) {
-    if (backend.backend === "codex") {
-      const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
-      return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: "codex", source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: "native-agent" };
-    }
+    if (backend.backend === "codex") return gatewayMarkerExec(backend, effort);
+    if (backend.backend !== "claude" || backend.source) return discoveredModelExec(backend, effort);
     const runtime = backend.slug;
     const agent = effort ? stableClaudeName(effort) : null;
-    return { agent, model: runtime, spawnId: runtime, backend: "claude", slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: "native-agent" };
+    return { agent, model: runtime, spawnId: runtime, backend: "claude", slug: runtime, runsModel: runtime, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
   }
   function resolveExec(model, effort) {
     const backend = availableRoute(model);
@@ -155,7 +179,7 @@ function createRouting(dependencies) {
     return {
       models: CLAUDE_RUNTIMES.concat(discovered.map((entry) => entry.slug)),
       efforts: VALID_EFFORTS.slice(),
-      discovered
+      discovered: CLAUDE_RUNTIMES.map(claudeRuntimeCatalogEntry).concat(discovered)
     };
   }
   function getModelVocab() {
@@ -497,14 +521,15 @@ function createRouting(dependencies) {
     const pairs = [];
     const seen = /* @__PURE__ */ new Set();
     const add = (category) => {
-      if (!category) return;
+      if (!category?.enabled) return;
       const route = normalizeRoute(category.route);
       const fallback = category.fallback == null ? null : normalizeRoute(category.fallback);
       if (!route) return;
-      const key = JSON.stringify({ route, fallback });
+      const readonly = category.readonly === true;
+      const key = JSON.stringify({ route, fallback, readonly });
       if (seen.has(key)) return;
       seen.add(key);
-      pairs.push({ route, fallback });
+      pairs.push({ route, fallback, readonly });
     };
     for (const row of database().prepare("SELECT data FROM routing_profile_entries ORDER BY profile_id, position, category_id").all()) {
       try {
@@ -564,8 +589,13 @@ function createRouting(dependencies) {
       contract: String(raw.contract || "").trim(),
       artifactRoots: normalizeArtifactRoots(raw.artifactRoots),
       readonly: raw.readonly === true,
-      enabled: raw.enabled !== false
+      enabled: raw.enabled !== false,
+      ...categoryDeniedTools(raw.deniedTools)
     };
+  }
+  function categoryDeniedTools(value) {
+    const deniedTools = normalizeDeniedTools(value, "Category deniedTools");
+    return deniedTools.length ? { deniedTools } : {};
   }
   function routingProfileCategory(profileId, id) {
     const normalizedId = normalizeCategoryId(id);
@@ -1007,34 +1037,37 @@ function createRouting(dependencies) {
     }
     return { model: exec.runsModel, effort: override.effort, exec, warnings, override: true };
   }
+  function categoryRouteCandidates(category, primary) {
+    return [
+      { source: "route", route: primary },
+      { source: "category fallback", route: normalizeRoute(category.fallback) },
+      { source: "global fallback", route: normalizeRoute(getRoutingFallback()) }
+    ].filter((candidate) => candidate.route);
+  }
+  function categoryCandidateOutcome(category, candidate, provider) {
+    const { source, route } = candidate;
+    if (source === "global fallback" && routeProvider(route) !== provider) {
+      return { warning: `Category "${category.id}" global fallback route "${route.model}" crosses providers and was refused.` };
+    }
+    const exec = resolveExec(route.model, route.effort);
+    if (exec && routeReadyForAutomaticFallback(route)) return { exec };
+    return { warning: `Category "${category.id}" ${source} model "${route.model}" isn't currently available.` };
+  }
+  function categoryFallbackReason(candidate, primary) {
+    if (candidate.source === "route") return {};
+    const refusal = providerDispatchRefusal(primary) || `${primary.model} is not in the live model catalog.`;
+    const unavailable = refusal.replace(/\s*No Anthropic fallback was used\./, "");
+    return { fallbackReason: `${candidate.source} ${candidate.route.model} replaced unavailable ${primary.model}. ${unavailable}` };
+  }
   function resolveCategoryRoute(category) {
     const warnings = [];
     const primary = normalizeRoute(category && category.route);
     if (!primary) return { model: null, effort: null, exec: null, warnings: ["Category route is missing or invalid."] };
     const provider = routeProvider(primary);
-    const candidates = [
-      { source: "route", route: primary },
-      { source: "category fallback", route: category && category.fallback },
-      { source: "global fallback", route: getRoutingFallback() }
-    ];
-    for (const candidate of candidates) {
-      const route = normalizeRoute(candidate.route);
-      if (!route) continue;
-      if (candidate.source !== "route" && routeProvider(route) !== provider) {
-        warnings.push(`Category "${category.id}" ${candidate.source} route "${route.model}" crosses providers and was refused.`);
-        continue;
-      }
-      const exec = resolveExec(route.model, route.effort);
-      if (exec && routeReadyForAutomaticFallback(route)) {
-        return {
-          model: exec.runsModel,
-          effort: route.effort,
-          exec,
-          warnings,
-          ...candidate.source === "route" ? {} : { fallbackReason: `${candidate.source} replaced unavailable ${primary.model}.` }
-        };
-      }
-      warnings.push(`Category "${category.id}" ${candidate.source} model "${route.model}" isn't currently available.`);
+    for (const candidate of categoryRouteCandidates(category, primary)) {
+      const { exec, warning } = categoryCandidateOutcome(category, candidate, provider);
+      if (exec) return { model: exec.runsModel, effort: candidate.route.effort, exec, warnings, ...categoryFallbackReason(candidate, primary) };
+      warnings.push(warning);
     }
     return { model: primary.model, effort: primary.effort, exec: null, warnings };
   }
@@ -1083,7 +1116,11 @@ function createRouting(dependencies) {
   function dispatchRouteRefusal(route) {
     const normalized = normalizeRoute(route);
     if (!normalized) return "Dispatch refused: the resolved route is missing or invalid.";
-    return providerDispatchRefusal(normalized);
+    return withGatewayRefreshFailure(providerDispatchRefusal(normalized));
+  }
+  function withGatewayRefreshFailure(refusal) {
+    const failure = refusal && gatewayCatalogRefreshFailure();
+    return failure ? `${refusal} Last gateway catalog refresh: ${failure}` : refusal;
   }
   function ticketCategory(ticket) {
     if (!ticket || ticket.category == null) return null;
@@ -1158,7 +1195,6 @@ function createRouting(dependencies) {
   }
   return {
     CLAUDE_RUNTIMES,
-    CLAUDE_RUNTIME_LABELS,
     VALID_EFFORTS,
     BACKEND_SLUG_RE,
     BACKEND_KEY_RE,
@@ -1181,6 +1217,7 @@ function createRouting(dependencies) {
     dispatchRouteState,
     execFromBackend,
     resolveExec,
+    discoveredModelBackends,
     resolveReportedExec,
     resolveModelId,
     routingModels,

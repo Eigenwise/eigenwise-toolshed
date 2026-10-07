@@ -1,6 +1,4 @@
 "use strict";
-const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const store = require("./store");
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
@@ -13,50 +11,9 @@ const { tools: routingTools } = require("./mcp-routing");
 function boardMcpSessionId() {
   return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
 }
-function boardMcpLivenessFile(sessionId) {
-  const home = process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest");
-  return path.join(home, "tmp", "state", `board-mcp-${encodeURIComponent(sessionId)}.json`);
-}
-function isBoardMcpLiveness(value) {
-  return value !== null && typeof value === "object" && Object.hasOwn(value, "pid") && Number.isInteger(Reflect.get(value, "pid")) && Reflect.get(value, "pid") > 0;
-}
-function readBoardMcpLiveness(sessionId) {
-  try {
-    const value = JSON.parse(fs.readFileSync(boardMcpLivenessFile(sessionId), "utf8"));
-    return isBoardMcpLiveness(value) ? value : null;
-  } catch (_) {
-    return null;
-  }
-}
-function writeBoardMcpLiveness(sessionId = boardMcpSessionId()) {
-  if (!sessionId) return;
-  const file = boardMcpLivenessFile(sessionId);
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ pid: process.pid }));
-  } catch (_) {
-  }
-}
-function clearBoardMcpLiveness(sessionId = boardMcpSessionId()) {
-  if (!sessionId || readBoardMcpLiveness(sessionId)?.pid !== process.pid) return;
-  try {
-    fs.rmSync(boardMcpLivenessFile(sessionId), { force: true });
-  } catch (_) {
-  }
-}
-function isBoardMcpLive(sessionId) {
-  const marker = sessionId ? readBoardMcpLiveness(sessionId) : null;
-  if (!marker) return false;
-  try {
-    process.kill(marker.pid, 0);
-    return true;
-  } catch (error) {
-    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
-  }
-}
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+const MCP_TOOLS_LIST_MAX_BYTES = 27075;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -114,17 +71,44 @@ const MUTATING_TOOLS = /* @__PURE__ */ new Set([
 ]);
 const GLOBAL_MUTATION_TOOLS = /* @__PURE__ */ new Set(["category_add", "category_edit", "category_rm", "global_fallback", "profile_create", "profile_edit", "profile_retire", "profile_repoint", "profile_promote"]);
 const mutationTails = /* @__PURE__ */ new Map();
-function toolMutates(name, args) {
-  if (MUTATING_TOOLS.has(String(name))) return true;
-  if (name === "new_board_profile") return args.profile !== void 0;
-  if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.worktreeRecoveryRetentionMaxPerAgent !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
-  return false;
+const CONDITIONAL_MUTATION_FIELDS = {
+  verdict: ["correct"],
+  new_board_profile: ["profile"],
+  global_fallback: ["model", "effort"],
+  board_config: [
+    "name",
+    "alwaysInScope",
+    "deniedTools",
+    "readOnlyDeniedTools",
+    "generatedPairs",
+    "integrationMode",
+    "integrationBranch",
+    "worktreeIsolation",
+    "worktreeBase",
+    "notIntegratedSalvageAgeHours",
+    "worktreeRecoveryRetentionAgeHours",
+    "autoApproveTestScope",
+    "autoApproveScope",
+    "worktreeSetup",
+    "worktreeDependencyPaths"
+  ]
+};
+const NULL_NONMUTATING_BOARD_FIELDS = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationBranch"]);
+function toolMutates(name, args = {}) {
+  if (MUTATING_TOOLS.has(name)) return true;
+  const fields = CONDITIONAL_MUTATION_FIELDS[name];
+  if (!fields) return false;
+  return fields.some((field) => {
+    if (args[field] === void 0) return false;
+    if (name === "board_config" && args[field] === null) return !NULL_NONMUTATING_BOARD_FIELDS.has(field);
+    return true;
+  });
 }
 function mutationQueueKey(name, args) {
   if (name === "new_board_profile") return "<global>";
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return "<global>";
-  return resolveProject(args.project).slug;
+  const board = resolveProject(args.project).slug;
+  return name === "commit" ? `${board}\0commit\0${args.ref}` : board;
 }
 async function enqueueMutation(board, operation) {
   const previous = mutationTails.get(board) || Promise.resolve();
@@ -237,8 +221,15 @@ function assertMutationFreshness(projectArg) {
   });
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
+function groomCloseArgs(tool, args) {
+  if (tool.name !== "groomClose" || String(args.by || "").trim()) return args;
+  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+  return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
+}
 async function runTool(tool, rawArgs) {
-  const { args, aliases } = validateToolArguments(tool, rawArgs);
+  const validated = validateToolArguments(tool, rawArgs);
+  const args = groomCloseArgs(tool, validated.args);
+  const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
     return acknowledgeAliases(tool.name === "context_page" ? output : boundedReadPayload(tool.name, output), aliases);
@@ -248,17 +239,17 @@ async function runTool(tool, rawArgs) {
   return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
+const DELIVERY_REVISION_CONTRACT = "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.";
+const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
-    limit: "UTF-8 bytes.",
-    expectedRevision: "Revision."
+    limit: "UTF-8 bytes."
   },
   add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: "Operator-only." },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
-    full: "Whole bodies.",
     since: "Comment id or ISO timestamp."
   },
   list: {
@@ -270,30 +261,37 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     outputTail: "Required blocker/contradiction output."
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
-  category_edit: { fallbackModel: "null clears fallback." },
+  category_edit: { fallbackModel: "null clears." },
   dispatch: {
-    sharedTree: "Tree.",
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
-    recoveryEvidence: "unbound or expired bound",
-    worktree: "Checkout."
+    recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."
   },
-  integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
+  integrate: {
+    deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT
+  },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
-    deliveryInteractionCommit: "Reviewed descendant, submitted paths only."
+    deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+    recoveryEvidence: "Unclaimed: preparing session retires now; others past deadline; CLI too."
   },
   verdict: {
-    outcome: "Candidate, not reviewer prose."
+    outcome: "Candidate, not reviewer prose.",
+    correct: "Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision."
   }
 };
 function toolDescriptor(tool) {
   const inputSchema = compactSchema(tool.inputSchema);
-  for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
-    inputSchema.properties[property].description = description;
+  for (const [property, description2] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
+    inputSchema.properties[property].description = description2;
   }
+  const description = Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description);
   return {
     name: tool.name,
-    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description),
+    ...description ? { description } : {},
     inputSchema
   };
 }
@@ -358,9 +356,6 @@ module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
   boardMcpSessionId,
-  writeBoardMcpLiveness,
-  clearBoardMcpLiveness,
-  isBoardMcpLive,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,

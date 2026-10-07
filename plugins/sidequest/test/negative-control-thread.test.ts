@@ -101,3 +101,30 @@ test('negative controls collect claim-holder test markers across the whole threa
     source: 'mcp',
   }).ok, true);
 });
+
+test('negative controls ignore regex .test() calls with a string literal argument', () => {
+  const by = 'sq-473-regex-test-call';
+  const ticket = createClaimedMixedChangeTicket(by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = 3;\n');
+  const realTestName = 'the only declared test in this fixture';
+  const definition = 'test';
+  const regexCall = 'UNPINNED_ARGV.test';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), [
+    `${definition}('${realTestName}', () => {`,
+    `  ${regexCall}(\`runInherit("npx", "x")\`);`,
+    `  ${regexCall}("not a declaration");`,
+    '});',
+    '',
+  ].join('\n'));
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete] passed: fixture verification passed.',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(realTestName));
+  assert.doesNotMatch(refusal.message, /runInherit/);
+  assert.doesNotMatch(refusal.message, /not a declaration/);
+});

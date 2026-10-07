@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFileText } from './git-process.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { hasGlob, isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
@@ -7,6 +7,7 @@ export { isInScope, scopedPaths } from './scope-match.js';
 
 type UnknownRecord = Record<string, unknown>;
 type GitResult = { ok: true; value: string } | { ok: false; message: string };
+type NamedRef = { name: string; commit: string };
 
 function isRecord(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === 'object';
@@ -303,6 +304,9 @@ export function foreignReleaseFragmentRefusalMessage(operation: string, ticketRe
   return `${operation}: refused ${ticketRef}; only ${ownFragment} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(', ')}.`;
 }
 
+// The write scope an allowUnscoped dispatch binds (GH-341): the glob every path matches.
+export const WHOLE_TREE_SCOPE = '**';
+
 export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[] {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
@@ -452,7 +456,7 @@ export function rangePaths(cwd: string, commits: readonly string[]): string[] {
   return paths;
 }
 
-function validatePaths(files: unknown, paths: string[]) {
+export function validatePaths(files: unknown, paths: string[]) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope', paths: [] as string[], outside: [] as string[] };
   const outside = paths.filter((file) => !isInScope(file, scopes));
@@ -486,6 +490,32 @@ function isAncestor(cwd: string, ancestor: string, descendant: string): boolean 
   } catch {
     return false;
   }
+}
+
+// The recorded dispatch baseline bounds the range while it is on the tip. The merge-base only
+// wins when it sits between them, meaning upstream work was synced into the candidate after
+// dispatch; a merge-base below the baseline (a stale remote, a cherry-picked sibling) or equal
+// to the tip (a shared tree that advanced the branch) says nothing about this ticket (GH-139, GH-195).
+function recordedBaselineBoundsRange(cwd: string, baseline: string, mergeBase: string, tip: string): boolean {
+  if (!isAncestor(cwd, baseline, tip)) return false;
+  return mergeBase === tip || isAncestor(cwd, mergeBase, baseline);
+}
+
+// A path whose bytes at the candidate already equal the integration branch's delivers nothing:
+// it is upstream movement the candidate's history carries, such as a sibling integrated by
+// cherry-pick (GH-139). A candidate already on the branch equals it everywhere, so nothing folds.
+export function candidatePaths(cwd: string, changedPaths: readonly string[], commit: string, upstreamCommit: string): string[] {
+  if (isAncestor(cwd, commit, upstreamCommit)) return [...changedPaths];
+  const differing = gitResult(cwd, ['diff', '--name-only', '--no-renames', '-z', upstreamCommit, commit]);
+  if (!differing.ok) return [...changedPaths];
+  const differingKeys = new Set(differing.value.split('\0').filter(Boolean).map(scopeKey));
+  return changedPaths.filter((file) => differingKeys.has(scopeKey(file)));
+}
+
+function rangeCandidatePaths(cwd: string, range: { ok: boolean; commit?: unknown; upstreamCommit?: unknown }, changedPaths: string[]): string[] {
+  return range.ok && typeof range.commit === 'string' && typeof range.upstreamCommit === 'string'
+    ? candidatePaths(cwd, changedPaths, range.commit, range.upstreamCommit)
+    : changedPaths;
 }
 
 // Which ref proves the candidate landed, and at what commit. Callers record the
@@ -565,30 +595,80 @@ export function unpublishedReleaseTip(cwd: string, commit: unknown, remoteBranch
   return { commit: tip.value, tags: [...marketplace, ...plugins].sort() };
 }
 
-export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown, options?: { noOverwrite?: boolean }) {
+const EMPTY_OBJECT_ID = '0000000000000000000000000000000000000000';
+
+function commitMatchesRevision(commit: string, revision: unknown): boolean {
+  const text = String(revision || '').trim().toLowerCase();
+  return text.length >= 7 && commit.startsWith(text);
+}
+
+export function recordsCommit(recorded: readonly unknown[], commit: string): boolean {
+  return recorded.some((revision) => commitMatchesRevision(commit, revision));
+}
+
+// No ref yet counts as owned: creating it names the empty id, so a racing writer still loses.
+function ownsRefTip(current: string, replaces: readonly unknown[]): boolean {
+  return current === EMPTY_OBJECT_ID || recordsCommit(replaces, current);
+}
+
+export function foreignRefMessage(ref: string, commit: string): string {
+  const archived = ref.replace('refs/sidequest/', 'refs/sidequest-archived/foreign/');
+  return `${ref} already points to ${commit}, a commit this ticket never recorded, so it belongs to another board or ticket on this repository. `
+    + 'Archiving that board moves its candidate refs to refs/sidequest-archived/<board>/; otherwise move this one aside with '
+    + `\`git update-ref ${archived} ${commit} && git update-ref -d ${ref} ${commit}\`, then retry.`;
+}
+
+// A board for the same repository numbers its tickets from SQ-1 again, so an existing
+// refs/sidequest/<ref> may be another board's candidate (GitHub #378). Only a tip this
+// ticket recorded may be replaced, and the update names that tip so a concurrent move loses.
+function compareAndSetRef(root: string, ref: string, tip: string, replaces: readonly unknown[]) {
+  const existing = resolvedCommit(root, ref);
+  const current = existing.ok ? existing.value : EMPTY_OBJECT_ID;
+  const preserved = { ok: true as const, commit: tip, gitRef: ref };
+  if (current === tip) return preserved;
+  if (!ownsRefTip(current, replaces)) return { ok: false as const, reason: 'git_ref_collision', message: foreignRefMessage(ref, current) };
+  const updated = gitResult(root, ['update-ref', ref, tip, current]);
+  return updated.ok ? preserved : { ok: false as const, reason: 'git_ref_collision', message: updated.message };
+}
+
+function refTarget(root: string, commit: unknown, ref: string) {
+  const tip = resolvedCommit(root, commit);
+  if (!tip.ok) return { ok: false as const, reason: 'missing_commit', message: tip.message };
+  const validRef = gitResult(root, ['check-ref-format', ref]);
+  return validRef.ok ? tip : { ok: false as const, reason: 'invalid_git_ref', message: validRef.message };
+}
+
+// `replaces` lists the revisions the ticket recorded; any other existing tip is refused.
+export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown, replaces: readonly unknown[] = []) {
   const ref = String(gitRef || '').trim();
   if (!ref) return { ok: false as const, reason: 'missing_git_ref' };
   try {
     const root = repoRoot(cwd);
-    const tip = resolvedCommit(root, commit);
-    if (!tip.ok) return { ok: false as const, reason: 'missing_commit', message: tip.message };
-    const validRef = gitResult(root, ['check-ref-format', ref]);
-    if (!validRef.ok) return { ok: false as const, reason: 'invalid_git_ref', message: validRef.message };
-    if (options?.noOverwrite) {
-      const existing = resolvedCommit(root, ref);
-      if (existing.ok) {
-        if (existing.value === tip.value) return { ok: true as const, commit: tip.value, gitRef: ref };
-        return { ok: false as const, reason: 'git_ref_collision', message: `${ref} already points to ${existing.value}` };
-      }
-      const emptyRef = '0000000000000000000000000000000000000000';
-      const created = gitResult(root, ['update-ref', ref, tip.value, emptyRef]);
-      if (!created.ok) return { ok: false as const, reason: 'git_ref_collision', message: created.message };
-      return { ok: true as const, commit: tip.value, gitRef: ref };
-    }
-    git(root, ['update-ref', ref, tip.value]);
-    return { ok: true as const, commit: tip.value, gitRef: ref };
+    const target = refTarget(root, commit, ref);
+    return target.ok ? compareAndSetRef(root, ref, target.value, replaces) : target;
   } catch (error) {
     return { ok: false as const, reason: 'git_error', message: errorMessage(error) };
+  }
+}
+
+export function listRefs(cwd: string, prefix: string): NamedRef[] {
+  const listed = gitResult(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', prefix]);
+  if (!listed.ok) return [];
+  return listed.value.split(/\r?\n/)
+    .map((line) => line.trim().split(' '))
+    .filter((fields) => fields.length === 2)
+    .map(([name, commit]) => ({ name: name!, commit: commit! }));
+}
+
+// One update-ref transaction: every move lands or none does, and each side names the tip
+// that was read, so a ref that changed or a target that appeared meanwhile refuses the batch.
+export function moveRefs(cwd: string, moves: ReadonlyArray<{ from: string; to: string; commit: string }>): GitResult {
+  const script = moves.map((move) => `create ${move.to} ${move.commit}\ndelete ${move.from} ${move.commit}\n`).join('');
+  try {
+    execFileSync('git', ['update-ref', '--stdin'], { cwd, encoding: 'utf8', input: script, windowsHide: true });
+    return { ok: true, value: '' };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error) };
   }
 }
 
@@ -685,15 +765,11 @@ export function submissionRange(cwd: string, options: unknown) {
     }
   }
 
-  let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && dispatchBase) {
-    const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
-    const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
-    const dispatchBaseIsIntegrated = dispatchBase.ok && integratedFrom(dispatchBase.value) !== null;
-    if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
-      effectiveBase = dispatchBase.value;
-    }
-  }
+  const recordedBase = !requestedBase && dispatchBase?.ok && recordedBaselineBoundsRange(cwd, dispatchBase.value, mergeBase.value, tip.value)
+    ? dispatchBase.value
+    : null;
+  const pinnedBase = requestedBase ? requestedBase.value : recordedBase;
+  let effectiveBase = pinnedBase ?? mergeBase.value;
   if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = new Set<string>();
     for (const name of opts.baseCandidates) {
@@ -729,15 +805,17 @@ export function submissionRange(cwd: string, options: unknown) {
     const commitList = gitResult(cwd, ['rev-list', '--reverse', `${effectiveBase}..${tip.value}`]);
     if (!commitList.ok) return { ok: false, reason: 'git_error', message: commitList.message };
     commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
+    // A tip that is still the pinned base did no work. For a recorded dispatch baseline,
+    // walking to its parent would submit the pre-dispatch commit's own paths (GH-195).
+    if (!commits.length && pinnedBase === tip.value) {
+      noOp = true;
+    }
     // An empty range does not mean nothing was done — it means the tip is not
     // AHEAD of the integration branch, which is what happens whenever the scoped
     // commit IS the branch tip: a greenfield repo whose first commit is the board
     // commit, or a shared-tree dispatch whose commit advanced main. Merge-base and
     // tip are then the same commit. Recover the way the orchestrator did by hand,
     // submitting against the tip's own parent (SQ-923).
-    if (!commits.length && requestedBase && requestedBase.value === tip.value) {
-      noOp = true;
-    }
     if (!commits.length && !noOp && !requestedBase && effectiveBase === tip.value) {
       const tipParents = parentCommits(cwd, tip.value);
       rootCommit = tipParents.length === 0;
@@ -764,8 +842,15 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 }
 
-export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown) {
+export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown, options?: unknown) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const opts = isRecord(options) ? options : {};
+  // The recorded expected upstream still has to be reachable before an automatic
+  // merge runs against it. A caller recording a delivery that already landed by
+  // hand proves its landing from the pinned candidate's own content instead, and
+  // holding it to this assertion refused the very recovery the divergence refusal
+  // prescribes (SQ-23). Every other stored-range invariant still runs.
+  const allowDivergedExpectedUpstream = opts.allowDivergedExpectedUpstream === true;
   // One derivation for every caller, including the override-less publish queue: the
   // submission itself records the mode, branch and upstream the dispatch froze.
   const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
@@ -774,7 +859,7 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
-    upstreamCommit: submission.upstreamCommit,
+    ...(allowDivergedExpectedUpstream ? {} : { upstreamCommit: submission.upstreamCommit }),
     integrationTarget: submission,
     integrationBranch: integrationRefs,
     base: submission.base,
@@ -818,7 +903,7 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     });
   }
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
-  const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
+  const scopeValidation = validatePaths(submissionScope, rangeCandidatePaths(cwd, range, rangeChangedPaths));
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, {
     ok: true,
@@ -833,7 +918,35 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
   });
 }
 
-export function commitScoped(cwd: string, message: unknown, files: unknown) {
+// A commit hook can stage paths the pathspec never named (GH-229). A refusal that leaves the commit
+// on HEAD reads as "nothing committed", so an out-of-scope commit is undone in the same call;
+// --soft keeps the declared paths staged the way this call staged them.
+function validateCommitOrUndo(root: string, commit: string, scopes: readonly string[], previousHead: GitResult) {
+  const validation = validateCommitScope(root, commit, scopes);
+  if (validation.reason !== 'outside_scope') return validation;
+  const undone = previousHead.ok
+    ? gitResult(root, ['reset', '--soft', previousHead.value])
+    : gitResult(root, ['update-ref', '-d', 'HEAD']);
+  return { ...validation, rolledBack: undone.ok, message: undone.ok ? undefined : undone.message };
+}
+
+async function commitWithinScope(root: string, message: unknown, scopes: readonly string[], stageableScopes: readonly string[], committableScopes: readonly string[]) {
+  if (stageableScopes.length) await execFileText('git', ['add', '--all', '--', ...stageableScopes], { cwd: root });
+  const previousHead = gitResult(root, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const commitArgs = ['commit', '--only'];
+  if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
+  await execFileText('git', [...commitArgs, '-m', String(message || ''), '--', ...committableScopes], { cwd: root });
+  const commit = git(root, ['rev-parse', 'HEAD']).trim();
+  return Object.assign({ commit }, validateCommitOrUndo(root, commit, scopes, previousHead));
+}
+
+export function outsideScopeCommitState(result: { commit?: string; rolledBack?: boolean; message?: string }): string {
+  return result.rolledBack
+    ? 'Nothing was committed: the commit was undone, HEAD is back where it was and the declared paths stay staged. A commit hook usually stages the extra paths.'
+    : `Commit ${result.commit} is still on HEAD because undoing it failed: ${result.message}.`;
+}
+
+export async function commitScoped(cwd: string, message: unknown, files: unknown) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope' };
   try {
@@ -849,18 +962,12 @@ export function commitScoped(cwd: string, message: unknown, files: unknown) {
     }
     const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
     const directScopes = commitScopes.filter((scope) => !hasGlob(scope));
-    const stageableScopes = [...new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const stageableScopes = stageableScopedPaths(root, [...new Set([...directScopes, ...concreteGlobPaths])]);
     const committableScopes = [...new Set([
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
     ])];
-    if (stageableScopes.length) git(root, ['add', '--all', '--', ...stageableScopes]);
-    const commitArgs = ['commit', '--only'];
-    if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
-    git(root, [...commitArgs, '-m', String(message || ''), '--', ...committableScopes]);
-    const commit = git(root, ['rev-parse', 'HEAD']).trim();
-    const validation = validateCommitScope(root, commit, scopes);
-    return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
+    return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
   } catch (error) {
     return { ok: false, reason: 'git_error', message: errorMessage(error) };
   }

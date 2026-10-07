@@ -33,6 +33,7 @@ __export(discovery_exports, {
   catalogStateFingerprint: () => catalogStateFingerprint,
   configuredExternalModelProvider: () => configuredExternalModelProvider,
   discoverExternalModels: () => discoverExternalModels,
+  gatewayCatalogRefreshFailure: () => gatewayCatalogRefreshFailure,
   providerReadiness: () => providerReadiness
 });
 module.exports = __toCommonJS(discovery_exports);
@@ -109,32 +110,43 @@ function newestGatewayCatalogCommand() {
   }
   return newest?.command ?? null;
 }
-function gatewayRefreshSucceeded(command) {
-  try {
-    return (0, import_node_child_process.spawnSync)(process.execPath, [command, "catalog", "--refresh", "--json"], {
-      encoding: "utf8",
-      timeout: 5e3,
-      windowsHide: true
-    }).status === 0;
-  } catch {
-    return false;
-  }
+function gatewayRefreshFailure(command) {
+  const result = (0, import_node_child_process.spawnSync)(process.execPath, [command, "catalog", "--refresh", "--json"], {
+    encoding: "utf8",
+    timeout: 5e3,
+    windowsHide: true
+  });
+  if (result.status === 0) return null;
+  const reason = String(result.stderr || result.error?.message || "").trim().split(/\r?\n/).pop();
+  return reason || `the refresh command exited with status ${result.status}`;
 }
 const CATALOG_STALE_MS = 5 * 60 * 1e3;
 const REFRESH_RETRY_MS = 30 * 1e3;
 const gatewayRefreshAttempts = /* @__PURE__ */ new Map();
+function gatewayRefreshDue(attempt) {
+  if (!attempt) return true;
+  return Date.now() - attempt.at > (attempt.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS);
+}
+function runGatewayRefresh(catalogPath) {
+  const command = newestGatewayCatalogCommand();
+  const failure = command === null ? "no installed model-gateway command was found" : gatewayRefreshFailure(command);
+  const written = failure === null ? readCatalogSafe(catalogPath) : null;
+  gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: refreshedCatalogStaysCurrent(written), failure });
+  return written;
+}
 function refreshGatewayCatalog(catalogPath) {
   if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
-  const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
-  if (!attempt || Date.now() - attempt.at > window) {
-    const command = newestGatewayCatalogCommand();
-    const written = command !== null && gatewayRefreshSucceeded(command) ? readCatalogSafe(catalogPath) : null;
-    gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
-    return isRecord(written) ? written : null;
-  }
-  const catalog = attempt.refreshed ? readCatalogSafe(catalogPath) : null;
+  let catalog = null;
+  if (gatewayRefreshDue(attempt)) catalog = runGatewayRefresh(catalogPath);
+  else if (attempt?.refreshed) catalog = readCatalogSafe(catalogPath);
   return isRecord(catalog) ? catalog : null;
+}
+function refreshedCatalogStaysCurrent(written) {
+  return catalogWithinFreshnessWindow(written) && catalogProviderReadiness(written, "codex")?.ready === true;
+}
+function gatewayCatalogRefreshFailure() {
+  return gatewayRefreshAttempts.get(import_node_path.default.join(claudeHome(), "model-gateway", "catalog.json"))?.failure ?? null;
 }
 function catalogWithinFreshnessWindow(data) {
   if (!isRecord(data) || typeof data.updatedAt !== "string") return false;
@@ -193,17 +205,28 @@ function currentCatalog(catalogPath, schemas) {
   if (usable || !isRecord(storedCatalog)) return usable;
   return usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
 }
+function catalogText(value, fallback = "") {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || fallback;
+}
+function catalogProvider(model, schema) {
+  if (schema < 4) return "codex";
+  const provider = model.provider;
+  return typeof provider === "string" && provider === provider.toLowerCase() && SLUG_RE.test(provider) ? provider : "";
+}
+function catalogContextWindow(model) {
+  const contextWindow = model.contextWindow;
+  if (typeof contextWindow !== "number" || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return {};
+  const contextWindowNote = catalogText(model.contextWindowNote);
+  return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
+}
 function validateEntry(raw, source, schema) {
-  if (!isRecord(raw)) return null;
-  const model = raw;
-  const slug = typeof model.slug === "string" ? model.slug.trim().toLowerCase() : "";
-  if (!SLUG_RE.test(slug)) return null;
-  const id = typeof model.id === "string" ? model.id.trim() : "";
-  if (!id) return null;
-  const provider = schema >= 4 ? typeof model.provider === "string" && model.provider === model.provider.toLowerCase() && SLUG_RE.test(model.provider) ? model.provider : "" : "codex";
-  if (!provider) return null;
-  const label = typeof model.label === "string" && model.label.trim() ? model.label.trim() : slug;
-  return { slug, id, label, provider, source };
+  const model = isRecord(raw) ? raw : {};
+  const slug = catalogText(model.slug).toLowerCase();
+  const id = catalogText(model.id);
+  const provider = catalogProvider(model, schema);
+  if (!SLUG_RE.test(slug) || !id || !provider) return null;
+  return { slug, id, label: catalogText(model.label, slug), provider, source, ...catalogContextWindow(model) };
 }
 function configuredExternalModelProvider(slug) {
   const normalizedSlug = slug.trim().toLowerCase();
@@ -246,5 +269,6 @@ function discoverExternalModels() {
   catalogStateFingerprint,
   configuredExternalModelProvider,
   discoverExternalModels,
+  gatewayCatalogRefreshFailure,
   providerReadiness
 });
