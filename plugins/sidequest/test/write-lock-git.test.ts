@@ -57,7 +57,7 @@ function observeGit(file: unknown, args: unknown): void {
   const gitArgs = Array.isArray(args) ? args.map(String) : [];
   observed.gitCalls += 1;
   if (!writeLockAvailable()) observed.gitUnderWriteLock.push(gitArgs.join(' '));
-  if (gitHook) gitHook(gitArgs);
+  gitHook?.(gitArgs);
 }
 
 const realExecFileSync = childProcess.execFileSync;
@@ -227,7 +227,58 @@ test('a candidate committed between the reclaim decision and the removal keeps t
     assert.equal(removal.reason, 'candidate_commit');
     assert.equal(fs.existsSync(retired.worktree), true, 'the checkout holding the late candidate stays');
     assert.equal(git(PROJECT, ['rev-parse', `refs/heads/${retired.branch}`]), git(retired.worktree, ['rev-parse', 'HEAD']), 'its branch still retains the candidate');
+    assert.equal(fs.existsSync(checkoutIndexLock(retired.worktree)), false, 'a refusal releases the index lock it took');
   } finally {
+    sidequest.releaseTicket(slug, retired.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(retired.worktree, retired.branch);
+  }
+});
+
+function checkoutIndexLock(worktree: string): string {
+  return path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir']), 'index.lock');
+}
+
+// SQ-3463: the reviewer's interleaving. The commit is attempted after the final HEAD and branch reads and the
+// dependency cleanup, just before `git worktree remove` runs.
+test('a commit attempted between the final reads and the removal is refused by the held index lock, so nothing is lost', () => {
+  const retired = retiredCheckout('late-commit');
+  const lateCommits: { status: number | null; stderr: string }[] = [];
+  gitHook = (args) => {
+    if (args[0] !== 'worktree' || args[1] !== 'remove') return;
+    lateCommits.push(realSpawnSync('git', ['-c', 'user.name=Sidequest Test', '-c', 'user.email=sidequest-test@example.invalid', 'commit', '--allow-empty', '-m', 'late'], { cwd: retired.worktree, encoding: 'utf8', windowsHide: true }));
+  };
+  try {
+    const decision = worktrees.unclaimedDispatchWorktreeReclaim(PROJECT, sidequest.getTicket(slug, retired.ref).dispatch);
+    assert.equal(typeof decision.reclaim, 'function', JSON.stringify(decision));
+    const removal = decision.reclaim();
+    assert.equal(lateCommits.length, 1, 'the late commit was attempted just before the removal');
+    assert.notEqual(lateCommits[0]!.status, 0, 'the late commit could not land while the reclaim held the index lock');
+    assert.match(lateCommits[0]!.stderr, /index\.lock/);
+    assert.equal(removal.reclaimed, true, JSON.stringify(removal));
+    assert.equal(fs.existsSync(retired.worktree), false);
+  } finally {
+    gitHook = null;
+    sidequest.releaseTicket(slug, retired.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(retired.worktree, retired.branch);
+  }
+});
+
+test('a reclaim that finds the index lock already held keeps the checkout, the branch and the foreign lock', () => {
+  const retired = retiredCheckout('held-index-lock');
+  const indexLock = checkoutIndexLock(retired.worktree);
+  try {
+    const decision = worktrees.unclaimedDispatchWorktreeReclaim(PROJECT, sidequest.getTicket(slug, retired.ref).dispatch);
+    assert.equal(typeof decision.reclaim, 'function', JSON.stringify(decision));
+    fs.writeFileSync(indexLock, '');
+    const removal = decision.reclaim();
+    assert.equal(removal.reclaimed, false);
+    assert.equal(removal.reason, 'commit_in_progress');
+    assert.match(removal.message, /immutable recovery fact: .*index\.lock exists/);
+    assert.equal(fs.existsSync(retired.worktree), true, 'the checkout stays');
+    assert.equal(branchExists(retired.branch), true, 'the branch stays');
+    assert.equal(fs.existsSync(indexLock), true, 'the lock another Git command holds is left alone');
+  } finally {
+    fs.rmSync(indexLock, { force: true });
     sidequest.releaseTicket(slug, retired.ref, 'cleanup', { status: 'todo', source: 'test', force: true });
     removeWorktreeBranch(retired.worktree, retired.branch);
   }
