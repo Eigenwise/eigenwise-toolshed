@@ -273,10 +273,10 @@ function siblingIdentities(descriptors, parent) {
 // V8 names an inline callback "" and the build ships no source map, so an unnamed function is
 // found by position: its twin in each output has the same identity, trusted only where every
 // function under the same parent lines up, since anything looser pins coverage on a neighbour.
-function anonymousRecords(descriptor, outputs) {
-  const sourceSiblings = siblingIdentities(outputs[0].descriptors, descriptor.parent);
+function anonymousRecords(descriptor, source, builtOutputs) {
+  const sourceSiblings = siblingIdentities(source.descriptors, descriptor.parent);
   const records = [];
-  for (const output of outputs) {
+  for (const output of builtOutputs) {
     const outputSiblings = siblingIdentities(output.descriptors, descriptor.parent);
     if (!outputSiblings) continue;
     if (outputSiblings !== sourceSiblings) return { unverified: `the functions beside it in ${output.relativePath} do not line up with the source, so its coverage cannot be paired` };
@@ -286,11 +286,27 @@ function anonymousRecords(descriptor, outputs) {
   return { records };
 }
 
+// A record on the source itself carries source offsets, so it is paired by position: V8 names
+// most callbacks "" and a constructor after its class. A remapped start can still land past the
+// AST's (esbuild drops a lone parameter's parentheses; tsx's __name wrapper leaves a zero-parameter
+// arrow no segment of its own), so a record belongs to the innermost function holding its start,
+// and the end, which maps cleanly, picks the function's own record over a nested class initializer.
+function ownRecords(descriptor, source) {
+  const nested = source.descriptors.filter((candidate) => candidate.parent === descriptor.identity);
+  const holds = (span, offset) => span.start <= offset && offset < span.end;
+  const startsHere = ({ ranges: [range] }) => holds(descriptor, range.startOffset) && !nested.some((child) => holds(child, range.startOffset));
+  const startedHere = source.records.filter(startsHere);
+  const endDistance = ({ ranges: [range] }) => Math.abs(range.endOffset - descriptor.end);
+  const nearest = Math.min(...startedHere.map(endDistance));
+  return startedHere.filter((record) => endDistance(record) === nearest);
+}
+
 // outputs[0] is the source itself; the rest are its build outputs.
 export function functionCoverage(descriptor, outputs) {
-  const paired = descriptor.name === '<anonymous>' ? anonymousRecords(descriptor, outputs) : namedRecords(descriptor, outputs);
+  const [source, ...builtOutputs] = outputs;
+  const paired = descriptor.name === '<anonymous>' ? anonymousRecords(descriptor, source, builtOutputs) : namedRecords(descriptor, builtOutputs);
   if (paired.unverified) return paired;
-  const intervals = paired.records.flatMap((record) => projectIntervals(record.ranges, descriptor));
+  const intervals = [...ownRecords(descriptor, source), ...paired.records].flatMap((record) => projectIntervals(record.ranges, descriptor));
   const coveredLength = mergeIntervals(intervals).reduce((total, [start, end]) => total + end - start, 0);
   return { coverage: Math.min(1, coveredLength / (descriptor.end - descriptor.start)) };
 }
