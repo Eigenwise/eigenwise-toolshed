@@ -81,16 +81,31 @@ function isDecision(node) {
   return DECISION_KINDS.has(node.kind) || (ast.isBinaryExpression(node) && SHORT_CIRCUIT_OPERATORS.has(node.operatorToken.kind));
 }
 
-// A nested function is discovered as its own descriptor, so its decisions stay out of the enclosing count.
+// A nested function is discovered as its own descriptor, so both its decisions and its text stay
+// out of the enclosing function: the same walk feeds the complexity count and the fingerprint.
+function forEachOwnNode(functionNode, onOwnNode, onNestedFunction) {
+  function walk(node) {
+    if (ast.isFunctionLikeDeclaration(node)) return onNestedFunction(node);
+    onOwnNode(node);
+    node.forEachChild(walk);
+  }
+  functionNode.forEachChild(walk);
+}
+
 export function cyclomaticComplexity(functionNode) {
   let decisions = 0;
-  function countDecisions(node) {
-    if (ast.isFunctionLikeDeclaration(node)) return;
-    if (isDecision(node)) decisions += 1;
-    node.forEachChild(countDecisions);
-  }
-  functionNode.forEachChild(countDecisions);
+  forEachOwnNode(functionNode, (node) => { if (isDecision(node)) decisions += 1; }, () => {});
   return 1 + decisions;
+}
+
+export function ownText(functionNode, text) {
+  const pieces = [];
+  let cursor = functionNode.getStart();
+  forEachOwnNode(functionNode, () => {}, (nested) => {
+    pieces.push(text.slice(cursor, nested.getStart()));
+    cursor = nested.end;
+  });
+  return pieces.join('') + text.slice(cursor, functionNode.end);
 }
 
 export function parserTransport(requested = process.env.CRAP_PARSER_TRANSPORT || 'sync') {
@@ -122,7 +137,7 @@ export async function collectFunctions(text, fileName, { transport } = {}) {
         const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
         const start = node.getStart();
         const end = node.end;
-        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
+        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text).replace(/\s+/g, ' ')).digest('hex') });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }

@@ -33,6 +33,19 @@ test('collects stable identities and source fingerprints', async () => {
   assert.ok(functions.every((entry) => entry.fingerprint.length === 64));
 });
 
+const workerBefore = 'function runWorker(items) {\n  const forward = (item) => item.id;\n  return items.map(forward);\n}\n';
+
+async function changedFunctionNames(before, after) {
+  const baseline = new Map((await collectFunctions(before, 'worker.js')).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
+  const metrics = (await collectFunctions(after, 'worker.js')).map((descriptor) => ({ ...descriptor, relativePath: 'worker.js' }));
+  return (await changedMetricsAgainstBase(metrics, ['worker.js'], 'base-sha', async () => baseline)).map((metric) => metric.name);
+}
+
+test('an enclosing function is fingerprinted over its own text, so editing a nested arrow touches only the arrow', async () => {
+  assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('item.id', 'item.id ?? item.ref')), ['forward']);
+  assert.deepEqual(await changedFunctionNames(workerBefore, workerBefore.replace('items.map(forward)', 'items.flatMap(forward)')), ['runWorker']);
+});
+
 test('strictly fails a new function with a CRAP score of six', async () => {
   const failures = await compareAgainstBase(
     [metric({ complexity: 6, coverage: 1, name: 'run' })],
