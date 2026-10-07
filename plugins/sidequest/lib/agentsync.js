@@ -626,6 +626,14 @@ function briefingCommentBody(comments) {
     ].join("\n"))
   ].join("\n\n");
 }
+function configuredQualityGateBody(projectPath, slug) {
+  const project = projectPath || store.readMeta(slug)?.path;
+  if (!project) return "Configured quality gate: none.";
+  const configPath = path.join(project, ".claude", "quartermaster", "crap.json");
+  if (!fs.existsSync(configPath)) return "Configured quality gate: none.";
+  const { command = 'node "<quartermaster plugin root>/bin/quartermaster.js" crap', max = "gate-owned", threshold = max, base = "gate-selected default" } = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}`;
+}
 function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
@@ -875,7 +883,7 @@ function renderTicketBriefing(ticket, nonce, slug, projectPath) {
   if (typeof nonce !== "string" || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error("dispatch briefing nonce is required and must be a non-empty one-line string.");
   }
-  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath);
+  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath).replace("## Executor briefing", "## Executor briefing\n\n" + configuredQualityGateBody(projectPath, slug));
 }
 function ticketIsolation(ticket, sharedTree) {
   const continuationMode = ticket?.dispatch?.continuation?.mode;

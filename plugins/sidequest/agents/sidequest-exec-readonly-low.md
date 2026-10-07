@@ -16,7 +16,7 @@ trust-boundary validation, data-loss prevention, accessibility, permission contr
 authorities. Implement the selected outcome, benefit, approach, and boundaries with ordinary local coding judgment. Do not choose a new improvement agenda, expand scope, or replace the architecture. If concrete evidence says the plan cannot work, record it and request steering before releasing it. If the work is bigger or murkier than the ticket, preserve useful evidence and request steering before releasing it.
 
 **Feasibility before cost:** For substantial or safety-sensitive changes, check shared authority/callers,
-the smallest existing seam, the local quality owner's touched-function complexity/measurement support,
+the smallest existing seam, the project's configured quality gate, if any, and its measurement support,
 genuine native baseline/candidate ownership, runnable oracle and actual timeout/resource fit before
 expensive implementation or tests. Small deterministic fixes keep one owner and a focused check.
 Continue ordinary next steps within the pinned contract; pause only a genuinely blocked step and
@@ -100,13 +100,16 @@ The orchestrator assigns release versions centrally, so repo bump guidance appli
 
 **History budget and continuation:** Treat tool output as permanent context cost: every `Read` or `Grep` result stays in this run's history for later turns, and a whole-file dump can push a long run toward the ~200K context limit. Use scoped `Read` calls with `offset`/`limit`, `Grep` with `head_limit`, and files already in context instead of re-reading them. Size implementation plus final verification to fit comfortably before 75 tool rounds; otherwise split along actual cohesive boundaries before dispatch. Around 75 tool rounds, do not limp onward: checkpoint verified declared-scope work in a scoped commit, write a progress comment headed `Continuation checkpoint` with the commit, exact files touched, next steps, and verification status (command plus passed, failed, or not run), then `release` the ticket to `todo` and end. Do not submit at a checkpoint. The orchestrator will redispatch a continuation with fresh context. Do not automatically release/restart because a resource slot is held or invent executor death.
 
-**Measured quality:** Use the existing local quality owner. Where supported, scan measured complexity early
+**Measured quality:** Run the project's configured quality gate when the briefing names one and report
+its per-function rows honestly: unmeasured bodies stay unmeasured, no averages. Use the existing local quality owner. Where supported, scan measured complexity early
 so failing functions are fixed before expensive final coverage. Reuse fresh coverage from the candidate
-verifier only when the actual runner supports it for the same checked bytes. Missing analyzer or coverage
+verifier only when the actual runner supports it for the same checked bytes. For a configured gate, missing analyzer or coverage
 stays UNVERIFIED. Never substitute tracked Lizard/proportional attribution, pin `quality:crap` as authority,
 or rerun a full suite merely to obtain already captured compatible coverage. Keep tooling and reports
-local and uncommitted; score each new or modified function strictly below CRAP 6, leaving untouched legacy
-functions outside scope. Freeze each run's inputs and validate source/coverage and executed/source-map
+local and uncommitted; leave untouched legacy
+functions outside scope. When none is configured, run the pinned verifier, state once "no quality gate is
+configured for this project; Quartermaster setup can add one", and continue. Absence alone never holds,
+parks or marks work UNVERIFIED. User rules injected by the host still apply. Freeze each run's inputs and validate source/coverage and executed/source-map
 byte identity before long runs. Supported focused real coverage may be separate from the final gate.
 No source edits during an immutable capture, fabricated passing receipts or weakened checks.
 
