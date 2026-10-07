@@ -39,8 +39,16 @@ type OwnedProcessTree = Readonly<{
   }>): Promise<OwnedPhaseResult>;
 }>;
 
-// Resolved from the built lib/ports directory; the owner is plain CommonJS shared with the test and build runners.
-const ownedProcessTree = require(path.join(__dirname, '..', '..', 'scripts', 'owned-process-tree.js')) as OwnedProcessTree;
+// This module runs from src/lib/ports under tsx and from lib/ports once built, so a fixed `..` count
+// lands in a different directory for each; the owner is plain CommonJS shared with the test and build runners.
+function nearestPackageRoot(directory: string): string {
+  if (fs.existsSync(path.join(directory, 'package.json'))) return directory;
+  const parent = path.dirname(directory);
+  if (parent === directory) throw new Error(`no package.json at or above ${__dirname}`);
+  return nearestPackageRoot(parent);
+}
+
+const ownedProcessTree: OwnedProcessTree = require(path.join(nearestPackageRoot(__dirname), 'scripts', 'owned-process-tree.js'));
 
 export type VerificationProcessPort = Readonly<{
   run(requirement: VerificationRequirement, options?: ProcessVerificationOptions): VerificationResult;

@@ -82,7 +82,7 @@ function copyMarketplaceFiles(destination: string): void {
       const relative = path.relative(ROOT, source);
       if (!relative) return true;
       const parts = relative.split(path.sep);
-      if (parts.includes('src') || parts.includes('node_modules') || parts.includes('test') || parts.includes('scripts')) return false;
+      if (parts.includes('src') || parts.includes('node_modules') || parts.includes('test')) return false;
       if (parts[0] === 'dashboard' && (parts[1] === 'app' || parts[1] === 'e2e' || parts[1] === 'test' || parts[1] === 'test-results')) return false;
       if (relative === path.join('dashboard', 'index.html')) return false;
       return true;

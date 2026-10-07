@@ -30,7 +30,13 @@ const os = require("node:os");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const ownedProcessTree = require(path.join(__dirname, "..", "..", "scripts", "owned-process-tree.js"));
+function nearestPackageRoot(directory) {
+  if (fs.existsSync(path.join(directory, "package.json"))) return directory;
+  const parent = path.dirname(directory);
+  if (parent === directory) throw new Error(`no package.json at or above ${__dirname}`);
+  return nearestPackageRoot(parent);
+}
+const ownedProcessTree = require(path.join(nearestPackageRoot(__dirname), "scripts", "owned-process-tree.js"));
 const DEFAULT_TIMEOUT_MILLISECONDS = 10 * 60 * 1e3;
 const DEFAULT_OUTPUT_TAIL_BYTES = 16 * 1024;
 const COMMAND_NOT_FOUND_EXIT_CODES = /* @__PURE__ */ new Set([127, 9009]);
