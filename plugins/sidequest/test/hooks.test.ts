@@ -3649,7 +3649,7 @@ test('session-start: loads user-story for routed work beyond small tasks', () =>
 
 test('session-start: the restored briefing retires a terminal ticket\'s still-running executor', () => {
   const context = runHookForBudget(SESSION, { session_id: 'restored-retire-terminal', source: 'compact' });
-  assert.match(context, /If the host still lists a terminal ticket's executor as running[^.]*TaskStop it once and never resume or message it/);
+  assert.match(context, /If the host still lists a terminal ticket's executor as running, TaskStop it once; never resume or message it/);
   assert.doesNotMatch(context, /do not investigate/i);
 });
 
