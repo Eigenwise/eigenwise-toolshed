@@ -135,4 +135,4 @@ Two Claude Code checks bypass the configured base URL and remain unmetered: fast
 - Gateway integration tests drive JSON and SSE responses through an isolated shim and fake upstream.
 - An isolated Observability observer receives the gateway record. Its request, session, agent, and composition views must match the raw response usage exactly for exact fields.
 - A collector that deliberately delays its OTLP response must not delay the proxied response.
-- Full gateway tests run with `node --test plugins/model-gateway/test/*.test.js`; Observability tests run with explicit Windows-safe globs.
+- Full gateway tests run with `npm test` from `plugins/model-gateway` (the script preloads `test/isolate-home.js`, which moves HOME to a throwaway directory; a bare `node --test` skips that guard and fails the settings-write-guard tests); Observability tests run with explicit Windows-safe globs.
