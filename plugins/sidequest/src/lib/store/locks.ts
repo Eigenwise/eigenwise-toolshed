@@ -4,6 +4,17 @@ type TicketLockKey = { slug: string; id: string };
 type BusyTicketLock = { ok: false; reason: 'busy' };
 const LOCK_HELD_ELSEWHERE = Symbol('lock held elsewhere');
 
+// The whole lock file: {pid, token} plus whatever the holder recorded (a delivery lock names its
+// ticket, pinned commit, command, log and start time, SQ-3425). Unreadable or malformed reads as null.
+function readLockHolder(fs: any, lockPath?: any) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8').trim());
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_: any) {
+    return null;
+  }
+}
+
 function createLocks(dependencies: any) {
   const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {} } = dependencies;
 
@@ -27,15 +38,10 @@ function createLocks(dependencies: any) {
   }
 
   function readLockOwner(lockPath?: any) {
-    try {
-      const content = fs.readFileSync(lockPath, 'utf8').trim();
-      const parsed = JSON.parse(content);
-      const pid = Number(parsed?.pid);
-      const token = typeof parsed?.token === 'string' ? parsed.token : null;
-      return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
-    } catch (_: any) {
-      return null;
-    }
+    const parsed = readLockHolder(fs, lockPath);
+    const pid = Number(parsed?.pid);
+    const token = typeof parsed?.token === 'string' ? parsed.token : null;
+    return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
   }
 
   function lockOwnerIsAlive(owner?: any) {
@@ -78,27 +84,29 @@ function createLocks(dependencies: any) {
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const created = createLockFile(lockPath, ownerToken);
+      const created = createLockFile(lockPath, ownerToken, options.holder);
       if (created !== LOCK_HELD_ELSEWHERE) return created;
       if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
     }
     return false;
   }
 
-  function createLockFile(lockPath: string, ownerToken: string) {
+  function createLockFile(lockPath: string, ownerToken: string, holder?: object) {
     let fd: number;
     try {
       fd = fs.openSync(lockPath, 'wx');
     } catch (error: any) {
       return error?.code === 'EEXIST' ? LOCK_HELD_ELSEWHERE : false;
     }
-    if (!writeLockOwner(lockPath, fd, ownerToken)) return false;
+    if (!writeLockOwner(lockPath, fd, ownerToken, holder)) return false;
     return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
   }
 
-  function writeLockOwner(lockPath: string, fd: number, ownerToken: string): boolean {
+  function writeLockOwner(lockPath: string, fd: number, ownerToken: string, holder?: object): boolean {
+    // The holder lands in the same write as the pid and token, before anyone else can open the file. A
+    // later rename over the lock fails with EPERM on Windows while a reader holds it open (SQ-3480).
     try {
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
+      fs.writeSync(fd, JSON.stringify({ ...holder, pid: process.pid, token: ownerToken }));
     } catch (_: any) {
       fs.closeSync(fd);
       try { fs.unlinkSync(lockPath); } catch (_: any) { /* ignore */ }
@@ -186,4 +194,4 @@ function createLocks(dependencies: any) {
   };
 }
 
-module.exports = { createLocks };
+module.exports = { createLocks, readLockHolder };

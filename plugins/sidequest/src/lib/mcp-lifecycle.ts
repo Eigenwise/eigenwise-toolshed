@@ -307,6 +307,30 @@ function ticketCommitScope(slug: string, ticket: CompositionTicket): string[] {
   ])];
 }
 
+// SQ-3425: runProcessVerification is spawnSync, so an environment-bound verifier inside the board server
+// would block every board call for up to the integration timeout. The lane runs through the CLI instead.
+function environmentLaneRefusal(slug: string, refs: string[], project: string) {
+  const bound = refs.map((ref: string) => store.getTicket(slug, ref)).find((candidate: any) => candidate && store.pinnedVerificationRequirement(candidate).environment === 'shared');
+  if (!bound) return null;
+  const timeoutMilliseconds = store.boardConfig(slug).integrationVerifyTimeoutMs;
+  return {
+    reason: 'environment_lane_requires_cli',
+    message: `integrate: ${bound.ref}'s verifier is environment-bound and can run up to ${timeoutMilliseconds} ms; inside the board server that stalls every executor's board calls. Run CLI integrate for ${bound.ref} (\`sidequest integrate ${bound.ref} --project ${JSON.stringify(project)} --json\`) with Bash run_in_background and act on its completion notification. Container teardown stays in the project's verify command.`,
+  };
+}
+
+// Wave assembly never runs the verifier, so only a delivery call meets the refusal.
+function refusingTheEnvironmentLane(integrate: ToolDefinition['handler']): ToolDefinition['handler'] {
+  return async (args) => {
+    if (Object.hasOwn(args, 'wave')) return integrate(args);
+    const { slug, meta } = resolveLifecycleProject(args.project, args, 'integrate');
+    requireBy(args, 'integrate');
+    const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
+    const refusal = environmentLaneRefusal(slug, refs, meta.path);
+    return refusal ? mutationAck(slug, combinedRefusal(store.getTicket(slug, refs[0]), [refusal])) : integrate(args);
+  };
+}
+
 function combinedRefusal(ticket: any, failures: Array<{ reason: string; message: string }>) {
   const primary = failures[0];
   if (!primary) throw new Error('combined refusal requires at least one failure');
@@ -1447,5 +1471,9 @@ const tools: ToolDefinition[] = [
     },
   },
 ];
+
+for (const tool of tools) {
+  if (tool.name === 'integrate') tool.handler = refusingTheEnvironmentLane(tool.handler);
+}
 
 module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };
