@@ -177,9 +177,6 @@ function ensureProject(...args) {
 function readMeta(...args) {
   return projectsLayer.readMeta(...args);
 }
-function metaLockPath(...args) {
-  return projectsLayer.metaLockPath(...args);
-}
 function withMetaLock(...args) {
   return projectsLayer.withMetaLock(...args);
 }
@@ -856,7 +853,7 @@ function withinTransaction(handle, fn) {
   try {
     result = db.txn(handle, () => {
       commitTasks.length = 0;
-      return fn();
+      return db.guardsEveryWrite() ? db.guardedWrite(fn) : fn();
     });
   } finally {
     openTransactionCommitTasks.delete(handle);
@@ -1868,8 +1865,11 @@ const INVALID_DIRECT_REASON_PATTERNS = [
 function directReasonAllowed(reason) {
   return !INVALID_DIRECT_REASON_PATTERNS.some((pattern) => pattern.test(String(reason || "")));
 }
+function lifecyclePreparedAt(ticket) {
+  return String(ticket.dispatch?.preparedAt || ticket.updatedAt || (/* @__PURE__ */ new Date()).toISOString());
+}
 function lifecycleBaseline(slug, ticket, purpose) {
-  const preparedAt = String(ticket.dispatch?.preparedAt || ticket.updatedAt || (/* @__PURE__ */ new Date()).toISOString());
+  const preparedAt = lifecyclePreparedAt(ticket);
   const project = readMeta(slug);
   const projectPath = String(project?.path || "").trim();
   const revision = project?.sourceRevisionAdapter === FILESYSTEM_SNAPSHOT_ADAPTER ? filesystemSnapshotBaseline(slug, preparedAt) : Object.freeze({
@@ -1883,9 +1883,14 @@ function recordLifecycleAttempt(ticket, attempt) {
   ticket.lifecycleAttempt = attempt;
   if (ticket.dispatch) ticket.dispatch.lifecycleAttempt = attempt;
 }
-function lifecycleAttemptFromFacts(slug, ticket, authority, purpose, direct) {
+function observeLifecycleBaseline(slug, ticket) {
+  if ((ticket.lifecycleAttempt || ticket.dispatch?.lifecycleAttempt)?.baseline) return null;
+  return { preparedAt: lifecyclePreparedAt(ticket), baseline: lifecycleBaseline(slug, ticket, "dispatch") };
+}
+function lifecycleAttemptFromFacts(ticket, authority, direct, observed) {
   const persistedAttempt = ticket.lifecycleAttempt || ticket.dispatch?.lifecycleAttempt;
-  const baseline = persistedAttempt?.baseline || lifecycleBaseline(slug, ticket, purpose);
+  const baseline = persistedAttempt?.baseline || (observed?.preparedAt === lifecyclePreparedAt(ticket) ? observed.baseline : null);
+  if (!baseline) return null;
   const preparedCompatibility = persistedAttempt?.preparedCompatibility || ticket.dispatch?.preparedCompatibility;
   let current = direct ? prepareDirectAttempt(baseline, persistedAttempt?.authority || authority) : prepareAttempt(baseline, persistedAttempt?.authority || authority, preparedCompatibility);
   const dispatch2 = ticket.dispatch;
@@ -2046,6 +2051,7 @@ function claimTicket(slug, idOrRef, by, opts) {
   by = String(by || "agent");
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: "not_found" };
+  const observedBaseline = observeLifecycleBaseline(slug, found);
   const result = withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: "not_found" };
@@ -2096,7 +2102,8 @@ function claimTicket(slug, idOrRef, by, opts) {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const lifecycleAuthority = { actor: by, operation: "claim", sessionId: opts.sessionId || null };
     const directExecution = opts.direct || !currentDispatch;
-    let activeAttempt = directExecution ? lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, "dispatch", true) : lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, "dispatch", false);
+    let activeAttempt = lifecycleAttemptFromFacts(t, lifecycleAuthority, directExecution, observedBaseline);
+    if (!activeAttempt) return { ok: false, reason: "busy", ticket: t };
     if (!directExecution && opts.requireBoundAgent && currentDispatch && activeAttempt.state === "prepared") {
       const boundAttempt = bindDispatchClaimToken(currentDispatch, activeAttempt, opts.sessionId, opts.executor, now);
       if (boundAttempt) activeAttempt = boundAttempt;
@@ -2216,7 +2223,7 @@ function claimTicket(slug, idOrRef, by, opts) {
       t.updatedAt = now;
     }
     putTicket(slug, t);
-    if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
+    if (opts.sessionId) afterCommit(() => registerWorker(opts.sessionId, slug, t.id, by));
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {} };
   });
@@ -3588,7 +3595,6 @@ const {
   updateStory
 } = stories;
 projectsLayer = createProjects({
-  acquireLock,
   assetsDir,
   claudeHome,
   homeRoot,
@@ -3611,7 +3617,6 @@ projectsLayer = createProjects({
   putProject,
   putStory,
   putTicket,
-  releaseLock,
   residentCache,
   slugify,
   sourceRevisionAdapterForPath,
@@ -3987,3 +3992,7 @@ module.exports = {
   reconcileSession,
   sessionClaims
 };
+for (const listedWrite of Object.keys(db.WRITES_STILL_SPAWNING)) {
+  const write = module.exports[listedWrite];
+  if (typeof write === "function") module.exports[listedWrite] = (...args) => db.stillSpawnsInsideItsWrite(listedWrite, () => write(...args));
+}

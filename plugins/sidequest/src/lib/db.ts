@@ -915,8 +915,43 @@ export function refuseUnderGuardedWrite(action: string): void {
 
 // One Git call inside a write transaction holds every board's writers past their busy budget (SQ-3348), and the
 // store has ~120 child-process call sites that cannot see whether a transaction is open. So the launchers refuse
-// from here. Only writes that were moved off Git run guarded; the rest of the store still spawns inside its
-// transactions and is follow-up work, so a global guard would break those paths rather than protect them.
+// from here. Writes moved off Git always run guarded. SIDEQUEST_GUARD_ALL_WRITES=1 (the test harness sets it)
+// guards every write transaction except the paths below, which still spawn or wait on a lock file inside their
+// transaction; the last ticket to empty this list makes the guard the default (SQ-3499). Keys are store exports,
+// plus withCompositionLocks, which every composition-root write passes through.
+export const WRITES_STILL_SPAWNING = Object.freeze({
+  addComment: 'SQ-3499 follow-up: verify-complete checks',
+  withCompositionLocks: 'SQ-3499 follow-up: composition admission and integrate delivery',
+  submitTicket: 'SQ-3499 follow-up: submit and verification capture',
+  recordVerificationCapture: 'SQ-3499 follow-up: submit and verification capture',
+  reworkSubmission: 'SQ-3499 follow-up: submit and verification capture',
+  closeSubmissionAsSuperseded: 'SQ-3499 follow-up: submit and verification capture',
+  reconcileSubmissionRejections: 'SQ-3499 follow-up: submit and verification capture',
+  requestScope: 'SQ-3499 follow-up: submit and verification capture',
+  bindDispatchAgent: 'SQ-3499 follow-up: dispatch agent binding and stops',
+  bindClaimRuntimeIdentity: 'SQ-3499 follow-up: dispatch agent binding and stops',
+  recordDispatchAgentFailure: 'SQ-3499 follow-up: dispatch agent binding and stops',
+  markDispatchStopped: 'SQ-3499 follow-up: dispatch agent binding and stops',
+  recoverLiveClaimDispatch: 'SQ-3499 follow-up: dispatch agent binding and stops',
+  prepareDispatch: 'SQ-3499 follow-up: dispatch agent binding and stops',
+  deleteTicket: 'SQ-3499 follow-up: dispatch agent binding and stops',
+} as const);
+
+let stillSpawningDepth = 0;
+
+export function stillSpawnsInsideItsWrite<T>(_listedWrite: keyof typeof WRITES_STILL_SPAWNING, write: () => T): T {
+  stillSpawningDepth += 1;
+  try {
+    return write();
+  } finally {
+    stillSpawningDepth -= 1;
+  }
+}
+
+export function guardsEveryWrite(): boolean {
+  return process.env.SIDEQUEST_GUARD_ALL_WRITES === '1' && stillSpawningDepth === 0;
+}
+
 export function guardedWrite<T>(write: () => T): T {
   guardedWriteDepth += 1;
   try {

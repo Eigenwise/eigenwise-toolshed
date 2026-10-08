@@ -26,6 +26,8 @@ type NativeCheckoutFacts = {
   gitDirectory: string; commonGitDirectory: string; checkoutInstance: string; revision: string;
 };
 type NativeCheckoutCompletion = { ok: true; alreadyCompleted: boolean } | { ok: false; reason: string };
+// Git output read before the write transaction; checkoutStatus is null when git could not report it.
+type ObservedNativeCheckout = { facts: NativeCheckoutFacts | null; checkoutStatus?: string | null };
 
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
@@ -3548,37 +3550,46 @@ function compositionCheckoutWasReused(previous: CompositionDispatch, worktree: s
     previous.worktreeCheckoutInstance === facts.checkoutInstance].some(Boolean);
 }
 
-function cleanCompositionCheckoutRefusal(worktree: string): NativeCheckoutCompletion | undefined {
+function checkoutStatus(worktree: string): string | null {
   try {
-    if (gitOutput(worktree, ['status', '--porcelain'])) return { ok: false, reason: 'composition_checkout_dirty' };
+    return gitOutput(worktree, ['status', '--porcelain']);
   } catch {
-    return { ok: false, reason: 'composition_checkout_unobservable' };
+    return null;
   }
 }
 
-function compositionCheckoutIdentityRefusal(ticket: CompositionTicket, worktree: string, facts: NativeCheckoutFacts): NativeCheckoutCompletion | undefined {
+function observeNativeCheckout(slug: string, worktree: string, ticket: CompositionTicket): ObservedNativeCheckout {
+  return { facts: immutableWorktreeFacts(slug, worktree), checkoutStatus: ticket.compositionAdmission ? checkoutStatus(worktree) : undefined };
+}
+
+function cleanCompositionCheckoutRefusal(status: string | null | undefined): NativeCheckoutCompletion | undefined {
+  if (status == null) return { ok: false, reason: 'composition_checkout_unobservable' };
+  if (status) return { ok: false, reason: 'composition_checkout_dirty' };
+}
+
+function compositionCheckoutIdentityRefusal(ticket: CompositionTicket, worktree: string, facts: NativeCheckoutFacts, observed: ObservedNativeCheckout): NativeCheckoutCompletion | undefined {
   const admission = ticket.compositionAdmission;
   if (!admission) return;
   if (compositionCheckoutWasReused(admission.releasedDispatch, worktree, facts)) return { ok: false, reason: 'composition_checkout_reused' };
-  return cleanCompositionCheckoutRefusal(worktree);
+  return cleanCompositionCheckoutRefusal(observed.checkoutStatus);
 }
 
-function nativeCheckoutCompletionFacts(slug: string, worktree: string, state: NativeCheckoutCreation): NativeCheckoutFacts | { ok: false; reason: string } {
-  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
+function nativeCheckoutCompletionFacts(observed: ObservedNativeCheckout, state: NativeCheckoutCreation): NativeCheckoutFacts | { ok: false; reason: string } {
+  const facts = observed.facts;
   if (!facts) return { ok: false, reason: 'invalid_worktree_binding' };
   if (facts.revision !== String(compositionCheckoutCommit(state)).trim()) return { ok: false, reason: 'worktree_revision_mismatch' };
   return facts;
 }
 
-function completeNativeCheckoutForTicket(slug: string, id: string, binding: { sessionId: string; worktree: string }, attempt?: string): NativeCheckoutCompletion {
+function completeNativeCheckoutForTicket(slug: string, id: string, binding: { sessionId: string; worktree: string }, attempt: string | undefined, observed: ObservedNativeCheckout): NativeCheckoutCompletion {
   const ticket = getTicket(slug, id);
   const current: NativeCheckoutCreation | undefined = dispatchState(ticket);
   const generation = worktreeCallbackGenerationRefusal(current, attempt);
   if (generation) return { ...generation, ok: false };
   if (!launchedNativeCheckoutMatches(current, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
-  const facts = nativeCheckoutCompletionFacts(slug, binding.worktree, current);
+  const facts = nativeCheckoutCompletionFacts(observed, current);
   if ('ok' in facts) return facts;
-  return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts)
+  return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts, observed)
     ?? recordNativeCheckoutCompletion(slug, ticket, current, facts);
 }
 
@@ -3588,8 +3599,9 @@ function completeDispatchWorktreeCreation(slug: string, sessionId?: string, work
   if (!binding) return { ok: false, reason: 'missing_binding_facts' };
   for (const candidate of listTickets(slug)) {
     if (!launchedNativeCheckoutMatches(dispatchState(candidate), binding)) continue;
+    const observed = observeNativeCheckout(slug, binding.worktree, candidate);
     return dependencies.withCompositionGenerationLock(slug, candidate.id,
-      () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt));
+      () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt, observed));
   }
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
@@ -3724,9 +3736,8 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
-function recordRecoveredCheckoutIdentity(slug: string, state: NativeCheckoutCreation, worktree: string): void {
+function recordRecoveredCheckoutIdentity(state: NativeCheckoutCreation, facts: NativeCheckoutFacts | null): void {
   if (state.worktreeCreationCompletedAt) return;
-  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
   const checkoutCommit = String(compositionCheckoutCommit(state)).trim();
   if (facts && checkoutCommit && facts.revision === checkoutCommit) recordCreatedCheckoutIdentity(state, facts);
 }
@@ -3754,13 +3765,13 @@ function terminalizeFailedCheckoutCreation(slug: string, ticket: ExecutorDispatc
   putTicket(slug, ticket);
 }
 
-function recoverLaunchedCheckout(slug: string, id: string, binding: { sessionId: string; worktree: string }, error: unknown, attempt?: string, options?: { created?: boolean }) {
+function recoverLaunchedCheckout(slug: string, id: string, binding: { sessionId: string; worktree: string }, error: unknown, attempt: string | undefined, options: { created?: boolean } | undefined, facts: NativeCheckoutFacts | null) {
   const ticket: ExecutorDispatchedTicket = getTicket(slug, id);
   const state: NativeCheckoutCreation | undefined = dispatchState(ticket);
   const generation = worktreeCallbackGenerationRefusal(state, attempt);
   if (generation) return generation;
   if (!launchedNativeCheckoutMatches(state, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
-  recordRecoveredCheckoutIdentity(slug, state, binding.worktree);
+  recordRecoveredCheckoutIdentity(state, facts);
   const held = holdOrReleaseUncreatedCheckout(slug, ticket, state, binding.sessionId, options?.created);
   if (held) return held;
   terminalizeFailedCheckoutCreation(slug, ticket, error);
@@ -3785,7 +3796,8 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
       && state.worktree && canonicalPath(state.worktree) === boundWorktree);
   });
   if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous_binding' : 'dispatch_binding_unavailable' };
-  const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options));
+  const facts: NativeCheckoutFacts | null = dispatchState(matches[0]).worktreeCreationCompletedAt ? null : immutableWorktreeFacts(slug, boundWorktree);
+  const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options, facts));
   if (!terminal?.ok || terminal.heldFor) return terminal;
   const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };

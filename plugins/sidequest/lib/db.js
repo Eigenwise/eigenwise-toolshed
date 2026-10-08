@@ -33,12 +33,14 @@ __export(db_exports, {
   SQLITE_BUSY_RETRY_DELAYS_MS: () => SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS: () => SQLITE_BUSY_TIMEOUT_MS,
   SQLITE_MIGRATION_BUSY_TIMEOUT_MS: () => SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+  WRITES_STILL_SPAWNING: () => WRITES_STILL_SPAWNING,
   WriteLockHeldError: () => WriteLockHeldError,
   assertWritable: () => assertWritable,
   countRows: () => countRows,
   deleteRow: () => deleteRow,
   getRow: () => getRow,
   guardedWrite: () => guardedWrite,
+  guardsEveryWrite: () => guardsEveryWrite,
   hasRow: () => hasRow,
   listRows: () => listRows,
   listRowsPage: () => listRowsPage,
@@ -48,6 +50,7 @@ __export(db_exports, {
   refuseUnderGuardedWrite: () => refuseUnderGuardedWrite,
   selectRow: () => selectRow,
   selectRows: () => selectRows,
+  stillSpawnsInsideItsWrite: () => stillSpawnsInsideItsWrite,
   txn: () => txn
 });
 module.exports = __toCommonJS(db_exports);
@@ -713,6 +716,35 @@ let guardedWriteDepth = 0;
 function refuseUnderGuardedWrite(action) {
   if (guardedWriteDepth > 0) throw new WriteLockHeldError(action);
 }
+const WRITES_STILL_SPAWNING = Object.freeze({
+  addComment: "SQ-3499 follow-up: verify-complete checks",
+  withCompositionLocks: "SQ-3499 follow-up: composition admission and integrate delivery",
+  submitTicket: "SQ-3499 follow-up: submit and verification capture",
+  recordVerificationCapture: "SQ-3499 follow-up: submit and verification capture",
+  reworkSubmission: "SQ-3499 follow-up: submit and verification capture",
+  closeSubmissionAsSuperseded: "SQ-3499 follow-up: submit and verification capture",
+  reconcileSubmissionRejections: "SQ-3499 follow-up: submit and verification capture",
+  requestScope: "SQ-3499 follow-up: submit and verification capture",
+  bindDispatchAgent: "SQ-3499 follow-up: dispatch agent binding and stops",
+  bindClaimRuntimeIdentity: "SQ-3499 follow-up: dispatch agent binding and stops",
+  recordDispatchAgentFailure: "SQ-3499 follow-up: dispatch agent binding and stops",
+  markDispatchStopped: "SQ-3499 follow-up: dispatch agent binding and stops",
+  recoverLiveClaimDispatch: "SQ-3499 follow-up: dispatch agent binding and stops",
+  prepareDispatch: "SQ-3499 follow-up: dispatch agent binding and stops",
+  deleteTicket: "SQ-3499 follow-up: dispatch agent binding and stops"
+});
+let stillSpawningDepth = 0;
+function stillSpawnsInsideItsWrite(_listedWrite, write) {
+  stillSpawningDepth += 1;
+  try {
+    return write();
+  } finally {
+    stillSpawningDepth -= 1;
+  }
+}
+function guardsEveryWrite() {
+  return process.env.SIDEQUEST_GUARD_ALL_WRITES === "1" && stillSpawningDepth === 0;
+}
 function guardedWrite(write) {
   guardedWriteDepth += 1;
   try {
@@ -764,12 +796,14 @@ function txn(database, fn, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
   SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS,
   SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+  WRITES_STILL_SPAWNING,
   WriteLockHeldError,
   assertWritable,
   countRows,
   deleteRow,
   getRow,
   guardedWrite,
+  guardsEveryWrite,
   hasRow,
   listRows,
   listRowsPage,
@@ -779,5 +813,6 @@ function txn(database, fn, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
   refuseUnderGuardedWrite,
   selectRow,
   selectRows,
+  stillSpawnsInsideItsWrite,
   txn
 });
