@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createAnalyzer } from '../lib/core.mjs';
+import { createAnalyzer, functionCoverage } from '../lib/core.mjs';
 import { resolveCompiler } from '../lib/compiler.mjs';
 import { measureFiles } from '../lib/measure.mjs';
 
@@ -93,6 +93,15 @@ test('measure consumes real V8 coverage, preserves report JSON and fails at six'
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('named build records cover their source function and exclude unrelated names or absent ranges', () => {
+  const descriptor = { identity: '<root>/FunctionDeclaration:subject#0', parent: '<root>', name: 'subject', start: 0, end: 10 };
+  const source = { descriptors: [descriptor], records: [] };
+  const matched = { functionName: 'subject', ranges: [{ startOffset: 100, endOffset: 110, count: 1 }] };
+  const unrelated = { functionName: 'another', ranges: [{ startOffset: 100, endOffset: 110, count: 1 }] };
+  assert.deepEqual(functionCoverage(descriptor, [source, { records: [matched, unrelated, { functionName: 'subject', ranges: [] }] }]), { coverage: 1 });
+  assert.deepEqual(functionCoverage(descriptor, [source, { records: [unrelated] }]), { coverage: 0 });
 });
 
 test('the measurement entry refuses incomplete arguments', () => {
