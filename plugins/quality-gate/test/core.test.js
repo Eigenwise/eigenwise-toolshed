@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createAnalyzer, functionCoverage } from '../lib/core.mjs';
+import { changedMetricsAgainstBase, createAnalyzer, functionCoverage } from '../lib/core.mjs';
 import { resolveCompiler } from '../lib/compiler.mjs';
-import { measureFiles } from '../lib/measure.mjs';
+import { crapScore, gateVerdict, measureFiles } from '../lib/measure.mjs';
 
 const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -93,6 +93,58 @@ test('measure consumes real V8 coverage, preserves report JSON and fails at six'
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+const legacyAtBase = [
+  'export function legacy(items) {',
+  '  let total = 0;',
+  '  for (const item of items) {',
+  '    if (item.a) total += 1;',
+  '    if (item.b) total += 2;',
+  '    if (item.c) total += 3;',
+  '    if (item.d) total += 4;',
+  '    if (item.e) total += 5;',
+  '  }',
+  '  return total;',
+  '}',
+  '',
+].join('\n');
+
+async function classifiedAgainstLegacyBase(head, { coverage = 1, unverified } = {}) {
+  const { collectFunctions } = await createAnalyzer(pluginRoot);
+  const metrics = (await collectFunctions(head, 'legacy.mjs')).map((descriptor) => (unverified
+    ? { ...descriptor, relativePath: 'legacy.mjs', unverified }
+    : { ...descriptor, relativePath: 'legacy.mjs', coverage, crap: crapScore(descriptor.complexity, coverage) }));
+  const changed = await changedMetricsAgainstBase(metrics, ['legacy.mjs'], 'base', () => collectFunctions(legacyAtBase, 'legacy.mjs'));
+  return { byName: Object.fromEntries(changed.map((metric) => [metric.name, metric.classification])), verdict: gateVerdict(changed) };
+}
+
+test('a function absent at base is new and enforced', async () => {
+  const { byName, verdict } = await classifiedAgainstLegacyBase(`${legacyAtBase}export function fresh(value) {\n  return value ? 1 : 0;\n}\n`);
+  assert.deepEqual(byName, { fresh: 'new' });
+  assert.deepEqual(verdict, { failures: [], unverified: [] });
+});
+
+test('a pass-through edit inside a cc=7 legacy function is legacy-unchanged: reported, never failed, never unverified', async () => {
+  const passThrough = legacyAtBase.replace('total += 1', 'total += 10');
+  const scored = await classifiedAgainstLegacyBase(passThrough, { coverage: 0 });
+  assert.deepEqual(scored.byName, { legacy: 'legacy-unchanged' });
+  assert.deepEqual(scored.verdict, { failures: [], unverified: [] });
+  const unmeasured = await classifiedAgainstLegacyBase(passThrough, { unverified: 'no suite loaded this file' });
+  assert.deepEqual(unmeasured.byName, { legacy: 'legacy-unchanged' });
+  assert.deepEqual(unmeasured.verdict, { failures: [], unverified: [] });
+});
+
+test('a legacy function that gains a branch is modified-raised and fails at or above six', async () => {
+  const { byName, verdict } = await classifiedAgainstLegacyBase(legacyAtBase.replace('  }\n  return', '    if (item.f) total += 6;\n  }\n  return'));
+  assert.deepEqual(byName, { legacy: 'modified-raised' });
+  assert.deepEqual(verdict.failures, ['legacy.mjs:1 legacy cc=8 coverage=100.00% CRAP=8.0000']);
+});
+
+test('the added branch moved into a new helper above the caller passes while the legacy caller stays informational', async () => {
+  const { byName, verdict } = await classifiedAgainstLegacyBase(`function bonus(item) {\n  return item.f ? 6 : 0;\n}\n${legacyAtBase.replace('  }\n  return', '    total += bonus(item);\n  }\n  return')}`);
+  assert.deepEqual(byName, { bonus: 'new', legacy: 'legacy-unchanged' });
+  assert.deepEqual(verdict, { failures: [], unverified: [] });
 });
 
 test('named build records cover their source function and exclude unrelated names or absent ranges', () => {

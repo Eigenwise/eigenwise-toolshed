@@ -1,9 +1,23 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createAnalyzer, changedMetricsAgainstBase, readCoverage, functionCoverage, normalizedPath } from './core.mjs';
+import { createAnalyzer, changedMetricsAgainstBase, readCoverage, functionCoverage, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
 
 const NO_COVERAGE_RECORD = 'no suite loaded this file, so it has no coverage record (a script only ever spawned as a child process is covered once the spawning test passes NODE_V8_COVERAGE through; see scripts/quality/README.md)';
+export const THRESHOLD = 6;
+
+export function enforcedMetrics(changedMetrics) {
+  return changedMetrics.filter((metric) => metric.classification !== LEGACY_UNCHANGED);
+}
+
+// A legacy-unchanged row is informational: it never fails and never counts as unverified.
+export function gateVerdict(changedMetrics) {
+  const enforced = enforcedMetrics(changedMetrics);
+  return {
+    failures: enforced.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric),
+    unverified: enforced.filter((metric) => metric.unverified),
+  };
+}
 
 export function crapScore(complexity, coverage) {
   return complexity ** 2 * (1 - coverage) ** 3 + complexity;
@@ -61,9 +75,7 @@ export async function measureFiles(files, { projectRoot, base, coverageDirectory
     return analyzer.collectFunctions(result.stdout, relativePath);
   };
   const changedMetrics = await changedMetricsAgainstBase(metrics, relativePaths, base, readBaseline);
-  const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= 6).map(formatMetric);
-  const unverified = changedMetrics.filter((metric) => metric.unverified);
-  return { metrics, changedMetrics, failures, unverified };
+  return { metrics, changedMetrics, ...gateVerdict(changedMetrics) };
 }
 
 export function formatMetric(metric) {
