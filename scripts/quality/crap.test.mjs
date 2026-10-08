@@ -601,6 +601,7 @@ async function createCliFixture() {
   await Promise.all(['src', 'scripts', 'test'].map((directory) => fs.mkdir(path.join(pluginRoot, directory), { recursive: true })));
   await fs.mkdir(path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib'), { recursive: true });
   await fs.mkdir(qualityFixtureDirectory, { recursive: true });
+  await fs.cp(path.join(process.cwd(), 'plugins', 'quality-gate'), path.join(fixtureRoot, 'plugins', 'quality-gate'), { recursive: true, filter: (sourcePath) => !sourcePath.includes('node_modules') });
   await Promise.all([
     fs.copyFile(path.join(qualityDirectory, 'crap.mjs'), path.join(qualityFixtureDirectory, 'crap.mjs')),
     fs.copyFile(path.join(qualityDirectory, 'crap-core.cjs'), path.join(qualityFixtureDirectory, 'crap-core.cjs')),

@@ -125,6 +125,26 @@
       ]
     },
     {
+      "name": "quality-gate",
+      "source": "./plugins/quality-gate",
+      "description": "Local JavaScript and TypeScript function complexity and measured V8 coverage, with per-function CRAP scores strictly below 6. The scorer reads source with the TypeScript compiler installed in the scored project (or its own dependency), pairs each function with V8 coverage by name or source position, and prints a per-function report. Everything runs on your machine; no source, coverage or report leaves it.",
+      "version": "0.0.0",
+      "author": {
+        "name": "Eigenwise"
+      },
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/quality-gate",
+      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": [
+        "quality",
+        "complexity",
+        "coverage",
+        "crap",
+        "typescript"
+      ]
+    },
+    {
       "name": "live-rules",
       "source": "./plugins/live-rules",
       "description": "Atomic project rules in .claude/live-rules/rules/ with a generated manifest. Claude injects applicable rules at SessionStart, then only new or changed unseen rules as prompts and edits match; legacy single-file storage is for migration or explicit overrides.",
