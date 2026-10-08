@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { ticketCommitScope, ticketReleaseFragment, validateCommitRangeScope, validateRelativeScopes } from '../commit-scope';
+import { stillSpawnsInsideItsWrite } from '../db';
 import { effectiveOracleVerdictOutcome, sameReviewCandidate } from '../kernel/review-binding';
 import { canonicalPath, checkoutInstanceIdentity } from '../kernel/worktree';
 import type { ReviewBindingSide, ReviewMirror, ReviewOutcome, OracleVerdictOutcome } from '../kernel/review-binding';
@@ -551,7 +552,7 @@ export function createCompositionAdmissions(dependencies: Dependencies) {
   }
 
   function withCompositionLocks<Result>(slug: string, identities: readonly string[], callback: () => Result): Result | { ok: false; reason: 'busy' } {
-    return dependencies.withTicketLocks(lockKeys(slug, identities), callback);
+    return stillSpawnsInsideItsWrite('withCompositionLocks', () => dependencies.withTicketLocks(lockKeys(slug, identities), callback));
   }
 
   function dispatchAdmissionRefusal(slug: string, root: CompositionTicket, locked: readonly string[]): Extract<CompositionAdmissionResult, { ok: false }> | undefined {

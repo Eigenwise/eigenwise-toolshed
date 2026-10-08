@@ -155,7 +155,6 @@ function executionScope(slug?: any, ticket?: any) {
 let projectsLayer: any;
 function ensureProject(...args: any[]) { return projectsLayer.ensureProject(...args); }
 function readMeta(...args: any[]) { return projectsLayer.readMeta(...args); }
-function metaLockPath(...args: any[]) { return projectsLayer.metaLockPath(...args); }
 function withMetaLock(...args: any[]) { return projectsLayer.withMetaLock(...args); }
 function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
 function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
@@ -801,7 +800,7 @@ function withinTransaction(handle: object, fn: () => any) {
     result = db.txn(handle, () => {
       // A busy retry reruns fn, so only the attempt that commits may leave tasks behind.
       commitTasks.length = 0;
-      return fn();
+      return db.guardsEveryWrite() ? db.guardedWrite(fn) : fn();
     });
   } finally {
     openTransactionCommitTasks.delete(handle);
@@ -1947,8 +1946,12 @@ function directReasonAllowed(reason?: any) {
   return !INVALID_DIRECT_REASON_PATTERNS.some((pattern) => pattern.test(String(reason || '')));
 }
 
+function lifecyclePreparedAt(ticket: any): string {
+  return String(ticket.dispatch?.preparedAt || ticket.updatedAt || new Date().toISOString());
+}
+
 function lifecycleBaseline(slug: any, ticket: any, purpose: 'dispatch' | 'wave' | 'submission') {
-  const preparedAt = String(ticket.dispatch?.preparedAt || ticket.updatedAt || new Date().toISOString());
+  const preparedAt = lifecyclePreparedAt(ticket);
   const project = readMeta(slug);
   const projectPath = String(project?.path || '').trim();
   const revision = project?.sourceRevisionAdapter === FILESYSTEM_SNAPSHOT_ADAPTER
@@ -1966,9 +1969,19 @@ function recordLifecycleAttempt(ticket: any, attempt: any) {
   if (ticket.dispatch) ticket.dispatch.lifecycleAttempt = attempt;
 }
 
-function lifecycleAttemptFromFacts(slug: any, ticket: any, authority: any, purpose: 'dispatch' | 'wave' | 'submission', direct: boolean) {
+type ObservedLifecycleBaseline = { preparedAt: string; baseline: ReturnType<typeof lifecycleBaseline> } | null;
+
+// A baseline runs git or hashes the project tree, so a claim observes it before its write transaction begins.
+function observeLifecycleBaseline(slug: any, ticket: any): ObservedLifecycleBaseline {
+  if ((ticket.lifecycleAttempt || ticket.dispatch?.lifecycleAttempt)?.baseline) return null;
+  return { preparedAt: lifecyclePreparedAt(ticket), baseline: lifecycleBaseline(slug, ticket, 'dispatch') };
+}
+
+// Null when the ticket moved since the baseline was observed; the claim then answers busy, as a held lock does.
+function lifecycleAttemptFromFacts(ticket: any, authority: any, direct: boolean, observed: ObservedLifecycleBaseline) {
   const persistedAttempt = ticket.lifecycleAttempt || ticket.dispatch?.lifecycleAttempt;
-  const baseline = persistedAttempt?.baseline || lifecycleBaseline(slug, ticket, purpose);
+  const baseline = persistedAttempt?.baseline || (observed?.preparedAt === lifecyclePreparedAt(ticket) ? observed.baseline : null);
+  if (!baseline) return null;
   const preparedCompatibility = persistedAttempt?.preparedCompatibility || ticket.dispatch?.preparedCompatibility;
   let current: any = direct
     ? prepareDirectAttempt(baseline, persistedAttempt?.authority || authority)
@@ -2158,6 +2171,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   by = String(by || 'agent');
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
+  const observedBaseline = observeLifecycleBaseline(slug, found);
   const result = withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
@@ -2215,9 +2229,8 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const now = new Date().toISOString();
     const lifecycleAuthority = { actor: by, operation: 'claim', sessionId: opts.sessionId || null };
     const directExecution = opts.direct || !currentDispatch;
-    let activeAttempt = directExecution
-      ? lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, 'dispatch', true)
-      : lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, 'dispatch', false);
+    let activeAttempt = lifecycleAttemptFromFacts(t, lifecycleAuthority, directExecution, observedBaseline);
+    if (!activeAttempt) return { ok: false, reason: 'busy', ticket: t };
     if (!directExecution && opts.requireBoundAgent && currentDispatch && activeAttempt.state === 'prepared') {
       const boundAttempt = bindDispatchClaimToken(currentDispatch, activeAttempt, opts.sessionId, opts.executor, now);
       if (boundAttempt) activeAttempt = boundAttempt;
@@ -2348,7 +2361,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // it immediately instead of waiting out the backstop. SessionEnd alone does not
     // attest anything: it carries a bare session id and is replayable against a live
     // claim, so reconcile only forgets these registrations. No-op without a session id.
-    if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
+    if (opts.sessionId) afterCommit(() => registerWorker(opts.sessionId, slug, t.id, by));
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
   });
@@ -4207,9 +4220,9 @@ const {
 } = stories;
 
 projectsLayer = createProjects({
-  acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
+  assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
   deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
-  path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction,
+  path, projectDir, putProject, putStory, putTicket, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction,
 });
 
 warningsLayer = createWarnings({
@@ -4563,3 +4576,8 @@ module.exports = {
   reconcileSession,
   sessionClaims,
 };
+
+for (const listedWrite of Object.keys(db.WRITES_STILL_SPAWNING)) {
+  const write = module.exports[listedWrite];
+  if (typeof write === 'function') module.exports[listedWrite] = (...args: unknown[]) => db.stillSpawnsInsideItsWrite(listedWrite, () => write(...args));
+}
