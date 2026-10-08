@@ -569,19 +569,23 @@ test('runs production CLI phases and its failing report outcome', async () => {
     // Uncommitted edits to this gate's own files are changed paths now, scored against the empty capture above.
     assert.ok(result.changedMetrics.every((entry) => entry.relativePath.startsWith('scripts/quality/') && entry.unverified.startsWith('no suite loaded this file')), JSON.stringify(result.changedMetrics));
 
-    const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: 'scripts/quality/crap.mjs' });
+    // A path absent at HEAD keeps both metrics new; a real path would pair them in order with the
+    // gate's own functions, and a partner at or above cc=6 would turn one into a legacy row.
+    const freshPath = 'scripts/quality/fresh-subject.mjs';
+    const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: freshPath });
     const anotherFailingMetric = { ...failingMetric, identity: '<root>/FunctionDeclaration:anotherSubject#0', line: 2, name: 'anotherSubject' };
     await withCapturedProcessOutput(async () => {
       const reported = await reportMetrics({
-        allChangedPaths: ['scripts/quality/crap.mjs'],
+        allChangedPaths: [freshPath],
         base: 'HEAD',
         baseWasExplicit: true,
-        changedEntries: [{ path: 'scripts/quality/crap.mjs' }],
-        changedPaths: ['scripts/quality/crap.mjs'],
+        changedEntries: [{ path: freshPath }],
+        changedPaths: [freshPath],
         metrics: [anotherFailingMetric, failingMetric],
         options: { all: true },
         suiteSummary: 'none',
       });
+      assert.deepEqual(reported.changedMetrics.map((entry) => entry.classification), ['new', 'new']);
       assert.equal(reported.failures.length, 2);
       assert.equal(process.exitCode, 1);
     });
