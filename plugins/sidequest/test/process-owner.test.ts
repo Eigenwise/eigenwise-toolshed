@@ -245,8 +245,9 @@ test('an owner killed before it can account for its job still takes the whole jo
   }
 });
 
-// The phase learns the real report path from a file the test fills in from the owner's arguments,
-// standing in for any way a phase could find it (SQ-3490).
+// The phase learns the real report path from SIDEQUEST_JOB_OWNER_REPORT if it inherited one, else from
+// a file the test fills in from the owner's arguments, standing in for any way a phase could find it
+// (SQ-3490). It writes only to a path named like a job report.
 test('SQ-3490: a phase that writes "members 0 end" into its real job report cannot pass a hard-killed owner off as an empty job', { ...windowsOnly, timeout: 120_000 }, async (context: TestContext) => {
   const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3490-forged-members-'));
   const reportPathHandoff = path.join(evidence, 'report.path');
@@ -254,8 +255,11 @@ test('SQ-3490: a phase that writes "members 0 end" into its real job report cann
   const forger = path.join(evidence, 'forger.js');
   fs.writeFileSync(forger, [
     "const fs = require('node:fs');",
-    "fs.appendFileSync(fs.readFileSync(process.argv[2], 'utf8'), 'members 0 end\\n');",
-    "fs.writeFileSync(process.argv[3], '');",
+    "const reportPath = process.env.SIDEQUEST_JOB_OWNER_REPORT || fs.readFileSync(process.argv[2], 'utf8');",
+    'if (/sidequest-job-[^\\\\/]*\\.log$/.test(reportPath)) {',
+    "  fs.appendFileSync(reportPath, 'members 0 end\\n');",
+    "  fs.writeFileSync(process.argv[3], '');",
+    '}',
     'setInterval(() => {}, 1000);',
     '',
   ].join('\n'));
