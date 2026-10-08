@@ -1,0 +1,10 @@
+{
+  "name": "@eigenwise/quality-gate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.5.0" },
+  "bin": { "quality-gate": "bin/quality-gate.js" },
+  "scripts": { "test": "node --test --test-timeout=120000 test/*.test.js" },
+  "dependencies": { "typescript": "7.0.2" }
+}

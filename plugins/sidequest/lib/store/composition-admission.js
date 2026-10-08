@@ -31,6 +31,7 @@ module.exports = __toCommonJS(composition_admission_exports);
 var import_node_crypto = require("node:crypto");
 var import_node_child_process = require("node:child_process");
 var import_commit_scope = require("../commit-scope");
+var import_db = require("../db");
 var import_review_binding = require("../kernel/review-binding");
 var import_worktree = require("../kernel/worktree");
 var import_composition_range = require("./composition-range");
@@ -488,7 +489,7 @@ function createCompositionAdmissions(dependencies) {
     return identities.map((id) => ({ slug, id }));
   }
   function withCompositionLocks(slug, identities, callback) {
-    return dependencies.withTicketLocks(lockKeys(slug, identities), callback);
+    return (0, import_db.stillSpawnsInsideItsWrite)("withCompositionLocks", () => dependencies.withTicketLocks(lockKeys(slug, identities), callback));
   }
   function dispatchAdmissionRefusal(slug, root, locked) {
     const admission = root.compositionAdmission;

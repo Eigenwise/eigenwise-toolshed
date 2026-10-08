@@ -704,6 +704,33 @@ test('the same Git call before BEGIN runs', () => {
   }
 });
 
+test('SIDEQUEST_GUARD_ALL_WRITES guards every write except the paths still listed as spawning', () => {
+  const previous = process.env.SIDEQUEST_GUARD_ALL_WRITES;
+  try {
+    process.env.SIDEQUEST_GUARD_ALL_WRITES = '1';
+    assert.equal(database.guardsEveryWrite(), true);
+    assert.equal(database.stillSpawnsInsideItsWrite('withCompositionLocks', () => database.guardsEveryWrite()), false);
+    assert.equal(database.guardsEveryWrite(), true, 'the exemption ends with the listed write');
+    delete process.env.SIDEQUEST_GUARD_ALL_WRITES;
+    assert.equal(database.guardsEveryWrite(), false, 'production keeps the per-write guard until the list is empty');
+  } finally {
+    if (previous === undefined) delete process.env.SIDEQUEST_GUARD_ALL_WRITES;
+    else process.env.SIDEQUEST_GUARD_ALL_WRITES = previous;
+  }
+});
+
+test('a direct claim reads HEAD and registers its session outside the write lock', () => {
+  const ticket = sidequest.createTicket(slug, { title: `direct claim ${process.pid}-${Date.now()}`, description: 'SQ-3499 fixture.' });
+  resetObservations();
+  const claimed = sidequest.claimTicket(slug, ticket.ref, 'direct-owner', { direct: true, sessionId: `sq-3499-${process.pid}`, source: 'test' });
+  assert.equal(claimed.ok, true, JSON.stringify(claimed).slice(0, 600));
+  assert.equal(claimed.ticket.lifecycleAttempt.baseline.revision.value, git(PROJECT, ['rev-parse', 'HEAD']));
+  assert.ok(observed.gitCalls > 0, 'the claim did read HEAD');
+  assert.deepEqual(observed.gitUnderWriteLock, []);
+  assert.deepEqual(observed.lockFilesUnderTransaction, []);
+  assert.ok(sidequest.sessionClaims(`sq-3499-${process.pid}`).some((claim: { ticketId: string }) => claim.ticketId === ticket.id), 'the session registry still records the claim');
+});
+
 test('an oracle release is checked before the write: ask, kind, status and a pending verdict', () => {
   const ticket = sidequest.createTicket(slug, { title: `oracle checks ${process.pid}-${Date.now()}`, category: 'codebase-exploration', description: 'SQ-3348 fixture.', files: ['README.md'] });
   const prepared = sidequest.prepareDispatch(slug, ticket.ref, { sharedTree: true });

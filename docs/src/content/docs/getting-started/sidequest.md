@@ -53,6 +53,19 @@ gate per wave before versioning, including a singleton. A changed tree after reb
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
+A verifier pinned to a shared environment (`verifyEnvironment: shared`) delivers through CLI `sidequest integrate`, which
+runs it under an owned process tree: at the deadline the whole tree ends and the delivery rolls back with exit
+124. On POSIX that tree is the verifier's process group, so anything it starts with `setsid` (or another new
+session or group) escapes the deadline and needs its own teardown in the verify command. On Windows the
+tree is the job owner's job, which holds detached descendants too; a process started through a service or
+broker (dockerd, for one) is outside it. A verifier that exits 0 but leaves the tree unaccounted for (a member
+still alive, or no account of the job's members) is recorded as `could_not_run` with the cleanup error, and the
+delivery rolls back. A verifier that exits non-zero is recorded as `failed_suite` with its own exit code even then,
+with the cleanup error added to the evidence. The run passes only when the tree's owner reports that it finished;
+an owner that dies first is recorded as `could_not_run`, whatever the verifier exited, and the delivery rolls back.
+The owner reports how the run ended on a private channel the verifier never sees, so the verifier's stdout and
+stderr are only the suite's log: nothing it prints, even a copy of an owner line, changes the verdict.
+
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or
 Claude take afterwards. When the project has an `origin` remote, Sidequest additionally reads
@@ -81,7 +94,11 @@ members and closes the job; an owner that does not exit in time is killed, which
 same. A pre-aborted signal starts nothing. The capture then fails as `timeout` or `could_not_run`, and
 its reason names the processes the job ended, any that refused to end, the broker boundary, and the
 output log path. When the owner left no account of its job, or one cut off mid-write or malformed, the
-reason says "survivor state unknown" rather than claiming none survived. A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
+reason says "survivor state unknown" rather than claiming none survived. The owner gets its report file
+and a per-run nonce only as its own arguments, stamps every report line with that nonce, and removes
+`SIDEQUEST_JOB_OWNER_REPORT` from the environment the verify inherits. A report line without the nonce
+counts for nothing, so a verify that finds the report file and writes an empty-job record into it still
+gets "survivor state unknown". A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
 instead of running the verify unowned. Set `SIDEQUEST_JOB_AFFINITY_MASK` (for example `3` for two
 cores) in the verify's environment to pin the whole job to those processors. POSIX keeps its
 process-group supervision unchanged; the signal option does not cancel a POSIX phase.

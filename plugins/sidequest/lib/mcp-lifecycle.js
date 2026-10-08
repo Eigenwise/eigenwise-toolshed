@@ -232,6 +232,25 @@ function ticketCommitScope(slug, ticket) {
     ...rejectedRelatedReleaseFragments(slug, ticket)
   ])];
 }
+function environmentLaneRefusal(slug, refs, project) {
+  const bound = refs.map((ref) => store.getTicket(slug, ref)).find((candidate) => candidate && store.pinnedVerificationRequirement(candidate).environment === "shared");
+  if (!bound) return null;
+  const timeoutMilliseconds = store.boardConfig(slug).integrationVerifyTimeoutMs;
+  return {
+    reason: "environment_lane_requires_cli",
+    message: `integrate: ${bound.ref}'s verifier is environment-bound and can run up to ${timeoutMilliseconds} ms; inside the board server that stalls every executor's board calls. Run CLI integrate for ${bound.ref} (\`sidequest integrate ${bound.ref} --project ${JSON.stringify(project)} --json\`) with Bash run_in_background and act on its completion notification. Container teardown stays in the project's verify command.`
+  };
+}
+function refusingTheEnvironmentLane(integrate) {
+  return async (args) => {
+    if (Object.hasOwn(args, "wave")) return integrate(args);
+    const { slug, meta } = resolveLifecycleProject(args.project, args, "integrate");
+    requireBy(args, "integrate");
+    const refs = String(args.ref).split(",").map((ref) => ref.trim()).filter(Boolean);
+    const refusal = environmentLaneRefusal(slug, refs, meta.path);
+    return refusal ? mutationAck(slug, combinedRefusal(store.getTicket(slug, refs[0]), [refusal])) : integrate(args);
+  };
+}
 function combinedRefusal(ticket, failures) {
   const primary = failures[0];
   if (!primary) throw new Error("combined refusal requires at least one failure");
@@ -1259,4 +1278,7 @@ const tools = [
     }
   }
 ];
+for (const tool of tools) {
+  if (tool.name === "integrate") tool.handler = refusingTheEnvironmentLane(tool.handler);
+}
 module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };

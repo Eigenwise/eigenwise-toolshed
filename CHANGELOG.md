@@ -8,6 +8,51 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.594.0 (2026-10-08)
+
+### Repository
+
+- Release-engine test fixtures turn off git auto maintenance (SQ-3481)
+  The real-repo fixture in scripts/release/test/realrepo.mjs sets `maintenance.auto false` on both the bare origin and the work repo. Every receive-pack and commit was starting a detached `git maintenance run --auto` that could still be writing into the temp directory when the test's cleanup removed it, which failed atomic.test.mjs's after hook with ENOTEMPTY on origin.git in CI.
+
+### model-gateway 0.54.1 → 0.54.2
+
+#### Fixes
+
+- Thread-negotiation tests no longer race the shim and proxy for one port (SQ-3489)
+  The thread-negotiation fixture used to pick its shim and proxy ports by binding and releasing them. When both picks came back equal on Linux, the fake proxy answered the Grok continuation refusal test with 200. The proxy now holds its own port 0 bind, and the shim reports its own ephemeral port. A failed refusal assertion also prints the response body now. Test-only change, no runtime behavior affected.
+
+### quality-gate 0.0.0 → 0.1.0
+
+#### Features
+
+- Add the quality-gate plugin and move the repository AST scoring core into it (SQ-3509) [`7d38d4c`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7d38d4cdfbb9ff83e9692000f7230632c6627492)
+  The quality-gate package owns JavaScript and TypeScript complexity, stable function identities and V8 coverage matching. The repository gate calls that library and produces the same report on frozen develop inputs. This first release exposes only the `measure` entry; the project-scoring command, configuration and hooks follow in Q2 and Q3 of US-80.
+
+### sidequest 5.8.0 → 5.9.0
+
+#### Features
+
+- Environment-bound deliveries run through CLI integrate with owned cleanup and a named lock (SQ-3425)
+  MCP `integrate` refuses a submission whose pinned verifier is environment-bound (`verifyEnvironment: shared`) with `environment_lane_requires_cli`: the refusal names the integration timeout and the CLI command to background, since the board server's synchronous verifier would stall every executor's board calls for that long. For those verifiers only, the delivery gate runs the shell under `scripts/owned-process-tree.js`, so a timeout ends docker clients, browsers and drivers under it (process group on POSIX, a kill-on-close Job Object on Windows); the log carries a `__SIDEQUEST_VERIFY_TIMEOUT__` marker. The delivery lock now records the ticket, pinned commit, command, log path and start time, and `delivery_in_progress` names them; a lock left by a dead process is still reclaimed. Default-board deliveries are unchanged.
+
+#### Fixes
+
+- Environment-lane timeouts never pass as success, and the delivery lock holder lands whole (SQ-3477)
+  On Windows, an environment-bound verifier's deadline is now enforced by the job owner's job instead of a `taskkill /T` sweep, so a detached descendant still holding the output open ends with the root, and the run records the `__SIDEQUEST_VERIFY_TIMEOUT__` marker and exit 124. The recorded timeout carries that 124 instead of 2. The lane also finds `scripts/owned-process-tree.js` from the package root when the store loads from source. The delivery lock holder record is written in the same exclusive create as the lock itself, so a reader never sees an empty lock. The MCP integrate refusal for the environment lane now wraps the tool handler, and wave delivery runs through named step functions; neither changes behavior. A verifier that starts work with `setsid` escapes the POSIX process group and needs its own teardown.
+- The delivery lock survives a reader, and an unclean owned tree never passes (SQ-3480)
+  This replaces the SQ-3477 note about the lock holder: the delivery lock no longer publishes its holder by renaming a side file over the lock, which failed with EPERM on Windows whenever `pulse` or a second integrate had the lock open and aborted the delivery. The holder now lands in the write that creates the lock. An environment-lane verifier that exits 0 while its owned tree reports a cleanup error (a job member still alive, or no account of the job's members) is now recorded as `could_not_run` with that error and the `__SIDEQUEST_VERIFY_CLEANUP_ERROR__` log marker, and the delivery rolls back, instead of passing.
+- An environment-lane verify passes only when its owner reports it finished, and a suite failure beats a cleanup error (SQ-3484)
+  The owned tree behind an environment-lane verifier now reports a final done record after its exit, timeout and cleanup records. A run without it (the owner crashed after the verifier exited) is recorded as `could_not_run` with "The verification owner ended without reporting." and the delivery rolls back; before, the verifier's own exit 0 passed it. A verifier that exits non-zero while the tree also reports a cleanup error is now `failed_suite` with the verifier's exit code, and the cleanup error is added to its evidence instead of replacing the suite failure with `could_not_run`.
+- An environment-lane verifier can no longer forge its owner's report (SQ-3488)
+  The owned tree behind an environment-lane verifier used to report its exit, timeout, cleanup error and done lines into the same log the verifier writes, so a verifier printing `__SIDEQUEST_VERIFY_DONE__` could pass a run whose owner had crashed. The owner now reports on a private file the board creates for each run, every record carrying a per-run nonce, and the verifier's stdout and stderr are only suite output. A missing or unreadable report is `could_not_run` and the delivery rolls back, as a missing done line was before; the verdicts are otherwise unchanged.
+- A Windows verifier can no longer forge its job owner's account of the job (SQ-3490)
+  The Windows job owner used to read its report path from `SIDEQUEST_JOB_OWNER_REPORT`, which the verifier inherited, so a verifier could write `members 0 end` into that report and pass a run whose owner died before accounting for its job. The owner now gets the report path and a per-run nonce only as its own arguments, stamps every report line with the nonce, and removes `SIDEQUEST_JOB_OWNER_REPORT` from the environment the verifier inherits. A report line without the nonce is ignored, so a forged or foreign record leaves survivor state unknown and the run fails as before.
+- Claim and WorktreeCreate writes no longer run git or wait on lock files inside the board's write lock (SQ-3499)
+  Claim, WorktreeCreate completion and WorktreeCreate recovery now read git (HEAD, the checkout identity, `git status`, the filesystem snapshot hash) before their write transaction begins, and the claim's session-registry write runs after commit. The `.meta.lock` file is gone: every project-row write was already one BEGIN IMMEDIATE transaction, and waiting on that file inside a caller's transaction held every board's writers. Under parallel dispatch these were the writes that pushed other sessions past their busy budget into `database is locked`.
+
+  The test harness now sets `SIDEQUEST_GUARD_ALL_WRITES=1`, so any write transaction that starts a child process or waits on a lock file fails the suite. The paths that still do are listed in `db.WRITES_STILL_SPAWNING` with their follow-up tickets; production behaviour on those paths is unchanged until the list is empty and the guard becomes the default.
+
 ## v3.593.0 (2026-10-07)
 
 ### Repository
