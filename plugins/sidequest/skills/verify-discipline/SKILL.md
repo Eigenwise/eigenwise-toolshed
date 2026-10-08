@@ -33,6 +33,9 @@ expensive final coverage. Reuse fresh candidate-verifier coverage for the same c
 the actual runner supports it. For a configured gate, missing analyzer or coverage stays UNVERIFIED. Never substitute tracked
 Lizard/proportional attribution, pin `quality:crap` as authority, or rerun a full suite merely for
 already captured compatible coverage. Tooling and reports stay local and uncommitted; untouched legacy functions are outside scope.
+Block only on new complexity the change introduced: a touched legacy function whose complexity did not
+rise since the base is reported with its number as informational (a LEGACY row), never as a failure and
+never as a reason to refactor it.
 When none is configured, run the pinned verifier, state once "no quality gate is configured for this
 project; Quartermaster setup can add one", and continue. Absence alone never holds, parks or marks work
 UNVERIFIED. User rules injected by the host still apply.

@@ -2,9 +2,17 @@
 
 The shared AST, function identity and V8 coverage core lives in `plugins/quality-gate/lib/`. This script owns only Toolshed path selection, build-output mapping, suite capture and text reporting; the plugin also exposes a `measure` entry that consumes existing coverage and prints JSON.
 
-`node scripts/quality/crap.mjs --base <revision>` scores every JavaScript or TypeScript function that is new or changed since `<revision>`, wherever the changed file lives: `plugins/*/lib`, `plugins/*/src`, `plugins/*/scripts`, `plugins/*/test`, `scripts/`, `docs/scripts/`. Test callbacks are function bodies too and get their own rows. Changed means the function's own text (its body minus nested functions) differs from the base function it is paired with, or it has no partner. Pairing runs parent by parent: a sibling whose own text appears exactly once on each side pairs first, and the rest pair in order between those anchors, so inserting or deleting a test leaves the untouched callbacks after it unscored. The file list is the changed range itself (`git diff --name-status`), filtered to `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`; Sidequest's built `lib/`, `bin/` and `hooks/` are skipped because `src/` is their source. A function fails at 6:
+`node scripts/quality/crap.mjs --base <revision>` scores every JavaScript or TypeScript function that is new or changed since `<revision>`, wherever the changed file lives: `plugins/*/lib`, `plugins/*/src`, `plugins/*/scripts`, `plugins/*/test`, `scripts/`, `docs/scripts/`. Test callbacks are function bodies too and get their own rows. Changed means the function's own text (its body minus nested functions) differs from the base function it is paired with, or it has no partner. Pairing runs parent by parent: a sibling whose own text appears exactly once on each side pairs first, and the rest pair in order between those anchors, so inserting or deleting a test leaves the untouched callbacks after it unscored. The file list is the changed range itself (`git diff --name-status`), filtered to `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`; Sidequest's built `lib/`, `bin/` and `hooks/` are skipped because `src/` is their source.
 
     CRAP = complexity² × (1 − coverage)³ + complexity
+
+Only new complexity the change introduced is enforced. Every changed function lands in one of three report sections, and the summary line carries their counts:
+
+- **NEW**: no partner at the base. Must score strictly below 6 with measured coverage.
+- **MODIFIED-RAISED**: has a partner and its cyclomatic complexity went up. Must score strictly below 6, or the added branches move into a new helper that does.
+- **LEGACY-UNCHANGED**: has a partner and its complexity is equal or lower. Printed as a `LEGACY` row with its number, informational only: it never fails, never counts as UNVERIFIED and never touches the exit code, so a pass-through edit inside a big legacy function is not a refactor demand.
+
+The exit code is 1 only when a NEW or MODIFIED-RAISED row fails or is unverified. Report a LEGACY row with its number; do not rewrite the function to satisfy the gate.
 
 Coverage is V8 block coverage captured through `NODE_V8_COVERAGE` from the suites behind the changed files, projected onto each function's source span:
 
@@ -19,7 +27,7 @@ Coverage is V8 block coverage captured through `NODE_V8_COVERAGE` from the suite
 
 ## Rows that are UNVERIFIED
 
-An UNVERIFIED row fails the gate like a FAIL does, and says why:
+An UNVERIFIED row in the NEW or MODIFIED-RAISED section fails the gate like a FAIL does (a LEGACY row stays informational either way), and says why:
 
 - **no analyzer**: a changed source in another language (`.cs`, `.py`, `.sh`, `.ps1`, `.svelte`, `.tsx`, `.jsx`) prints one row for the file. The gate has nothing to measure it with; say so in the report rather than claiming a score.
 - **no suite loaded this file**: the file has no coverage record at all, so no suite imported or ran it. Zero coverage from a file that did run is reported as 0% and scored; a file that never ran is a measurement gap, not a score. The usual cause is a script that is only ever spawned as a child process (`spawnSync(process.execPath, ['scripts/thing.js'])`). A child inherits `NODE_V8_COVERAGE` from its parent's environment, so it is covered as soon as the spawning test passes the environment through (`env: process.env`, or `{ ...process.env, ... }`); a test that builds a fresh `env` without it drops the capture. `verify-capture` sets the variable for its own runs the same way.

@@ -25,7 +25,7 @@ function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed
 }
 
 function baselineOf(entries) {
-  return async () => entries.map(([identity, fingerprint]) => ({ identity, parent: '<root>', fingerprint }));
+  return async () => entries.map(([identity, fingerprint, complexity = 1]) => ({ identity, parent: '<root>', fingerprint, complexity }));
 }
 
 test('collects stable identities and source fingerprints', async () => {
@@ -93,7 +93,7 @@ test('keeps changed unverified functions in the result set', async () => {
     'base-sha',
     baselineOf([]),
   );
-  assert.deepEqual(changedMetrics, [unverified]);
+  assert.deepEqual(changedMetrics, [{ ...unverified, classification: 'new' }]);
   assert.deepEqual(await compareAgainstBase([unverified], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([])), []);
 });
 
@@ -103,32 +103,32 @@ test('treats a file that is new since the base as entirely changed', async () =>
     throw new Error(`fatal: path '${relativePath}' exists on disk, but not in '${base}'`);
   };
   const changedMetrics = await changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', newFileAtBase);
-  assert.deepEqual(changedMetrics, [fresh]);
+  assert.deepEqual(changedMetrics, [{ ...fresh, classification: 'new' }]);
   const otherFailure = async () => { throw new Error('fatal: not a git repository'); };
   await assert.rejects(changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', otherFailure), /not a git repository/);
 });
 
-test('accepts a changed function whose score falls below six', async () => {
-  const lowered = metric({ complexity: 3, coverage: 1, fingerprint: 'lowered' });
+test('accepts a changed function whose complexity rose but whose score stays below six', async () => {
+  const raised = metric({ complexity: 3, coverage: 1, fingerprint: 'raised' });
   const failures = await compareAgainstBase(
-    [lowered],
+    [raised],
     ['plugins/example/lib/subject.js'],
     'base-sha',
-    baselineOf([[lowered.identity, 'higher']]),
+    baselineOf([[raised.identity, 'prior', 2]]),
   );
   assert.deepEqual(failures, []);
 });
 
-test('fails a changed over-ceiling function without a delta ratchet', async () => {
+test('fails a changed over-ceiling function only when its complexity rose since base', async () => {
   const changed = metric({ complexity: 7, coverage: 0.5, fingerprint: 'changed' });
-  const failures = await compareAgainstBase(
-    [changed],
-    ['plugins/example/lib/subject.js'],
-    'base-sha',
-    baselineOf([[changed.identity, 'prior']]),
-  );
-  assert.equal(failures.length, 1);
-  assert.match(failures[0], /subject cc=7 coverage=50\.00%/);
+  const raised = await compareAgainstBase([changed], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([[changed.identity, 'prior', 6]]));
+  assert.equal(raised.length, 1);
+  assert.match(raised[0], /subject cc=7 coverage=50\.00%/);
+  for (const baseComplexity of [7, 9]) {
+    const [legacy] = await changedMetricsAgainstBase([changed], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([[changed.identity, 'prior', baseComplexity]]));
+    assert.equal(legacy.classification, 'legacy-unchanged');
+    assert.deepEqual(await compareAgainstBase([changed], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([[changed.identity, 'prior', baseComplexity]])), []);
+  }
 });
 
 test('scores JavaScript and TypeScript wherever it lives, skipping generated Sidequest build output and other languages', () => {
@@ -637,38 +637,54 @@ test('the CLI scores a changed plugin script, test callback and src function wit
       fs.rm(path.join(pluginRoot, 'src', 'retired.js')),
     ]);
     const result = runCliFixture(fixtureRoot, base);
-    const rows = result.stdout.split('\n').filter((line) => /^(PASS|FAIL|UNVERIFIED) /.test(line));
+    const rows = result.stdout.split('\n').filter((line) => /^(PASS|FAIL|LEGACY|UNVERIFIED) /.test(line));
     assert.deepEqual(rows.map((row) => row.split(' ').slice(0, 3).join(' ')), [
       'PASS plugins/sidequest/scripts/helper.js:1 helper',
-      'PASS plugins/sidequest/src/subject.js:1 subject',
-      'PASS plugins/sidequest/test/subject.test.mjs:6 <anonymous>',
+      'LEGACY plugins/sidequest/src/subject.js:1 subject',
+      'LEGACY plugins/sidequest/test/subject.test.mjs:6 <anonymous>',
       'UNVERIFIED scripts/windows-job-owner.cs:1 windows-job-owner.cs',
     ], result.stdout + result.stderr);
     assert.match(rows[0], /cc=2 coverage=100\.00% CRAP=2\.0000/);
     assert.match(rows[2], /cc=1 coverage=100\.00% CRAP=1\.0000/);
     assert.match(rows[3], /this gate has no analyzer for \.cs sources; measurement is unverified\./);
+    assert.deepEqual(result.stdout.split('\n').filter((line) => /^(NEW|MODIFIED-RAISED|LEGACY-UNCHANGED|UNCLASSIFIED):/.test(line)).map((line) => line.split(':')[0]), ['MODIFIED-RAISED', 'LEGACY-UNCHANGED', 'UNCLASSIFIED']);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /coverage suites: sidequest/);
+    assert.match(result.stderr, /coverage suites: sidequest\): 0 new, 1 modified-raised, 2 legacy-unchanged; only new complexity the change introduced is enforced/);
     assert.doesNotMatch(result.stdout + result.stderr, /retired/);
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });
 
-test('the CLI captures a fixture suite and reports passing and failing changed functions', async () => {
+test('the CLI captures a fixture suite: a pass-through edit stays legacy, a gained branch fails, and a branch moved into a new helper passes', async () => {
   const { fixtureRoot, base } = await createCliFixture();
+  const subjectPath = path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js');
   try {
-    await fs.writeFile(path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js'), passSubject);
+    await fs.writeFile(subjectPath, passSubject);
     const passing = runCliFixture(fixtureRoot, base);
-    assert.equal(passing.status, 0);
-    assert.match(passing.stdout, /PASS plugins\/sidequest\/src\/subject\.js:1 subject/);
-    assert.match(passing.stdout, /coverage suites: sidequest/);
+    assert.equal(passing.status, 0, passing.stderr);
+    assert.match(passing.stdout, /LEGACY-UNCHANGED: touched without new complexity, informational, never a failure \(1\)\nLEGACY plugins\/sidequest\/src\/subject\.js:1 subject cc=1/);
+    assert.match(passing.stdout, /coverage suites: sidequest\): 0 new, 0 modified-raised, 1 legacy-unchanged; only new complexity the change introduced is enforced below 6/);
 
-    await fs.writeFile(path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js'), failingSubject);
+    await fs.writeFile(subjectPath, failingSubject);
     const failing = runCliFixture(fixtureRoot, base);
     assert.equal(failing.status, 1);
-    assert.match(failing.stdout, /FAIL plugins\/sidequest\/src\/subject\.js:1 subject/);
-    assert.match(failing.stderr, /CRAP gate failed against/);
+    assert.match(failing.stdout, /MODIFIED-RAISED: complexity rose since base[^\n]*\(1\)\nFAIL plugins\/sidequest\/src\/subject\.js:1 subject cc=6/);
+    assert.match(failing.stderr, /CRAP gate failed against [^\n]*: 0 new, 1 modified-raised, 0 legacy-unchanged; only new complexity/);
+
+    const legacyBase = commitFixture(fixtureRoot, 'legacy at cc=6');
+    await fs.writeFile(subjectPath, failingSubject.replace('return 0;', 'return -1;'));
+    const passThrough = runCliFixture(fixtureRoot, legacyBase);
+    assert.equal(passThrough.status, 0, passThrough.stderr);
+    assert.match(passThrough.stdout, /LEGACY plugins\/sidequest\/src\/subject\.js:1 subject cc=6 coverage=[\d.]+% CRAP=\d/);
+    assert.doesNotMatch(passThrough.stdout + passThrough.stderr, /FAIL/);
+
+    await fs.writeFile(subjectPath, failingSubject.replace('return 0;', 'return fallback(value);\n}\nfunction fallback(value) {\n  return value > 5 ? -1 : 0;'));
+    const helper = runCliFixture(fixtureRoot, legacyBase);
+    assert.equal(helper.status, 0, helper.stderr);
+    assert.match(helper.stdout, /NEW: not at base, must score below 6 \(1\)\nPASS plugins\/sidequest\/src\/subject\.js:9 fallback cc=2/);
+    assert.match(helper.stdout, /LEGACY plugins\/sidequest\/src\/subject\.js:1 subject cc=6/);
+    assert.match(helper.stdout, /: 1 new, 0 modified-raised, 1 legacy-unchanged;/);
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
