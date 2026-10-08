@@ -794,8 +794,10 @@ const jobReportEvents = new Map([
   ['owner-error', (report, [code, ...message]) => { report.ownerError = { code: Number(code), message: message.join(' ') }; }],
 ]);
 
-// Only lines carrying this run's nonce are the owner's: the phase can find and write the report file,
-// but never learns the nonce, so a line without it is not an event, whatever it says (SQ-3490).
+// Only lines carrying this run's nonce are the owner's, so a verifier that prints `members 0 end` or
+// inherits a stale variable is never read as the owner (SQ-3490). This is not a security boundary: the
+// verifier runs as the same OS user and could read the nonce from the owner's command line or from this
+// file. Deliberate forging by an executor's test is caught by candidate review, not here (SQ-3492 ruling).
 function readJobReport({ reportPath, nonce }) {
   const report = { closedMemberIds: null, accountFailure: null, endedOnRequest: false, affinityMask: null, ownerError: null };
   const text = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8') : '';
