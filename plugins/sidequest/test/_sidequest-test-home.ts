@@ -18,6 +18,8 @@ Object.assign(process.env, {
   GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
 });
 process.env.SIDEQUEST_HOME = sidequestTestHome;
+// Any write transaction that starts git or waits on a lock file fails the suite, outside db.WRITES_STILL_SPAWNING.
+process.env.SIDEQUEST_GUARD_ALL_WRITES = '1';
 process.env.SIDEQUEST_CLAUDE_HOME = path.join(sidequestTestHome, 'claude');
 
 // Routing reads the wired Claude tier pins from the environment. A developer machine wired to the

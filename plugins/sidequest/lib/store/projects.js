@@ -1,5 +1,5 @@
 "use strict";
-function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
+function createProjects({ assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
   function canonicalize(absPath) {
     const resolved = path.resolve(absPath);
     try {
@@ -148,17 +148,8 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     cache.metadata.set(key, meta);
     return cloneCached(meta);
   }
-  function metaLockPath(slug) {
-    return path.join(projectDir(slug), ".meta.lock");
-  }
-  function withMetaLock(slug, fn) {
-    const lock = metaLockPath(slug);
-    const locked = acquireLock(lock);
-    try {
-      return transaction(fn);
-    } finally {
-      if (locked) releaseLock(lock, locked);
-    }
+  function withMetaLock(_slug, fn) {
+    return transaction(fn);
   }
   function nextSeq(slug) {
     return withMetaLock(slug, () => {
@@ -384,6 +375,6 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     }
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
-  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, takeSourceRevisionAdapterSwitch, unarchiveProject, withMetaLock };
+  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, takeSourceRevisionAdapterSwitch, unarchiveProject, withMetaLock };
 }
 module.exports = { createProjects };

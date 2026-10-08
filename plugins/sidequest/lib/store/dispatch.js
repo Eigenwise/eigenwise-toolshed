@@ -2843,34 +2843,41 @@ function createDispatch(dependencies) {
       previous.worktreeCheckoutInstance === facts.checkoutInstance
     ].some(Boolean);
   }
-  function cleanCompositionCheckoutRefusal(worktree) {
+  function checkoutStatus(worktree) {
     try {
-      if (gitOutput(worktree, ["status", "--porcelain"])) return { ok: false, reason: "composition_checkout_dirty" };
+      return gitOutput(worktree, ["status", "--porcelain"]);
     } catch {
-      return { ok: false, reason: "composition_checkout_unobservable" };
+      return null;
     }
   }
-  function compositionCheckoutIdentityRefusal(ticket, worktree, facts) {
+  function observeNativeCheckout(slug, worktree, ticket) {
+    return { facts: immutableWorktreeFacts(slug, worktree), checkoutStatus: ticket.compositionAdmission ? checkoutStatus(worktree) : void 0 };
+  }
+  function cleanCompositionCheckoutRefusal(status) {
+    if (status == null) return { ok: false, reason: "composition_checkout_unobservable" };
+    if (status) return { ok: false, reason: "composition_checkout_dirty" };
+  }
+  function compositionCheckoutIdentityRefusal(ticket, worktree, facts, observed) {
     const admission = ticket.compositionAdmission;
     if (!admission) return;
     if (compositionCheckoutWasReused(admission.releasedDispatch, worktree, facts)) return { ok: false, reason: "composition_checkout_reused" };
-    return cleanCompositionCheckoutRefusal(worktree);
+    return cleanCompositionCheckoutRefusal(observed.checkoutStatus);
   }
-  function nativeCheckoutCompletionFacts(slug, worktree, state) {
-    const facts = immutableWorktreeFacts(slug, worktree);
+  function nativeCheckoutCompletionFacts(observed, state) {
+    const facts = observed.facts;
     if (!facts) return { ok: false, reason: "invalid_worktree_binding" };
     if (facts.revision !== String(compositionCheckoutCommit(state)).trim()) return { ok: false, reason: "worktree_revision_mismatch" };
     return facts;
   }
-  function completeNativeCheckoutForTicket(slug, id, binding, attempt) {
+  function completeNativeCheckoutForTicket(slug, id, binding, attempt, observed) {
     const ticket = getTicket(slug, id);
     const current = dispatchState(ticket);
     const generation = worktreeCallbackGenerationRefusal(current, attempt);
     if (generation) return { ...generation, ok: false };
     if (!launchedNativeCheckoutMatches(current, binding)) return { ok: false, reason: "dispatch_binding_unavailable" };
-    const facts = nativeCheckoutCompletionFacts(slug, binding.worktree, current);
+    const facts = nativeCheckoutCompletionFacts(observed, current);
     if ("ok" in facts) return facts;
-    return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts) ?? recordNativeCheckoutCompletion(slug, ticket, current, facts);
+    return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts, observed) ?? recordNativeCheckoutCompletion(slug, ticket, current, facts);
   }
   function completeDispatchWorktreeCreation(slug, sessionId, worktree, attempt) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
@@ -2878,10 +2885,11 @@ function createDispatch(dependencies) {
     if (!binding) return { ok: false, reason: "missing_binding_facts" };
     for (const candidate of listTickets(slug)) {
       if (!launchedNativeCheckoutMatches(dispatchState(candidate), binding)) continue;
+      const observed = observeNativeCheckout(slug, binding.worktree, candidate);
       return dependencies.withCompositionGenerationLock(
         slug,
         candidate.id,
-        () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt)
+        () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt, observed)
       );
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
@@ -2996,9 +3004,8 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
-  function recordRecoveredCheckoutIdentity(slug, state, worktree) {
+  function recordRecoveredCheckoutIdentity(state, facts) {
     if (state.worktreeCreationCompletedAt) return;
-    const facts = immutableWorktreeFacts(slug, worktree);
     const checkoutCommit = String(compositionCheckoutCommit(state)).trim();
     if (facts && checkoutCommit && facts.revision === checkoutCommit) recordCreatedCheckoutIdentity(state, facts);
   }
@@ -3019,13 +3026,13 @@ function createDispatch(dependencies) {
     stampDispatchEvent(ticket, "worktree-create-recovery");
     putTicket(slug, ticket);
   }
-  function recoverLaunchedCheckout(slug, id, binding, error, attempt, options) {
+  function recoverLaunchedCheckout(slug, id, binding, error, attempt, options, facts) {
     const ticket = getTicket(slug, id);
     const state = dispatchState(ticket);
     const generation = worktreeCallbackGenerationRefusal(state, attempt);
     if (generation) return generation;
     if (!launchedNativeCheckoutMatches(state, binding)) return { ok: false, reason: "dispatch_binding_unavailable" };
-    recordRecoveredCheckoutIdentity(slug, state, binding.worktree);
+    recordRecoveredCheckoutIdentity(state, facts);
     const held = holdOrReleaseUncreatedCheckout(slug, ticket, state, binding.sessionId, options?.created);
     if (held) return held;
     terminalizeFailedCheckoutCreation(slug, ticket, error);
@@ -3043,7 +3050,8 @@ function createDispatch(dependencies) {
       return Boolean(state && state.sessionId === normalizedSessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt && state.worktreeBindingSource === "worktree-create" && state.worktree && canonicalPath(state.worktree) === boundWorktree);
     });
     if (matches.length !== 1) return { ok: false, reason: matches.length ? "ambiguous_binding" : "dispatch_binding_unavailable" };
-    const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options));
+    const facts = dispatchState(matches[0]).worktreeCreationCompletedAt ? null : immutableWorktreeFacts(slug, boundWorktree);
+    const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options, facts));
     if (!terminal?.ok || terminal.heldFor) return terminal;
     const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
     return { ok: true, ticket: terminal.ticket, cleanup };
