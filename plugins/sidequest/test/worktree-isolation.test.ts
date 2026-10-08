@@ -2475,6 +2475,7 @@ test('an unrelated executor subagent does not inherit a session fallback claim',
 
 test('a destructive git command is refused while the shared checkout carries uncommitted work', () => {
   const repo = initRepo('sq-destructive-repo-');
+  store.ensureProject(repo);
   const clean = runHook(GUARD_DESTRUCTIVE, {
     cwd: repo,
     tool_name: 'Bash',

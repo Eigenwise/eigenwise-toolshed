@@ -24,7 +24,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/guard-destructive-git.ts
-var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 
 // src/lib/git-process.ts
@@ -303,7 +302,7 @@ function repoRoot(repo) {
 }
 function sharedCheckout(repo) {
   try {
-    return import_node_fs2.default.statSync(import_node_path.default.join(repo, ".git")).isDirectory();
+    return Boolean(store.findProject(repo).ok);
   } catch (_) {
     return false;
   }
@@ -410,7 +409,7 @@ function destructiveRefusal(label, repo, dirty) {
   const shown = dirty.slice(0, 10).map((line) => `  ${line}`);
   if (dirty.length > shown.length) shown.push(`  … +${dirty.length - shown.length} more`);
   return [
-    `sidequest: refusing ${label} — the shared checkout has ${dirty.length} uncommitted change(s) that this operation would destroy.`,
+    `sidequest: refusing ${label} — the shared checkout (a board-registered project root; your evidence clone is not one) has ${dirty.length} uncommitted change(s) that this operation would destroy.`,
     `  repo: ${repo}`,
     ...shown,
     "Some of this may be a live executor's finished work that lost its worktree; the shared tree is not yours alone.",
