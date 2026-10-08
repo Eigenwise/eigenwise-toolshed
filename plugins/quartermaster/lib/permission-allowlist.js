@@ -58,6 +58,11 @@ const COMMAND_SUBSTITUTION = /\$\(|\$\{|\x60/;
 // no trailing separator required, not just a path further inside it.
 const PLUGIN_CACHE_PATH = /\.claude[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+(?:[\\/]|$)/i;
 const SESSION_SCRATCHPAD_PATH = /claude[-\\/][^\\/]+[\\/][\s\S]*[\\/]scratchpad(?:[\\/]|$)/i;
+// A glob metacharacter in the kept argument (`ls foo/*.test.ts`) is spliced
+// verbatim ahead of the `:*` suffix by ruleFor, and Claude Code reads that `*`
+// literally rather than as a glob, so the rule can never match the command that
+// earned it. The rule is dead on arrival, so the fingerprint earns none.
+const GLOB_ARGUMENT = /[*?[\]]/;
 
 function settingsFile(projectDir) {
   return path.join(projectDir, '.claude', 'settings.local.json');
@@ -154,6 +159,13 @@ const TOO_BROAD_RULES = [
   {
     reason: 'bare shell variable argument',
     test: ({ firstArg }) => Boolean(firstArg) && VARIABLE_ONLY_ARG.test(firstArg),
+  },
+  // A glob metacharacter in the argument makes ruleFor emit a literal-`*`
+  // prefix that Claude Code never matches, so the rule is written dead; veto it
+  // rather than let a fresh one accrete for every distinct `cmd path/*` command.
+  {
+    reason: 'glob argument',
+    test: ({ firstArg }) => Boolean(firstArg) && GLOB_ARGUMENT.test(firstArg),
   },
   // A command substitution resolves to whatever that subcommand prints,
   // same reasoning as a bare variable, just not anchored to one argument.
