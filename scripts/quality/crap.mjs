@@ -8,7 +8,7 @@ import { crapScore, formatMetric, measureSource, readOutput } from '../../plugin
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sidequestRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
-const { collectFunctions, cyclomaticComplexity, ownText, parserTransport } = await createAnalyzer(repositoryRoot);
+const { collectFunctions, cyclomaticComplexity, ownText, parserTransport } = await createAnalyzer(sidequestRoot);
 export { collectFunctions, cyclomaticComplexity, ownText, parserTransport, functionCoverage, readCoverage, remapRecords, originalOffsetMapper, baseFunctionByIdentity };
 const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']);
 const UNANALYZED_SOURCE_EXTENSIONS = new Set(['.cs', '.py', '.sh', '.ps1', '.svelte', '.tsx', '.jsx']);
