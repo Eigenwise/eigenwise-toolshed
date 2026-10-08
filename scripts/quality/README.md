@@ -1,5 +1,7 @@
 # CRAP gate for the toolshed repository
 
+The shared AST, function identity and V8 coverage core lives in `plugins/quality-gate/lib/`. This script owns only Toolshed path selection, build-output mapping, suite capture and text reporting; the plugin also exposes a `measure` entry that consumes existing coverage and prints JSON.
+
 `node scripts/quality/crap.mjs --base <revision>` scores every JavaScript or TypeScript function that is new or changed since `<revision>`, wherever the changed file lives: `plugins/*/lib`, `plugins/*/src`, `plugins/*/scripts`, `plugins/*/test`, `scripts/`, `docs/scripts/`. Test callbacks are function bodies too and get their own rows. Changed means the function's own text (its body minus nested functions) differs from the base function it is paired with, or it has no partner. Pairing runs parent by parent: a sibling whose own text appears exactly once on each side pairs first, and the rest pair in order between those anchors, so inserting or deleting a test leaves the untouched callbacks after it unscored. The file list is the changed range itself (`git diff --name-status`), filtered to `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`; Sidequest's built `lib/`, `bin/` and `hooks/` are skipped because `src/` is their source. A function fails at 6:
 
     CRAP = complexity² × (1 − coverage)³ + complexity
