@@ -208,6 +208,23 @@ test('an interpreter never earns a rule, because its wildcard runs arbitrary cod
   assert.match(result.blocked[0].fingerprint, /^permission:Bash:node\b/);
 });
 
+test('a glob argument is vetoed, not written as a dead literal-* rule', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, Array.from({ length: 3 }, () => permissionTranscript('ls packages/trading-connector/src/*.test.ts')));
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+  const after = fs.readFileSync(path.join(projectDir, '.claude', 'settings.local.json'), 'utf8');
+
+  // ruleFor would splice the glob ahead of the `:*` suffix as
+  // "Bash(ls packages/trading-connector/src/*.test.ts:*)", a literal-* prefix
+  // Claude Code can never match, so the veto keeps any ls rule unwritten.
+  assert.equal(result.additions.length, 0);
+  assert.equal(result.blocked[0].fingerprint, 'permission:Bash:ls packages/trading-connector/src/*.test.ts');
+  assert.equal(result.blocked[0].vetoReason, 'glob argument');
+  assert.doesNotMatch(after, /Bash\(ls/);
+});
+
 test('enabling automation writes only the project-local opt-in marker', () => {
   const projectDir = temporaryProject();
 
