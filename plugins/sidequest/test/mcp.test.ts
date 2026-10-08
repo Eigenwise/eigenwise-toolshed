@@ -1749,6 +1749,33 @@ test('integrate returns actionable post-merge verification failures', async () =
   }
 });
 
+test('SQ-3425: MCP integrate refuses an environment-bound submission and names the CLI lane', async () => {
+  const repo = committedRepo('sq-mcp-integrate-environment-lane-');
+  const project = store.ensureProject(repo).slug;
+  store.setBoardConfig(project, { integrationVerifyTimeoutMs: 180000 });
+  const ticket = store.createTicket(project, {
+    title: 'environment-bound delivery',
+    files: ['lib/lane.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for the environment lane refusal',
+    labels: ['direct-ok'],
+  });
+  const bound = store.getTicket(project, ticket.ref);
+  const requirement = { kind: 'command', command: 'npm run gate', evidenceContract: 'npm run gate', environment: 'shared' };
+  bound.dispatch = { verificationRequirement: requirement, lifecycleAttempt: { execution: 'dispatched', verificationRequirement: requirement } };
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: bound.id, project, ref: bound.ref, status: bound.status,
+    archived: 0, ord: bound.order, claim_by: null, data: bound,
+  });
+
+  const result = await callHandler('integrate', { project, ref: ticket.ref, by: 'payload-tester' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'environment_lane_requires_cli');
+  assert.equal(result.message, `integrate: ${ticket.ref}'s verifier is environment-bound and can run up to 180000 ms; inside the board server that stalls every executor's board calls. Run CLI integrate for ${ticket.ref} (\`sidequest integrate ${ticket.ref} --project ${JSON.stringify(repo)} --json\`) with Bash run_in_background and act on its completion notification. Container teardown stays in the project's verify command.`);
+});
+
 test('integrate compacts successful verification output', async () => {
   const repo = committedRepo('sq-mcp-integrate-verify-success-');
   gitAt(repo, ['config', 'user.name', 'Sidequest Test']);
@@ -7567,4 +7594,49 @@ test('add and update carry verifyCwd to the ticket and refuse one outside the pr
   await callTool('update', { project, ref: added.ref, verifyCwd: '' });
   assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, '');
   await assert.rejects(callTool('update', { project, ref: added.ref, verifyCwd: '../outside' }), /verifyCwd must be a directory relative to the project root/);
+});
+
+test('SQ-3477: a two-participant source-revision wave needs the resulting revision and accepted evidence, then records both', async (context: any) => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-revision-wave-'));
+  const project = store.ensureProject(projectPath).slug;
+  context.after(store.registerSourceRevisionCapability(project, () => ({ candidateExists: true, containsCandidate: true })));
+  const refs: string[] = [];
+  for (const revision of [{ source: 'wiki', value: 'wiki-50', surface: 'wiki/a.md' }, { source: 'wiki', value: 'wiki-51', surface: 'wiki/b.md' }]) {
+    const ticket = store.createTicket(project, {
+      title: `publish ${revision.value}`,
+      files: [revision.surface],
+      complexity: 2,
+      complexityWhy: 'publish one pinned immutable source revision',
+      executorVerifyKind: 'attestation',
+      executorAttestationArtifact: revision.value,
+      labels: ['direct-ok'],
+    });
+    const by = `mcp-${revision.value}-worker`;
+    claimDispatchedTicket(project, ticket, by, true);
+    const submitted = await callTool('submit', {
+      project,
+      ref: ticket.ref,
+      by,
+      sourceRevision: { source: revision.source, value: revision.value, observedAt: '2026-08-14T00:00:00.000Z' },
+      changedSurfaces: [revision.surface],
+      projectCapabilities: { process: false, worktree: false, review: true },
+      verify: `attestation: ${revision.value} | review-accepted | reviewer approved the immutable revision`,
+      body: `Reviewed ${revision.value}.`,
+    });
+    assert.equal(submitted.ok, true, JSON.stringify(submitted));
+    refs.push(ticket.ref);
+  }
+  const verification = store.getTicket(project, refs[0]).submission.verificationResult;
+  const assembled = await callTool('integrate', { project, ref: refs.join(','), by: 'mcp-source-publisher', wave: { verification } });
+  assert.equal(assembled.ok, true, JSON.stringify(assembled));
+
+  const deliveryRevision = { source: 'wiki', value: 'wiki-52', observedAt: '2026-08-15T00:00:00.000Z' };
+  assert.equal(store.integrateSubmissionWave(project, refs, {}).reason, 'wave_delivery_revision_required');
+  assert.equal(store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: { ...verification, status: 'failed_suite' } }).reason, 'wave_delivery_verification_required');
+  const delivered = store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: verification });
+
+  assert.equal(delivered.ok, true, JSON.stringify(delivered));
+  assert.equal(delivered.integration.mode, 'source-revision');
+  assert.deepEqual(delivered.integration.participants, refs);
+  for (const ref of refs) assert.equal(store.getTicket(project, ref).submission.integration.sourceRevision.value, 'wiki-52');
 });

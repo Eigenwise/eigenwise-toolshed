@@ -794,12 +794,14 @@ const jobReportEvents = new Map([
   ['owner-error', (report, [code, ...message]) => { report.ownerError = { code: Number(code), message: message.join(' ') }; }],
 ]);
 
-function readJobReport(reportPath) {
+// Only lines carrying this run's nonce are the owner's: the phase can find and write the report file,
+// but never learns the nonce, so a line without it is not an event, whatever it says (SQ-3490).
+function readJobReport({ reportPath, nonce }) {
   const report = { closedMemberIds: null, accountFailure: null, endedOnRequest: false, affinityMask: null, ownerError: null };
   const text = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8') : '';
   for (const line of text.split(/\r?\n/)) {
-    const [event, ...values] = line.split(' ');
-    jobReportEvents.get(event)?.(report, values);
+    const [lineNonce, event, ...values] = line.split(' ');
+    if (lineNonce === nonce) jobReportEvents.get(event)?.(report, values);
   }
   return report;
 }
@@ -842,9 +844,9 @@ function unknownSurvivorsError(report, cleanupError) {
  * the drain window ran out. Both are null when no such account exists, which fails the phase
  * rather than passing for an empty job.
  */
-async function withJobEvidence(result, reportPath, budgetMilliseconds) {
-  const report = readJobReport(reportPath);
-  fs.rmSync(reportPath, { force: true });
+async function withJobEvidence(result, reportChannel, budgetMilliseconds) {
+  const report = readJobReport(reportChannel);
+  fs.rmSync(reportChannel.reportPath, { force: true });
   const accounted = { ...result, ...ownerReportedPhaseFields(report), processorAffinityMask: report.affinityMask };
   if (report.closedMemberIds === null) {
     return { ...accounted, cleanupError: unknownSurvivorsError(report, result.cleanupError), jobClosedProcessIds: null, survivingProcessIds: null };
@@ -863,16 +865,16 @@ async function withJobEvidence(result, reportPath, budgetMilliseconds) {
  * the phase, so the direct leaf runDirectlyOwnedPhase retains is the owner and its exit, for any
  * reason, ends every descendant that inherited the job. A process created through a broker (a
  * service, COM activation, a daemon such as dockerd) is outside the job and is not tracked.
+ * The report path and its nonce reach the owner only as its own arguments.
  */
 async function runJobOwnedPhase(options) {
-  const reportPath = path.join(os.tmpdir(), `sidequest-job-${process.pid}-${randomUUID()}.log`);
+  const reportChannel = { reportPath: path.join(os.tmpdir(), `sidequest-job-${process.pid}-${randomUUID()}.log`), nonce: randomUUID() };
   const result = await runDirectlyOwnedPhase({
     ...options,
     command: windowsJobOwnerPath(),
-    args: [options.command, ...options.args],
-    env: { ...(options.env ?? process.env), SIDEQUEST_JOB_OWNER_REPORT: reportPath },
+    args: [reportChannel.reportPath, reportChannel.nonce, options.command, ...options.args],
   });
-  return withJobEvidence(result, reportPath, options.cleanupDrainMilliseconds);
+  return withJobEvidence(result, reportChannel, options.cleanupDrainMilliseconds);
 }
 
 /**
@@ -895,10 +897,59 @@ function runOwnedPhase(rawOptions) {
   return platformUsesProcessGroups ? runSupervisedPhase(options) : runJobOwnedPhase(options);
 }
 
+const ownedVerifyTimeoutExitCode = 124;
+
+function exitedPhaseExitCode(result, report) {
+  if (result.status !== null) report('exit', result.status);
+  if (result.cleanupError === null) return result.status ?? 2;
+  report('cleanup-error', result.cleanupError);
+  return 2;
+}
+
+function ownedVerifyExitCode(result, timeoutMilliseconds, report) {
+  if (result.timedOut) {
+    report('timeout', timeoutMilliseconds);
+    return ownedVerifyTimeoutExitCode;
+  }
+  if (result.error) {
+    process.stderr.write(`${result.error.message}\n`);
+    return 2;
+  }
+  return exitedPhaseExitCode(result, report);
+}
+
+/**
+ * Runs one verifier shell as an owned phase for a synchronous caller: the deadline ends the
+ * whole tree (process group on POSIX, the job owner's job on Windows) and the output is forwarded
+ * to stdout/stderr. How the phase ended goes only to spec.reportPath, one JSON record per line
+ * carrying spec.nonce: the verifier's exit, a timeout (exit 124), a cleanupError (the exit is then
+ * no proof that its tree ended), and done last. The verifier never sees the path or the nonce, so
+ * nothing it prints is a record, and an owner that dies before done has reported nothing.
+ */
+async function runOwnedVerifyPhase(spec) {
+  const report = (record, value) => fs.appendFileSync(spec.reportPath, `${JSON.stringify({ nonce: spec.nonce, record, value })}\n`);
+  const result = await runOwnedPhase({
+    command: spec.command,
+    args: spec.args,
+    cwd: spec.cwd,
+    env: { ...process.env, SIDEQUEST_OWNED_VERIFY_PHASE: '1' },
+    timeoutMilliseconds: spec.timeoutMilliseconds,
+  });
+  const exitCode = ownedVerifyExitCode(result, spec.timeoutMilliseconds, report);
+  report('done');
+  return exitCode;
+}
+
 module.exports = {
   compileJobOwner,
   classifyProcessState,
   isProcessTerminal,
+  ownedVerifyTimeoutExitCode,
   runOwnedPhase,
   withJobEvidence,
+  runOwnedVerifyPhase,
 };
+
+if (require.main === module) {
+  runOwnedVerifyPhase(JSON.parse(process.argv[2])).then((exitCode) => { process.exitCode = exitCode; });
+}

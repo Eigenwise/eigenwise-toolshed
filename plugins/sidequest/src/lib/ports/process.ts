@@ -361,51 +361,157 @@ function failedResult(requirement: VerificationRequirement, status: 'failed_suit
   });
 }
 
-export function runProcessVerification(requirement: VerificationRequirement, options: ProcessVerificationOptions = {}): VerificationResult {
-  const command = String(requirement.command || '').trim();
-  if (!command) {
-    return Object.freeze({
-      kind: requirement.kind,
-      status: 'could_not_run',
-      evidence: 'The required command verifier has no pinned command.',
-      command: null,
-      failureIdentities: Object.freeze(['could_not_run:missing-command']),
-    });
-  }
-  const logPath = options.logPath || defaultLogPath();
-  const timeoutMilliseconds = options.timeoutMilliseconds || DEFAULT_TIMEOUT_MILLISECONDS;
-  const outputTailBytes = options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES;
-  const temporary = temporaryScript(command);
-  const { scriptPath, shell } = temporary;
-  let outcome: import('node:child_process').SpawnSyncReturns<Buffer> | null = null;
+// The owned tree reports on a file only the port and the owner know, each record carrying the port's
+// per-run nonce: the verifier writes to the log, so nothing it prints can stand in for the owner (SQ-3488).
+type OwnerChannel = Readonly<{ reportPath: string; nonce: string }>;
+
+type VerifierRun = Readonly<{
+  requirement: VerificationRequirement;
+  command: string;
+  logPath: string;
+  timeoutMilliseconds: number;
+  outputTailBytes: number;
+  cwd: string | undefined;
+  environment: NodeJS.ProcessEnv;
+  ownerChannel: OwnerChannel | null;
+}>;
+
+type OwnerRecord = Readonly<{ nonce?: unknown; record?: unknown; value?: unknown }>;
+
+type VerifierReport = Readonly<{ done: boolean; timedOut: boolean; cleanupError: string | null; exitCode: number | null }>;
+
+type SpawnOutcome = import('node:child_process').SpawnSyncReturns<Buffer>;
+
+const OWNED_PROCESS_TREE_SCRIPT = path.join(nearestPackageRoot(__dirname), 'scripts', 'owned-process-tree.js');
+// Room for the owned phase to terminate its tree and drain output after its own deadline fired:
+// the termination grace and the output drain windows.
+const OWNED_TREE_SETTLE_MARGIN_MILLISECONDS = 15_000;
+
+function verifierRun(requirement: VerificationRequirement, command: string, options: ProcessVerificationOptions): VerifierRun {
+  return Object.freeze({
+    requirement,
+    command,
+    logPath: options.logPath || defaultLogPath(),
+    timeoutMilliseconds: options.timeoutMilliseconds || DEFAULT_TIMEOUT_MILLISECONDS,
+    outputTailBytes: options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES,
+    cwd: options.cwd,
+    environment: verifierEnvironment(options.environment || process.env),
+    ownerChannel: ownerChannel(requirement),
+  });
+}
+
+function ownerChannel(requirement: VerificationRequirement): OwnerChannel | null {
+  if (requirement.environment !== 'shared') return null;
+  return Object.freeze({ reportPath: path.join(os.tmpdir(), `sidequest-verify-owner-${process.pid}-${randomUUID()}.jsonl`), nonce: randomUUID() });
+}
+
+function spawnFailureResult(run: VerifierRun, shell: ShellCommand, error: unknown): VerificationResult {
+  const reason = error instanceof Error ? error.message : String(error);
+  const tail = fs.existsSync(run.logPath) ? outputTail(run.logPath, run.outputTailBytes) : '';
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, reason, 2, tail, undefined, shell.label);
+}
+
+// An environment-bound verifier (SQ-3425) runs its shell under the owned process tree so the
+// deadline ends docker clients, browsers and drivers under it, not the shell alone. The phase's own
+// deadline sits inside the spawnSync timeout; the outer timeout only backstops a phase that cannot
+// end its tree.
+function ownedTreeLaunch(shell: ShellCommand, run: VerifierRun, channel: OwnerChannel): ShellCommand {
+  fs.writeFileSync(channel.reportPath, '', { flag: 'wx', mode: 0o600 });
+  const spec = { command: shell.executable, args: shell.arguments, cwd: run.cwd, timeoutMilliseconds: run.timeoutMilliseconds, ...channel };
+  return Object.freeze({ ...shell, executable: process.execPath, arguments: Object.freeze([OWNED_PROCESS_TREE_SCRIPT, JSON.stringify(spec)]) });
+}
+
+function spawnVerifier(shell: ShellCommand, run: VerifierRun): SpawnOutcome {
+  const launch = run.ownerChannel ? ownedTreeLaunch(shell, run, run.ownerChannel) : shell;
+  const timeout = run.ownerChannel ? run.timeoutMilliseconds + OWNED_TREE_SETTLE_MARGIN_MILLISECONDS : run.timeoutMilliseconds;
+  const log = fs.openSync(run.logPath, 'w');
   try {
-    const log = fs.openSync(logPath, 'w');
-    try {
-      outcome = spawnSync(shell.executable, shell.arguments, {
-        cwd: options.cwd || process.cwd(),
-        env: verifierEnvironment(options.environment || process.env),
-        windowsHide: true,
-        timeout: timeoutMilliseconds,
-        stdio: ['ignore', log, log],
-      });
-    } finally {
-      fs.closeSync(log);
-    }
-  } catch (error: unknown) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return failedResult(requirement, 'could_not_run', command, logPath, reason, 2, fs.existsSync(logPath) ? outputTail(logPath, outputTailBytes) : '', undefined, shell.label);
+    return spawnSync(launch.executable, launch.arguments, {
+      cwd: run.cwd,
+      env: run.environment,
+      windowsHide: true,
+      timeout,
+      stdio: ['ignore', log, log],
+    });
   } finally {
-    fs.rmSync(scriptPath, { force: true });
+    fs.closeSync(log);
   }
-  const tail = outputTail(logPath, outputTailBytes);
-  if (processTimedOut(outcome?.error)) {
-    return failedResult(requirement, 'timeout', command, logPath, `Verification timed out after ${timeoutMilliseconds}ms; partial output captured.`, 2, tail, timeoutMilliseconds, shell.label);
+}
+
+// The channel lives exactly as long as one spawn, whether the spawn returns or throws.
+function spawnVerifierAndReport(shell: ShellCommand, run: VerifierRun): Readonly<{ outcome: SpawnOutcome; report: VerifierReport }> {
+  try {
+    const outcome = spawnVerifier(shell, run);
+    return { outcome, report: verifierReport(run) };
+  } finally {
+    if (run.ownerChannel) fs.rmSync(run.ownerChannel.reportPath, { force: true });
   }
-  const exitCode = markerExitCode(logPath);
-  if (exitCode === null) {
-    const shellExitCode = outcome?.status ?? (outcome?.error ? 2 : null);
-    return failedResult(requirement, 'could_not_run', command, logPath, shellExitReason(shell, shellExitCode, outcome?.error), shellExitCode, tail, undefined, shell.label);
+}
+
+function authenticOwnerRecord(line: string, nonce: string): OwnerRecord | null {
+  try {
+    const parsed: OwnerRecord | null = JSON.parse(line);
+    return parsed?.nonce === nonce ? parsed : null;
+  } catch {
+    return null;
   }
+}
+
+function ownerRecords(channel: OwnerChannel): Map<unknown, unknown> {
+  const text = fs.existsSync(channel.reportPath) ? fs.readFileSync(channel.reportPath, 'utf8') : '';
+  const records = text.split('\n').map((line) => authenticOwnerRecord(line, channel.nonce)).filter((record) => record !== null);
+  return new Map(records.map((record) => [record.record, record.value]));
+}
+
+// A run outside the owned tree has no owner: its shell's exit line in the log is the whole report.
+function verifierReport(run: VerifierRun): VerifierReport {
+  if (!run.ownerChannel) return Object.freeze({ done: true, timedOut: false, cleanupError: null, exitCode: markerExitCode(run.logPath) });
+  const records = ownerRecords(run.ownerChannel);
+  const cleanupError = records.get('cleanup-error');
+  const exitCode = records.get('exit');
+  return Object.freeze({
+    done: records.has('done'),
+    timedOut: records.has('timeout'),
+    cleanupError: typeof cleanupError === 'string' ? cleanupError : null,
+    exitCode: Number.isInteger(exitCode) ? Number(exitCode) : null,
+  });
+}
+
+// A deadline the owned tree enforced exits 124, the code the CLI's timeout reports; only spawnSync's own
+// kill leaves no status, and that keeps the legacy 2.
+function timeoutResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
+  return failedResult(run.requirement, 'timeout', run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
+}
+
+function unreportedOwnerResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification owner ended without reporting. Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+}
+
+// A suite failure outranks the cleanup error, which joins its evidence; only a clean exit is masked by it.
+function cleanupErrorResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, exitCode: number | null, cleanupError: string): VerificationResult {
+  if (exitCode === null || exitCode === 0) {
+    return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification command ended, but its process tree did not. ${cleanupError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+  }
+  const verdict = exitCodeVerdict(run, shell, exitCode, tail);
+  return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
+}
+
+// The verifier's own exit code passes nothing while its tree may still be running (SQ-3480), or
+// when the owner died before it reported how the run ended (SQ-3484).
+function abnormalVerifierResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, report: VerifierReport): VerificationResult | null {
+  if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail);
+  if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
+  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+}
+
+function exitCodeResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, exitCode: number | null): VerificationResult {
+  if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);
+  const shellExitCode = outcome.status ?? (outcome.error ? 2 : null);
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, shellExitReason(shell, shellExitCode, outcome.error), shellExitCode, tail, undefined, shell.label);
+}
+
+function exitCodeVerdict(run: VerifierRun, shell: ShellCommand, exitCode: number, tail: string): VerificationResult {
+  const { requirement, command, logPath } = run;
   if (shellCannotParsePosixSyntax(logPath, exitCode, shell)) {
     return failedResult(requirement, 'could_not_run', command, logPath, `The ${shell.label} fallback could not parse POSIX syntax while running ${JSON.stringify(command)} (exit code ${exitCode}).`, exitCode, tail, undefined, shell.label);
   }
@@ -418,6 +524,32 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     return Object.freeze({ kind: requirement.kind, status: 'passed', evidence: requirement.evidenceContract, command, logPath, exitCode, shell: shell.label });
   }
   return failedResult(requirement, 'failed_suite', command, logPath, `The required command exited ${exitCode}.`, exitCode, tail, undefined, shell.label);
+}
+
+export function runProcessVerification(requirement: VerificationRequirement, options: ProcessVerificationOptions = {}): VerificationResult {
+  const command = String(requirement.command || '').trim();
+  if (!command) {
+    return Object.freeze({
+      kind: requirement.kind,
+      status: 'could_not_run',
+      evidence: 'The required command verifier has no pinned command.',
+      command: null,
+      failureIdentities: Object.freeze(['could_not_run:missing-command']),
+    });
+  }
+  const run = verifierRun(requirement, command, options);
+  const { scriptPath, shell } = temporaryScript(command);
+  let outcome: SpawnOutcome;
+  let report: VerifierReport;
+  try {
+    ({ outcome, report } = spawnVerifierAndReport(shell, run));
+  } catch (error: unknown) {
+    return spawnFailureResult(run, shell, error);
+  } finally {
+    fs.rmSync(scriptPath, { force: true });
+  }
+  const tail = outputTail(run.logPath, run.outputTailBytes);
+  return abnormalVerifierResult(run, shell, outcome, tail, report) ?? exitCodeResult(run, shell, outcome, tail, report.exitCode);
 }
 
 export function createProcessPort(): VerificationProcessPort {
