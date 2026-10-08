@@ -1,6 +1,6 @@
 # Entry points
 
-Last Updated: 2026-10-07
+Last Updated: 2026-10-08
 
 ## User and runtime entry points
 
@@ -18,6 +18,7 @@ Last Updated: 2026-10-07
 - Live-rules skills: `manage-rules` and `add-rule` under `plugins/live-rules/skills/`. Hooks: `session-start-rules.js` at SessionStart and SubagentStart, `inject-prompt-rules.js` at UserPromptSubmit, `inject-edit-rules.js` at PreToolUse for edit tools.
 - Codebase-mapper hooks: `plugins/codebase-mapper/hooks/hooks.json` registers `PreToolUse: Skill` and `Stop`, both invoking `hooks/inject-context.js`; the hook enforces that an announced map update invokes `codebase-mapper:update-codebase-map`. Map creation/update: `plugins/codebase-mapper/skills/map-codebase/SKILL.md` and `update-codebase-map/SKILL.md`.
 - Quartermaster CLI: `plugins/quartermaster/bin/quartermaster.js` with `mine`, `status`, `catalog`, `decisions`, `verify`, `allowlist`, `enable-auto-allowlist`, `mark-resupply`, `decline-resupply`, and `crap` subcommands (`mark-retro` retired); the `resupply` and `setup` skills drive it and never read a transcript directly. `crap` scores every function `lizard` can parse against an LCOV file for CRAP (Change Risk Anti-Patterns), reading `.claude/quartermaster/crap.json` and printing one line per offender plus a summary unless `--json`; each lizard row is bound to its own definition by span and a changed line no row measures fails closed (exit 2), and `--cc-only` (lifted from argv in the entry block, `parseArgs` untouched) reports complexity alone (SQ-3459). Its `hooks/hooks.json` registers a SessionEnd tally, a SessionStart hook combining the capability-capture charter with a threshold-gated offer of a focused optimization round, and a Stop hook (`hooks/stop-resupply-offer.js`) that blocks the turn once per session when a resupply is overdue so the offer lands at a real pause; declining via `decline-resupply` resets the accumulation window. The pass runs after current user approval or explicit standing permission, and each change needs approval unless that standing permission covers its class. Sidequest ships the `verify-discipline` skill (guidance, no code), which agentsync pins into every executor.
+- Quality gate CLI: `plugins/quality-gate/bin/quality-gate.js measure` (file list, base revision, coverage directory; prints the per-function report JSON that `scripts/quality/crap.mjs` renders). The plugin's suite is `npm test` under `plugins/quality-gate` after `npm ci`; CI discovers it through the marketplace entry and the suite resolver.
 - Windows Sandbox launcher (maintainer-only, gitignored, no docs page): `sandbox/windows/Start-ToolshedSandbox.ps1`; guest entry is `sandbox/windows/bootstrap/Start-ToolshedSandboxGuest.ps1`; contract test is `sandbox/windows/Test-ToolshedSandbox.ps1`.
 
 ## Maintainer entry points
