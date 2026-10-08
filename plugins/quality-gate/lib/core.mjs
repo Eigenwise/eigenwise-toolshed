@@ -283,7 +283,8 @@ function pairInOrder(heads, bases, pairs, accepts) {
 
 // An identity ends in a per-parent ordinal, so an inserted or deleted sibling shifts every later one.
 // Siblings whose own text appears exactly once on each side anchor the pairing; the rest pair in order
-// within the gap between the same two anchors, equal text first, so an edited body keeps its partner.
+// within the gap between the same two anchors, equal text first, then equal name, so an edited body
+// keeps its partner and a helper inserted above it does not take that partner and read as legacy.
 function pairSiblings(baseSiblings, headSiblings) {
   const baseByFingerprint = Map.groupBy(baseSiblings, (sibling) => sibling.fingerprint);
   const headByFingerprint = Map.groupBy(headSiblings, (sibling) => sibling.fingerprint);
@@ -294,6 +295,7 @@ function pairSiblings(baseSiblings, headSiblings) {
     const heads = headEntries.map((entry) => entry.sibling);
     const bases = (baseGaps.get(segment) ?? []).map((entry) => entry.sibling);
     pairInOrder(heads, bases, pairs, (head, base) => head.fingerprint === base.fingerprint);
+    pairInOrder(heads, bases, pairs, (head, base) => head.name === base.name);
     pairInOrder(heads, bases, pairs, () => true);
   }
   return pairs;
@@ -326,6 +328,23 @@ function pathAbsentAtBase(error, baselinePath) {
     || message.includes(`path '${baselinePath}' exists on disk, but not in`);
 }
 
+export const LEGACY_UNCHANGED = 'legacy-unchanged';
+
+// Only complexity the change introduced is enforced: a function new since base, or one whose
+// cyclomatic count rose above its base partner's. Equal or lower is a pass-through edit inside a
+// legacy body, reported with its number but never a refusal to land the change.
+function classifyChange(metric, partner) {
+  if (!partner) return 'new';
+  return metric.complexity > partner.complexity ? 'modified-raised' : LEGACY_UNCHANGED;
+}
+
+function changedFunctions(fileMetrics, baseline) {
+  const partners = baseFunctionByIdentity(baseline, fileMetrics);
+  return fileMetrics
+    .filter((metric) => partners.get(metric.identity)?.fingerprint !== metric.fingerprint)
+    .map((metric) => ({ ...metric, classification: classifyChange(metric, partners.get(metric.identity)) }));
+}
+
 export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline) {
   const baselinePathByPath = new Map(changedPaths.map(pathAndBaselinePath));
   const changedMetrics = [];
@@ -339,8 +358,7 @@ export async function changedMetricsAgainstBase(metrics, changedPaths, base, rea
     } catch (error) {
       if (!pathAbsentAtBase(error, baselinePath)) throw error;
     }
-    const partners = baseFunctionByIdentity(baseline, fileMetrics);
-    changedMetrics.push(...fileMetrics.filter((metric) => partners.get(metric.identity)?.fingerprint !== metric.fingerprint));
+    changedMetrics.push(...changedFunctions(fileMetrics, baseline));
   }
   return changedMetrics;
 }

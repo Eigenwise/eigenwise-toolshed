@@ -44,6 +44,8 @@ npm run quality:crap
 
 It runs the test suite of every plugin the diff touches (Sidequest `test:full`, a plugin's own `test` script, or `node --test` over its `test/*.test.js`) under V8 coverage, so a Sidequest-only change does not pay for the gateway suite. The summary line names the suites it ran, and `--coverage <dir>` skips the run and reuses a coverage directory you captured yourself. It scores only `src/` TypeScript and compares changed functions with the merge base against `develop` (or `main` in a checkout without `develop`). Pass `--base <ref>` to compare against something else. Existing debt does not fail an unchanged branch. The report merges direct `tsx` coverage with the compiled child-process counterpart, so generated build helpers never appear as source findings. Use `node ../../scripts/quality/crap.mjs --all` when you need every score rather than the functions at or above the threshold.
 
+Every changed function lands in one of three sections: NEW (no partner at the base), MODIFIED-RAISED (its complexity rose since the base) or LEGACY-UNCHANGED (its complexity held or fell). Only the first two must score below 6; a LEGACY row is printed with its number as information and never fails, so a small edit inside a big legacy function is not a refactor demand. Moving the new branches into a new helper that scores below 6 is the way to land a change that would otherwise raise a legacy function's complexity.
+
 The gate compares complexity at a fixed coverage, so it catches a function that gained branches and not one that only lost test coverage. That second arm needs coverage from the base tree as well, which is a separate measurement pass.
 
 See [release process](../release-process/) for publishing changes.
