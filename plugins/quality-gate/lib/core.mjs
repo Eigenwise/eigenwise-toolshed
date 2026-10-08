@@ -75,7 +75,7 @@ export async function createAnalyzer(projectRoot) {
   }
   
   async function collectFunctions(text, fileName, { transport } = {}) {
-    const virtualFile = /\.[cm]?js$/.test(fileName) ? '/source.js' : '/source.ts';
+    const virtualFile = /\.(jsx|tsx)$/i.test(fileName) ? '/source' + path.extname(fileName).toLowerCase() : /\.[cm]?js$/.test(fileName) ? '/source.js' : '/source.ts';
     const virtualFileSystem = createVirtualFileSystem({
       '/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }),
       [virtualFile]: text,
