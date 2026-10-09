@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.593.0",
+  "version": "3.594.0",
   "plugins": [
     {
       "name": "observability",
@@ -34,7 +34,7 @@
       "name": "model-gateway",
       "source": "./plugins/model-gateway",
       "description": "Your ChatGPT/Codex and Grok subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, and Grok mid-session like any other model. No API keys.",
-      "version": "0.54.1",
+      "version": "0.54.2",
       "author": {
         "name": "Eigenwise"
       },
@@ -57,7 +57,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "A local work board and orchestration loop for Claude Code. Every task saved as a ticket survives context compaction and new sessions, with instructions, status, and recorded discussion kept on the board. Categories route tickets to a model and effort; token-gated executors return verified work for review and integration. A self-hosted Kanban dashboard spans your projects.",
-      "version": "5.8.0",
+      "version": "5.9.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -128,7 +128,7 @@
       "name": "quality-gate",
       "source": "./plugins/quality-gate",
       "description": "Local JavaScript and TypeScript function complexity and measured V8 coverage, with per-function CRAP scores strictly below 6. The scorer reads source with the TypeScript compiler installed in the scored project (or its own dependency), pairs each function with V8 coverage by name or source position, and prints a per-function report. Everything runs on your machine; no source, coverage or report leaves it.",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "author": {
         "name": "Eigenwise"
       },
