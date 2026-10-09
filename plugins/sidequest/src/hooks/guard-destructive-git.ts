@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from '../lib/git-process.js';
 import { createRequire } from 'node:module';
@@ -84,9 +83,13 @@ function repoRoot(repo: string): string {
   }
 }
 
+// A clone an executor makes under its ticket's verification directory has a `.git` directory too, and
+// `--no-checkout` leaves every tracked file reading as deleted, so "primary checkout with dirty work"
+// refused the reviewer's own fixture as 896 doomed changes (SQ-3436). The shared checkout is the root
+// the board registered, nothing else.
 function sharedCheckout(repo: string): boolean {
   try {
-    return fs.statSync(path.join(repo, '.git')).isDirectory();
+    return Boolean(store.findProject(repo).ok);
   } catch (_) {
     return false;
   }
@@ -212,7 +215,7 @@ function destructiveRefusal(label: string, repo: string, dirty: string[]): strin
   const shown = dirty.slice(0, 10).map((line) => `  ${line}`);
   if (dirty.length > shown.length) shown.push(`  … +${dirty.length - shown.length} more`);
   return [
-    `sidequest: refusing ${label} — the shared checkout has ${dirty.length} uncommitted change(s) that this operation would destroy.`,
+    `sidequest: refusing ${label} — the shared checkout (a board-registered project root; your evidence clone is not one) has ${dirty.length} uncommitted change(s) that this operation would destroy.`,
     `  repo: ${repo}`,
     ...shown,
     'Some of this may be a live executor\'s finished work that lost its worktree; the shared tree is not yours alone.',
