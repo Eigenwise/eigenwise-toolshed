@@ -815,11 +815,393 @@ test('negative-control marker refusals quote malformed marker lines', () => {
     body: '[sidequest:verify-complete]',
     source: 'mcp',
   });
-  assert.equal(refusal.reason, 'negative_control_required');
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
   assert.match(refusal.message, new RegExp(markerLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(refusal.message, /number was not where it was expected/);
+  assert.match(refusal.message, /it does not begin with target=/);
   git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
   git(['commit', '-m', 'negative control malformed marker fixture']);
+});
+
+test('negative-control marker refusals bound an unbounded quoted marker line', () => {
+  const by = 'negative-control-long-marker';
+  const ticket = addNegativeControlTicket('negative control bounds a long marker line', by);
+  const longMarker = `[sidequest:negative-control] ${'x'.repeat(400)} failed=1`;
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: longMarker, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
+  assert.match(refusal.message, new RegExp(longMarker.slice(0, 200).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(refusal.message, /more characters/);
+  assert.ok(!refusal.message.includes(longMarker), 'a long marker line must not appear in full');
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control long marker fixture']);
+});
+
+test('SQ-17: a target= value keeps its semicolons, and an unparsed marker names the field it stopped at', () => {
+  const by = 'negative-control-semicolon-target';
+  const ticket = addNegativeControlTicket('negative control target keeps its semicolons', by);
+  const testName = 'a semicolon-joined target is read as one value';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `test('${testName}', () => {});\n`);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed ${testName}`,
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  const unparsed = '[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2 npm run test:files test/fixture.test.js failed=1 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: unparsed, source: 'mcp' }).ok, true);
+  const unparsedRefusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(unparsedRefusal.reason, 'negative_control_evidence_required');
+  assert.match(unparsedRefusal.message, new RegExp(unparsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(unparsedRefusal.message, /no "; assertion=" follows its target= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control semicolon target fixture']);
+});
+
+test('SQ-83: the failed= parse anchors on the first match, not a later one the recovery guidance allows in context', () => {
+  const by = 'negative-control-failed-anchor';
+  const ticket = addNegativeControlTicket('negative control anchors on the first failed=', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=x; assertion=y; npm run test:files test/x.test.ts failed=2 failure-kind=assertion; base run failed=0',
+    source: 'mcp',
+  }).ok, true);
+  const result = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.notEqual(result.reason, 'negative_control_zero_failures');
+  assert.equal(result.ok, true, result.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control failed anchor fixture']);
+});
+
+test('SQ-95: a failed= inside the assertion prose does not end the parse before the command\'s failed=<n>', () => {
+  const by = 'negative-control-failed-in-assertion';
+  const ticket = addNegativeControlTicket('negative control accepts failed= inside assertion prose', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=x; assertion=returns failed=0 on empty input; npm test failed=2 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const result = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.notEqual(result.reason, 'negative_control_evidence_required');
+  assert.notEqual(result.reason, 'negative_control_zero_failures');
+  assert.equal(result.ok, true, result.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control failed in assertion prose fixture']);
+});
+
+test('SQ-116: a quoted failed=<n> inside the assertion prose does not mask the command\'s real count', () => {
+  const by = 'negative-control-quoted-semicolon-assertion';
+  const ticket = addNegativeControlTicket('negative control reads the count from the command segment', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=fixture; assertion=returns "a; failed=2" on empty input; node --test failed=0 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const zeroRun = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(zeroRun.reason, 'negative_control_zero_failures', 'assertion count masks zero run');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=fixture; assertion=returns "a; failed=0" on empty input; node --test failed=2 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const failingRun = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(failingRun.ok, true, failingRun.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control quoted semicolon assertion fixture']);
+});
+
+test('SQ-116: a marker with no command between the assertion and failed=<n> is refused', () => {
+  const by = 'negative-control-missing-command';
+  const ticket = addNegativeControlTicket('negative control requires a command', by);
+
+  const markerLine = '[sidequest:negative-control] target=fixture; assertion=changed value; failed=2 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: markerLine, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required', 'missing command');
+  assert.match(refusal.message, /no non-empty "<command> failed=<n>" follows its assertion= value/);
+
+  const noTerminator = '[sidequest:negative-control] target=fixture; assertion=changed value node --test failed=2 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: noTerminator, source: 'mcp' }).ok, true);
+  const unterminated = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(unterminated.reason, 'negative_control_evidence_required');
+  assert.match(unterminated.message, /no ";" ends its assertion= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control missing command fixture']);
+});
+
+test('SQ-83: a malformed newest marker without a real failed count is skipped in favor of an older valid one', () => {
+  const by = 'negative-control-skip-to-older';
+  const ticket = addNegativeControlTicket('negative control skips to an older valid marker', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] see the marker above',
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control skip to older fixture']);
+});
+
+test('SQ-83: a malformed marker that still carries a real failed=<n> count is not skipped', () => {
+  const by = 'negative-control-no-skip-real-count';
+  const ticket = addNegativeControlTicket('negative control does not skip a real attempt', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const malformedWithCount = '[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2 npm run test:files test/fixture.test.js failed=1 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: malformedWithCount, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
+  assert.match(refusal.message, /no "; assertion=" follows its target= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control no skip for real count fixture']);
+});
+
+test('SQ-83: a newer valid marker is used even when an older one was malformed', () => {
+  const by = 'negative-control-skip-to-older-reverse';
+  const ticket = addNegativeControlTicket('negative control prefers a newer valid marker over an older malformed one', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] see the marker above',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control newer valid over older malformed fixture']);
+});
+
+test('SQ-17: a changed it.each table is attributed to its own test, not the preceding plain test', () => {
+  const by = 'negative-control-each-table';
+  const eachName = 'adds %s to the row';
+  const unrelatedName = 'an unrelated baseline test';
+  const baseline = `test('${unrelatedName}', () => {});\n\ntest.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control each-table baseline']);
+
+  const ticket = addNegativeControlTicket('negative control reads an each table', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(eachName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(refusal.message, new RegExp(unrelatedName));
+
+  // The runner substitutes %s with the row's actual value, so an agent reporting the
+  // resolved name ("adds a to the row") must still match the table's placeholder name.
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control-test] failed adds a to the row',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control each-table fixture']);
+});
+
+test('SQ-83: a wildcard-matched name keeps substring tolerance for trailing context like a case-count suffix', () => {
+  const by = 'negative-control-wildcard-suffix';
+  const eachName = 'adds %s to the row';
+  const baseline = `test.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard suffix baseline']);
+
+  const ticket = addNegativeControlTicket('negative control tolerates a wildcard suffix', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+
+  // node:test can append a case-count suffix the diff-detected each-table name never
+  // has; the wildcard match must keep the same substring tolerance the plain,
+  // no-placeholder path always gave, instead of demanding an exact anchored match.
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control-test] failed adds a to the row (3 cases)',
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard suffix fixture']);
+});
+
+test('SQ-83: matching a wildcard name against a 1000-char repetitive line stays linear instead of backtracking', () => {
+  const by = 'negative-control-wildcard-perf';
+  const eachName = 'adds %s a %s a %s a %s row';
+  const baseline = `test.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard perf baseline']);
+
+  const ticket = addNegativeControlTicket('negative control times a wildcard match', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+
+  // The delimiter " a " recurring throughout a 1000-char line is the shape that made
+  // the old `.+`-joined regex (4 placeholders here) back off through combinatorially
+  // many split points -- 72.7s on the board server for realistic prose that normally
+  // costs 0-1ms. It never matches "adds ... row", so this is the worst case for a
+  // backtracking engine (it must exhaust every split before giving up); a linear
+  // indexOf scan costs the same whether it matches or not.
+  const repetitiveLine = ' a '.repeat(334).slice(0, 1000);
+  const start = Date.now();
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control-test] failed ${repetitiveLine}`,
+    source: 'mcp',
+  }).ok, true);
+  const afterMarker = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  const elapsedMs = Date.now() - start;
+  assert.equal(afterMarker.reason, 'negative_control_test_required', afterMarker.message);
+  assert.ok(elapsedMs < 5000, `expected the wildcard match to stay linear, took ${elapsedMs}ms`);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard perf fixture']);
+});
+
+test('SQ-17: a hunk inserted between tests does not demand the test that follows it', () => {
+  const by = 'negative-control-inserted-hunk';
+  const alphaName = 'alpha baseline assertion';
+  const omegaName = 'omega baseline assertion';
+  const insertedName = 'inserted middle assertion';
+  const definition = 'test';
+  const baseline = `${definition}('${alphaName}', () => {});\n\n${definition}('${omegaName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control inserted-hunk baseline']);
+
+  const ticket = addNegativeControlTicket('negative control reads an inserted hunk', by);
+  fs.writeFileSync(
+    path.join(PROJECT_DIR, 'test', 'fixture.test.js'),
+    baseline.replace(`${definition}('${omegaName}`, `${definition}('${insertedName}', () => {});\n\n${definition}('${omegaName}`),
+  );
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed ${insertedName}\n[sidequest:negative-control-test] failed ${alphaName}`,
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control inserted-hunk fixture']);
 });
 
 test('negative controls account for every added named test', () => {
