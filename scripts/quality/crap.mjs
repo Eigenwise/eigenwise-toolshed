@@ -159,9 +159,15 @@ function spawnSuite(suite, coverageDirectory) {
 
 async function runSuites(suites, runSuite) {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'toolshed-crap-'));
-  for (const suite of suites) {
-    const { status } = runSuite(suite, coverageDirectory);
-    if (status !== 0) throw new Error(`${suite.name} tests failed with exit ${status ?? 'signal'}`);
+  try {
+    for (const suite of suites) {
+      const { status } = runSuite(suite, coverageDirectory);
+      if (status !== 0) throw new Error(`${suite.name} tests failed with exit ${status ?? 'signal'}`);
+    }
+  } catch (error) {
+    // run()'s finally only starts once captureCoverage returns, so a failing suite would leak the V8 coverage directory.
+    await fs.rm(coverageDirectory, { recursive: true, force: true });
+    throw error;
   }
   return coverageDirectory;
 }

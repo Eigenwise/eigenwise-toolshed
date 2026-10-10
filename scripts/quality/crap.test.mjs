@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -544,6 +545,19 @@ test('a failing suite stops the capture and names its plugin', async () => {
   const { suites, error } = await suitesRunFor(['plugins/model-gateway/lib/a.js', 'plugins/observability/lib/a.js'], 1);
   assert.equal(suites.length, 1);
   assert.match(error.message, /model-gateway tests failed with exit 1/);
+});
+
+test('a failing suite removes the coverage directory the earlier suites wrote into and rethrows the same error', async () => {
+  const receivedDirectories = [];
+  const failOnLastSuite = (suite, coverageDirectory) => {
+    receivedDirectories.push(coverageDirectory);
+    if (suite.name === 'observability') return { status: 3 };
+    fsSync.writeFileSync(path.join(coverageDirectory, 'coverage-1.json'), '{}');
+    return { status: 0 };
+  };
+  await assert.rejects(captureCoverage(['plugins/model-gateway/lib/a.js', 'plugins/observability/lib/a.js'], null, failOnLastSuite), { message: 'observability tests failed with exit 3' });
+  assert.equal(receivedDirectories.length, 2);
+  assert.equal(fsSync.existsSync(receivedDirectories[0]), false);
 });
 
 async function withCapturedProcessOutput(action) {
