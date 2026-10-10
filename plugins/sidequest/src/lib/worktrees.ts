@@ -1288,21 +1288,15 @@ async function classifyClosedTicketWorktree(repo: string, tickets: any[], entry:
   };
 }
 
-// The same live questions classifyWorktree asks before it reads any data.
+// Only a granted lease opens the closed path, because that path lets ignored files go with the tree,
+// which is safe only for the checkout the ticket owns. A refused lease (an unknown, replaced, or
+// unregistered checkout, or a locked, live, or unfinished one) ends this attempt and hands the tree
+// to classifyWorktree, which keeps its ignored files as data.
 async function closedTicketCleanupGate(repo: string, ticket: any, entry: any, context: SweepClassificationContext): Promise<{ lease: any; cleanup: { allowed: boolean; reason: string } } | null> {
   if (canonicalPath(entry.worktree) === canonicalPath(context.currentPath)) return null;
   const lease = await worktreeCleanupLease(repo, ticket, entry, context.livePaths);
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, context.registered);
-  if (closedTicketLeaseHolds(entry, lease) || cleanupRefusedUnregistered(cleanup, context.registered, entry.worktree)) return null;
-  return { lease, cleanup };
-}
-
-function closedTicketLeaseHolds(entry: any, lease: any): boolean {
-  return Boolean(entry.locked || lease.liveness.status === 'live' || (lease.identity.status === 'bound' && lease.phase !== 'terminal'));
-}
-
-function cleanupRefusedUnregistered(cleanup: { allowed: boolean }, registered: readonly string[], worktree: string): boolean {
-  return !cleanup.allowed && !registered.some((candidate) => canonicalPath(candidate) === canonicalPath(worktree));
+  return cleanup.allowed ? { lease, cleanup } : null;
 }
 
 type ClosedTreeInspection = { facts: WorktreeSweepFacts; stdout: string; recorded: RecordedDependencyPaths };

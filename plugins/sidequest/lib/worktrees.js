@@ -937,14 +937,7 @@ async function closedTicketCleanupGate(repo, ticket, entry, context) {
   if (canonicalPath(entry.worktree) === canonicalPath(context.currentPath)) return null;
   const lease = await worktreeCleanupLease(repo, ticket, entry, context.livePaths);
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, context.registered);
-  if (closedTicketLeaseHolds(entry, lease) || cleanupRefusedUnregistered(cleanup, context.registered, entry.worktree)) return null;
-  return { lease, cleanup };
-}
-function closedTicketLeaseHolds(entry, lease) {
-  return Boolean(entry.locked || lease.liveness.status === "live" || lease.identity.status === "bound" && lease.phase !== "terminal");
-}
-function cleanupRefusedUnregistered(cleanup, registered, worktree) {
-  return !cleanup.allowed && !registered.some((candidate) => canonicalPath(candidate) === canonicalPath(worktree));
+  return cleanup.allowed ? { lease, cleanup } : null;
 }
 async function inspectClosedTicketWorktree(entry, ticket, context) {
   const [status, measures] = await Promise.all([

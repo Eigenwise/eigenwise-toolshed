@@ -20,7 +20,7 @@ const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { spawnSync, execFileSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -2430,6 +2430,30 @@ test('MCP remove reclaims a released ticket tree that holds only build output', 
   assert.equal(removed.ok, true, removed.message || removed.reason);
   assert.equal(store.getTicket(project, ticket.ref), null);
   assert.equal(fs.existsSync(worktree), false, 'remove reclaimed the tree of the ticket it deleted');
+});
+
+// GH-439 review, round four: the close-time sweep ran outside the lock the session sweeps hold, so it
+// could rename a tree that a session sweep in another process was already moving into quarantine.
+test('MCP groomClose leaves the tree to a session sweep that holds the sweep lock', async (context: any) => {
+  const by = 'close-lock-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('leave a locked sweep its tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  const sessionSweep = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true });
+  const lockFile = path.join(SIDEQUEST_HOME, 'worktree-sweep.lock');
+  context.after(() => {
+    sessionSweep.kill();
+    fs.rmSync(lockFile, { force: true });
+  });
+  fs.writeFileSync(lockFile, String(sessionSweep.pid));
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+
+  const closed = await callTool('groomClose', { project, ref: ticket.ref, reason: 'The work is no longer needed.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(path.join(worktree, '.next', 'cache', 'chunk.js')), true, 'the close left the tree to the sweep holding the lock');
+  assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), true, 'and left its registration alone');
+  assert.equal(fs.readFileSync(lockFile, 'utf8'), String(sessionSweep.pid), 'and did not take the lock from that sweep');
 });
 
 test('MCP integrate accepts its worker lock across runtime sessions and refuses another worker', async (context: any) => {

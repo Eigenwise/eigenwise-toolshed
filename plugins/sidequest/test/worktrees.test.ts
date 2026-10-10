@@ -732,7 +732,7 @@ test('sweep reclaims a clean worktree after a bound checkout is recreated at the
     const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
     assert.equal(entry.action, 'remove');
-    assert.equal(entry.reason, 'ticket_closed_settled');
+    assert.equal(entry.reason, 'ticket_done', 'the refused lease keeps the tree off the closed path, and the clean tree goes by the data rule');
     assert.match(entry.leaseDecision, /checkout instance/);
     assert.equal(fs.existsSync(worktree), false);
   } finally {
@@ -1298,6 +1298,38 @@ test('sweep keeps a done ticket tree while its claim is still live', async () =>
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// GH-439 review, round four: a registered path reached the closed path even when its lease was
+// refused, so a checkout recreated at a done ticket's path went with ignored files the ticket never
+// wrote. The refused lease ends that attempt, and the data rule keeps those files.
+test('sweep neither removes nor reclaims a registered done ticket tree whose lease is refused', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closed-refused-quarantine-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'closed-refused');
+  const ticket = integratedTicket('SQ-CLOSED-REFUSED', 'closed-refused', worktree, baseCommit);
+  try {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    git(repository, ['worktree', 'add', '--detach', worktree, baseCommit]);
+    writeBuildOutput(worktree);
+    assert.ok(registeredWorktreePaths(repository).includes(worktrees.canonicalPath(worktree)), 'the replacement is registered at the ticket path');
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.match(entry.leaseDecision, /checkout instance/);
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'untracked_recent');
+    assert.deepEqual(result.removed, []);
+    assert.deepEqual(result.quarantined, []);
+    assert.deepEqual(fs.readdirSync(quarantineDir), [], 'nothing was moved into quarantine');
+    assert.equal(fs.readFileSync(path.join(worktree, '.next', 'cache', 'chunk.js'), 'utf8'), 'compiled\n');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
   }
 });
 

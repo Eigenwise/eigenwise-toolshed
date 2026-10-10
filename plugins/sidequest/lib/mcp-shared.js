@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const store = require("./store");
 const work = require("./work");
 const worktrees = require("./worktrees");
+const { withWorktreeSweepLock } = require("./worktree-sweep-lock");
 const agentsync = require("./agentsync");
 const commitScope = require("./commit-scope");
 const publish = require("./publish");
@@ -289,15 +290,19 @@ function closeCleanupTickets(ticket, claimWasLive, extraTicket) {
 async function cleanupClosedTicketWorktree(slug, projectPath, ticket, claimWasLive = false, extraTicket = null) {
   try {
     if (!closedTicketCleanupApplies(slug, ticket)) return;
-    await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
-      execute: true,
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
-      minAgeMs: 0,
-      ticketRef: ticket.ref
-    });
+    await withWorktreeSweepLock(() => sweepClosedTicketWorktree(slug, projectPath, ticket, claimWasLive, extraTicket));
   } catch (_) {
   }
+}
+async function sweepClosedTicketWorktree(slug, projectPath, ticket, claimWasLive, extraTicket) {
+  await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
+    execute: true,
+    currentPath: store.nearestRepoRoot(process.cwd()),
+    integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+    minAgeMs: 0,
+    ticketRef: ticket.ref
+  });
+  return [];
 }
 async function closeExecutorAndReclaimTree(slug, projectPath, res, ticket, reclaim = true) {
   if (!res.ok) return;

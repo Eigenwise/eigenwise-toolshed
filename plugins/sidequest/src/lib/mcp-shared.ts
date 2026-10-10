@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const store = require('./store');
 const work = require('./work');
 const worktrees = require('./worktrees');
+const { withWorktreeSweepLock } = require('./worktree-sweep-lock');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
 const publish = require('./publish');
@@ -410,20 +411,27 @@ function closeCleanupTickets(ticket: any, claimWasLive: boolean, extraTicket: an
 
 // Every ticket close (integrate, groomClose, done, release, remove) reclaims that ticket's own
 // worktree at zero age under the sweep's rules, so a finished tree does not wait for a session sweep
-// that may never reach it (SQ-51, GH-439). The session sweep stays the backstop.
+// that may never reach it (SQ-51, GH-439). The session sweep stays the backstop. A session sweep
+// that holds the sweep lock may be renaming this same tree into quarantine and repairing its
+// registration, so a held lock leaves the tree to it instead of racing it.
 async function cleanupClosedTicketWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean = false, extraTicket: any = null): Promise<void> {
   try {
     if (!closedTicketCleanupApplies(slug, ticket)) return;
-    await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
-      execute: true,
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
-      minAgeMs: 0,
-      ticketRef: ticket.ref,
-    });
+    await withWorktreeSweepLock(() => sweepClosedTicketWorktree(slug, projectPath, ticket, claimWasLive, extraTicket));
   } catch (_) {
     // The close has already been durably recorded. The session sweep remains the backstop.
   }
+}
+
+async function sweepClosedTicketWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean, extraTicket: any): Promise<string[]> {
+  await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
+    execute: true,
+    currentPath: store.nearestRepoRoot(process.cwd()),
+    integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+    minAgeMs: 0,
+    ticketRef: ticket.ref,
+  });
+  return [];
 }
 
 // done, release and groomClose end the executor that held the ticket and then reclaim its tree.

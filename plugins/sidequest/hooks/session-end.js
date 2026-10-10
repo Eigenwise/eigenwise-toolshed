@@ -121,26 +121,33 @@ function detachSessionEndSweep(data) {
 
 // src/hooks/shared/worktree-sweep.ts
 var import_node_child_process2 = require("node:child_process");
-var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_fs4 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
+var import_node_os3 = __toESM(require("node:os"));
+var import_node_path4 = __toESM(require("node:path"));
+
+// src/lib/worktree-sweep-lock.ts
+var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path3 = __toESM(require("node:path"));
+
+// src/hooks/shared/worktree-sweep.ts
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 function stateFile() {
-  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
-  return import_node_path3.default.join(home, "worktree-sweep-sessions.json");
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path4.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
+  return import_node_path4.default.join(home, "worktree-sweep-sessions.json");
 }
 function readState() {
   try {
-    return JSON.parse(import_node_fs3.default.readFileSync(stateFile(), "utf8"));
+    return JSON.parse(import_node_fs4.default.readFileSync(stateFile(), "utf8"));
   } catch (_) {
     return {};
   }
 }
 function writeState(state) {
   try {
-    import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(stateFile()), { recursive: true });
-    import_node_fs3.default.writeFileSync(stateFile(), JSON.stringify(state), "utf8");
+    import_node_fs4.default.mkdirSync(import_node_path4.default.dirname(stateFile()), { recursive: true });
+    import_node_fs4.default.writeFileSync(stateFile(), JSON.stringify(state), "utf8");
   } catch (_) {
   }
 }
