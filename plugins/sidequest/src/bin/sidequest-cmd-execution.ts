@@ -357,29 +357,32 @@ function scopeRefusalNextStep(res: any) {
   return 'commit in-scope work, then release with --release-kind handback and name the refused paths.';
 }
 
+// A ruling that went through, as the lines the CLI prints for it.
+function scopeRulingLines(res: any, project: string): string[] {
+  if (res.state === 'refused') {
+    return [`✓ ${res.ticket.ref} scope expansion refused: ${res.refused.join(', ')} — ${project}`, `  ${scopeRefusalNextStep(res)}`];
+  }
+  if (res.approved?.length) return [`✓ ${res.ticket.ref} scope auto-approved: ${res.approved.join(', ')} — ${project}`];
+  return [`✓ ${res.ticket.ref} already covers: ${res.covered.join(', ')} — ${project}`];
+}
+
+function reportScopeRuling(idOrRef: string, res: any, meta: any) {
+  if (!res.ok) return reportClaimFailure('scope-request', idOrRef, res, meta);
+  for (const line of scopeRulingLines(res, meta.name)) console.log(line);
+}
+
 // Granting an outstanding refused request is main-thread-only (MCP scopeRequest
 // grant:true from the orchestrator): the CLI has no scope-grant/--grant surface,
 // so an executor subagent can never widen its own live scope from Bash.
 async function cmdScopeRequest(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.');
-  const files = opts.file != null ? opts.file : opts.files;
+  const files = opts.file ?? opts.files;
   if (files == null) fail('scope-request: pass one or more requested paths with --file or --files. Granting an outstanding refused request is MCP-only: scopeRequest grant:true from the orchestrator.');
   const { slug, meta } = await resolveProject(opts);
   const res = store.requestScope(slug, idOrRef, workerId(opts), files, { source: opts.source, force: !!opts.force });
   if (opts.json) return reportScopeJson(slug, res);
-  if (res.ok) {
-    if (res.state === 'refused') {
-      console.log(`✓ ${res.ticket.ref} scope expansion refused: ${res.refused.join(', ')} — ${meta.name}`);
-      console.log(`  ${scopeRefusalNextStep(res)}`);
-    } else if (res.approved?.length) {
-      console.log(`✓ ${res.ticket.ref} scope auto-approved: ${res.approved.join(', ')} — ${meta.name}`);
-    } else {
-      console.log(`✓ ${res.ticket.ref} already covers: ${res.covered.join(', ')} — ${meta.name}`);
-    }
-  } else {
-    reportClaimFailure('scope-request', idOrRef, res, meta);
-  }
+  reportScopeRuling(idOrRef, res, meta);
 }
 
 async function cmdCommit(opts: any, positional: any) {

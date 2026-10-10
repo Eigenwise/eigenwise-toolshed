@@ -1047,9 +1047,9 @@ function createTickets(dependencies) {
       encoding: "utf8",
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"]
-    })).split(/\r?\n/).filter(Boolean);
+    })).split("\0").filter(Boolean);
     try {
-      return [...git(["diff", "--name-only", "--no-renames", checkout.base]), ...git(["ls-files", "--others", "--exclude-standard"])];
+      return [...git(["diff", "--name-only", "-z", "--no-renames", checkout.base]), ...git(["ls-files", "--others", "--exclude-standard", "-z"])];
     } catch (_) {
       throw new Error(`${ticket.ref}: removeFiles cannot confirm the bound checkout ${checkout.cwd} has written nothing under the path, because git could not read it. Release the claim first, then remove the path.`);
     }
