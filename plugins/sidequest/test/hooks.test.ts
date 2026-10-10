@@ -6113,3 +6113,57 @@ test('denied-tools guard: board and category deniedTools refuse an executor call
     store.setBoardConfig(slug, { deniedTools: previous.deniedTools, readOnlyDeniedTools: previous.readOnlyDeniedTools });
   }
 });
+
+// GH-424. The MCP server shares one session id across every subagent, so only this hook can tell which executor
+// omitted `by` on rework. It defaults the owner label the executor's own dispatch recorded and refuses when no
+// single label is attributable.
+test('bind-runtime-identity defaults an omitted rework by to the calling executor and refuses an ambiguous caller (GH-424)', () => {
+  const sessionId = `gh424-rework-${++sqSeq}`;
+  const own = addStopTicket('GH-424 executor reworking its own candidate');
+  const other = addStopTicket('GH-424 ticket this executor never claimed');
+  const owner = `gh424-owner-${sqSeq}`;
+  const stop = claimStopTicket(own, sessionId, owner);
+  const callRework = (toolInput: Record<string, unknown>, identity: Record<string, unknown> = stop) => runHookOutput(
+    path.join(HOOKS, 'bind-runtime-identity.js'),
+    { ...identity, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__rework', tool_input: toolInput },
+  );
+  const review = 'The candidate misses a case.';
+
+  const defaulted = callRework({ ref: own.ref, review, reason: 'Repair it.' });
+  assert.notEqual(defaulted, null, 'the hook rewrites a rework that omitted by');
+  assert.equal(defaulted.hookSpecificOutput.updatedInput.by, owner);
+  assert.equal(defaulted.hookSpecificOutput.updatedInput.ref, own.ref, 'the rest of the call passes through');
+
+  const refused = callRework({ ref: other.ref, review, reason: 'Not this executor ticket.' });
+  assert.equal(refused.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(refused.hookSpecificOutput.permissionDecisionReason, /rework omitted by/);
+  assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(stop.agent_id));
+  assert.match(refused.hookSpecificOutput.permissionDecisionReason, /main session id is a different identity/);
+
+  assert.equal(callRework({ ref: own.ref, by: 'explicit-label', review, reason: 'Explicit wins.' }), null, 'an explicit by is left alone');
+  assert.equal(callRework({ ref: own.ref, review, reason: 'Main thread.' }, { session_id: sessionId }), null, 'a main-thread call has no agent_id to resolve');
+});
+
+// SQ-160. groomClose and supersede_submission default an omitted `by` to the shared session id in the MCP server,
+// which a subagent would otherwise inherit: a fresh-fixture subagent groomClose closed an unclaimed ticket as the
+// main session. mcp.test.ts pins this list to the server's CONTROL_PLANE_DEFAULT_BY, so a tool added there fails
+// that test until it is probed here too.
+test('bind-runtime-identity refuses a subagent call that omits by on every defaulted control-plane tool and leaves the main thread alone (SQ-160)', () => {
+  const subagent = { session_id: `sq160-${++sqSeq}`, agent_type: 'sidequest-exec-dispatch', agent_id: `sq160-agent-${sqSeq}` };
+  for (const tool of ['groomClose', 'rework', 'supersede_submission']) {
+    const ticket = addStopTicket(`SQ-160 unclaimed ticket for ${tool}`);
+    const call = (identity: Record<string, unknown>, extra: Record<string, unknown> = {}) => runHookOutput(
+      path.join(HOOKS, 'bind-runtime-identity.js'),
+      { ...identity, cwd: BOARD_PATH, tool_name: `mcp__plugin_sidequest_board__${tool}`, tool_input: { ref: ticket.ref, reason: 'Probe.', review: 'Probe.', supersededBy: 'SQ-1', ...extra } },
+    );
+    const refused = call(subagent);
+    assert.notEqual(refused, null, `${tool}: the hook lets a subagent call without by through to the main-session default`);
+    assert.equal(refused.hookSpecificOutput.permissionDecision, 'deny', `${tool}: a subagent call without by is refused`);
+    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(`${tool} omitted by`));
+    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(subagent.agent_id));
+    assert.equal(store.getTicket(slug, ticket.ref).status, 'todo', `${tool}: the refused call leaves the ticket unclosed`);
+    assert.equal(call(subagent, { by: '   ' }).hookSpecificOutput.permissionDecision, 'deny', `${tool}: a blank by counts as omitted`);
+    assert.equal(call(subagent, { by: 'explicit-label' }), null, `${tool}: an explicit by is left alone`);
+    assert.equal(call({ session_id: subagent.session_id }), null, `${tool}: a main-thread call keeps the MCP default`);
+  }
+});

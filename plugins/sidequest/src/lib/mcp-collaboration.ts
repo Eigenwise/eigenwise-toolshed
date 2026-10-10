@@ -94,7 +94,7 @@ const tools: ToolDefinition[] = [
       properties: {
         ref: { type: 'string', description: 'Pending submission to close.' },
         project: PROJECT_PROP,
-        by: { type: 'string', description: 'Control-plane identity recording the closure.' },
+        by: { type: 'string', description: 'Control-plane identity recording the closure. Omitted, the main thread defaults to its session id; a subagent call without by is refused.' },
         supersededBy: { type: 'string', description: 'Later ticket ref with an integrated repair delivery.' },
         reason: { type: 'string', description: 'Concise delivery evidence retained on the closed submission.' },
         reviewedReplacements: {
@@ -111,7 +111,7 @@ const tools: ToolDefinition[] = [
           },
         },
       },
-      required: ['ref', 'by', 'supersededBy', 'reason'],
+      required: ['ref', 'supersededBy', 'reason'],
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, 'supersede_submission');

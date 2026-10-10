@@ -3119,6 +3119,12 @@ function createDispatch(dependencies) {
   function gatedClaimHolder(ticket) {
     return ticket?.claim?.by ? String(ticket.claim.by) : "<your claim id>";
   }
+  function dispatchCallerOwners(identity) {
+    const agentId = String(identity?.agentId || "").trim();
+    const ref = String(identity?.ref || "").trim().toUpperCase();
+    if (!agentId) return [];
+    return listProjects({ all: true }).flatMap((project) => listTickets(project.slug)).filter((ticket) => dispatchState(ticket)?.agentId === agentId && (!ref || String(ticket.ref).toUpperCase() === ref)).map((ticket) => ({ ref: ticket.ref, by: String(ticket.claim?.by || ticket.submission?.by || "").trim() })).filter((owner) => owner.by);
+  }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();
     const executor = String(identity?.executor || "").trim();
@@ -4213,6 +4219,7 @@ function createDispatch(dependencies) {
     dispatchIdentityDiagnosis,
     crossedWorktreeBinding,
     dispatchIsolationExpectation,
+    dispatchCallerOwners,
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,

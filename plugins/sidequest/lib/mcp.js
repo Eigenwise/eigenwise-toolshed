@@ -13,7 +13,7 @@ function boardMcpSessionId() {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 27300;
+const MCP_TOOLS_LIST_MAX_BYTES = 27330;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -156,6 +156,19 @@ function argumentSuggestion(key, allowed) {
   const matches = Array.from(allowed).filter((accepted) => editDistance(key, accepted) <= 2);
   return matches.length === 1 ? ` did you mean ${matches[0]}?` : "";
 }
+function dependsOnConflicts(args) {
+  return args.to !== void 0 || args.verb !== void 0 && args.verb !== "depends-on";
+}
+function foldLinkDependsOn(args, aliases) {
+  if (args.verb === "dependsOn") args.verb = "depends-on";
+  if (args.dependsOn === void 0) return;
+  if (dependsOnConflicts(args)) {
+    throw new Error("link: dependsOn names the target of a depends-on link; pass dependsOn alone or verb + to, not both.");
+  }
+  Object.assign(args, { verb: "depends-on", to: args.dependsOn });
+  delete args.dependsOn;
+  aliases.push('accepted dependsOn as verb "depends-on" + to');
+}
 function validateToolArguments(tool, rawArgs) {
   if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
     throw new Error(`${tool.name}: arguments must be an object.`);
@@ -169,6 +182,7 @@ function validateToolArguments(tool, rawArgs) {
     delete args[from];
     aliases.push(`accepted ${from} as ${to}`);
   }
+  if (tool.name === "link") foldLinkDependsOn(args, aliases);
   if (args.priority === COERCED_PRIORITY.from) {
     args.priority = COERCED_PRIORITY.to;
     aliases.push(`accepted priority "${COERCED_PRIORITY.from}" as "${COERCED_PRIORITY.to}"`);
@@ -221,14 +235,15 @@ function assertMutationFreshness(projectArg) {
   });
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
-function groomCloseArgs(tool, args) {
-  if (tool.name !== "groomClose" || String(args.by || "").trim()) return args;
+const CONTROL_PLANE_DEFAULT_BY = /* @__PURE__ */ new Set(["groomClose", "rework", "supersede_submission"]);
+function controlPlaneByArgs(tool, args) {
+  if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || "").trim()) return args;
   const sessionId = runtimeSessionId();
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
 async function runTool(tool, rawArgs) {
   const validated = validateToolArguments(tool, rawArgs);
-  const args = groomCloseArgs(tool, validated.args);
+  const args = controlPlaneByArgs(tool, validated.args);
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
@@ -361,6 +376,7 @@ module.exports = {
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,
   COERCED_PRIORITY,
+  CONTROL_PLANE_DEFAULT_BY,
   TOOLS,
   toolDescriptors,
   toolDescriptorByteReport,

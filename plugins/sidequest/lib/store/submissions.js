@@ -2860,15 +2860,36 @@ ${verify.outputTail}` : null
       return preserved;
     });
   }
+  function overlongReworkComment(by, review, reason, source) {
+    const parts = [["review", review, REJECTION_REVIEW_MAX], ["reason", reason, REJECTION_REASON_MAX]].filter(([, text, max]) => text.length > max).map(([name, text]) => `${name}:
+${text}`);
+    if (!parts.length) return null;
+    const prepared = prepareComment({ by, source, body: `Full rework text; the stored review and reason hold a truncated summary.
+
+${parts.join("\n\n")}` });
+    if (!prepared.ok) {
+      throw new Error(`rework: review and reason are too long to keep even as a comment (${prepared.length} chars, max ${prepared.max}). Put the findings in a ticket comment and keep review and reason to a summary.`);
+    }
+    return prepared;
+  }
+  function storeOverlongReworkText(ticket, prepared, review, reason) {
+    if (!prepared) return { review, reason };
+    const comment = createComment(prepared);
+    if (!Array.isArray(ticket.comments)) ticket.comments = [];
+    ticket.comments.push(comment);
+    const pointer = ` … [full text: comment ${comment.id}]`;
+    const summary = (text, max) => text.length > max ? text.slice(0, max - pointer.length) + pointer : text;
+    return { review: summary(review, REJECTION_REVIEW_MAX), reason: summary(reason, REJECTION_REASON_MAX) };
+  }
   function reworkSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const by = String(opts.by || "").trim();
-    const review = String(opts.review || "").trim();
-    const reason = String(opts.reason || "").trim();
+    const fullReview = String(opts.review || "").trim();
+    const fullReason = String(opts.reason || "").trim();
     if (!by) throw new Error("rework requires the reviewer or orchestrator identity in by");
-    if (!review) throw new Error('rework: "review" is required.');
-    if (!reason) throw new Error("rework requires the review rejection reason");
-    if (review.length > REJECTION_REVIEW_MAX || reason.length > REJECTION_REASON_MAX) throw new Error("rework review evidence or reason exceeds its maximum length");
+    if (!fullReview) throw new Error('rework: "review" is required.');
+    if (!fullReason) throw new Error("rework requires the review rejection reason");
+    const overlong = overlongReworkComment(by, fullReview, fullReason, opts.source);
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
     return withTicketLock(slug, found.id, () => {
@@ -2900,11 +2921,12 @@ ${verify.outputTail}` : null
           projectCapabilities: retryCheckpoint.projectCapabilities,
           verify: retryCheckpoint.verify
         };
+        const { review: review2, reason: reason2 } = storeOverlongReworkText(ticket, overlong, fullReview, fullReason);
         const rejected2 = Object.assign({}, rejectedCandidate, {
           rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
           rejectedBy: by,
-          review,
-          reason,
+          review: review2,
+          reason: reason2,
           ...candidate.source === "git" ? { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) } : {},
           rejectionKind: "rework",
           preservationState: "pending",
@@ -2928,6 +2950,7 @@ ${verify.outputTail}` : null
         if (recovered.ok) queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
         return recovered;
       }
+      const { review, reason } = storeOverlongReworkText(ticket, overlong, fullReview, fullReason);
       const rejected = Object.assign({}, ticket.submission, {
         rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
         rejectedBy: by,

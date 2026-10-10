@@ -6818,6 +6818,105 @@ test('GH-378: submit never repoints another board\'s refs/sidequest/<ref> and na
   assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`]), foreign, 'the foreign candidate ref is left in place');
 });
 
+// GH-424. rework is reached through the JSON-RPC layer here because the by default lives in runTool, which a
+// direct tool.handler call skips.
+async function reworkAsSession(sessionId: string | null, args: Record<string, unknown>) {
+  const previous = process.env.CLAUDE_CODE_SESSION_ID;
+  const previousFallback = process.env.CLAUDE_SESSION_ID;
+  if (sessionId === null) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = sessionId;
+  delete process.env.CLAUDE_SESSION_ID;
+  try {
+    const response = await mcp.handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'rework', arguments: { project: PROJECT_DIR, ...args } } });
+    const text = response.result.content[0].text;
+    return response.result.isError ? { isError: true, text } : JSON.parse(text);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previous;
+    if (previousFallback !== undefined) process.env.CLAUDE_SESSION_ID = previousFallback;
+  }
+}
+
+function submittedCandidate(title: string, by: string) {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh424.js'), `${title}\n`);
+  git(['add', 'lib/gh424.js']);
+  git(['commit', '-m', title]);
+  const commit = git(['rev-parse', 'HEAD']);
+  const ticket = addTicket(title);
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, by, { commit }).ok, true);
+  return ticket;
+}
+
+test('rework defaults an omitted by to the session id: it passes for the owner and names both labels otherwise (GH-424)', async () => {
+  const owned = submittedCandidate('gh424 owner session', 'gh424-session');
+  const defaulted = await reworkAsSession('gh424-session', { ref: owned.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(defaulted.ok, true, defaulted.message);
+  assert.strictEqual(store.getTicket(slug, owned.ref).rejectedSubmissions[0].rejectedBy, 'gh424-session');
+
+  const foreign = submittedCandidate('gh424 foreign owner', 'exec-y');
+  const refused = await reworkAsSession('gh424-session', { ref: foreign.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'not_owner');
+  assert.match(refused.message, /submitter "exec-y"/);
+  assert.match(refused.message, /got "gh424-session"/);
+  assert.ok(store.getTicket(slug, foreign.ref).submission, 'a refused default leaves the candidate in place');
+
+  const anonymous = await reworkAsSession(null, { ref: foreign.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(anonymous.isError, true);
+  assert.match(anonymous.text, /rework: "by" is required/);
+
+  const explicit = await reworkAsSession('gh424-session', { ref: foreign.ref, by: 'exec-y', review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(explicit.ok, true, 'an explicit by wins over the session default');
+});
+
+test('rework defaults an omitted by to the session the host switched to, not the startup environment (GH-424, GH-467)', async () => {
+  const owned = submittedCandidate('gh424 cleared session', 'gh424-cleared');
+  const sessionsDirectory = path.join(String(process.env.SIDEQUEST_CLAUDE_HOME), 'sessions');
+  const recordFile = path.join(sessionsDirectory, `${process.ppid}.json`);
+  fs.mkdirSync(sessionsDirectory, { recursive: true });
+  fs.writeFileSync(recordFile, JSON.stringify({ pid: process.ppid, sessionId: 'gh424-cleared' }));
+  try {
+    const defaulted = await reworkAsSession('gh424-startup', { ref: owned.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+    assert.strictEqual(defaulted.ok, true, defaulted.message);
+    assert.strictEqual(store.getTicket(slug, owned.ref).rejectedSubmissions[0].rejectedBy, 'gh424-cleared');
+  } finally {
+    fs.rmSync(recordFile, { force: true });
+  }
+});
+
+test('rework stores over-long review and reason as a comment and keeps a truncated summary with its id (GH-424)', async () => {
+  const review = `review-${'r'.repeat(1500)}`;
+  const reason = `reason-${'x'.repeat(5000)}`;
+  const refusedTicket = submittedCandidate('gh424 overlong refused', 'exec-z');
+  const refused = await callMcp('rework', { project: PROJECT_DIR, ref: refusedTicket.ref, by: 'reviewer', review, reason });
+  assert.strictEqual(refused.reason, 'not_owner');
+  assert.strictEqual((store.getTicket(slug, refusedTicket.ref).comments || []).length, 0, 'a refused rework writes no comment');
+
+  const ticket = submittedCandidate('gh424 overlong', 'exec-z');
+  const reworked = await callMcp('rework', { project: PROJECT_DIR, ref: ticket.ref, by: 'exec-z', review, reason });
+  assert.strictEqual(reworked.ok, true, reworked.message);
+  const stored = store.getTicket(slug, ticket.ref);
+  const comment = stored.comments.at(-1);
+  assert.strictEqual(comment.kind, 'comment');
+  assert.strictEqual(comment.by, 'exec-z');
+  assert.ok(comment.body.includes(review) && comment.body.includes(reason), 'the comment holds the whole text');
+  const rejection = stored.rejectedSubmissions[0];
+  assert.strictEqual(rejection.review.length, 1000);
+  assert.strictEqual(rejection.reason.length, 4000);
+  for (const field of [rejection.review, rejection.reason]) assert.ok(field.endsWith(`[full text: comment ${comment.id}]`), field.slice(-80));
+
+  const unbounded = submittedCandidate('gh424 beyond a comment', 'exec-z');
+  await assert.rejects(
+    callMcp('rework', { project: PROJECT_DIR, ref: unbounded.ref, by: 'exec-z', review: 'ok', reason: 'z'.repeat(17000) }),
+    /too long to keep even as a comment \(\d+ chars, max 16000\)/,
+  );
+  assert.ok(store.getTicket(slug, unbounded.ref).submission, 'a text no comment can hold is refused with the candidate in place');
+});
+
 // SQ-3424: on a board with verifyEnvironment: shared, an isolated dispatch pins environment: 'shared'
 // onto its command verifier. The executor cannot run that command in its worktree, so submit admits
 // the candidate as deferred, the wave gate records gate_deferred without provisioning anything, and
