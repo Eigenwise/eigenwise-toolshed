@@ -64,8 +64,12 @@ function resolveCommit(cwd, revision) {
   }
 }
 function porcelainCodes(cwd) {
-  const output = (0, import_git_process.execFileSync)("git", ["status", "--porcelain"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  return output.split("\n").filter(Boolean).map((entry) => entry.slice(0, 2));
+  try {
+    const output = (0, import_git_process.execFileSync)("git", ["status", "--porcelain"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return output.split("\n").filter(Boolean).map((entry) => entry.slice(0, 2));
+  } catch (_) {
+    return null;
+  }
 }
 function ancestry(cwd, base, head) {
   try {
@@ -83,6 +87,7 @@ function headProblem({ input, cwd, head }) {
 function retainedProblem({ input, cwd }) {
   if (!input.retained) return null;
   const codes = porcelainCodes(cwd);
+  if (!codes) return failed("unreadable", "git status --porcelain could not run");
   if (!codes.length) return failed("retained-changes-missing", "git status --porcelain lists no changes, so this is not the retained candidate");
   return codes.some((code) => UNMERGED_CODES.has(code)) ? failed("unmerged", "git status --porcelain lists unmerged entries") : null;
 }

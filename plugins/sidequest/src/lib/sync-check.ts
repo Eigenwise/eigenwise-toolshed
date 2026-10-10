@@ -56,9 +56,15 @@ function resolveCommit(cwd: string, revision: string): string {
   }
 }
 
-function porcelainCodes(cwd: string): string[] {
-  const output = execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  return output.split('\n').filter(Boolean).map((entry) => entry.slice(0, 2));
+// A corrupt index makes `git status` exit non-zero; null lets the caller report it as a structured line
+// instead of letting the throw escape as a raw command failure with empty stdout.
+function porcelainCodes(cwd: string): string[] | null {
+  try {
+    const output = execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return output.split('\n').filter(Boolean).map((entry) => entry.slice(0, 2));
+  } catch (_) {
+    return null;
+  }
 }
 
 // `--is-ancestor` answers through its exit code, so "not an ancestor" (1) arrives as a throw that has to be
@@ -81,6 +87,7 @@ function headProblem({ input, cwd, head }: SyncFacts): SyncCheckResult | null {
 function retainedProblem({ input, cwd }: SyncFacts): SyncCheckResult | null {
   if (!input.retained) return null;
   const codes = porcelainCodes(cwd);
+  if (!codes) return failed('unreadable', 'git status --porcelain could not run');
   if (!codes.length) return failed('retained-changes-missing', 'git status --porcelain lists no changes, so this is not the retained candidate');
   return codes.some((code) => UNMERGED_CODES.has(code)) ? failed('unmerged', 'git status --porcelain lists unmerged entries') : null;
 }

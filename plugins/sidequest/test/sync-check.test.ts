@@ -128,6 +128,15 @@ test('the retained-candidate variant needs uncommitted changes with no unmerged 
   assert.match(wrongHead.stdout, /^sync-check: FAILED head-mismatch /);
 });
 
+test('the retained-candidate variant reports a corrupt git index as unreadable with exit 1', () => {
+  const { repo, first, second } = fixture();
+  fs.writeFileSync(path.join(repo, '.git', 'index'), 'not a git index');
+
+  const result = cli(['sync-check', first, '--head', second, '--retained'], repo);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, 'sync-check: FAILED unreadable (git status --porcelain could not run)');
+});
+
 test('the retained-candidate variant refuses a checkout that is mid-merge', () => {
   const { repo, first } = fixture();
   commitFile(repo, 'shared.txt', 'main\n');
