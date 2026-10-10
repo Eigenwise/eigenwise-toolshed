@@ -352,8 +352,9 @@ function createTickets(dependencies) {
   function declaredScopeGuidance(ticket, refusedPaths) {
     if (!refusedPaths.length || !normalizeFiles(ticket.files).length) return "";
     const subject = refusedPaths.length === 1 ? "The refused path is" : "The refused paths are";
-    return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(", ")}. The orchestrator has to declare them (\`sidequest update ${ticket.ref} --file <path>\`) and redispatch.`;
+    return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(", ")}. The orchestrator can widen this live claim in place from its own main-thread identity: MCP \`update\` with addFiles appends without dropping the rest of the declared list, and MCP \`scopeRequest\` with grant:true grants exactly this refusal. Both refuse the claim holder's own \`by\`, and neither has a CLI surface a subagent can reach from Bash; the CLI's \`sidequest update ${ticket.ref} --add-file <path>\` only applies once the claim is released. Either remedy is in force for this dispatch's next scopeRequest, so there is nothing to redispatch.`;
   }
+  const SCOPE_HANDBACK_INSTRUCTION = ' Commit in-scope work, then release with kind "handback" and name the refused paths.';
   const DECLARED_FILES_MAX = 100;
   const CONTRACT_NAMES_MAX = 40;
   const LABELS_MAX = 24;
@@ -390,6 +391,10 @@ function createTickets(dependencies) {
   function scopeExpansionFiles(ticket, additions) {
     return normalizeFiles([...Array.isArray(ticket?.files) ? ticket.files : [], ...normalizeFiles(additions)]);
   }
+  function scopeReductionFiles(files, removals) {
+    const removalSet = new Set(normalizeFiles(removals).map((file) => file.toLowerCase()));
+    return normalizeFiles(files).filter((file) => !removalSet.has(file.toLowerCase()));
+  }
   function scopeResolution(slug, ticket, request, state, now, granted, refused) {
     const resolution = {
       state,
@@ -398,11 +403,36 @@ function createTickets(dependencies) {
       requested: normalizeFiles(request?.requested || request?.files),
       granted: normalizeFiles(granted),
       refused: normalizeFiles(refused),
+      // Which claim this ruling belongs to. A grant is only for the executor that
+      // asked, so a released and re-claimed ticket carries a new generation and its
+      // predecessor's refusal can no longer land in the new executor's scope.
+      claimGeneration: ticket?.claim?.generation,
       effectiveScope: [],
       at: now || (/* @__PURE__ */ new Date()).toISOString()
     };
     ticket.scopeResolution = resolution;
     resolution.effectiveScope = effectiveScope(slug, ticket);
+  }
+  function outstandingRefusedScopePaths(slug, ticket, refused) {
+    const carried = ticket?.claim?.generation === ticket?.scopeResolution?.claimGeneration ? normalizeFiles(ticket.scopeResolution.outstandingRefused) : [];
+    const scope = commitScope.ticketCommitScope(effectiveScope(slug, ticket), ticket?.files, ticket?.ref);
+    return normalizeFiles([...carried, ...normalizeFiles(refused)]).filter((file) => !commitScope.isInScope(file, scope));
+  }
+  function pendingRefusedScopePaths(ticket) {
+    const pending = ticket?.scopeResolution;
+    const refused = normalizeFiles(pending?.outstandingRefused ?? pending?.refused);
+    return refused.length ? refused : null;
+  }
+  function outstandingScopeGuidance(outstanding, refused) {
+    const earlier = outstanding.filter((file) => !refused.some((current) => current.toLowerCase() === file.toLowerCase()));
+    if (!earlier.length) return "";
+    return ` Earlier requests on this claim are still refused and a grant covers them too: ${earlier.join(", ")}.`;
+  }
+  function autoApprovalNote(policy, approved) {
+    return approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : "";
+  }
+  function scopeRefusalBody(refusalMessage, approvalNote, guidance, noBounce) {
+    return `${refusalMessage}${approvalNote}${guidance}${noBounce ? "" : SCOPE_HANDBACK_INSTRUCTION}`;
   }
   function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
@@ -670,7 +700,9 @@ function createTickets(dependencies) {
       touchClaimActivity(t, by, now);
       const request = { by, files: additions, requested, covered, at: now };
       if (!additions.length && !foreignReleaseFragments.length) {
+        const stillRefused2 = outstandingRefusedScopePaths(slug, t, []);
         scopeResolution(slug, t, request, "granted", now, [], []);
+        t.scopeResolution.outstandingRefused = stillRefused2;
         t.updatedAt = now;
         putTicket(slug, t);
         return { ok: true, ticket: t, covered, approved: [], autoApproved: false, state: "granted", resolution: t.scopeResolution };
@@ -700,16 +732,21 @@ function createTickets(dependencies) {
         ...additions.filter((file) => !commitScope.isInScope(file, approved))
       ]);
       const state = refused.length ? "refused" : "granted";
+      const refusedEvidencePaths = refused.filter((file) => isVerificationEvidencePath(file, evidenceDirectory, t.ref));
+      const refusedOutsideDeclaredFiles = refused.filter((file) => !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory, t.ref));
+      const stillRefused = outstandingRefusedScopePaths(slug, t, refusedOutsideDeclaredFiles);
       scopeResolution(slug, t, request, state, now, approved, refused);
+      t.scopeResolution.outstandingRefused = stillRefused;
       if (!Array.isArray(t.comments)) t.comments = [];
       const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "matching package surface derived from the ticket’s declared files";
       const undeclared = !normalizeFiles(t.files).length ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.` : "";
-      const refusedEvidencePaths = refused.filter((file) => isVerificationEvidencePath(file, evidenceDirectory, t.ref));
-      const refusedOutsideDeclaredFiles = refused.filter((file) => !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory, t.ref));
       const foreignReleaseFragmentMessage = foreignReleaseFragments.length ? commitScope.foreignReleaseFragmentRefusalMessage("scopeRequest", t.ref, foreignReleaseFragments) : "";
-      const scopeExpansionRefusalMessage = additions.length ? `Scope expansion refused: ${refused.join(", ")}.` : "";
+      const refusedAdditions = additions.filter((file) => !commitScope.isInScope(file, approved));
+      const scopeExpansionRefusalMessage = refusedAdditions.length ? `Scope expansion refused: ${refusedAdditions.join(", ")}.` : "";
       const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(" ");
-      const body = refused.length ? `${refusalMessage}${packageScopeRefusalNote(packageRulings)}${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${declaredScopeGuidance(t, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
+      const declaredGuidance = declaredScopeGuidance(t, refusedOutsideDeclaredFiles);
+      const guidance = `${undeclared}${declaredGuidance}${outstandingScopeGuidance(stillRefused, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)}`;
+      const body = refused.length ? scopeRefusalBody(refusalMessage, `${packageScopeRefusalNote(packageRulings)}${autoApprovalNote(policy, approved)}`, guidance, Boolean(declaredGuidance)) : `Auto-approved ${policy}: ${approved.join(", ")}.`;
       const comment = createComment({ by: refused.length ? "board" : "board", body, kind: "comment", source: refused.length ? opts.source || "cli" : "policy" }, now);
       t.comments.push(comment);
       t.lastEventType = refused.length ? "scope_refused" : "scope_auto_approved";
@@ -725,10 +762,68 @@ function createTickets(dependencies) {
         autoApproved: !refused.length,
         refused,
         state,
+        // Whether a live-claim remedy exists for this refusal, so every surface that
+        // repeats the instruction stops telling the executor to bounce when it does.
+        noBounce: Boolean(declaredGuidance),
         resolution: t.scopeResolution,
         comment,
         ...refusalMessage ? { message: refusalMessage } : {}
       };
+    });
+  }
+  function scopeGrantRefusal(ticket, by) {
+    const held = ticket.claim;
+    if (!held?.by || claimReclaimable(ticket)) return { ok: false, reason: "not_claimed", ticket };
+    if (held.by === by) return { ok: false, reason: "claim_holder_cannot_grant", ticket, claim: held };
+    if (held.generation !== ticket.scopeResolution?.claimGeneration) return { ok: false, reason: "stale_scope_request", ticket, claim: held };
+    return null;
+  }
+  function recordScopeGrant(slug, ticket, granted, by, source) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const pending = ticket.scopeResolution;
+    const request = { by: pending.by, files: granted, requested: pending.requested, covered: [], at: pending.requestAt };
+    scopeResolution(slug, ticket, request, "granted", now, normalizeFiles([...normalizeFiles(pending.granted), ...granted]), []);
+    ticket.scopeResolution.grantedBy = by;
+    if (!Array.isArray(ticket.comments)) ticket.comments = [];
+    const comment = createComment({
+      by,
+      body: `Granted the outstanding scope request: ${granted.join(", ")}. Declared files widened for the live claim, so there is nothing to redispatch.`,
+      kind: "comment",
+      source: source || "cli"
+    }, now);
+    ticket.comments.push(comment);
+    ticket.lastEventType = "scope_granted";
+    ticket.lastEventSource = comment.source;
+    ticket.updatedAt = now;
+    putTicket(slug, ticket);
+    queueEventNotification(slug, ticket, "comment", comment.source, { commentBody: comment.body });
+    return { ok: true, ticket, granted, resolution: ticket.scopeResolution, comment };
+  }
+  function grantScope(slug, idOrRef, by, opts) {
+    opts = opts || {};
+    by = String(by || "orchestrator");
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    return withTicketLock(slug, found.id, () => {
+      const t = getTicket(slug, found.id);
+      if (!t) return { ok: false, reason: "not_found" };
+      const refused = pendingRefusedScopePaths(t);
+      if (!refused) return { ok: false, reason: "no_pending_scope_request", ticket: t };
+      const refusal = scopeGrantRefusal(t, by);
+      if (refusal) return refusal;
+      try {
+        t.files = boundedFiles(scopeExpansionFiles(t, refused), {
+          category: t.category,
+          readonlyOverride: t.readonlyOverride,
+          slug,
+          ticketRef: t.ref,
+          operation: "scopeGrant"
+        });
+      } catch (error) {
+        return { ok: false, reason: "invalid_scope", ticket: t, message: error.message };
+      }
+      syncLiveDispatchScope(slug, t);
+      return recordScopeGrant(slug, t, refused, by, opts.source);
     });
   }
   function migrateLegacyScopeRequest(slug, idOrRef) {
@@ -934,10 +1029,72 @@ function createTickets(dependencies) {
     const rightFiles = new Set(normalizedRight.map((file) => file.toLowerCase()));
     return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((file) => rightFiles.has(file.toLowerCase()));
   }
+  function assertDeclaredRemovals(ticket, declared, removals) {
+    const present = new Set(declared.map((file) => file.toLowerCase()));
+    const missing = normalizeFiles(removals).filter((file) => !present.has(file.toLowerCase()));
+    if (!missing.length) return;
+    throw new Error(`${ticket.ref}: removeFiles named ${missing.join(", ")}, which this ticket does not declare, so the removal would change nothing. Declared files: ${declared.join(", ") || "(none)"}.`);
+  }
+  function inspectableCheckout(ticket) {
+    const { worktree, baseCommit } = dispatchState(ticket) || {};
+    if (!worktree || !baseCommit || !fs.existsSync(worktree)) return null;
+    return { cwd: worktree, base: baseCommit };
+  }
+  function boundCheckoutWrittenPaths(ticket) {
+    const checkout = inspectableCheckout(ticket);
+    if (!checkout) return [];
+    const git = (args) => String(execFileSync("git", args, {
+      cwd: checkout.cwd,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    })).split(/\r?\n/).filter(Boolean);
+    try {
+      return [...git(["diff", "--name-only", "--no-renames", checkout.base]), ...git(["ls-files", "--others", "--exclude-standard"])];
+    } catch (_) {
+      throw new Error(`${ticket.ref}: removeFiles cannot confirm the bound checkout ${checkout.cwd} has written nothing under the path, because git could not read it. Release the claim first, then remove the path.`);
+    }
+  }
+  function liveClaimDroppedFiles(ticket, next) {
+    if (!ticket.claim?.by || claimReclaimable(ticket)) return [];
+    const kept = new Set(next.map((file) => file.toLowerCase()));
+    return normalizeFiles(ticket.files).filter((file) => !kept.has(file.toLowerCase()));
+  }
+  function assertLiveClaimRemoval(ticket, next) {
+    if (!liveClaimDroppedFiles(ticket, next).length) return;
+    if (!next.length) {
+      throw new Error(`${ticket.ref}: removeFiles would leave the live claim with no declared files, which also drops its implicit release fragment .release/unreleased/${ticket.ref}.md from scope. Keep at least one declared path, or release the claim first and then change the scope.`);
+    }
+    const revoked = boundCheckoutWrittenPaths(ticket).filter((file) => commitScope.isInScope(file, ticket.files) && !commitScope.isInScope(file, next));
+    if (revoked.length) {
+      throw new Error(`${ticket.ref}: removeFiles would revoke ${revoked.join(", ")}, which the bound checkout has already changed since the dispatch base. Keep the path declared, or release the claim first and then remove it.`);
+    }
+  }
+  function assertLiveClaimReplace(ticket, next) {
+    const dropped = liveClaimDroppedFiles(ticket, next).filter((file) => !commitScope.isInScope(file, next));
+    if (!dropped.length) return;
+    throw new Error(`${ticket.ref}: update files would replace the live claim's declared scope and drop ${dropped.join(", ")}, which the claim still holds (including any path a scopeRequest granted). Use addFiles to add paths without dropping the rest, removeFiles to drop paths the bound checkout has not written, or release the claim first and then replace the list.`);
+  }
+  function patchedFileScope(ticket, patch) {
+    const adjusts = patch.addFiles !== void 0 || patch.removeFiles !== void 0;
+    if (patch.files !== void 0 && adjusts) {
+      throw new Error(`${ticket.ref}: update cannot mix files with addFiles/removeFiles in one call. Use files to replace the declared list, or addFiles/removeFiles to adjust it without dropping the rest.`);
+    }
+    if (!adjusts) return patch.files;
+    const widened = scopeExpansionFiles(ticket, patch.addFiles);
+    assertDeclaredRemovals(ticket, widened, patch.removeFiles);
+    const reduced = scopeReductionFiles(widened, patch.removeFiles);
+    assertLiveClaimRemoval(ticket, reduced);
+    return reduced;
+  }
+  function patchChangesFiles(ticket, patch) {
+    const filesPatch = patchedFileScope(ticket, patch);
+    return filesPatch !== void 0 && !sameFiles(ticket.files, filesPatch);
+  }
   function activeClaimCloseoutUpdateRefusal(ticket, patch, options = {}) {
     if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
     const changedFields = [
-      ...patch.files !== void 0 && !sameFiles(ticket.files, patch.files) ? ["files"] : [],
+      ...patchChangesFiles(ticket, patch) ? ["files"] : [],
       ...patch.status !== void 0 && String(patch.status).trim().toLowerCase() !== ticket.status ? ["status"] : [],
       ...(patch.readonly !== void 0 || patch.readonlyOverride !== void 0) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ["readonly"] : [],
       ...patch.workingTreeDelivery !== void 0 && patch.workingTreeDelivery === true !== (ticket.workingTreeDelivery === true) ? ["workingTreeDelivery"] : [],
@@ -1004,6 +1161,8 @@ function createTickets(dependencies) {
         throw new Error(`${t.ref} reviewTarget is immutable and cannot be cleared by changing category; file a fresh ticket`);
       }
       const prevStatus = t.status;
+      const filesPatch = patchedFileScope(t, patch);
+      if (patch.files !== void 0) assertLiveClaimReplace(t, normalizeFiles(patch.files));
       if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
       if (patch.description != null) t.description = String(patch.description).trim();
       if (patch.status != null) t.status = nextStatus;
@@ -1024,10 +1183,10 @@ function createTickets(dependencies) {
         if (c) t.complexity = c;
       }
       if (patch.complexityWhy !== void 0 && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1e3);
-      if (patch.files !== void 0) {
-        const scopeRefusal = options.allowLiveClaimCloseoutUpdate === true ? null : activeClaimScopeRefusal(slug, t, patch.files, patch);
+      if (filesPatch !== void 0) {
+        const scopeRefusal = options.allowLiveClaimCloseoutUpdate === true ? null : activeClaimScopeRefusal(slug, t, filesPatch, patch);
         if (scopeRefusal) throw new Error(scopeRefusal);
-        t.files = boundedFiles(patch.files, {
+        t.files = boundedFiles(filesPatch, {
           category: patch.category === void 0 ? t.category : patch.category,
           readonlyOverride: patch.readonly === void 0 && patch.readonlyOverride === void 0 ? t.readonlyOverride : requestedReadonlyOverride(patch),
           slug,
@@ -1221,6 +1380,6 @@ function createTickets(dependencies) {
   function listActive(slug) {
     return queryTickets(String(slug || ""), { archived: false });
   }
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 module.exports = { createTickets };

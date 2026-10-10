@@ -992,6 +992,8 @@ function toolInputOf(input) {
 }
 var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "files",
+  "addFiles",
+  "removeFiles",
   "status",
   "readonly",
   "readonlyOverride",
@@ -1012,11 +1014,27 @@ var MAIN_THREAD_MUTATIONS = {
     matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
     denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
   },
+  mcp__plugin_sidequest_board__scopeRequest: {
+    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
+    // already recorded, which is a live-claim mutation just like the update fields
+    // above. Without this, a subagent could pass by:'orchestrator' to mint the
+    // grant itself; the store's by-mismatch check only catches the claim holder's
+    // own by, not an impersonated one.
+    matches: (input) => input.grant === true,
+    denial: "sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread."
+  },
   mcp__plugin_sidequest_board__remove: {
+    // force:true is the only path that deletes a live-claimed ticket, so it is the
+    // executor's escape hatch (delete the ticket to shed the claim). The store
+    // refuses ungranted live-claim deletion, but deny it here too so a subagent
+    // can never mint the main-thread grant by riding the MCP remove handler.
     matches: (input) => input.force === true,
     denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
   },
   mcp__plugin_sidequest_board__verdict: {
+    // verdict with correct appends an accepted-to-rejected correction to a finalized
+    // review verdict, which only the main thread may do. Ordinary verdict calls stay
+    // open to the review executor that closes its own readonly review.
     matches: (input) => Object.hasOwn(input, "correct"),
     denial: "sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread."
   }

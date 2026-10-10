@@ -4391,11 +4391,14 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
   });
   assert.ok(updatedCommit.commit, 'the normal commit gate admits a live shared dispatch scope update');
 
-  await callToolAsSession(MCP_SESSION_ID, 'update', {
+  const shed = await callToolRawAsSession(MCP_SESSION_ID, 'update', {
     project: updatedProject, ref: updatedTicket.ref, by: 'control-plane', files: ['lib/original.js'],
   });
+  assert.equal(shed.isError, true, 'a files replace cannot shed a path a live claim holds');
+  assert.match(shed.content[0].text, /drop lib\/updated\.js/);
   updated = store.getTicket(updatedProject, updatedTicket.ref);
-  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', updatedFragment, 'lib/updated.js'], 'shared-tree scope updates retain the submission binding when ticket scope sheds a path');
+  assert.deepEqual(updated.files, ['lib/original.js', 'lib/updated.js']);
+  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', updatedFragment, 'lib/updated.js'], 'a refused shed leaves the shared-tree submission binding untouched');
 
   const grantedWorktree = createGitWorktree();
   const grantedProject = store.ensureProject(grantedWorktree).slug;
@@ -4443,7 +4446,7 @@ test('MCP update refuses claim-holder live scope changes and admits a control-pl
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'screenshots']);
 
   await callToolAsSession(MCP_SESSION_ID, 'update', {
-    project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js'],
+    project, ref: ticket.ref, by: 'mcp-scope-control-plane', removeFiles: ['screenshots'],
   });
   const narrowed = store.getTicket(project, ticket.ref);
   assert.deepEqual(narrowed.files, ['lib/allowed.js']);
@@ -4470,7 +4473,7 @@ test('MCP update handler grants live scope changes without deriving authority fr
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'foreign/new.js']);
 
   await callToolAsSession(MCP_SESSION_ID, 'update', {
-    project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js'],
+    project, ref: ticket.ref, by: 'mcp-scope-control-plane', removeFiles: ['foreign/new.js'],
   });
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
 
