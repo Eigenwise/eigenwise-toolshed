@@ -52,7 +52,7 @@ const sourceRevisionCapability = require('../lib/source-revision-capability.js')
 const { runCapturedVerification, runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
 const publish = require('../lib/publish.js');
-const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
+const { createCheckoutInstanceMarker, sameCanonicalPath } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 
@@ -217,6 +217,13 @@ async function callHandler(name?: any, args?: any) {
 
 function gitAt(cwd?: any, args?: any) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+// Git for Windows lists worktrees with forward slashes and long names, while the test holds a
+// backslashed path that can carry an 8.3 short name (RUNNER~1), so a substring match never hits there.
+function worktreeRegistered(primary: string, worktree: string): boolean {
+  return gitAt(primary, ['worktree', 'list', '--porcelain']).split(/\r?\n/)
+    .some((line: string) => line.startsWith('worktree ') && sameCanonicalPath(line.slice('worktree '.length), worktree));
 }
 
 function persistTicket(project: string, ticket: any) {
@@ -2416,7 +2423,7 @@ test('MCP release leaves the live executor its tree, and groomClose reclaims the
   assert.equal(closed.ok, true, closed.message || closed.reason);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
   assert.equal(fs.existsSync(worktree), false, 'groomClose reclaimed the closed tree in the same call');
-  assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), false, 'and left it unregistered');
+  assert.equal(worktreeRegistered(primary, worktree), false, 'and left it unregistered');
 });
 
 test('MCP remove reclaims a released ticket tree that holds only build output', async (context: any) => {
@@ -2452,7 +2459,7 @@ test('MCP groomClose leaves the tree to a session sweep that holds the sweep loc
   assert.equal(closed.ok, true, closed.message || closed.reason);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
   assert.equal(fs.existsSync(path.join(worktree, '.next', 'cache', 'chunk.js')), true, 'the close left the tree to the sweep holding the lock');
-  assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), true, 'and left its registration alone');
+  assert.equal(worktreeRegistered(primary, worktree), true, 'and left its registration alone');
   assert.equal(fs.readFileSync(lockFile, 'utf8'), String(sessionSweep.pid), 'and did not take the lock from that sweep');
 });
 
