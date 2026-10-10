@@ -122,6 +122,21 @@ function heartbeatTestEnvironment(heartbeatTimeoutMilliseconds = 40): NodeJS.Pro
   };
 }
 
+function splitFrames(text: string) {
+  const lines = text.split('\n');
+  const rest = lines.pop() ?? '';
+  return { lines, rest };
+}
+
+function pingFrom(line: string): JsonRpcRecord | undefined {
+  try {
+    const message: unknown = JSON.parse(line);
+    return jsonRpcRecord(message) && message.method === 'ping' ? message : undefined;
+  } catch (_) {
+    return undefined;
+  }
+}
+
 function answerHeartbeats(server: import('node:child_process').ChildProcess, count: number, timeoutMilliseconds: number) {
   return new Promise<void>((resolve, reject) => {
     let buffer = '';
@@ -132,24 +147,18 @@ function answerHeartbeats(server: import('node:child_process').ChildProcess, cou
     }, timeoutMilliseconds);
     const output = server.stdout;
     const onData = (chunk: Buffer | string) => {
-      buffer += String(chunk);
-      let newline = buffer.indexOf('\n');
-      while (newline !== -1) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        newline = buffer.indexOf('\n');
-        try {
-          const message: unknown = JSON.parse(line);
-          if (jsonRpcRecord(message) && message.method === 'ping') {
-            answered += 1;
-            server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} })}\n`);
-            if (answered === count) {
-              cleanup();
-              resolve();
-              return;
-            }
-          }
-        } catch (_) {}
+      const frames = splitFrames(buffer + String(chunk));
+      buffer = frames.rest;
+      for (const line of frames.lines) {
+        const ping = pingFrom(line);
+        if (!ping) continue;
+        answered += 1;
+        server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: ping.id, result: {} })}\n`);
+        if (answered === count) {
+          cleanup();
+          resolve();
+          return;
+        }
       }
     };
     const cleanup = () => {
