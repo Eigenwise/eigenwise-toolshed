@@ -12,7 +12,7 @@ writeBoardMcpLiveness(mcp.boardMcpSessionId(), process.env.CLAUDE_PROJECT_DIR ||
 process.once('exit', clearBoardMcpLiveness);
 
 const CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS = 60_000;
-const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 10_000;
+const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 30_000;
 const CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS = 70_000;
 
 type ClientConnectionTiming = {
@@ -117,17 +117,27 @@ function main() {
     initializationDeadline.unref();
   };
 
+  const reapIfUnanswered = (identifier: string, sentAt: number) => {
+    if (shuttingDown || pendingHeartbeatIdentifier !== identifier) return;
+    process.stderr.write(`sidequest-mcp: no answer to ping ${identifier} after ${Date.now() - sentAt}ms; shutting down\n`);
+    void shutdown();
+  };
+
   const scheduleClientHeartbeat = () => {
     if (shuttingDown || !clientInitialized || pendingHeartbeatIdentifier !== null) return;
     if (heartbeatTimer) clearTimeout(heartbeatTimer);
     heartbeatTimer = setTimeout(() => {
       heartbeatTimer = undefined;
       if (shuttingDown || !clientInitialized || pendingHeartbeatIdentifier !== null) return;
-      pendingHeartbeatIdentifier = `sidequest-heartbeat-${++heartbeatIdentifier}`;
-      writeMessage({ jsonrpc: '2.0', id: pendingHeartbeatIdentifier, method: 'ping' });
+      const identifier = `sidequest-heartbeat-${++heartbeatIdentifier}`;
+      const sentAt = Date.now();
+      pendingHeartbeatIdentifier = identifier;
+      writeMessage({ jsonrpc: '2.0', id: identifier, method: 'ping' });
       heartbeatTimeout = setTimeout(() => {
         heartbeatTimeout = undefined;
-        void shutdown();
+        // Expired timers run before the poll phase reads stdin. After a long synchronous handler an answer
+        // already waiting there would lose the race, so decide only once the check phase has let it in.
+        setImmediate(() => reapIfUnanswered(identifier, sentAt));
       }, timing.timeoutMilliseconds);
       heartbeatTimeout.unref();
     }, timing.intervalMilliseconds);
