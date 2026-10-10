@@ -287,11 +287,18 @@ function rebindObservedCheckout(input, agentId, executor, checkoutRoot) {
 }
 var SUBAGENT_BY_TOOLS = /* @__PURE__ */ new Set(["rework", "groomClose", "supersede_submission"]);
 var BOARD_TOOL_PREFIX = "mcp__plugin_sidequest_board__";
-function subagentCallWithoutBy(input, agentId) {
+function boardToolName(input) {
   const toolName = stringField(input, "tool_name");
-  const tool = toolName.startsWith(BOARD_TOOL_PREFIX) ? toolName.slice(BOARD_TOOL_PREFIX.length) : "";
-  if (!agentId || !SUBAGENT_BY_TOOLS.has(tool) || !isRecord(input.tool_input)) return null;
-  return String(input.tool_input.by ?? "").trim() ? null : { tool, toolInput: input.tool_input };
+  return toolName.startsWith(BOARD_TOOL_PREFIX) ? toolName.slice(BOARD_TOOL_PREFIX.length) : "";
+}
+function omitsBy(toolInput) {
+  return !String(toolInput.by ?? "").trim();
+}
+function subagentCallWithoutBy(input, agentId) {
+  const tool = boardToolName(input);
+  const toolInput = input.tool_input;
+  if (!agentId || !SUBAGENT_BY_TOOLS.has(tool) || !isRecord(toolInput) || !omitsBy(toolInput)) return null;
+  return { tool, toolInput };
 }
 function refuseSubagentBy(tool, agentId) {
   writeDeny("PreToolUse", `sidequest: ${tool} omitted by and cannot default it: subagent ${agentId} would act as the main session id, a different identity. Pass by = your own claim id, or leave ${tool} to the orchestrator.`);

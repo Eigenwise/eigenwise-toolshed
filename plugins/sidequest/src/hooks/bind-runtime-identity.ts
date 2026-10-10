@@ -129,11 +129,20 @@ function rebindObservedCheckout(input: HookInput, agentId: string, executor: str
 const SUBAGENT_BY_TOOLS = new Set(['rework', 'groomClose', 'supersede_submission']);
 const BOARD_TOOL_PREFIX = 'mcp__plugin_sidequest_board__';
 
-function subagentCallWithoutBy(input: HookInput, agentId: string): { tool: string; toolInput: Record<string, unknown> } | null {
+function boardToolName(input: HookInput): string {
   const toolName = stringField(input, 'tool_name');
-  const tool = toolName.startsWith(BOARD_TOOL_PREFIX) ? toolName.slice(BOARD_TOOL_PREFIX.length) : '';
-  if (!agentId || !SUBAGENT_BY_TOOLS.has(tool) || !isRecord(input.tool_input)) return null;
-  return String(input.tool_input.by ?? '').trim() ? null : { tool, toolInput: input.tool_input };
+  return toolName.startsWith(BOARD_TOOL_PREFIX) ? toolName.slice(BOARD_TOOL_PREFIX.length) : '';
+}
+
+function omitsBy(toolInput: Record<string, unknown>): boolean {
+  return !String(toolInput.by ?? '').trim();
+}
+
+function subagentCallWithoutBy(input: HookInput, agentId: string): { tool: string; toolInput: Record<string, unknown> } | null {
+  const tool = boardToolName(input);
+  const toolInput = input.tool_input;
+  if (!agentId || !SUBAGENT_BY_TOOLS.has(tool) || !isRecord(toolInput) || !omitsBy(toolInput)) return null;
+  return { tool, toolInput };
 }
 
 function refuseSubagentBy(tool: string, agentId: string): void {
