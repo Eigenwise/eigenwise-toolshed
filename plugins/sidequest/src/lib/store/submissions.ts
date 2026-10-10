@@ -1714,6 +1714,16 @@ function resolveDeliveryWorktree(registeredRepo: string, requestedWorktree: stri
   return { ok: true, worktree: candidate };
 }
 
+// groomClose takes no integrationBranch (#391), so this refusal cannot reuse the shared
+// branchNotCheckedOutMessage, which ends by offering that argument. The recovery it can
+// honestly offer is the one recordDeliveredSubmission admits: HEAD at the target's current tip,
+// which is not necessarily the delivered commit.
+function recordedDeliveryNotAtTipMessage(targetBranch: string, currentBranch: string, givenWorktree: string) {
+  const checkedOut = currentBranch || 'detached HEAD';
+  const where = givenWorktree ? `the worktree given (${givenWorktree})` : 'this checkout';
+  return `${targetBranch} must be checked out before recording an external delivery; ${where} is on ${checkedOut}, not at the ${targetBranch} tip. Check out the observed ${targetBranch} tip (the branch itself, or a detached checkout of its current tip, which may be later than deliveryCommit), or give such a worktree via worktree:"<path>" (CLI: --worktree <path>).`;
+}
+
 function refTipEquals(repo: string, ref: string, commit: string): boolean {
   try {
     return integrationGit(repo, ['rev-parse', '--verify', `${ref}^{commit}`]).toLowerCase() === commit;
@@ -1798,7 +1808,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
           ok: false,
           reason: 'branch_not_checked_out',
           ticket,
-          message: `${branchNotCheckedOutMessage(target.branch, currentBranch, 'recording an external delivery')}${requestedWorktree ? ` The worktree given (${repo}) is not at the ${target.branch} tip either.` : ''} A worktree at the ${target.branch} tip is also admitted: give it via worktree:"<path>" (CLI: --worktree <path>).`,
+          message: recordedDeliveryNotAtTipMessage(target.branch, currentBranch, requestedWorktree ? repo : ''),
         };
       }
       observedIntegrationRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;

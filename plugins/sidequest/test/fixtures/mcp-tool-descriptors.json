@@ -864,7 +864,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.",
+    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in tree or at deliveryRevision; verifier replacement; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -914,7 +914,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence."
+          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable."
         },
         "verificationSupersession": {
           "type": "object",
@@ -1295,7 +1295,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence."
+          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable."
         },
         "reason": {
           "type": "string"

@@ -214,7 +214,7 @@ async function runTool(tool, rawArgs) {
 }
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
 const DELIVERY_REVISION_CONTRACT = "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.";
-const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.";
+const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     limit: "UTF-8 bytes."
