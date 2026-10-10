@@ -284,7 +284,8 @@ function assertMutationFreshness(projectArg: unknown) {
 
 // Control-plane mutations name no worker of their own, so the main session's runtime identity is the caller
 // when `by` is omitted. rework is here too: the store's candidate-owner check still judges the defaulted value,
-// and a subagent caller is resolved by the PreToolUse hook before this runs (GH-424).
+// and the PreToolUse hook settles a subagent caller before this runs: rework gets its dispatch owner label, the other
+// two are refused, so this default only ever serves the main thread (GH-424, SQ-160).
 const CONTROL_PLANE_DEFAULT_BY = new Set(['groomClose', 'rework', 'supersede_submission']);
 
 function controlPlaneByArgs(tool: ToolDefinition, args: Record<string, unknown>) {
@@ -463,6 +464,7 @@ module.exports = {
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,
   COERCED_PRIORITY,
+  CONTROL_PLANE_DEFAULT_BY,
   TOOLS,
   toolDescriptors,
   toolDescriptorByteReport,

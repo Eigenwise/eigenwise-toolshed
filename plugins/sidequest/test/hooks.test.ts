@@ -6143,3 +6143,26 @@ test('bind-runtime-identity defaults an omitted rework by to the calling executo
   assert.equal(callRework({ ref: own.ref, by: 'explicit-label', review, reason: 'Explicit wins.' }), null, 'an explicit by is left alone');
   assert.equal(callRework({ ref: own.ref, review, reason: 'Main thread.' }, { session_id: sessionId }), null, 'a main-thread call has no agent_id to resolve');
 });
+
+// SQ-160. groomClose and supersede_submission default an omitted `by` to the shared session id in the MCP server,
+// which a subagent would otherwise inherit: a fresh-fixture subagent groomClose closed an unclaimed ticket as the
+// main session. The loop reads the server's own set so a tool added to the default cannot skip this guard.
+test('bind-runtime-identity refuses a subagent call that omits by on every defaulted control-plane tool and leaves the main thread alone (SQ-160)', () => {
+  const { CONTROL_PLANE_DEFAULT_BY } = require('../lib/mcp.js');
+  const subagent = { session_id: `sq160-${++sqSeq}`, agent_type: 'sidequest-exec-dispatch', agent_id: `sq160-agent-${sqSeq}` };
+  for (const tool of CONTROL_PLANE_DEFAULT_BY) {
+    const ticket = addStopTicket(`SQ-160 unclaimed ticket for ${tool}`);
+    const call = (identity: Record<string, unknown>, extra: Record<string, unknown> = {}) => runHookOutput(
+      path.join(HOOKS, 'bind-runtime-identity.js'),
+      { ...identity, cwd: BOARD_PATH, tool_name: `mcp__plugin_sidequest_board__${tool}`, tool_input: { ref: ticket.ref, reason: 'Probe.', review: 'Probe.', supersededBy: 'SQ-1', ...extra } },
+    );
+    const refused = call(subagent);
+    assert.equal(refused.hookSpecificOutput.permissionDecision, 'deny', `${tool}: a subagent call without by is refused`);
+    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(`${tool} omitted by`));
+    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(subagent.agent_id));
+    assert.equal(store.getTicket(slug, ticket.ref).status, 'todo', `${tool}: the refused call leaves the ticket unclosed`);
+    assert.equal(call(subagent, { by: '   ' }).hookSpecificOutput.permissionDecision, 'deny', `${tool}: a blank by counts as omitted`);
+    assert.equal(call(subagent, { by: 'explicit-label' }), null, `${tool}: an explicit by is left alone`);
+    assert.equal(call({ session_id: subagent.session_id }), null, `${tool}: a main-thread call keeps the MCP default`);
+  }
+});

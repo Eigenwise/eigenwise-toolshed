@@ -376,6 +376,7 @@ module.exports = {
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,
   COERCED_PRIORITY,
+  CONTROL_PLANE_DEFAULT_BY,
   TOOLS,
   toolDescriptors,
   toolDescriptorByteReport,

@@ -285,35 +285,38 @@ function rebindObservedCheckout(input, agentId, executor, checkoutRoot) {
   if (found?.terminal || found?.identityBound) return;
   bindObservedRuntimeIdentity(input, agentId, executor, checkoutRoot);
 }
-function subagentReworkInput(input, agentId) {
-  const isRework = stringField(input, "tool_name") === "mcp__plugin_sidequest_board__rework";
-  if (!agentId || !isRework) return null;
-  return isRecord(input.tool_input) ? input.tool_input : null;
+var SUBAGENT_BY_TOOLS = /* @__PURE__ */ new Set(["rework", "groomClose", "supersede_submission"]);
+var BOARD_TOOL_PREFIX = "mcp__plugin_sidequest_board__";
+function subagentCallWithoutBy(input, agentId) {
+  const toolName = stringField(input, "tool_name");
+  const tool = toolName.startsWith(BOARD_TOOL_PREFIX) ? toolName.slice(BOARD_TOOL_PREFIX.length) : "";
+  if (!agentId || !SUBAGENT_BY_TOOLS.has(tool) || !isRecord(input.tool_input)) return null;
+  return String(input.tool_input.by ?? "").trim() ? null : { tool, toolInput: input.tool_input };
 }
-function reworkWithoutBy(input, agentId) {
-  const toolInput = subagentReworkInput(input, agentId);
-  return toolInput && !String(toolInput.by ?? "").trim() ? toolInput : null;
+function refuseSubagentBy(tool, agentId) {
+  writeDeny("PreToolUse", `sidequest: ${tool} omitted by and cannot default it: subagent ${agentId} would act as the main session id, a different identity. Pass by = your own claim id, or leave ${tool} to the orchestrator.`);
 }
-function defaultReworkBy(input, agentId) {
-  const toolInput = reworkWithoutBy(input, agentId);
-  if (!toolInput) return false;
+function defaultSubagentBy(input, agentId) {
+  const call = subagentCallWithoutBy(input, agentId);
+  if (!call) return false;
+  if (call.tool === "rework") defaultReworkBy(call.toolInput, agentId);
+  else refuseSubagentBy(call.tool, agentId);
+  return true;
+}
+function defaultReworkBy(toolInput, agentId) {
   const store = require(runtimeModule("store"));
   const owners = store.dispatchCallerOwners({ agentId, ref: toolInput.ref });
   const labels = Array.from(new Set(owners.map((owner) => owner.by)));
-  if (labels.length === 1) {
-    writeToolUpdate({ ...toolInput, by: labels[0] });
-    return true;
-  }
+  if (labels.length === 1) return writeToolUpdate({ ...toolInput, by: labels[0] });
   const named = labels.length ? `owner labels ${labels.map((label) => `"${label}"`).join(" and ")}` : "no dispatch with an owner label";
   writeDeny("PreToolUse", `sidequest: rework omitted by and cannot default it: subagent ${agentId} has ${named}, while the main session id is a different identity. Pass by = the submitter's claim id.`);
-  return true;
 }
 function main() {
   const input = readStdin();
   if (!input) return;
   const agentId = stringField(input, "agent_id", "agentId");
   const executor = stringField(input, "agent_type", "agentType", "subagent_type");
-  if (defaultReworkBy(input, agentId)) return;
+  if (defaultSubagentBy(input, agentId)) return;
   if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
   const checkoutRoot = executorCheckoutRoot(input, agentId, executor);
   if (!checkoutRoot) return;

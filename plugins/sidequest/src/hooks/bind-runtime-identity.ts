@@ -121,35 +121,42 @@ function rebindObservedCheckout(input: HookInput, agentId: string, executor: str
 }
 
 // The MCP server shares one runtime session id across every subagent, so it cannot tell an executor from the
-// orchestrator. Only this hook sees agent_id, so a subagent that omits `by` on rework gets the owner label its
-// own dispatch recorded, or a refusal naming the identities in conflict (GH-424). A main-thread call carries no
-// agent_id and falls through to the MCP default, the session id.
-function subagentReworkInput(input: HookInput, agentId: string): Record<string, unknown> | null {
-  const isRework = stringField(input, 'tool_name') === 'mcp__plugin_sidequest_board__rework';
-  if (!agentId || !isRework) return null;
-  return isRecord(input.tool_input) ? input.tool_input : null;
+// orchestrator. Only this hook sees agent_id, so a subagent that omits `by` on a tool the MCP server defaults
+// (mcp.ts CONTROL_PLANE_DEFAULT_BY) is settled here: rework gets the owner label its own dispatch recorded, or a
+// refusal naming the identities in conflict (GH-424); groomClose and supersede_submission have no attributable owner,
+// so they are refused rather than closing a ticket as the main session. A main-thread call carries no agent_id and
+// falls through to the MCP default, the session id.
+const SUBAGENT_BY_TOOLS = new Set(['rework', 'groomClose', 'supersede_submission']);
+const BOARD_TOOL_PREFIX = 'mcp__plugin_sidequest_board__';
+
+function subagentCallWithoutBy(input: HookInput, agentId: string): { tool: string; toolInput: Record<string, unknown> } | null {
+  const toolName = stringField(input, 'tool_name');
+  const tool = toolName.startsWith(BOARD_TOOL_PREFIX) ? toolName.slice(BOARD_TOOL_PREFIX.length) : '';
+  if (!agentId || !SUBAGENT_BY_TOOLS.has(tool) || !isRecord(input.tool_input)) return null;
+  return String(input.tool_input.by ?? '').trim() ? null : { tool, toolInput: input.tool_input };
 }
 
-function reworkWithoutBy(input: HookInput, agentId: string): Record<string, unknown> | null {
-  const toolInput = subagentReworkInput(input, agentId);
-  return toolInput && !String(toolInput.by ?? '').trim() ? toolInput : null;
+function refuseSubagentBy(tool: string, agentId: string): void {
+  writeDeny('PreToolUse', `sidequest: ${tool} omitted by and cannot default it: subagent ${agentId} would act as the main session id, a different identity. Pass by = your own claim id, or leave ${tool} to the orchestrator.`);
 }
 
-function defaultReworkBy(input: HookInput, agentId: string): boolean {
-  const toolInput = reworkWithoutBy(input, agentId);
-  if (!toolInput) return false;
+function defaultSubagentBy(input: HookInput, agentId: string): boolean {
+  const call = subagentCallWithoutBy(input, agentId);
+  if (!call) return false;
+  if (call.tool === 'rework') defaultReworkBy(call.toolInput, agentId);
+  else refuseSubagentBy(call.tool, agentId);
+  return true;
+}
+
+function defaultReworkBy(toolInput: Record<string, unknown>, agentId: string): void {
   const store = require(runtimeModule('store')) as {
     dispatchCallerOwners: (identity: unknown) => Array<{ ref: string; by: string }>;
   };
   const owners = store.dispatchCallerOwners({ agentId, ref: toolInput.ref });
   const labels = Array.from(new Set(owners.map((owner) => owner.by)));
-  if (labels.length === 1) {
-    writeToolUpdate({ ...toolInput, by: labels[0] });
-    return true;
-  }
+  if (labels.length === 1) return writeToolUpdate({ ...toolInput, by: labels[0] });
   const named = labels.length ? `owner labels ${labels.map((label) => `"${label}"`).join(' and ')}` : 'no dispatch with an owner label';
   writeDeny('PreToolUse', `sidequest: rework omitted by and cannot default it: subagent ${agentId} has ${named}, while the main session id is a different identity. Pass by = the submitter's claim id.`);
-  return true;
 }
 
 function main(): void {
@@ -157,7 +164,7 @@ function main(): void {
   if (!input) return;
   const agentId = stringField(input, 'agent_id', 'agentId');
   const executor = stringField(input, 'agent_type', 'agentType', 'subagent_type');
-  if (defaultReworkBy(input, agentId)) return;
+  if (defaultSubagentBy(input, agentId)) return;
   if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
   const checkoutRoot = executorCheckoutRoot(input, agentId, executor);
   if (!checkoutRoot) return;

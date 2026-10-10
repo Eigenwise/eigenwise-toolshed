@@ -2576,6 +2576,26 @@ test('MCP groomClose abandons an unconsumed prepared dispatch without waiting fo
   assert.match(refused.message, /without --integration/i);
 });
 
+// SQ-160. The PreToolUse hook refuses a subagent that omits `by` on these tools (hooks.test.ts), so a call that reaches
+// the server without `by` is the main thread, and the server defaults it to the session id.
+test('MCP groomClose and supersede_submission default an omitted by to the main session id (SQ-160)', async () => {
+  assert.deepEqual([...mcp.CONTROL_PLANE_DEFAULT_BY].sort(), ['groomClose', 'rework', 'supersede_submission']);
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'main thread groomClose default', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm the main thread keeps the by default after the subagent refusal',
+  });
+  const closed = await callToolAsSession('sq160-main-session', 'groomClose', { project, ref: ticket.ref, reason: 'Obsolete.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).completion.by, 'sq160-main-session', 'the closure is attributed to the session id');
+
+  const superseded = await callToolRawAsSession('sq160-main-session', 'supersede_submission', {
+    project, ref: ticket.ref, supersededBy: ticket.ref, reason: 'Repaired elsewhere.',
+  });
+  assert.doesNotMatch(superseded.content[0].text, /"by" is required/, 'by was defaulted, so the call reached the store');
+});
+
 test('MCP delivery closure points live claims at the owning release command', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
