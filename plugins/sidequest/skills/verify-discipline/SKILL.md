@@ -73,3 +73,9 @@ The right fix depends on what the token is and on which tool receives it:
   arguments, so the shell does not expand it first. Leave it unquoted for a tool that takes literal
   paths (`tsc`, `pytest`) and relies on the shell to expand it; a quoted glob there is a hard error
   (`tsc` exits 2 with TS6053).
+- A bracket segment plus a glob (`app/[id]/*.test.js`): escape the bracket and keep the glob. For a
+  runner that globs its own arguments (`node --test`), quote it with each `[` written as `[[]`,
+  giving `"app/[[]id]/*.test.js"`. Quoting the bare `[id]` form is the false green: the runner reads
+  `[id]` as a character class, matches zero tests, and exits 0. For a tool that takes literal paths
+  (`tsc`, `pytest`), leave the glob unquoted so the shell expands it, and backslash-escape each
+  bracket (`app/\[id\]/*.test.js`).

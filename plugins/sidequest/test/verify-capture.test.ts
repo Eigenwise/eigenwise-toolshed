@@ -22,11 +22,22 @@ const SIDEQUEST_DIR = path.resolve(__dirname, '..');
 // pattern like `[fulfillmentId]`. Force SHELL=zsh when it's actually on the box so this test
 // exercises the real regression; on a host without zsh (Windows CI) there is no `SHELL`-based
 // POSIX shell selection to force at all, so the case is skipped rather than faked.
+function isExecutableFile(candidate: string): boolean {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findOnPath(name: string): string | null {
+  const directories = (process.env.PATH || '').split(path.delimiter);
+  return directories.map((directory) => path.join(directory, name)).find(isExecutableFile) ?? null;
+}
+
 function locateZsh(): string | null {
-  if (process.platform === 'win32') return null;
-  const found = spawnSync('which', ['zsh'], { encoding: 'utf8' });
-  const candidate = String(found.stdout || '').trim().split(/\r?\n/)[0];
-  return found.status === 0 && candidate && fs.existsSync(candidate) ? candidate : null;
+  return process.platform === 'win32' ? null : findOnPath('zsh');
 }
 const ZSH_EXECUTABLE = locateZsh();
 const UNQUOTED_GLOB_SHELL = ZSH_EXECUTABLE || (process.platform === 'win32' ? null : '/bin/sh');

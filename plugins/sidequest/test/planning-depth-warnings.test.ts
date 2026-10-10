@@ -932,6 +932,48 @@ test('the advice for a literal bracket path matches real node --test behavior', 
   }
 });
 
+// Round 4 of the GH-171 review: a path that mixes a bracket segment and a glob
+// (`app/[id]/*.test.js`) used to get the plain "quote it" advice, which for a self-globbing
+// runner reads `[id]` as a character class and runs 0 tests while exiting 0.
+function mixedPathWarning(verify: string): string {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+  return unquotedGlobWarning(cliJson(['add', '-t', 'mixed bracket and glob', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', verify]).warnings) as string;
+}
+
+test('the warning for a path that mixes a bracket and a glob names the escaped form, not plain quoting', () => {
+  const warning = mixedPathWarning('node --test app/[id]/*.test.js');
+  assert.ok(warning);
+  assert.match(warning, /mixes a bracket segment and a glob like "app\/\[id\]\/\*\.test\.js"/);
+  assert.ok(warning.includes('"app/[[]id]/*.test.js"'), warning);
+  assert.match(warning, /node --test\) needs the bracket escaped and the glob kept/);
+  assert.ok(warning.includes('app/\\[id\\]/*.test.js'), warning);
+  assert.doesNotMatch(warning, /intended glob/);
+  assert.doesNotMatch(warning, /literal bracket path/);
+});
+
+const ZSH_AVAILABLE = process.platform !== 'win32' && spawnSync('zsh', ['-c', 'exit 0']).status === 0;
+
+test('the advised escaped form runs one test under real zsh where the bare form runs none', { skip: !ZSH_AVAILABLE }, () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-node-test-mixed-'));
+  try {
+    fs.mkdirSync(path.join(fixture, 'app', '[id]'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'app', '[id]', 'x.test.js'), "require('node:test')('runs', () => {});\n");
+    const advised = /"(app\/\[\[\]id\]\/\*\.test\.js)"/.exec(mixedPathWarning('node --test app/[id]/*.test.js'))?.[1];
+    assert.ok(advised, 'the warning must carry the escaped form in double quotes');
+    const testsRun = (pattern: string) => {
+      const { NODE_TEST_CONTEXT: _inherited, ...env } = process.env;
+      const run = spawnSync('zsh', ['-c', `"${process.execPath}" --test --test-reporter=tap "${pattern}"`], { cwd: fixture, env, encoding: 'utf8' });
+      return { status: run.status, tests: Number(/^# tests (\d+)$/m.exec(run.stdout)?.[1]) };
+    };
+    assert.deepStrictEqual(testsRun('app/[id]/*.test.js'), { status: 0, tests: 0 });
+    assert.deepStrictEqual(testsRun(advised as string), { status: 0, tests: 1 });
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('a path with a quoted span holding a space is one token with a well-formed suggestion', () => {
   const scopedFile = path.join(PROJ, 'lib', 'verify.js');
   fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
