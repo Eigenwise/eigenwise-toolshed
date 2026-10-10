@@ -55,8 +55,18 @@ const {
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
   withoutCategories,
-  snapshotContextRetrieval
+  snapshotContextRetrieval,
+  cleanupClosedTicketWorktree,
+  claimHeldLive
 } = require("./mcp-shared");
+function liveClaimRemovalRefusal(ticket, force) {
+  if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
+  return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
+}
+async function removedTicketAck(slug, projectPath, ticket) {
+  await cleanupClosedTicketWorktree(slug, projectPath, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false });
+  return { ok: true, ref: ticket.ref };
+}
 function sameBasenameSiblingDetails(project, ticket, projectPath, tool) {
   const details = store.scopeConsumerWarningDetails(ticket, projectPath);
   if (!details.length) return {};
@@ -354,14 +364,12 @@ const tools = [
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
-      if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !args.force) {
-        return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
-      }
-      const ref = ticket.ref;
+      const refusal = liveClaimRemovalRefusal(ticket, args.force);
+      if (refusal) return refusal;
       if (!store.deleteTicket(slug, ticket.id, { allowLiveClaimDeletion: args.force === true })) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
-      return { ok: true, ref };
+      return removedTicketAck(slug, meta.path, ticket);
     }
   },
   {

@@ -7,6 +7,8 @@ import { stringField, type HookInput } from './input.js';
 import { pluginRoot, runtimeModule } from './paths.js';
 import { writeSweepProgress, type SweepProgress } from './sweep-handoff.js';
 
+export { withWorktreeSweepLock } from '../../lib/worktree-sweep-lock.js';
+
 const MAX_PROJECTS_PER_START = 3;
 const MAX_CANDIDATES_PER_PROJECT = 8;
 // Whatever the current project leaves unspent goes to the other projects' oldest

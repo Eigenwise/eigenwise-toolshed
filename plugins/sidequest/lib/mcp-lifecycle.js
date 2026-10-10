@@ -54,6 +54,8 @@ const {
   requiredReleaseReason,
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
+  cleanupClosedTicketWorktree: cleanupDeliveredWorktree,
+  closeExecutorAndReclaimTree,
   withoutCategories,
   CATEGORY_TAXONOMY_WARNING,
   state
@@ -118,21 +120,6 @@ function deliveredAck(slug, result, integration, changed = {}) {
     message,
     ...changed
   });
-}
-async function cleanupDeliveredWorktree(slug, projectPath, ticket, claimWasLive = false) {
-  try {
-    const dispatch = ticket?.dispatch;
-    if (!dispatch?.worktree || dispatch.sharedTree !== false || dispatch.continuation || store.boardConfig(slug)?.worktreeIsolation === false) return;
-    const tickets = store.worktreeGcTickets().map((candidate) => candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate);
-    await worktrees.sweep(projectPath, tickets, {
-      execute: true,
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
-      minAgeMs: 0,
-      ticketRef: ticket.ref
-    });
-  } catch (_) {
-  }
 }
 function objectProperties(value) {
   return value && typeof value === "object" ? Object.fromEntries(Object.entries(value)) : {};
@@ -610,7 +597,7 @@ const tools = [
       },
       required: ["ref", "by", "body"]
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "done");
       const by = requireBy(args, "done");
       const body = requiredFinalReport(args, "done");
@@ -638,7 +625,7 @@ const tools = [
           res.message = `${res.message} ${noOp.detail}`;
         }
       }
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     }
   },
@@ -722,7 +709,7 @@ const tools = [
         resolvedPaths: args.resolvedPaths,
         verificationSupersession
       });
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket, !args.integration);
       if (res.ok && args.integration) {
         try {
           const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
@@ -771,7 +758,7 @@ const tools = [
       },
       required: ["ref", "by"]
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "release");
       const by = requireBy(args, "release");
       const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }), { requireClassification: true });
@@ -790,7 +777,7 @@ const tools = [
         source: "mcp",
         sessionId: sessionOf(args)
       });
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     }
   },

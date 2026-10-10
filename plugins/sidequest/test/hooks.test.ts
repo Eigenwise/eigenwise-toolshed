@@ -3008,7 +3008,7 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
 });
 
-test('session-end reclaims an unbound old patch-equivalent worktree and stays fail-soft', () => {
+test('session-end reclaims an unbound old patch-equivalent worktree and stays fail-soft', async () => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-project-'));
   const worktrees = path.join(project, '.claude', 'worktrees');
   const projectGit = (args: string[], cwd?: string) => execFileSync('git', args, { cwd: cwd || project, encoding: 'utf8', windowsHide: true }).trim();
@@ -3033,10 +3033,54 @@ test('session-end reclaims an unbound old patch-equivalent worktree and stays fa
   store.ensureProject(project);
 
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
+  // The hook hands the sweep to a detached worker (GH-439), so the reclaim lands after it returns.
+  const deadline = Date.now() + waitForPathDefaultBudgetMs() * 4;
+  while (Date.now() < deadline && (fs.existsSync(worktree) || projectGit(['branch', '--list', branch]) !== '')) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   assert.equal(fs.existsSync(worktree), false);
   assert.equal(projectGit(['branch', '--list', branch]), '');
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
   fs.rmSync(project, { recursive: true, force: true });
+});
+
+// GH-439: SessionEnd ran the sweep inline, and Claude Code gives SessionEnd about 1.5 s (#400), so a
+// sweep over more than a handful of trees was cut off on every exit. The stub worker stands in for a
+// sweep that takes 30 s.
+test('session-end returns within a second while its detached sweep keeps running', async () => {
+  const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-stub-'));
+  const marker = path.join(stubRoot, 'worker-started.json');
+  fs.symlinkSync(path.join(PLUGIN_ROOT, 'lib'), path.join(stubRoot, 'lib'), process.platform === 'win32' ? 'junction' : 'dir');
+  fs.mkdirSync(path.join(stubRoot, 'hooks'));
+  fs.writeFileSync(path.join(stubRoot, 'hooks', 'sweep-worktrees.js'), [
+    `require('fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid: process.pid, argv: process.argv.slice(2) }));`,
+    'setTimeout(() => {}, 30000);',
+    '',
+  ].join('\n'));
+  let workerPid = 0;
+  try {
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [SESSION_END], {
+      input: JSON.stringify({ session_id: 'session-end-detached', cwd: BOARD_PATH, reason: 'prompt_input_exit' }),
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: stubRoot },
+      windowsHide: true,
+    });
+    const elapsedMs = Date.now() - started;
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(elapsedMs < Math.max(1000, measureProcessSpawnBaselineMs() * 10), `session-end took ${elapsedMs}ms`);
+    await waitForPath(marker);
+    const worker = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    workerPid = worker.pid;
+    assert.deepEqual(worker.argv.slice(-2), ['--mode', 'session-end']);
+    assert.doesNotThrow(() => process.kill(workerPid, 0), 'the sweep outlives the hook that started it');
+  } finally {
+    if (workerPid) {
+      try { process.kill(workerPid); } catch (_) {}
+    }
+    fs.rmSync(stubRoot, { recursive: true, force: true });
+  }
 });
 
 

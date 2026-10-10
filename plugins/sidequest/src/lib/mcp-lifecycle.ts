@@ -54,6 +54,8 @@ const {
   requiredReleaseReason,
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
+  cleanupClosedTicketWorktree: cleanupDeliveredWorktree,
+  closeExecutorAndReclaimTree,
   withoutCategories,
   CATEGORY_TAXONOMY_WARNING,
   state,
@@ -147,25 +149,6 @@ function deliveredAck(slug: string, result: any, integration: any, changed: any 
     message,
     ...changed,
   });
-}
-
-async function cleanupDeliveredWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean = false): Promise<void> {
-  try {
-    const dispatch = ticket?.dispatch;
-    if (!dispatch?.worktree || dispatch.sharedTree !== false || dispatch.continuation || store.boardConfig(slug)?.worktreeIsolation === false) return;
-    const tickets = store.worktreeGcTickets().map((candidate: any) => (
-      candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate
-    ));
-    await worktrees.sweep(projectPath, tickets, {
-      execute: true,
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
-      minAgeMs: 0,
-      ticketRef: ticket.ref,
-    });
-  } catch (_) {
-    // Delivery has already been durably recorded. SessionStart remains the backstop.
-  }
 }
 
 function objectProperties(value: unknown): Record<string, unknown> {
@@ -774,7 +757,7 @@ const tools: ToolDefinition[] = [
       },
       required: ['ref', 'by', 'body'],
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'done');
       const by = requireBy(args, 'done');
       const body = requiredFinalReport(args, 'done');
@@ -802,7 +785,7 @@ const tools: ToolDefinition[] = [
           res.message = `${res.message} ${noOp.detail}`;
         }
       }
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     },
   },
@@ -887,7 +870,7 @@ const tools: ToolDefinition[] = [
         resolvedPaths: args.resolvedPaths,
         verificationSupersession,
       });
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket, !args.integration);
       if (res.ok && args.integration) {
         // Advance before sweeping: a local integration branch that just moved
         // makes this ticket's worktree reachable, which the sweep collects on.
@@ -940,7 +923,7 @@ const tools: ToolDefinition[] = [
       },
       required: ['ref', 'by'],
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'release');
       const by = requireBy(args, 'release');
       const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }), { requireClassification: true });
@@ -959,7 +942,7 @@ const tools: ToolDefinition[] = [
         source: 'mcp',
         sessionId: sessionOf(args),
       });
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     },
   },

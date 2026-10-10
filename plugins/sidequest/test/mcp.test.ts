@@ -20,7 +20,7 @@ const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { spawnSync, execFileSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -52,7 +52,7 @@ const sourceRevisionCapability = require('../lib/source-revision-capability.js')
 const { runCapturedVerification, runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
 const publish = require('../lib/publish.js');
-const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
+const { createCheckoutInstanceMarker, sameCanonicalPath } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 
@@ -217,6 +217,13 @@ async function callHandler(name?: any, args?: any) {
 
 function gitAt(cwd?: any, args?: any) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+// Git for Windows lists worktrees with forward slashes and long names, while the test holds a
+// backslashed path that can carry an 8.3 short name (RUNNER~1), so a substring match never hits there.
+function worktreeRegistered(primary: string, worktree: string): boolean {
+  return gitAt(primary, ['worktree', 'list', '--porcelain']).split(/\r?\n/)
+    .some((line: string) => line.startsWith('worktree ') && sameCanonicalPath(line.slice('worktree '.length), worktree));
 }
 
 function persistTicket(project: string, ticket: any) {
@@ -2405,6 +2412,82 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   assert.equal(integrated.ok, true, integrated.message || integrated.reason);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
   assert.equal(fs.existsSync(worktree), false);
+});
+
+// GH-439: only integrate reclaimed a tree at close, so every other close left a tree full of build
+// output for a session sweep that a backlog of older trees could starve. Every close reclaims the
+// ticket's own tree now, except while the closer is the executor still running inside it.
+function closeCleanupFixture(title: string, by: string) {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  fs.appendFileSync(path.join(primary, '.git', 'info', 'exclude'), 'node_modules/\n.next/\ncoverage/\n*.tsbuildinfo\n');
+  const ticket = store.createTicket(project, {
+    title, files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise close-time cleanup of a tree that holds build output',
+  });
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  fs.mkdirSync(path.join(worktree, 'node_modules', 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(worktree, '.next', 'cache'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.next', 'cache', 'chunk.js'), 'compiled\n');
+  fs.mkdirSync(path.join(worktree, 'coverage'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'coverage', 'lcov.info'), 'TN:\n');
+  fs.writeFileSync(path.join(worktree, 'tsconfig.tsbuildinfo'), '{}\n');
+  return { primary, project, ticket, worktree };
+}
+
+test('MCP release leaves the live executor its tree, and groomClose reclaims the tree with its build output', async (context: any) => {
+  const by = 'close-cleanup-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('reclaim a groomed tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+  assert.equal(fs.existsSync(worktree), true, 'the releasing executor still runs inside its tree');
+
+  const closed = await callTool('groomClose', { project, ref: ticket.ref, reason: 'The work is no longer needed.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), false, 'groomClose reclaimed the closed tree in the same call');
+  assert.equal(worktreeRegistered(primary, worktree), false, 'and left it unregistered');
+});
+
+test('MCP remove reclaims a released ticket tree that holds only build output', async (context: any) => {
+  const by = 'remove-cleanup-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('reclaim a removed tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+
+  const removed = await callTool('remove', { project, ref: ticket.ref });
+  assert.equal(removed.ok, true, removed.message || removed.reason);
+  assert.equal(store.getTicket(project, ticket.ref), null);
+  assert.equal(fs.existsSync(worktree), false, 'remove reclaimed the tree of the ticket it deleted');
+});
+
+// GH-439 review, round four: the close-time sweep ran outside the lock the session sweeps hold, so it
+// could rename a tree that a session sweep in another process was already moving into quarantine.
+test('MCP groomClose leaves the tree to a session sweep that holds the sweep lock', async (context: any) => {
+  const by = 'close-lock-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('leave a locked sweep its tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  const sessionSweep = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true });
+  const lockFile = path.join(SIDEQUEST_HOME, 'worktree-sweep.lock');
+  context.after(() => {
+    sessionSweep.kill();
+    fs.rmSync(lockFile, { force: true });
+  });
+  fs.writeFileSync(lockFile, String(sessionSweep.pid));
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+
+  const closed = await callTool('groomClose', { project, ref: ticket.ref, reason: 'The work is no longer needed.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(path.join(worktree, '.next', 'cache', 'chunk.js')), true, 'the close left the tree to the sweep holding the lock');
+  assert.equal(worktreeRegistered(primary, worktree), true, 'and left its registration alone');
+  assert.equal(fs.readFileSync(lockFile, 'utf8'), String(sessionSweep.pid), 'and did not take the lock from that sweep');
 });
 
 test('MCP integrate accepts its worker lock across runtime sessions and refuses another worker', async (context: any) => {
