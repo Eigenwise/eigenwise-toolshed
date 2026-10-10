@@ -14,10 +14,11 @@ interface ClaimContext extends ClaimIdentity {
 
 type RefusalMessage = (ref: string, claim: ClaimContext) => string;
 
-const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, manualCandidateDeliveryGuidance, routingDisabledMessage } = require('../lib/refusal-guidance.js') as {
+const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, manualCandidateDeliveryGuidance, negativeControlRecoveryGuidance, routingDisabledMessage } = require('../lib/refusal-guidance.js') as {
   CLAIM_REFUSAL_MESSAGES: Record<string, RefusalMessage>;
   claimRefusalMessage(reason: string, ref: string, claim?: ClaimContext): string;
   manualCandidateDeliveryGuidance(): string;
+  negativeControlRecoveryGuidance(): string;
   routingDisabledMessage(ref: string): string;
 };
 
@@ -93,6 +94,15 @@ test('manual candidate delivery guidance preserves every pinned authority', () =
   assert.match(message, /immutable deliveryCommit/i);
   assert.match(message, /deliveryMethod:"manual"/);
   assert.match(message, /omit integration:true/i);
+});
+
+test('recovery guidance retains required per-test marker recipe', () => {
+  const message = negativeControlRecoveryGuidance();
+  assert.match(message, /between that ';' and failed=<n>/);
+  assert.match(message, /\[sidequest:negative-control-test\] failed <test name>/);
+  assert.match(message, /test\.each\/it\.each/);
+  assert.match(message, /\[sidequest:negative-control-test\] unaffected <test name> because <reason>/);
+  assert.match(message, /\[sidequest:negative-control\] waived <reason of at least 20 characters>/);
 });
 
 test('routing-disabled guidance names the enabled and direct paths', () => {
