@@ -4476,6 +4476,332 @@ test('SQ-2254: MCP groomClose records a manual delivery from its pinned candidat
   }
 });
 
+test('SQ-58: recordDeliveredSubmission admits a manual delivery from a detached worktree whose HEAD matches the target branch tip, without moving the registered checkout', () => {
+  const originalConfig = store.boardConfig(slug);
+  let scratchWorktree: string | null = null;
+  try {
+    cleanBranch();
+    const targetBranch = git(['branch', '--show-current']);
+    const ticket = addTicket('manual delivery gated from a scratch worktree', { files: ['lib/worktree-delivery.js'] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'worktree-delivery.js'), 'worktree delivered\n');
+    git(['add', 'lib/worktree-delivery.js']);
+    git(['commit', '-m', 'worktree delivery candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    const base = git(['rev-parse', `${candidate}^`]);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'worktree-delivery-source', {
+      direct: true,
+      reason: 'The worktree delivery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'worktree-delivery-source', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base,
+      upstream: 'origin/main',
+      upstreamCommit: base,
+      commits: [candidate],
+      changedPaths: ['lib/worktree-delivery.js'],
+    });
+    submitted.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'worktree-delivery-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submitted);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+
+    scratchWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-58-worktree-'));
+    fs.rmdirSync(scratchWorktree);
+    git(['worktree', 'add', '--detach', scratchWorktree, candidate]);
+    git(['checkout', '-f', 'main']);
+    assert.strictEqual(git(['branch', '--show-current']), 'main', 'the registered checkout starts on an unrelated branch');
+
+    const delivered = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      worktree: scratchWorktree,
+      reason: 'Squash-merged externally; recorded from a scratch worktree instead of moving the registered checkout.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(delivered.integration.deliveryRevision.source, `git:${targetBranch}`, 'evidence names the ref that actually contained it, not the scratch worktree path');
+    assert.strictEqual(delivered.integration.deliveryRevision.value, candidate);
+    assert.strictEqual(git(['branch', '--show-current']), 'main', 'the registered checkout never moved off its unrelated branch');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    if (scratchWorktree) {
+      try { git(['worktree', 'remove', '--force', scratchWorktree]); } catch (_) { /* best-effort cleanup */ }
+    }
+  }
+});
+
+test('SQ-58: recordDeliveredSubmission still refuses branch_not_checked_out when neither the checkout nor any target ref has the delivery at its tip', () => {
+  const originalConfig = store.boardConfig(slug);
+  try {
+    cleanBranch();
+    const targetBranch = git(['branch', '--show-current']);
+    const ticket = addTicket('manual delivery with genuinely wrong checkout', { files: ['lib/wrong-checkout-delivery.js'] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'wrong-checkout-delivery.js'), 'candidate\n');
+    git(['add', 'lib/wrong-checkout-delivery.js']);
+    git(['commit', '-m', 'wrong checkout delivery candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'wrong-checkout-source', {
+      direct: true,
+      reason: 'The wrong-checkout delivery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'wrong-checkout-source', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+    git(['checkout', '-f', 'main']);
+
+    const refused = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      reason: 'The registered checkout is on an unrelated branch and no ref names this tip.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'branch_not_checked_out');
+    assert.match(refused.message, new RegExp(`${targetBranch} must be checked out`));
+    assert.ok(refused.message.includes('worktree:"<path>"'), 'refusal names the worktree argument spelling');
+    assert.ok(refused.message.includes('--worktree <path>'), 'refusal names the CLI --worktree spelling');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
+test('SQ-58: recordDeliveredSubmission refuses an explicit worktree that is not part of this repository', () => {
+  const originalConfig = store.boardConfig(slug);
+  let foreignDir: string | null = null;
+  try {
+    cleanBranch();
+    const targetBranch = git(['branch', '--show-current']);
+    const ticket = addTicket('manual delivery pointed at a foreign directory', { files: ['lib/foreign-worktree.js'] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'foreign-worktree.js'), 'candidate\n');
+    git(['add', 'lib/foreign-worktree.js']);
+    git(['commit', '-m', 'foreign worktree delivery candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'foreign-worktree-source', {
+      direct: true,
+      reason: 'The foreign-worktree delivery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'foreign-worktree-source', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+
+    foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-58-foreign-'));
+
+    const refused = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      worktree: foreignDir,
+      reason: 'A plain directory is not a worktree of this repository.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'delivery_worktree_unavailable');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    if (foreignDir) fs.rmSync(foreignDir, { recursive: true, force: true });
+  }
+});
+
+// A pinned manual-delivery candidate C committed onto a fresh target branch. The tests below
+// then move the target tip past C (T) and check which worktree HEAD recordDeliveredSubmission admits.
+function sq58SubmittedCandidate(label: string) {
+  cleanBranch();
+  const targetBranch = git(['branch', '--show-current']);
+  const file = `lib/${label}.js`;
+  const ticket = addTicket(`manual delivery ${label}`, { files: [file] });
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, file), `${label}\n`);
+  git(['add', file]);
+  git(['commit', '-m', `${label} delivery candidate`]);
+  const candidate = git(['rev-parse', 'HEAD']);
+  const base = git(['rev-parse', `${candidate}^`]);
+  pin(ticket, candidate);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, `${label}-source`, {
+    direct: true,
+    reason: 'The tip-delivery fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, `${label}-source`, {
+    commit: candidate,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+  Object.assign(submitted.submission, {
+    base,
+    upstream: 'origin/main',
+    upstreamCommit: base,
+    commits: [candidate],
+    changedPaths: [file],
+  });
+  submitted.dispatch = {
+    outcome: 'submitted',
+    terminalAt: new Date(Date.now() - 60_000).toISOString(),
+    attempts: [{ outcome: 'submitted', commit: candidate, agentId: `${label}-source`, terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+  };
+  persist(submitted);
+  return { ticket, candidate, base, targetBranch };
+}
+
+function sq58CommitOnCurrentBranch(file: string) {
+  fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, file)), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, file), 'later work\n');
+  git(['add', file]);
+  git(['commit', '-m', `later work ${file}`]);
+  return git(['rev-parse', 'HEAD']);
+}
+
+function sq58DetachedWorktree(created: string[], commit: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-58-tip-'));
+  fs.rmdirSync(dir);
+  git(['worktree', 'add', '--detach', dir, commit]);
+  created.push(dir);
+  return dir;
+}
+
+function sq58Cleanup(originalConfig: any, created: string[]) {
+  store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  for (const dir of created) {
+    try { git(['worktree', 'remove', '--force', dir]); } catch (_) { /* best-effort cleanup */ }
+  }
+}
+
+test('SQ-58: a delivered commit that precedes the target tip is recorded from a worktree at the observed tip, not from one still at the delivered commit', () => {
+  const originalConfig = store.boardConfig(slug);
+  const created: string[] = [];
+  try {
+    const fixture = sq58SubmittedCandidate('tip-ahead');
+    const tip = sq58CommitOnCurrentBranch('lib/tip-ahead-later.js');
+    assert.notStrictEqual(tip, fixture.candidate, 'the target tip is later than the delivered commit');
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: fixture.targetBranch });
+    const atCandidate = sq58DetachedWorktree(created, fixture.candidate);
+    const atTip = sq58DetachedWorktree(created, tip);
+    git(['checkout', '-f', 'main']);
+    const deliver = (worktree: string) => store.recordDeliveredSubmission(slug, fixture.ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: fixture.candidate,
+      deliveryMethod: 'manual',
+      worktree,
+      reason: 'Squash-merged externally; the target has since moved past the delivered commit.',
+    });
+
+    const stale = deliver(atCandidate);
+    assert.strictEqual(stale.ok, false);
+    assert.strictEqual(stale.reason, 'branch_not_checked_out', 'a detached checkout of the delivered commit is not the target tip');
+    assert.ok(stale.message.includes(`${fixture.targetBranch} tip`), 'the refusal names the observed target tip as the checkout to use');
+    assert.doesNotMatch(stale.message, /integrationBranch|--integration-branch/, 'groomClose takes no integrationBranch, so the refusal must not offer it');
+
+    const advised = deliver(path.relative(PROJECT_DIR, atTip));
+    assert.strictEqual(advised.ok, true, advised.message);
+    assert.strictEqual(advised.integration.deliveryRevision.source, `git:${fixture.targetBranch}`);
+    assert.strictEqual(advised.integration.deliveryRevision.value, tip, 'the revision observed is the tip the worktree stood on');
+    assert.strictEqual(git(['branch', '--show-current']), 'main', 'the registered checkout never moved');
+  } finally {
+    sq58Cleanup(originalConfig, created);
+  }
+});
+
+test('SQ-58: a remote-mode delivery is admitted from a worktree at the frozen remote-tracking tip while the local branch lags, and refused from an off-tip checkout', () => {
+  const originalConfig = store.boardConfig(slug);
+  const created: string[] = [];
+  try {
+    const fixture = sq58SubmittedCandidate('remote-tip');
+    git(['push', '-f', '-u', 'origin', fixture.targetBranch]);
+    const remoteTip = sq58CommitOnCurrentBranch('lib/remote-tip-later.js');
+    git(['push', 'origin', fixture.targetBranch]);
+    git(['checkout', '-f', 'main']);
+    git(['branch', '-f', fixture.targetBranch, fixture.candidate]);
+    assert.strictEqual(git(['rev-parse', `refs/heads/${fixture.targetBranch}`]), fixture.candidate, 'the local branch lags the remote-tracking ref');
+    assert.strictEqual(git(['rev-parse', `refs/remotes/origin/${fixture.targetBranch}`]), remoteTip);
+    store.setBoardConfig(slug, { integrationMode: 'remote', integrationBranch: fixture.targetBranch });
+    const offTip = sq58DetachedWorktree(created, fixture.base);
+    const atRemoteTip = sq58DetachedWorktree(created, remoteTip);
+    const deliver = (worktree: string) => store.recordDeliveredSubmission(slug, fixture.ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: fixture.candidate,
+      deliveryMethod: 'manual',
+      worktree,
+      reason: 'Landed on origin first; the local branch has not been fast-forwarded.',
+    });
+
+    const control = deliver(offTip);
+    assert.strictEqual(control.ok, false);
+    assert.strictEqual(control.reason, 'branch_not_checked_out', 'a checkout that is no target ref tip is refused');
+
+    const admitted = deliver(atRemoteTip);
+    assert.strictEqual(admitted.ok, true, admitted.message);
+    assert.strictEqual(admitted.integration.deliveryRevision.source, `git:origin/${fixture.targetBranch}`, 'evidence names the remote-tracking ref that matched');
+    assert.strictEqual(admitted.integration.deliveryRevision.value, remoteTip);
+  } finally {
+    sq58Cleanup(originalConfig, created);
+  }
+});
+
+test('SQ-58: a worktree at the target tip does not make an unreachable delivery commit reachable', () => {
+  const originalConfig = store.boardConfig(slug);
+  const created: string[] = [];
+  try {
+    const fixture = sq58SubmittedCandidate('unreached');
+    git(['checkout', '-f', '-B', `sq58-sibling-${++branchSeq}`, 'origin/main']);
+    const siblingBranch = git(['branch', '--show-current']);
+    const siblingTip = sq58CommitOnCurrentBranch('lib/unreached-sibling.js');
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: siblingBranch });
+    const atTip = sq58DetachedWorktree(created, siblingTip);
+    git(['checkout', '-f', 'main']);
+
+    const refused = store.recordDeliveredSubmission(slug, fixture.ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: fixture.candidate,
+      worktree: atTip,
+      reason: 'The delivered commit lives only on another branch, so tip admission alone must not record it.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'delivery_not_reachable');
+    assert.notStrictEqual(store.getTicket(slug, fixture.ticket.ref).status, 'done');
+  } finally {
+    sq58Cleanup(originalConfig, created);
+  }
+});
+
+test('SQ-58: recordDeliveredSubmission refuses a worktree that belongs to a different repository', () => {
+  const originalConfig = store.boardConfig(slug);
+  let otherRepo: string | null = null;
+  try {
+    const fixture = sq58SubmittedCandidate('other-repo');
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: fixture.targetBranch });
+    otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-58-other-repo-'));
+    execFileSync('git', ['init', '-b', 'main', otherRepo], { encoding: 'utf8', windowsHide: true });
+
+    const refused = store.recordDeliveredSubmission(slug, fixture.ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: fixture.candidate,
+      deliveryMethod: 'manual',
+      worktree: otherRepo,
+      reason: 'A different repository is not a worktree of this project.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'delivery_worktree_unavailable');
+    assert.match(refused.message, /is not a worktree of the registered project/);
+  } finally {
+    sq58Cleanup(originalConfig, []);
+    if (otherRepo) fs.rmSync(otherRepo, { recursive: true, force: true });
+  }
+});
+
 test('SQ-2413: MCP groomClose records terminal recovery evidence and accepts a reachable manual delivery', async () => {
   const originalConfig = store.boardConfig(slug);
   try {

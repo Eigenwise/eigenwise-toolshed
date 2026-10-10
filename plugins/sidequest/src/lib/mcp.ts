@@ -289,7 +289,7 @@ const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestation
 // A rebased or squash-merged candidate never byte-matches the working tree, and the
 // refusal only reaches an operator who already knows these two properties exist.
 const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
-const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.';
+const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {

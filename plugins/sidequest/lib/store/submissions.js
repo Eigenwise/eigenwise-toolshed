@@ -669,7 +669,7 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       };
     }
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-    const project = readMeta(slug)?.path;
+    const project = String(opts?.cwd || "").trim() || readMeta(slug)?.path;
     const verify = (environment) => runProcessVerification(requirement, {
       cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
       timeoutMilliseconds,
@@ -1426,6 +1426,42 @@ ${verify.outputTail}` : null
     const method = String(value || "").trim();
     return WORKING_TREE_DELIVERY_METHODS.has(method) ? method : null;
   }
+  function canonicalCommonDir(value) {
+    let resolved = value;
+    try {
+      resolved = fs.realpathSync.native(value);
+    } catch (_) {
+    }
+    const normalized = path.normalize(resolved);
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  }
+  function resolveDeliveryWorktree(registeredRepo, requestedWorktree) {
+    const candidate = path.isAbsolute(requestedWorktree) ? requestedWorktree : path.resolve(registeredRepo, requestedWorktree);
+    let candidateCommonDir;
+    let registeredCommonDir;
+    try {
+      candidateCommonDir = canonicalCommonDir(path.resolve(candidate, integrationGit(candidate, ["rev-parse", "--git-common-dir"])));
+      registeredCommonDir = canonicalCommonDir(path.resolve(registeredRepo, integrationGit(registeredRepo, ["rev-parse", "--git-common-dir"])));
+    } catch (error) {
+      return { ok: false, message: `${candidate} could not be inspected as a Git worktree: ${integrationGitError(error)}` };
+    }
+    if (candidateCommonDir !== registeredCommonDir) {
+      return { ok: false, message: `${candidate} is not a worktree of the registered project at ${registeredRepo}.` };
+    }
+    return { ok: true, worktree: candidate };
+  }
+  function recordedDeliveryNotAtTipMessage(targetBranch, currentBranch, givenWorktree) {
+    const checkedOut = currentBranch || "detached HEAD";
+    const where = givenWorktree ? `the worktree given (${givenWorktree})` : "this checkout";
+    return `${targetBranch} must be checked out before recording an external delivery; ${where} is on ${checkedOut}, not at the ${targetBranch} tip. Check out the observed ${targetBranch} tip (the branch itself, or a detached checkout of its current tip, which may be later than deliveryCommit), or give such a worktree via worktree:"<path>" (CLI: --worktree <path>).`;
+  }
+  function refTipEquals(repo, ref, commit) {
+    try {
+      return integrationGit(repo, ["rev-parse", "--verify", `${ref}^{commit}`]).toLowerCase() === commit;
+    } catch (_) {
+      return false;
+    }
+  }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
@@ -1463,18 +1499,37 @@ ${verify.outputTail}` : null
     const requestedCommit = String(opts.deliveryCommit || "").trim();
     if (!reason) return { ok: false, reason: "evidence_required", ticket, message: `${ticket.ref} reconciliation requires delivery evidence.` };
     if (!SUBMISSION_COMMIT_RE.test(requestedCommit)) return { ok: false, reason: "delivery_commit_required", ticket, message: `${ticket.ref} reconciliation requires the delivery commit hash.` };
-    const repo = String(readMeta(slug)?.path || "").trim();
+    const registeredRepo = String(readMeta(slug)?.path || "").trim();
     const target = opts.target;
-    if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+    if (!registeredRepo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+    const requestedWorktree = String(opts.worktree || "").trim();
+    let repo = registeredRepo;
+    if (requestedWorktree) {
+      const resolvedWorktree = resolveDeliveryWorktree(registeredRepo, requestedWorktree);
+      if (!resolvedWorktree.ok) {
+        return { ok: false, reason: "delivery_worktree_unavailable", ticket, message: `${ticket.ref} reconciliation refused: ${resolvedWorktree.message}` };
+      }
+      repo = resolvedWorktree.worktree;
+    }
     try {
       const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
-      if (currentBranch !== target.branch) {
-        return { ok: false, reason: "branch_not_checked_out", ticket, message: branchNotCheckedOutMessage(target.branch, currentBranch, "recording an external delivery") };
-      }
       const deliveryCommit = integrationGit(repo, ["rev-parse", "--verify", `${requestedCommit}^{commit}`]).toLowerCase();
       const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]).toLowerCase();
+      let observedIntegrationRevisionSource = `git:${target.branch}`;
+      if (currentBranch !== target.branch) {
+        const matchedRef = commitScope.integrationTargetRefs(target).find((ref) => refTipEquals(repo, ref, resultingHead));
+        if (!matchedRef) {
+          return {
+            ok: false,
+            reason: "branch_not_checked_out",
+            ticket,
+            message: recordedDeliveryNotAtTipMessage(target.branch, currentBranch, requestedWorktree ? repo : "")
+          };
+        }
+        observedIntegrationRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;
+      }
       const observedIntegrationRevision = {
-        source: `git:${target.branch}`,
+        source: observedIntegrationRevisionSource,
         value: resultingHead,
         observedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
@@ -1556,7 +1611,7 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} delivery refused: verificationSupersession requires a runnable command or suite verifier.`
         };
       }
-      const verify = verifyDeliveredSubmission(slug, ticket, replacementRequirement ? { requirement: replacementRequirement } : void 0);
+      const verify = verifyDeliveredSubmission(slug, ticket, { ...replacementRequirement ? { requirement: replacementRequirement } : {}, cwd: repo });
       if (!verificationAccepted(verify)) {
         const failureReason = `${verificationOutcome(verify)}_recorded_delivery`;
         const failureMessage = `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;

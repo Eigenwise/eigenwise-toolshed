@@ -272,6 +272,7 @@ async function cmdGroomClose(opts, positional) {
     deliveryCommit: opts["delivery-commit"],
     deliveryInteractionCommit: opts["delivery-interaction-commit"],
     deliveryMethod: opts["delivery-method"],
+    worktree: opts.worktree,
     deliveryRevision: opts["delivery-revision"],
     resolvedPaths: opts["resolved-path"]
   });
