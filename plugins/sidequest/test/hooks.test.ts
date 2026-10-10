@@ -6157,6 +6157,7 @@ test('bind-runtime-identity refuses a subagent call that omits by on every defau
       { ...identity, cwd: BOARD_PATH, tool_name: `mcp__plugin_sidequest_board__${tool}`, tool_input: { ref: ticket.ref, reason: 'Probe.', review: 'Probe.', supersededBy: 'SQ-1', ...extra } },
     );
     const refused = call(subagent);
+    assert.notEqual(refused, null, `${tool}: the hook lets a subagent call without by through to the main-session default`);
     assert.equal(refused.hookSpecificOutput.permissionDecision, 'deny', `${tool}: a subagent call without by is refused`);
     assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(`${tool} omitted by`));
     assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(subagent.agent_id));
