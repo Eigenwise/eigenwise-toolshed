@@ -22,6 +22,7 @@ __export(process_exports, {
   runOwnedProcessVerification: () => runOwnedProcessVerification,
   runProcessVerification: () => runProcessVerification,
   shellCommand: () => shellCommand,
+  shellScript: () => shellScript,
   verifierEnvironment: () => verifierEnvironment
 });
 module.exports = __toCommonJS(process_exports);
@@ -150,15 +151,31 @@ function windowsPosixShell() {
   if (discovered.status !== 0) return null;
   return String(discovered.stdout || "").split(/\r?\n/).map((candidate) => candidate.trim()).find((candidate) => fs.existsSync(candidate)) || null;
 }
+const ZSH_NAME = /(?:^|[\\/])zsh(?:\.exe)?$/i;
+function resolvedExecutable(executable) {
+  try {
+    return fs.realpathSync(executable);
+  } catch {
+    return executable;
+  }
+}
+function isZshExecutable(executable) {
+  return ZSH_NAME.test(executable) || ZSH_NAME.test(resolvedExecutable(executable));
+}
+function posixShellDefinition() {
+  const posixShell = process.env.SHELL || "/bin/sh";
+  const isZsh = isZshExecutable(posixShell);
+  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch nobadpattern)` : `POSIX shell (${posixShell})`;
+  return Object.freeze({ executable: posixShell, label, scriptExtension: ".sh", isZsh });
+}
 function shellDefinition(platform = process.platform) {
   if (platform === "win32") {
-    const posixShell2 = windowsPosixShell();
-    if (posixShell2) return Object.freeze({ executable: posixShell2, label: `POSIX shell (${posixShell2})`, scriptExtension: ".sh" });
+    const posixShell = windowsPosixShell();
+    if (posixShell) return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: ".sh", isZsh: false });
     const commandPrompt = process.env.ComSpec || "cmd.exe";
-    return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd" });
+    return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd", isZsh: false });
   }
-  const posixShell = process.env.SHELL || "/bin/sh";
-  return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: ".sh" });
+  return posixShellDefinition();
 }
 const WINDOWS_BACKSLASH_PATH = /(?:^|[\s=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
 const QUOTED_SEGMENT = /"(?:\\.|[^"\\])*"|'[^']*'/g;
@@ -167,7 +184,7 @@ function unquotedText(command) {
 }
 function commandPromptShell() {
   const commandPrompt = process.env.ComSpec || "cmd.exe";
-  return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd" });
+  return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd", isZsh: false });
 }
 function verifierShell(command, platform = process.platform) {
   return platform === "win32" && WINDOWS_BACKSLASH_PATH.test(unquotedText(command)) ? commandPromptShell() : shellDefinition(platform);
@@ -190,7 +207,8 @@ function shellScript(command, shell) {
       ""
     ].join("\r\n");
   }
-  return `(
+  const zshNonomatchPreamble = shell.isZsh ? "setopt nonomatch nobadpattern\n" : "";
+  return `${zshNonomatchPreamble}(
 ${command}
 )
 sidequest_exit_code=$?
@@ -419,5 +437,6 @@ function createProcessPort() {
   runOwnedProcessVerification,
   runProcessVerification,
   shellCommand,
+  shellScript,
   verifierEnvironment
 });

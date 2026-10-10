@@ -838,6 +838,220 @@ test('accepts repository-root and subdirectory verify commands', () => {
   assert.deepStrictEqual(subdirectory.warnings, []);
 });
 
+// GH-171: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a recorded verify string
+// aborts under zsh with "no matches found" before the pinned command runs. add/update now warn
+// (not refuse) so existing tickets keep working while the wrapper fix removes the false red.
+test('warns about an unquoted [param]-shaped path in a recorded verify command, not a quoted one', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const unquoted = cliJson(['add', '-t', 'unquoted glob verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts']);
+  assert.ok(
+    unquoted.warnings.some((warning: string) => warning.includes('unquoted path with shell glob characters') && warning.includes('[fulfillmentId]')),
+    JSON.stringify(unquoted.warnings),
+  );
+
+  const quoted = cliJson(['add', '-t', 'quoted glob verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" "src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts"']);
+  assert.ok(
+    !quoted.warnings.some((warning: string) => warning.includes('unquoted path with shell glob characters')),
+    JSON.stringify(quoted.warnings),
+  );
+
+  const updated = cliJson(['update', quoted.ticket.ref, '--verify', 'node -e "0" src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts']);
+  assert.ok(
+    updated.warnings.some((warning: string) => warning.includes('unquoted path with shell glob characters')),
+    JSON.stringify(updated.warnings),
+  );
+});
+
+// Owner review on GH-171: verifyUnquotedGlobIssue's message can no longer state quoting as the
+// one universal fix (quoting a real shell glob like `src/*.ts` breaks a tool that expects the
+// shell to have already expanded it, e.g. tsc or pytest), and its filters had specific false
+// positives and false negatives. Each bullet below is one input the review measured.
+function unquotedGlobWarning(warnings: string[]) {
+  return warnings.find((warning) => warning.includes('unquoted path with shell glob characters')) || null;
+}
+
+test('the unquoted-glob message offers quoting conditionally, not as the one fix', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const flagged = cliJson(['add', '-t', 'conditional quoting advice', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" src/app/[id]/a.test.ts']);
+  const warning = unquotedGlobWarning(flagged.warnings);
+  assert.ok(warning, JSON.stringify(flagged.warnings));
+  // The existing "quote it" phrasing must survive (other tests match /quote it/i against it),
+  // but the fix is split by token kind instead of stating one answer unconditionally.
+  assert.match(warning as string, /quote it/i);
+  assert.match(warning as string, /node --test/);
+  assert.match(warning as string, /tsc|pytest/);
+});
+
+// Round 3 of the GH-171 review: quoting a literal `[id]` path is backwards for node --test,
+// which globs its own arguments and reads the quoted `[id]` as a character class. Literal
+// bracket paths get quoted for literal-path tools and `[[]id]`-escaped for self-globbing
+// runners; an intended `*` glob is quoted for self-globbing runners and left bare for
+// literal-path tools.
+test('the advice splits by token kind: a literal bracket path is escaped, an intended glob is quoted', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const bracket = unquotedGlobWarning(cliJson(['add', '-t', 'bracket advice', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/app/[id]/a.test.js']).warnings) as string;
+  assert.match(bracket, /literal bracket path like "src\/app\/\[id\]\/a\.test\.js", quote it \("src\/app\/\[id\]\/a\.test\.js"\) for a tool that takes literal paths \(for example tsc or pytest\)/);
+  assert.match(bracket, /node --test\) quote it and also escape each "\[" as "\[\[\]" \("src\/app\/\[\[\]id\]\/a\.test\.js"\)/);
+  assert.doesNotMatch(bracket, /intended glob/);
+
+  const wildcard = unquotedGlobWarning(cliJson(['add', '-t', 'wildcard advice', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/app/*/a.test.js']).warnings) as string;
+  assert.match(wildcard, /intended glob like "src\/app\/\*\/a\.test\.js", quote it \("src\/app\/\*\/a\.test\.js"\) so a runner that globs its own arguments \(for example node --test\) sees the pattern; leave it unquoted/);
+  assert.match(wildcard, /for a tool that takes literal paths \(for example tsc or pytest\)/);
+  assert.doesNotMatch(wildcard, /literal bracket path/);
+
+  const both = unquotedGlobWarning(cliJson(['add', '-t', 'mixed advice', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/app/[id]/a.test.js src/lib/*.test.js']).warnings) as string;
+  assert.match(both, /literal bracket path like "src\/app\/\[id\]\/a\.test\.js".*intended glob like "src\/lib\/\*\.test\.js"/);
+});
+
+// The advice above is only worth shipping while node keeps behaving as measured, so this runs
+// the real runner (argv without a shell, which is what a quoted token becomes) against a
+// fixture that holds exactly one test file under a literal `[id]` directory.
+test('the advice for a literal bracket path matches real node --test behavior', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-node-test-bracket-'));
+  try {
+    fs.mkdirSync(path.join(fixture, 'src', 'app', '[id]'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'src', 'app', '[id]', 'a.test.js'), "require('node:test')('runs', () => {});\n");
+    const testsRun = (relativePath: string) => {
+      const { NODE_TEST_CONTEXT: _inherited, ...env } = process.env;
+      const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', relativePath], { cwd: fixture, env, encoding: 'utf8' });
+      return { status: run.status, tests: Number(/^# tests (\d+)$/m.exec(run.stdout)?.[1]) };
+    };
+    assert.deepStrictEqual(testsRun('src/app/[id]/a.test.js'), { status: 0, tests: 0 });
+    assert.deepStrictEqual(testsRun('src/app/[[]id]/a.test.js'), { status: 0, tests: 1 });
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+// Round 4 of the GH-171 review: a path that mixes a bracket segment and a glob
+// (`app/[id]/*.test.js`) used to get the plain "quote it" advice, which for a self-globbing
+// runner reads `[id]` as a character class and runs 0 tests while exiting 0.
+function mixedPathWarning(verify: string): string {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+  return unquotedGlobWarning(cliJson(['add', '-t', 'mixed bracket and glob', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', verify]).warnings) as string;
+}
+
+test('the warning for a path that mixes a bracket and a glob names the escaped form, not plain quoting', () => {
+  const warning = mixedPathWarning('node --test app/[id]/*.test.js');
+  assert.ok(warning);
+  assert.match(warning, /mixes a bracket segment and a glob like "app\/\[id\]\/\*\.test\.js"/);
+  assert.ok(warning.includes('"app/[[]id]/*.test.js"'), warning);
+  assert.match(warning, /node --test\) needs the bracket escaped and the glob kept/);
+  assert.ok(warning.includes('app/\\[id\\]/*.test.js'), warning);
+  assert.doesNotMatch(warning, /intended glob/);
+  assert.doesNotMatch(warning, /literal bracket path/);
+});
+
+const ZSH_AVAILABLE = process.platform !== 'win32' && spawnSync('zsh', ['-c', 'exit 0']).status === 0;
+
+test('the advised escaped form runs one test under real zsh where the bare form runs none', { skip: !ZSH_AVAILABLE }, () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-node-test-mixed-'));
+  try {
+    fs.mkdirSync(path.join(fixture, 'app', '[id]'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'app', '[id]', 'x.test.js'), "require('node:test')('runs', () => {});\n");
+    const advised = /"(app\/\[\[\]id\]\/\*\.test\.js)"/.exec(mixedPathWarning('node --test app/[id]/*.test.js'))?.[1];
+    assert.ok(advised, 'the warning must carry the escaped form in double quotes');
+    const testsRun = (pattern: string) => {
+      const { NODE_TEST_CONTEXT: _inherited, ...env } = process.env;
+      const run = spawnSync('zsh', ['-c', `"${process.execPath}" --test --test-reporter=tap "${pattern}"`], { cwd: fixture, env, encoding: 'utf8' });
+      return { status: run.status, tests: Number(/^# tests (\d+)$/m.exec(run.stdout)?.[1]) };
+    };
+    assert.deepStrictEqual(testsRun('app/[id]/*.test.js'), { status: 0, tests: 0 });
+    assert.deepStrictEqual(testsRun(advised as string), { status: 0, tests: 1 });
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('a path with a quoted span holding a space is one token with a well-formed suggestion', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const warning = unquotedGlobWarning(cliJson(['add', '-t', 'inner quoted space', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/"a b"/[id]/x.test.ts']).warnings) as string;
+  assert.ok(warning);
+  assert.match(warning, /glob characters: src\/"a b"\/\[id\]\/x\.test\.ts\./);
+  assert.match(warning, /quote it \("src\/a b\/\[id\]\/x\.test\.ts"\)/);
+});
+
+test('false positive: a query string is not an unquoted glob path (GH-171 review section 4)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const curlUrl = cliJson(['add', '-t', 'curl query string', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" && curl https://api.example.com/v1/items?debug']);
+  assert.strictEqual(unquotedGlobWarning(curlUrl.warnings), null, JSON.stringify(curlUrl.warnings));
+});
+
+test('false positive: a bracket quoted inside the token is not flagged, and no malformed suggestion is built (GH-171 review section 4)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const quotedBracket = cliJson(['add', '-t', 'quoted bracket segment', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/"[id]"/a.test.js']);
+  assert.strictEqual(unquotedGlobWarning(quotedBracket.warnings), null, JSON.stringify(quotedBracket.warnings));
+});
+
+test('accepted false positive: a regex pattern argument still reads as a path (GH-171 review section 4, not fixed)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  // The review names this as a false positive but only two of its three examples "deserve a
+  // fix"; the tokenizer cannot tell a `--testPathPattern` regex argument from a real path
+  // without flag-name awareness, so this one stays warn-only, unchanged. Documented, not "fixed".
+  const mochaPattern = cliJson(['add', '-t', 'mocha regex pattern', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'npx mocha --testPathPattern src/a[bc]/x.js']);
+  assert.ok(unquotedGlobWarning(mochaPattern.warnings), JSON.stringify(mochaPattern.warnings));
+});
+
+test('false negative: an = -separated flag value is still checked for glob characters (GH-171 review section 5)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const jestEquals = cliJson(['add', '-t', 'jest testPathPattern equals', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'npx jest --testPathPattern=src/[id]/x.ts']);
+  const warning = unquotedGlobWarning(jestEquals.warnings);
+  assert.ok(warning, JSON.stringify(jestEquals.warnings));
+  assert.match(warning as string, /--testPathPattern=src\/\[id\]\/x\.ts/);
+});
+
+test('false negative: a leading ../ path is still checked, only a bare .. is exempt (GH-171 review section 5)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const parentPath = cliJson(['add', '-t', 'relative parent path', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test ../src/[id]/a.test.ts']);
+  const warning = unquotedGlobWarning(parentPath.warnings);
+  assert.ok(warning, JSON.stringify(parentPath.warnings));
+  assert.match(warning as string, /\.\.\/src\/\[id\]\/a\.test\.ts/);
+
+  const bareDotDot = cliJson(['add', '-t', 'bare parent dir', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd .. && node --test']);
+  assert.strictEqual(unquotedGlobWarning(bareDotDot.warnings), null, JSON.stringify(bareDotDot.warnings));
+});
+
+test('brace expansion and tilde stay unflagged (GH-171 review section 5, no bug)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const brace = cliJson(['add', '-t', 'brace expansion path', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/{a,b}/x.test.js']);
+  assert.strictEqual(unquotedGlobWarning(brace.warnings), null, JSON.stringify(brace.warnings));
+
+  const tilde = cliJson(['add', '-t', 'tilde path', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test ~/x.test.js']);
+  assert.strictEqual(unquotedGlobWarning(tilde.warnings), null, JSON.stringify(tilde.warnings));
+});
+
 test('rejects unrunnable npm verifies when tickets are added or updated', () => {
   const packageDir = path.join(PROJ, 'plugins', 'package-suite');
   const bareDir = path.join(PROJ, 'plugins', 'bare-suite');
