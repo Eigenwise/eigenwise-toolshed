@@ -13,8 +13,7 @@ const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 const DECLARED_PATH = 'plugins/sidequest/src/lib/store/tickets.ts';
 const REFUSED_PATH = 'plugins/other/src/a.ts';
-const SECOND_REFUSED_PATH = 'plugins/other/src/b.ts';
-// A foreign release fragment is refused on every dispatch, including a whole-tree one (SQ-3187), and no live-claim remedy applies to it.
+const SECOND_REFUSED_PATH = 'plugins/other/src/b.ts';// A foreign release fragment is refused on every dispatch, including a whole-tree one (SQ-3187), and no live-claim remedy applies to it.
 const NO_REMEDY_REFUSED_PATH = '.release/unreleased/SQ-999.md';
 
 // GitHub #173: the orchestrator's scopeRequest was refused with not_owner, so there
@@ -350,4 +349,20 @@ test('scope-request --json prints the ruling and exits nonzero only on failure',
   const missingBody = JSON.parse(missing.stdout);
   assert.equal(missingBody.ok, false);
   assert.equal(missingBody.reason, 'not_found');
+});
+
+test('the scope-request CLI reports an already covered path and fails on an unknown ticket or a missing path', () => {
+  const fixture = createClaimedDispatch();
+  const env = cliEnv(fixture);
+
+  const covered = cli(env, ['scope-request', fixture.ticket.ref, '--file', DECLARED_PATH, '--by', fixture.worker]);
+  assert.equal(covered.status, 0, covered.stderr);
+  assert.match(covered.stdout, new RegExp(`already covers: ${DECLARED_PATH}`));
+
+  const unknown = cli(env, ['scope-request', 'SQ-does-not-exist', '--file', REFUSED_PATH, '--by', fixture.worker]);
+  assert.equal(unknown.status, 1);
+
+  const noFiles = cli(env, ['scope-request', fixture.ticket.ref, '--by', fixture.worker]);
+  assert.equal(noFiles.status, 1);
+  assert.match(noFiles.stderr + noFiles.stdout, /pass one or more requested paths/);
 });

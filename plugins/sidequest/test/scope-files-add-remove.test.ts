@@ -167,6 +167,27 @@ test('removeFiles refuses a live-claim path the bound checkout changed, whether 
   assert.deepEqual(liveRemoval(fixture, [kept]).files, [untracked, edited, committed]);
 });
 
+// Without -z git prints a non-ASCII name C-quoted ("caf\303\251.ts"), which no declared
+// path matches, so the guard saw the ASCII file but let the accented one be revoked.
+test('removeFiles of a directory refuses when the checkout wrote a non-ASCII file under it, committed or untracked', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest-test@example.invalid', ...args], { cwd, windowsHide: true });
+  const directory = 'plugins/sidequest/src';
+  const fixture = createClaimedDispatch({ files: [directory, 'docs'], realWorktree: true });
+  const write = (file: string) => {
+    fs.mkdirSync(path.dirname(path.join(fixture.worktree, file)), { recursive: true });
+    fs.writeFileSync(path.join(fixture.worktree, file), 'x\n');
+  };
+  const untracked = `${directory}/café.ts`;
+  const committed = `${directory}/naïve.ts`;
+  write(committed);
+  git(fixture.worktree, 'add', committed);
+  git(fixture.worktree, 'commit', '--quiet', '-m', 'committed work');
+  write(untracked);
+
+  assert.throws(() => liveRemoval(fixture, [directory]), (error: Error) => error.message.includes(untracked) && error.message.includes(committed));
+  assert.deepEqual(fixture.store.getTicket(fixture.project, fixture.ticket.ref).files, [directory, 'docs']);
+});
+
 test('removeFiles of a directory entry is refused when the checkout changed a file under it, unless another entry still covers it', () => {
   const fixture = createClaimedDispatch({ files: ['plugins/sidequest/src', 'plugins/sidequest/src/lib', 'docs'], realWorktree: true });
   const inner = 'plugins/sidequest/src/lib/store/inner.ts';
