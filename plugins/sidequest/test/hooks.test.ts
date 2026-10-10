@@ -6146,11 +6146,11 @@ test('bind-runtime-identity defaults an omitted rework by to the calling executo
 
 // SQ-160. groomClose and supersede_submission default an omitted `by` to the shared session id in the MCP server,
 // which a subagent would otherwise inherit: a fresh-fixture subagent groomClose closed an unclaimed ticket as the
-// main session. The loop reads the server's own set so a tool added to the default cannot skip this guard.
+// main session. mcp.test.ts pins this list to the server's CONTROL_PLANE_DEFAULT_BY, so a tool added there fails
+// that test until it is probed here too.
 test('bind-runtime-identity refuses a subagent call that omits by on every defaulted control-plane tool and leaves the main thread alone (SQ-160)', () => {
-  const { CONTROL_PLANE_DEFAULT_BY } = require('../lib/mcp.js');
   const subagent = { session_id: `sq160-${++sqSeq}`, agent_type: 'sidequest-exec-dispatch', agent_id: `sq160-agent-${sqSeq}` };
-  for (const tool of CONTROL_PLANE_DEFAULT_BY) {
+  for (const tool of ['groomClose', 'rework', 'supersede_submission']) {
     const ticket = addStopTicket(`SQ-160 unclaimed ticket for ${tool}`);
     const call = (identity: Record<string, unknown>, extra: Record<string, unknown> = {}) => runHookOutput(
       path.join(HOOKS, 'bind-runtime-identity.js'),
