@@ -2454,6 +2454,42 @@ test('an isolated executor can inspect but not mutate the shared checkout with g
   assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Read-only git commands/);
 });
 
+// GH-422. Executors appended `; echo anc=$?` to the briefing's raw `git merge-base` check and the compound
+// command was refused. The briefing now prints a single `sync-check` command, and every Bash guard in this
+// plugin has to let each form of it through for an isolated executor, including one that names the shared
+// checkout as its --worktree.
+test('the sync-check commands the briefing prints pass every Bash guard for an isolated executor', () => {
+  const agentId = 'sync-check-guards';
+  const { sessionId, executor } = dispatched(agentId);
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const briefingFor = (continuation: Record<string, unknown> | undefined) => agentsync.renderTicketBriefing({
+    ref: 'SQ-422', title: 'Sync guards', model: 'opus', effort: 'high', category: {},
+    dispatch: { sharedTree: false, baseCommit: base, integrationTarget: { mode: 'local', branch: 'main' }, ...(continuation ? { continuation } : {}) },
+  }, 'sync-guard-token', undefined, PROJECT);
+  const commands = [
+    briefingFor(undefined),
+    briefingFor({ mode: 'live_claim_resume', sourceWorktree: PROJECT, commit: retained }),
+    briefingFor({ mode: 'dirty_worktree_resume', commit: retained, baseCommit: retained }),
+  ].flatMap((briefing: string) => [...briefing.matchAll(/`(node "[^"]*sidequest-launcher\.js" sync-check [^`]*)`/g)].map((match) => match[1]));
+  assert.equal(commands.length, 3, 'one sync-check command per briefing variant');
+
+  const guards = ['guard-shared-checkout-git.js', 'guard-destructive-git.js', 'guard-shared-tree-commit.js', 'guard-home-delete.js', 'guard-heredoc-isolated.js', 'guard-bash-windows-paths.js', 'repeated-command-warn.js'];
+  for (const command of commands) {
+    for (const guard of guards) {
+      const out = runHook(path.join(HOOKS, guard), {
+        session_id: sessionId,
+        agent_id: agentId,
+        agent_type: executor,
+        cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`),
+        tool_name: 'Bash',
+        tool_input: { command },
+      });
+      assert.equal(out?.hookSpecificOutput?.permissionDecision, undefined, `${guard} must not refuse: ${command}`);
+    }
+  }
+});
+
 test('an unrelated executor subagent does not inherit a session fallback claim', () => {
   const activeAgentId = 'active-shared-git';
   const { sessionId, executor } = dispatched(activeAgentId);

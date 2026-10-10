@@ -16,11 +16,11 @@ const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./s
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require("./sidequest-cmd-configuration");
 const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
-const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
+const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "resolved-path", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface", "dependency"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label" };
-const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "no-process", "no-worktree", "review", "abandon-submission"]);
+const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "no-process", "no-worktree", "review", "abandon-submission", "retained"]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
 const COMMAND_FLAGS = {
   add: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "unclassified", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "verify-cwd", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "dry-run", "name"],
@@ -66,6 +66,7 @@ const COMMAND_FLAGS = {
   unarchive: [],
   dispatch: ["shared-tree", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "session", "unverified-transport", "recovery-evidence", "retire-only"],
   briefing: ["token-file"],
+  "sync-check": ["worktree", "head", "retained"],
   temp: ["root"],
   "cleanup-temp": ["root"],
   "native-agent": ["prompt", "shared-tree", "unverified-transport", "session", "dir", "name"],
@@ -304,6 +305,7 @@ const HELP_COMMANDS = {
   unarchive: "sidequest unarchive <id|SQ-n>",
   dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--reduced-agent-schema] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>" --retire-only]',
   briefing: "sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]",
+  "sync-check": "sidequest sync-check <base-commit> [--worktree <path>] [--head <commit>] [--retained]",
   "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]',
   temp: "sidequest temp cleanup [--root <path>] [--json]",
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
@@ -440,6 +442,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
 Native Agent dispatch (routed work stays in this conversation):
   sidequest dispatch <SQ-n> [--shared-tree] [--reduced-agent-schema] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>" [--retire-only]]  prepare a token-gated dispatch: declared-file tickets use worktrees by default; shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout; --reduced-agent-schema is only for a visible Agent schema that lacks name and mode, omits both fields, and refuses the first claim unless hooks report agent_id plus a permission_mode of auto or bypassPermissions (the executor inherits the spawning session's mode); executors with a live claim cannot dispatch child work; --recovery-evidence is unverified attestation for retiring an unclaimed attempt, at once from the session that prepared it and otherwise after its deadline (an already-terminal attempt needs nothing, so the call just prepares); --retire-only stops after retirement instead of preparing a replacement identity. The deadline is 15 minutes by default (SIDEQUEST_CLAIM_GRACE_MIN, clamped to the idle limit) from the latest runtime signal (launch, WorktreeCreate start or completion, finished provisioning, bind, briefing fetch, claim, or a board write from that runtime). A board write counts only on the attempt's own ticket, on the launcher session the dispatch recorded, after launch, before any claim, and under the exact runtime name SubagentStart bound: the launcher session is the trust boundary, so a same-session caller writing under that bound name is trusted as that runtime and any other --by, the orchestrator's own identity included, counts for nothing. Of the WorktreeCreate callbacks, creation completed, finished provisioning, provisioning failure, dependency link, and recovery are generation-scoped; the start binding is scoped to the session and the checkout, because the hook learns its generation from that call. An unfinished WorktreeCreate waits for the idle backstop instead, and an attempt that recorded none of those signals is retirable at once; the refusal names the deadline and measured signal, and groom-close --recovery-evidence runs the same retirement authority, refusing with the same countdown inside it
   sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]  print the current token-gated executor briefing
+  sidequest sync-check <base-commit> [--worktree <path>] [--head <commit>] [--retained]  check a worktree against its dispatch base and print one line: "sync-check: ok (...)" exits 0, "sync-check: FAILED <reason> (...)" exits 1, so no trailing echo of the exit status is needed. --head also requires HEAD to equal that commit; --retained also requires uncommitted changes with no unmerged entries. Reasons: not-ancestor, head-mismatch, retained-changes-missing, unmerged, unknown-revision, no-worktree, not-a-worktree, unreadable
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]  return an already-registered native Agent spawn spec + bounded prompt; CLI transport refuses unless --unverified-transport
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
@@ -686,6 +689,9 @@ async function main() {
       break;
     case "briefing":
       await cmdBriefing(opts, positional);
+      break;
+    case "sync-check":
+      cmdSyncCheck(opts, positional);
       break;
     case "temp":
       await cmdTempCleanup(opts, positional);
