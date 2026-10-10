@@ -338,7 +338,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **No TaskStop after terminal evidence.** Consume the submission report, done comment, or recovery handoff;
   the executor already ended its own run, so the host lists it completed and a TaskStop only fails (GH-203).
   The TaskStop rule is authoritative in `SKILL.md`'s "Work a ticket" section, not restated here: it is host
-  cleanup for an executor `pulse` still shows alive after its ticket went terminal. A `READY_FOR_INTEGRATION`
+  cleanup, once, only when the host still lists a terminal ticket's executor as running. A `READY_FOR_INTEGRATION`
   verdict additionally queues the ticket for the publish transaction ([publishing.md](publishing.md)) — publish
   the wave's submissions in one batch; never respawn an executor for a submitted ticket.
 
