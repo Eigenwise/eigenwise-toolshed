@@ -340,9 +340,14 @@ function conciseDescription(description?: any) {
   return firstSentence ? firstSentence[0].trim() : description;
 }
 
+// Accepts both the human ref (US-n) and the stable id `story` returns (st_...);
+// store.coerceStoryId already resolves either form via getStory, so this only
+// needs to reject shapes neither form produces.
 function validateStoryId(value: any, allowClear = false) {
   if (allowClear && String(value).toLowerCase() === 'none') return;
-  if (!/^US-\d+$/.test(String(value))) throw new Error('storyId must be a US-n story ref.');
+  if (/^US-\d+$/.test(String(value))) return;
+  if (/^st_[0-9a-z]+_[0-9a-f]+$/i.test(String(value))) return;
+  throw new Error('storyId must be a US-n story ref or the story id (st_...) that story returns.');
 }
 
 function compactSchema(schema?: any, propertyMap = false): any {

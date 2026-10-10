@@ -1214,8 +1214,17 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any, slug?: any) {
   warnings.push(...scopeConsumerWarnings(ticket, projectPath));
   const absent = commitScope.scopedPaths(ticket.files).filter((file?: any) => {
     const scope = String(file || '');
-    const literalRoot = scope.includes('*') ? scope.slice(0, scope.indexOf('*')).replace(/\/+$/, '') || '.' : scope;
-    const declared = path.resolve(projectPath, literalRoot);
+    if (scope.includes('*')) {
+      // The glob segment itself is a valid scope for files the executor will create, so only
+      // the directory before the first `*` is checked for existence — that still catches a
+      // typo'd directory (src/typo/**) without flagging an in-directory glob like
+      // src/foo*.integration.test.ts.
+      const slashIndex = scope.lastIndexOf('/', scope.indexOf('*'));
+      if (slashIndex === -1) return false;
+      const declaredDir = path.resolve(projectPath, scope.slice(0, slashIndex));
+      return !fs.existsSync(declaredDir) && fs.existsSync(path.dirname(declaredDir));
+    }
+    const declared = path.resolve(projectPath, scope);
     return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
   });
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);

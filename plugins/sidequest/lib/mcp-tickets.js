@@ -82,6 +82,24 @@ const VERIFY_ORACLE_PROP = {
   maxLength: store.EXECUTOR_VERIFY_MAX,
   description: "Pin the required verifier in the prepared attempt. command and suite use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry."
 };
+function normalizedDependsOnRefs(dependsOn) {
+  const coercedFromString = !Array.isArray(dependsOn);
+  const raw = coercedFromString ? [dependsOn] : dependsOn;
+  const refs = [...new Set(raw.map((dep) => String(dep || "").trim()).filter(Boolean))];
+  return { refs, coercedFromString };
+}
+function dependsOnAckFields(slug, ticket, dependsOn) {
+  if (dependsOn === void 0) return {};
+  const { refs, coercedFromString } = normalizedDependsOnRefs(dependsOn);
+  const linked = [];
+  const failed = [];
+  for (const depRef of refs) {
+    const res = store.linkTickets(slug, ticket.ref, "depends-on", depRef);
+    if (res.ok) linked.push(res.to.ref);
+    else failed.push({ ref: depRef, reason: res.reason });
+  }
+  return { dependsOn: Object.assign({ linked, failed }, coercedFromString ? { coercedFromString: true } : {}) };
+}
 function liveVerificationAmendment(ticket) {
   const amendment = Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments.at(-1) : null;
   if (!amendment || !ticket.dispatch || ticket.dispatch.terminalAt) return null;
@@ -138,7 +156,8 @@ const tools = [
         verifyCwd: VERIFY_CWD_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
-        storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
+        storyId: { type: "string", description: "A story ref (US-n) or the story id story returns (st_...) to file this ticket into." },
+        dependsOn: { type: "array", items: { type: "string" }, description: "Refs this ticket depends on. Recorded as depends-on links to the new ticket in this same call, so a dependent ticket needs no follow-up link call." },
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
         category: { type: "string", description: "Enabled category id from category_list." },
@@ -208,6 +227,7 @@ const tools = [
       const presentedWarnings = store.presentWarnings(ticket, warnings, sessionOf(args));
       return mutationAck(slug, { ok: true, ticket }, Object.assign(
         presentedWarnings.length ? { warnings: presentedWarnings } : {},
+        dependsOnAckFields(slug, ticket, args.dependsOn),
         sameBasenameSiblingDetails(slug, ticket, meta.path, "add")
       ));
     }
@@ -240,7 +260,7 @@ const tools = [
         verifyCwd: VERIFY_CWD_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
-        storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
+        storyId: { anyOf: [{ type: "string" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string" },
         category: { type: "string", description: 'Enabled category id from category_list. Use "none" to clear. A bound reviewTarget pins its review-audit category.' },
