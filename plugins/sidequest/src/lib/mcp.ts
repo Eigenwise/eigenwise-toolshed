@@ -70,10 +70,12 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 25400 for update.admitComposition (SQ-3331): +1675 bytes compacted, all of it schema structure,
 // since compactSchema strips its descriptions and update's served description is empty. Trimming other tools
 // could not recover it without dropping callable constraints or pinned contract text, so the 2.5KB reserve holds.
-// Raised from 27075 for board_config.verifyEnvironment (SQ-3423): +235 bytes compacted, 67 for the key and its
-// enum plus 168 for the served description, since compactSchema strips the authored one. Measured at 24797
-// payload bytes on the W1 tree, so the 2.5KB reserve holds.
-const MCP_TOOLS_LIST_MAX_BYTES = 27300;
+// Raised from 27075 for two changes that landed on separate branches. board_config.verifyEnvironment
+// (SQ-3423) is +235 bytes compacted, 67 for the key and its enum plus 168 for the served description, since
+// compactSchema strips the authored one. update.addFiles/removeFiles and scopeRequest.grant (GitHub #173)
+// are +535 bytes compacted. Measured at 25332 payload bytes on the merged tree with both in, so the cap is
+// set to 27900 and the 2.5KB reserve still holds.
+const MCP_TOOLS_LIST_MAX_BYTES = 27900;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -297,7 +299,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
-  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  update: {
+    verify: ATTESTATION_VERIFY_CONTRACT,
+    addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
+    removeFiles: 'Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
+  },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
     since: 'Comment id or ISO timestamp.',
@@ -332,6 +338,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
     correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
+  },
+  scopeRequest: {
+    grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
   },
 };
 
