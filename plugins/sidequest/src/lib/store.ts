@@ -1027,17 +1027,18 @@ function changeTestNames(root: string, change: OwnChange, files: string[]) {
     .filter((name): name is string => Boolean(name));
 }
 
-// Tips of what was written somewhere other than this candidate: the integration refs, and any
-// remote-tracking ref, that do not already contain HEAD. A shared tree commits on its integration
-// branch directly, so that branch cannot tell this candidate's commits from anyone else's. A
-// remote-tracking ref covers a branch merged in that the integration target never held, such as
-// upstream develop merged into a fork PR branch: the candidate's own commits stay local until the
-// orchestrator pushes them, so a published commit is never the candidate's.
+// Tips of what was written somewhere other than this candidate: the integration refs, and every
+// remote's copy of the board's integration branch, that do not already contain HEAD. A shared tree
+// commits on its integration branch directly, so that branch cannot tell this candidate's commits
+// from anyone else's. A remote's copy covers upstream develop merged into a fork PR branch, whose
+// integration target never held it. Only that reviewed line counts: a pushed feature branch has not
+// been reviewed, so the tests it carries still need the candidate's negative control.
 function foreignTips(slug: any, ticket: any, root: string) {
   const refs = commitScope.integrationTargetRefs(ticketIntegrationTarget(slug, ticket));
   if (!refs.length) return [];
-  const isForeign = (ref: string) => refs.includes(ref) || (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD'));
-  return gitOutput(root, ['for-each-ref', '--no-contains', 'HEAD', '--format=%(objectname) %(refname)', ...refs, 'refs/remotes/'])
+  const branch = normalizeIntegrationBranch(readMeta(slug)?.integrationBranch);
+  const isForeign = (ref: string) => refs.includes(ref) || (ref.startsWith('refs/remotes/') && ref.split('/').slice(3).join('/') === branch);
+  return gitOutput(root, ['for-each-ref', '--no-contains', 'HEAD', '--format=%(objectname) %(refname)', ...refs, `refs/remotes/*/${branch}`])
     .split(/\r?\n/).map((line) => line.split(' ')).filter(([, ref]) => isForeign(String(ref))).map(([tip]) => String(tip));
 }
 
@@ -1046,11 +1047,10 @@ function commitChange(line: string): OwnChange {
   return parents.length > 1 ? { merge: commit } : { from: parents[0] || EMPTY_TREE, to: commit };
 }
 
-// The candidate's own commits are the ones since base that no integration or remote-tracking ref
-// reaches: what a merge brought in from the integration branch or a published branch was written and
-// tested there (GH-160). A commit merged in from a branch that exists only locally is walked as the
-// candidate's own. Null when no such ref reaches into the range, which leaves the whole range the
-// candidate's.
+// The candidate's own commits are the ones since base that no integration ref and no remote's copy
+// of the integration branch reaches: what a merge brought in from there was written and tested there
+// (GH-160). A commit merged in from any other branch, pushed or not, is walked as the candidate's
+// own. Null when no such ref reaches into the range, which leaves the whole range the candidate's.
 function ownChanges(slug: any, ticket: any, root: string, base: string): OwnChange[] | null {
   const tips = foreignTips(slug, ticket, root);
   if (!tips.length) return null;
