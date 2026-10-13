@@ -48,7 +48,7 @@ function storyWarnings(ref: string): string[] {
 }
 
 function routableMember(storyRef: string, title: string) {
-  return store.createTicket(slug, { title, storyId: storyRef, source: 'test', category: 'general' });
+  return store.createTicket(slug, { title, storyId: storyRef, source: 'test', category: 'general', files: ['src/story-member.ts'] });
 }
 
 function prepare(ref: string) {

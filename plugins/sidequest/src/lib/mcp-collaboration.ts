@@ -1,5 +1,7 @@
 'use strict';
 
+import { WORK_KINDS } from './store/work-provenance';
+
 const {
   path,
   fs,
@@ -278,21 +280,32 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.',
+    description: 'Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        sharedTree: { type: 'boolean', description: 'Use the declared shared checkout only when the spawning runtime is already rooted there. Executors with a live claim cannot use this to dispatch child work.' },
+        sharedTree: { type: 'boolean', description: 'Use the declared shared checkout only when the spawning runtime is already rooted there. Read-only tickets and unscoped investigations declaring no repository writes need no write-scope ruling; whole-tree write scope is never granted here. Executors with a live claim cannot use this to dispatch child work.' },
         reducedAgentSchema: { type: 'boolean', description: 'Omit name/mode; hook needs agent_id and permission_mode "auto" or "bypassPermissions".' },
         allowRepeatFailure: { type: 'boolean' },
-        allowUnscoped: { type: 'boolean', description: 'Explicitly allow a write ticket with no declared file scope.' },
+        allowUnscoped: { type: 'boolean', description: 'Give a write ticket with no declared files the whole tree as its write scope (isolated worktree only).' },
         integrationBranch: { type: 'string', description: 'Ticket delivery target branch. Dispatch records it for submit, wave assembly, and integration even if the board target later changes.' },
-        recoveryEvidence: { type: 'string', description: 'Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it. With retireOnly:true, retire an eligible unclaimed attempt without preparing a replacement only after its deadline. This evidence is your attestation and is NOT verified. The deadline is 15 minutes by default (SIDEQUEST_CLAIM_GRACE_MIN, clamped to the idle limit) from the latest runtime signal: launch, WorktreeCreate start or completion, finished provisioning, bind, briefing fetch, claim, or a board write from that runtime. An unfinished WorktreeCreate waits for the idle backstop instead. An attempt that recorded none of those signals is retirable at once. A board write counts only on the attempt\'s own ticket, on the launcher session the dispatch recorded, after launch, before any claim, and under the exact runtime name SubagentStart bound: the launcher session is the trust boundary, so a same-session caller writing under that bound name is trusted as that runtime and any other by - the orchestrator\'s own identity included - counts for nothing. Inside the grace the refusal names the exact instant it becomes retirable and the signal it measured from, and groomClose with recoveryEvidence - MCP and `sidequest groom-close` alike, one shared authority - refuses with the same countdown and retires the attempt in the same call once it passes.' },
+        recoveryEvidence: { type: 'string', description: 'Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it. With retireOnly:true, retire an eligible unclaimed attempt without preparing a replacement. This evidence is your attestation and is NOT verified. From the session that prepared the dispatch (it spawned the runtime, so it holds the host failure report or the Agent call that returned without a claim) it retires an unclaimed attempt at once; an attempt a stop hook already made terminal needs nothing, so the call just prepares the replacement. From any other session it waits for the deadline. The deadline is 15 minutes by default (SIDEQUEST_CLAIM_GRACE_MIN, clamped to the idle limit) from the latest runtime signal: launch, WorktreeCreate start or completion, finished provisioning, bind, briefing fetch, claim, or a board write from that runtime. An unfinished WorktreeCreate waits for the idle backstop instead. An attempt that recorded none of those signals is retirable at once. A board write counts only on the attempt\'s own ticket, on the launcher session the dispatch recorded, after launch, before any claim, and under the exact runtime name SubagentStart bound: the launcher session is the trust boundary, so a same-session caller writing under that bound name is trusted as that runtime and any other by - the orchestrator\'s own identity included - counts for nothing. Inside the grace the refusal names the exact instant it becomes retirable and the signal it measured from, and groomClose with recoveryEvidence - MCP and `sidequest groom-close` alike, one shared authority - refuses with the same countdown and retires the attempt in the same call once it passes.' },
         retireOnly: { type: 'boolean', description: 'Stop after recovery-evidence retirement rather than prepare a replacement. It accepts the same eligible unclaimed attempt shapes as recovery-evidence retirement.' },
         claimHolder: { type: 'string', description: 'The exact by identity holding the live claim being recovered.' },
         worktree: { type: 'string', description: 'The resumed executor\'s linked worktree path for live-claim recovery.' },
+        workProvenance: {
+          type: 'object', additionalProperties: false, required: ['kind', 'sources'],
+          description: 'Main-thread-only declaration frozen before execution. Factual provenance, never execution evidence. Execution, quality and admission stay UNVERIFIED. Sources must name genuine terminal native producer generations and immutable owned commits. No historical receipt rebinding or composition adoption.',
+          properties: {
+            kind: { enum: WORK_KINDS },
+            sources: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: false, required: ['ref', 'preparedAt', 'commit'], properties: {
+              ref: { type: 'string', minLength: 1 }, preparedAt: { type: 'string', minLength: 1 },
+              commit: { type: 'string', pattern: '^[a-f0-9]{40}$' }, captureId: { type: 'string', minLength: 1 },
+            } } },
+          },
+        },
         full: { type: 'boolean', description: 'Include token, executor, warnings, and recovery details.' },
       },
       required: ['ref'],
@@ -321,6 +334,7 @@ const tools: ToolDefinition[] = [
           allowRepeatFailure: args.allowRepeatFailure === true,
           allowUnscoped: args.allowUnscoped === true,
           integrationBranch: args.integrationBranch,
+          worktree: args.worktree,
           recoveryEvidence: args.recoveryEvidence,
           retireOnly: args.retireOnly === true,
           ...(freshness.skew ? { dispatchSkew: freshness.skew } : {}),
@@ -328,7 +342,8 @@ const tools: ToolDefinition[] = [
           // in this session (SQ-1017); CLI transport carries no such proof.
           source: 'mcp',
           transport: 'mcp',
-        });
+          workProvenance: args.workProvenance,
+        }, { allowWorkProvenance: true });
       if (!prepared.ok) throw new Error(`dispatch: ${prepared.message || prepared.reason || 'live-claim recovery failed'}`);
       if (prepared.retired) return mutationAck(slug, prepared, { retired: true });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
@@ -342,11 +357,17 @@ const tools: ToolDefinition[] = [
       const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, description, {
         reducedAgentSchema: dispatchState.reducedAgentSchema === true,
       });
+      // Paths the dispatch enforces beyond ticket.files; a dirty one blocks submit, so the orchestrator must see them (GH-194).
+      const boardAddedScope = dispatchState.boardAddedFiles?.length ? { boardAddedFiles: dispatchState.boardAddedFiles } : {};
+      const unscopedWriteScope = dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {};
       const compact: any = {
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
         ...(prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {}),
+        ...(prepared.recovery?.worktreeCorrection ? { worktreeCorrection: prepared.recovery.worktreeCorrection } : {}),
+        ...boardAddedScope,
+        ...unscopedWriteScope,
         spawn,
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
@@ -367,6 +388,8 @@ const tools: ToolDefinition[] = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         ...(dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {}),
+        ...boardAddedScope,
+        ...unscopedWriteScope,
         warnings,
         spawn,
         guidance: prepared.recovery?.kind === 'live_claim_resume'

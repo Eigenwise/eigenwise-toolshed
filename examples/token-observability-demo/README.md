@@ -21,3 +21,7 @@ The test calls the Observability plugin's setup with a fake local Collector bina
 The demo uses a local fixture for Claude and model-gateway evidence. A route record proves route selection, model/backend/effort, and timing. It does not prove a provider request or hidden MCP billing. The report keeps estimated cost labels separate from exact tokens and never claims an invoice amount.
 
 The failure matrix is exercised locally too: observer and exporter failures, retry and outbox replay, duplicate and out-of-order data, schema drops, malformed and rotated adapter inputs, queue saturation gaps, privacy filtering, high-cardinality identifiers, and a session with no `SessionEnd`. Queue overhead is reported as unavailable when the environment cannot measure a real Collector or Docker process.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of this Observability test fixture. Donations are never required to use the files in this directory.

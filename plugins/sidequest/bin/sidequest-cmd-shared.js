@@ -8,32 +8,30 @@ function fail(msg) {
   console.error(`sidequest: ${msg}`);
   process.exit(1);
 }
-async function resolveProject(opts) {
-  const arg = opts.project;
-  if (arg) {
-    const res = store.findProject(arg);
-    if (res.ok) return { slug: res.slug, meta: res.meta };
-    if (res.reason === "ambiguous") {
-      const lines = res.matches.map((p) => `    "${p.name}" -> ${p.path}`).join("\n");
-      fail(`--project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the path to disambiguate:
+function registeredBoard(registration) {
+  if (!registration.ok) fail(registration.reason);
+  return registration;
+}
+function unknownBoardFailure(arg, knownNames) {
+  const known = Array.from(new Set(knownNames || []));
+  fail(
+    `--project "${arg}" does not match any registered board.` + (known.length ? ` Known projects: ${known.join(", ")}` : " No projects are registered yet.")
+  );
+}
+function namedBoard(arg, name) {
+  const res = store.findProject(arg);
+  if (res.ok) return { slug: res.slug, meta: res.meta };
+  if (res.reason === "ambiguous") {
+    const lines = res.matches.map((p) => `    "${p.name}" -> ${p.path}`).join("\n");
+    fail(`--project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the path to disambiguate:
 ${lines}`);
-    }
-    if (path.isAbsolute(arg)) {
-      let isDir = false;
-      try {
-        isDir = (await fs.stat(arg)).isDirectory();
-      } catch (_) {
-      }
-      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)), opts.name);
-    }
-    const known = Array.from(new Set(res.known || []));
-    fail(
-      `--project "${arg}" does not match any registered board.` + (known.length ? ` Known projects: ${known.join(", ")}` : " No projects are registered yet.")
-    );
   }
-  const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const dir = store.nearestRepoRoot(start);
-  return store.ensureProject(dir, opts.name);
+  if (path.isAbsolute(arg)) return registeredBoard(store.registerProject(store.explicitProjectRoot(arg), name));
+  return unknownBoardFailure(arg, res.known);
+}
+async function resolveProject(opts) {
+  if (opts.project) return namedBoard(opts.project, opts.name);
+  return registeredBoard(store.registerProject(store.sessionProjectRoot(), opts.name, { implicit: true }));
 }
 async function resolveWatchProject(opts) {
   if (!opts.project) fail("watch: --project must name the board root or registered board identity.");

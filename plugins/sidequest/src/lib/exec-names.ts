@@ -5,11 +5,13 @@ export const CLAUDE_PREFIX = 'sidequest-exec-';
 export const DISPATCH_PREFIX = 'sidequest-exec-dispatch-';
 export const READ_ONLY_CLAUDE_PREFIX = 'sidequest-exec-readonly-';
 export const READ_ONLY_DISPATCH_PREFIX = 'sidequest-exec-dispatch-readonly-';
+export const DISCOVERED_MODEL_PREFIX = 'sidequest-exec-model-';
+export const READ_ONLY_DISCOVERED_MODEL_PREFIX = 'sidequest-exec-readonly-model-';
 export const TICKET_PREFIX = 'sidequest-sq-';
 export const LEGACY_TICKET_PREFIX = 'sidequest-ticket-';
 export const DIAGNOSTIC_PROBE_NAME = 'sidequest-diagnostic-probe';
 
-export type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'ticket' | 'legacy_ticket' | 'unknown';
+export type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'discovered_model' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'read_only_discovered_model' | 'ticket' | 'legacy_ticket' | 'unknown';
 export interface ExecutorClassification {
   kind: ExecutorKind;
   effort: Effort | null;
@@ -121,6 +123,31 @@ export function stableReadOnlyDispatchName(_effort?: Effort): string {
   return READ_ONLY_DISPATCH_NAME;
 }
 
+// A discovered model the gateway shim does not serve runs from a user-scope definition whose frontmatter
+// pins its full id, because the Agent tool's `model` parameter only accepts the four Claude aliases
+// (GH-361). Effort rides the same frontmatter, so that ladder is per model and per effort.
+export function discoveredModelExecutorName(agentSlug: string, effort: Effort): string {
+  return `${DISCOVERED_MODEL_PREFIX}${agentSlug}-${effort}`;
+}
+
+export function readOnlyDiscoveredModelExecutorName(agentSlug: string, effort: Effort): string {
+  return `${READ_ONLY_DISCOVERED_MODEL_PREFIX}${agentSlug}-${effort}`;
+}
+
+const DISCOVERED_MODEL_SUFFIX_RE = /^[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)$/;
+
+function discoveredModelEffort(name: string, prefix: string): Effort | null {
+  const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
+  return name.startsWith(prefix) && isEffort(effort) ? effort : null;
+}
+
+function classifyDiscoveredModel(name: string): ExecutorClassification | null {
+  const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
+  if (readOnlyEffort) return { kind: 'read_only_discovered_model', effort: readOnlyEffort };
+  const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
+  return effort ? { kind: 'discovered_model', effort } : null;
+}
+
 const BUNDLED_AGENT_NAMES = new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
@@ -143,7 +170,12 @@ export function bundledAgentType(name: string): string {
 
 export function isReadOnlyExecutor(name: unknown): boolean {
   const kind = classify(name).kind;
-  return kind === 'read_only_codex_dispatch' || kind === 'read_only_claude_builtin';
+  return kind === 'read_only_codex_dispatch' || kind === 'read_only_claude_builtin' || kind === 'read_only_discovered_model';
+}
+
+export function isDiscoveredModelExecutor(name: unknown): boolean {
+  const kind = classify(name).kind;
+  return kind === 'discovered_model' || kind === 'read_only_discovered_model';
 }
 
 export function classify(value: unknown): ExecutorClassification {
@@ -156,6 +188,10 @@ export function classify(value: unknown): ExecutorClassification {
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: 'read_only_codex_dispatch', effort: null };
   if (name === DISPATCH_NAME) return { kind: 'codex_dispatch', effort: null };
   if (name === DIAGNOSTIC_PROBE_NAME) return { kind: 'unknown', effort: null };
+
+  // Both discovered-model prefixes extend a Claude ladder prefix, so they are matched first.
+  const discoveredModel = classifyDiscoveredModel(name);
+  if (discoveredModel) return discoveredModel;
 
   // Pre-collapse records still name per-effort executors; classifying them keeps old
   // dispatch records readable so the board can heal by redispatch instead of erroring.

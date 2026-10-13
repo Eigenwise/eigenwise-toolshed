@@ -11,7 +11,7 @@ const test = require('node:test');
 const { spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
-const { DispatchSessionRouteCache } = require(CLI);
+const { DispatchSessionRouteCache } = require('../lib/request-worker.js');
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -82,7 +82,7 @@ function agentMetadata(sessionId) {
 test('dispatch session route cache expires entries after their idle TTL', () => {
   let now = 0;
   const cache = new DispatchSessionRouteCache({ ttlMs: 100, maxSessions: 2, now: () => now });
-  const route = { model: 'gpt-5.6-sol', effort: 'xhigh' };
+  const route = { model: 'gpt-5.6-sol', effort: 'xhigh', ticket: null };
 
   cache.set('session-a', route);
   now = 50;
@@ -95,9 +95,9 @@ test('dispatch session route cache expires entries after their idle TTL', () => 
 
 test('dispatch session route cache evicts the least recently used session', () => {
   const cache = new DispatchSessionRouteCache({ ttlMs: 1000, maxSessions: 2 });
-  const routeA = { model: 'gpt-5.6-sol', effort: 'xhigh' };
-  const routeB = { model: 'gpt-5.6-terra', effort: 'high' };
-  const routeC = { model: 'gpt-5.6-luna', effort: 'low' };
+  const routeA = { model: 'gpt-5.6-sol', effort: 'xhigh', ticket: null };
+  const routeB = { model: 'gpt-5.6-terra', effort: 'high', ticket: null };
+  const routeC = { model: 'gpt-5.6-luna', effort: 'low', ticket: null };
 
   cache.set('session-a', routeA);
   cache.set('session-b', routeB);
@@ -480,7 +480,7 @@ test('markerless child agents inherit only their trusted parent route', async (t
     req.on('end', () => {
       nativeClaudeBody = Buffer.concat(chunks).toString();
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ type: 'message', model: 'claude-sonnet-5', content: [] }));
+      res.end(JSON.stringify({ type: 'message', model: 'claude-sonnet-5-5', content: [] }));
     });
   });
   const anthropicPort = await new Promise((resolve) => anthropic.listen(0, '127.0.0.1', () => resolve(anthropic.address().port)));
@@ -574,7 +574,7 @@ test('markerless child agents inherit only their trusted parent route', async (t
   const nativeClaude = await request(
     shimPort,
     '/v1/messages',
-    JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'native route' }] }),
+    JSON.stringify({ model: 'claude-sonnet-5-5', messages: [{ role: 'user', content: 'native route' }] }),
     'family-session',
     {
       'x-claude-code-agent-id': 'native-child-agent',
@@ -590,7 +590,7 @@ test('markerless child agents inherit only their trusted parent route', async (t
   assert.equal(explicitConflict.status, 200);
   assert.equal(nativeClaude.status, 200);
   assert.deepEqual(JSON.parse(nativeClaudeBody), {
-    model: 'claude-sonnet-5',
+    model: 'claude-sonnet-5-5',
     messages: [{ role: 'user', content: 'native route' }],
   });
   assert.deepEqual(forwarded.map(({ model, output_config: outputConfig }) => ({ model, outputConfig })), [
@@ -610,6 +610,6 @@ test('markerless child agents inherit only their trusted parent route', async (t
     { model: 'claude-codex-auto', via: 'dispatch-unbound', parentAgentId: undefined, inheritedFromAgentId: undefined },
     { model: 'claude-codex-auto', via: 'dispatch-unbound', parentAgentId: 'parent-agent', inheritedFromAgentId: undefined },
     { model: 'gpt-5.6-terra', via: 'dispatch', parentAgentId: 'parent-agent', inheritedFromAgentId: undefined },
-    { model: 'claude-sonnet-5', via: undefined, parentAgentId: undefined, inheritedFromAgentId: undefined },
+    { model: 'claude-sonnet-5-5', via: undefined, parentAgentId: undefined, inheritedFromAgentId: undefined },
   ]);
 });

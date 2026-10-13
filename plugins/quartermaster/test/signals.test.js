@@ -97,8 +97,46 @@ test('mine reports host policy blocks without inventing permission provenance', 
   assert.equal(output.friction.toolErrors.total, 4);
   assert.equal(
     output.friction.denials.meaning,
-    'Host-reported policy blocks. permission-rule cannot distinguish a permission rule from a PreToolUse hook policy block.',
+    'Host-reported policy blocks. A hook that exits nonzero with stderr is detected and counted separately as hook_block in byKind, excluded from this total. A hook using the structured JSON deny protocol still cannot be told apart from a permission-rule denial.',
   );
+});
+
+test('a PreToolUse hook error wrapper is counted as hook_block, not as denial friction', async () => {
+  const hookBlock = assistantToolUse('Read', { file_path: 'src/secret.js' });
+  const realDenial = assistantToolUse('Bash', { command: 'rm -rf build' });
+  const signals = await collect([
+    hookBlock,
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: hookBlock.message.content[0].id,
+          content: 'PreToolUse:Read hook error: remind: use serena tools for reads',
+          is_error: true,
+        }],
+      },
+      toolDenialKind: 'permission-rule',
+      timestamp: '2026-08-01T10:02:00Z',
+    },
+    realDenial,
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: realDenial.message.content[0].id, content: 'blocked by rule', is_error: true }],
+      },
+      toolDenialKind: 'permission-rule',
+      timestamp: '2026-08-01T10:03:00Z',
+    },
+  ]);
+
+  const tally = tallyFromSignals(signals);
+  assert.equal(tally.denials, 1, 'the hook block must not inflate friction used by verifyDecisions');
+  assert.equal(signals.friction.denials.total, 1);
+  assert.equal(signals.friction.denials.byKind.hook_block, 1, 'the hook block count stays visible, just broken out separately');
+  assert.equal(signals.friction.denials.byKind['permission-rule'], 1);
 });
 
 test('detects corrections and interrupts from user prompts', async () => {

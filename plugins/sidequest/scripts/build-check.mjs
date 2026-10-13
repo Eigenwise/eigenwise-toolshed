@@ -9,9 +9,8 @@ const { runOwnedPhase } = require('./owned-process-tree.js');
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectories = ['agents', 'bin', 'lib', 'hooks'];
-// build:check runs inside `npm run test:full`, and esbuild builds behind its own service
-// child, so an unbounded spawn here is a full-gate phase that can hang with nobody able to
-// end it. Every child the gate starts gets an owner and a deadline.
+// The deadline bounds this build phase. POSIX owns its inherited process group;
+// Windows owns a Job Object, so the esbuild service child ends with the phase too.
 const buildPhaseTimeoutMilliseconds = 300_000;
 
 function outputHashes() {

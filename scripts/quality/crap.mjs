@@ -1,22 +1,17 @@
 import { spawnSync } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-import { fileURLToPath, fileURLToPath as fromFileUrl, pathToFileURL } from 'node:url';
-import crapCore from './crap-core.cjs';
-
-const { crapScore, parseLizardCsv } = crapCore;
+import { fileURLToPath } from 'node:url';
+import { createAnalyzer, baseFunctionByIdentity, changedMetricsAgainstBase as changedMetrics, functionCoverage, readCoverage, remapRecords, originalOffsetMapper, LEGACY_UNCHANGED } from '../../plugins/quality-gate/lib/core.mjs';
+import { crapScore, formatMetric, gateVerdict, measureSource, readOutput, THRESHOLD } from '../../plugins/quality-gate/lib/measure.mjs';
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sidequestRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
-const require = createRequire(path.join(sidequestRoot, 'package.json'));
-const ast = await import(pathToFileURL(require.resolve('typescript/unstable/ast')).href);
-const { API } = await import(pathToFileURL(require.resolve('typescript/unstable/sync')).href);
-const { createVirtualFileSystem } = await import(pathToFileURL(require.resolve('typescript/unstable/fs')).href);
-const SOURCE_EXTENSIONS = new Set(['.js', '.ts']);
-const THRESHOLD = 6;
+const { collectFunctions, cyclomaticComplexity, ownText, parserTransport } = await createAnalyzer(sidequestRoot);
+export { collectFunctions, cyclomaticComplexity, ownText, parserTransport, functionCoverage, readCoverage, remapRecords, originalOffsetMapper, baseFunctionByIdentity };
+const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']);
+const UNANALYZED_SOURCE_EXTENSIONS = new Set(['.cs', '.py', '.sh', '.ps1', '.svelte', '.tsx', '.jsx']);
 const SIDEQUEST_BUILD_OUTPUT_DIRECTORIES = new Set(['bin', 'hooks', 'lib']);
 
 function parseArguments(argumentsList) {
@@ -31,141 +26,16 @@ function parseArguments(argumentsList) {
   return options;
 }
 
-async function filesBelow(directory) {
-  try {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    const nested = await Promise.all(entries.map(async (entry) => {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) return filesBelow(entryPath);
-      return entry.isFile() && SOURCE_EXTENSIONS.has(path.extname(entry.name)) ? [entryPath] : [];
-    }));
-    return nested.flat().sort();
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
 export function isScoredSource(sourcePath) {
+  if (!SOURCE_EXTENSIONS.has(path.extname(sourcePath))) return false;
   const [sidequestDirectory] = path.relative(sidequestRoot, sourcePath).replaceAll('\\', '/').split('/');
   return !SIDEQUEST_BUILD_OUTPUT_DIRECTORIES.has(sidequestDirectory);
 }
 
-async function sourcePaths() {
-  const pluginsDirectory = path.join(repositoryRoot, 'plugins');
-  const plugins = await fs.readdir(pluginsDirectory, { withFileTypes: true });
-  const sourceLists = await Promise.all(plugins.filter((entry) => entry.isDirectory()).flatMap((entry) => [
-    filesBelow(path.join(pluginsDirectory, entry.name, 'lib')),
-    filesBelow(path.join(pluginsDirectory, entry.name, 'src')),
-  ]));
-  return sourceLists.flat().filter(isScoredSource);
-}
-
-function functionName(node) {
-  if (ast.isConstructorDeclaration(node)) return 'constructor';
-  if ('name' in node && node.name) return node.name.getText();
-  const parent = node.parent;
-  if (ast.isVariableDeclaration(parent)) return parent.name.getText();
-  if (ast.isPropertyAssignment(parent)) return parent.name.getText();
-  if (ast.isBinaryExpression(parent)) return parent.left.getText();
-  if (ast.isPropertyDeclaration(parent) && parent.name) return parent.name.getText();
-  return '<anonymous>';
-}
-
-function functionKind(node) {
-  return ast.SyntaxKind[node.kind];
-}
-
-export async function collectFunctions(text, fileName) {
-  const virtualFile = fileName.endsWith('.js') ? '/source.js' : '/source.ts';
-  const virtualFileSystem = createVirtualFileSystem({
-    '/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }),
-    [virtualFile]: text,
-  });
-  const api = new API({ cwd: '/', fs: virtualFileSystem });
-  try {
-    const snapshot = api.updateSnapshot({ openProject: '/tsconfig.json' });
-    const sourceFile = snapshot.getProject('/tsconfig.json').program.getSourceFile(virtualFile);
-    if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}.`);
-    const functions = [];
-    const childCounts = new Map();
-    function visit(node, parentId = '<root>') {
-      if (ast.isFunctionLikeDeclaration(node) && node.body) {
-        const name = functionName(node);
-        const countKey = `${parentId}\u0000${functionKind(node)}\u0000${name}`;
-        const ordinal = childCounts.get(countKey) ?? 0;
-        childCounts.set(countKey, ordinal + 1);
-        const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
-        const start = node.getStart();
-        const end = node.end;
-        functions.push({ identity, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
-        node.forEachChild((child) => visit(child, identity));
-      } else node.forEachChild((child) => visit(child, parentId));
-    }
-    visit(sourceFile);
-    return functions;
-  } finally {
-    api.close();
-  }
-}
-
-function normalizedPath(filePath) {
-  return path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
-}
-
-function pathFromCoverageUrl(url) {
-  try {
-    return normalizedPath(fromFileUrl(url));
-  } catch {
-    return null;
-  }
-}
-
-function coverageIntervals(ranges) {
-  const boundaries = [...new Set(ranges.flatMap((range) => [range.startOffset, range.endOffset]))].sort((left, right) => left - right);
-  const intervals = [];
-  for (let index = 0; index < boundaries.length - 1; index += 1) {
-    const start = boundaries[index];
-    const end = boundaries[index + 1];
-    const candidates = ranges.filter((range) => range.startOffset <= start && range.endOffset >= end);
-    candidates.sort((left, right) => (left.endOffset - left.startOffset) - (right.endOffset - right.startOffset));
-    if (candidates[0]?.count > 0) intervals.push([start, end]);
-  }
-  return intervals;
-}
-
-function projectIntervals(ranges, descriptor) {
-  const primaryRange = ranges[0];
-  const sourceLength = primaryRange.endOffset - primaryRange.startOffset;
-  const targetLength = descriptor.end - descriptor.start;
-  if (sourceLength <= 0 || targetLength <= 0) return [];
-  return coverageIntervals(ranges).map(([start, end]) => [
-    descriptor.start + ((start - primaryRange.startOffset) / sourceLength) * targetLength,
-    descriptor.start + ((end - primaryRange.startOffset) / sourceLength) * targetLength,
-  ]);
-}
-
-function mergeIntervals(intervals) {
-  const merged = [];
-  for (const [start, end] of intervals.sort((left, right) => left[0] - right[0])) {
-    const previous = merged.at(-1);
-    if (previous && start <= previous[1]) previous[1] = Math.max(previous[1], end);
-    else merged.push([start, end]);
-  }
-  return merged;
-}
-
-async function readCoverage(coverageDirectory) {
-  const reports = await Promise.all((await fs.readdir(coverageDirectory)).filter((file) => file.endsWith('.json')).map(async (file) => JSON.parse(await fs.readFile(path.join(coverageDirectory, file), 'utf8'))));
-  const scripts = new Map();
-  for (const report of reports) {
-    for (const script of report.result ?? []) {
-      const scriptPath = pathFromCoverageUrl(script.url);
-      if (!scriptPath) continue;
-      scripts.set(scriptPath, [...(scripts.get(scriptPath) ?? []), ...script.functions]);
-    }
-  }
-  return scripts;
+export function noAnalyzerMetric(relativePath) {
+  const extension = path.extname(relativePath);
+  if (!UNANALYZED_SOURCE_EXTENSIONS.has(extension)) return null;
+  return { relativePath, line: 1, name: path.basename(relativePath), unverified: `this gate has no analyzer for ${extension} sources` };
 }
 
 async function outputPathsForSource(sourcePath) {
@@ -178,50 +48,18 @@ async function outputPathsForSource(sourcePath) {
   return [];
 }
 
-function matchingCoverage(records, descriptor) {
-  return records.filter((record) => record.functionName === descriptor.name && record.ranges[0]);
+export async function builtOutput(outputPath, coverageScripts, needsFunctions) {
+  return readOutput(outputPath, coverageScripts, needsFunctions, { projectRoot: repositoryRoot, analyzer: { collectFunctions } });
 }
 
-export function lizardMetric(descriptor, lizardEntries) {
-  const expectedName = descriptor.name === '<anonymous>' ? '(anonymous)' : descriptor.name;
-  return lizardEntries.find((entry) => entry.start === descriptor.line && entry.name === expectedName)?.complexity ?? null;
+export async function sourceMetrics(sourcePath, coverageScripts) {
+  return measureSource(sourcePath, coverageScripts, { projectRoot: repositoryRoot, analyzer: { collectFunctions }, outputPaths: await outputPathsForSource(sourcePath) });
 }
 
-export async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
-  const sourceText = await fs.readFile(sourcePath, 'utf8');
-  const descriptors = await collectFunctions(sourceText, sourcePath);
-  const sourceRecords = coverageScripts.get(normalizedPath(sourcePath)) ?? [];
-  const outputPaths = await outputPathsForSource(sourcePath);
-  const outputRecords = (await Promise.all(outputPaths.map(async (outputPath) => {
-    try {
-      await fs.access(outputPath);
-      return coverageScripts.get(normalizedPath(outputPath)) ?? [];
-    } catch {
-      return [];
-    }
-  }))).flat();
-  if (!sourceRecords.length && !outputPaths.length) throw new Error(`could not resolve coverage output for ${path.relative(repositoryRoot, sourcePath)}; measurement is unverified.`);
-  return descriptors.map((descriptor) => {
-    const metric = {
-      identity: descriptor.identity,
-      fingerprint: descriptor.fingerprint,
-      line: descriptor.line,
-      name: descriptor.name,
-      relativePath: path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/'),
-    };
-    const complexity = lizardMetric(descriptor, lizardEntries);
-    if (complexity === null) return { ...metric, unverified: 'lizard could not measure this function' };
-    const intervals = [...matchingCoverage(sourceRecords, descriptor), ...matchingCoverage(outputRecords, descriptor)].flatMap((record) => projectIntervals(record.ranges, descriptor));
-    const coveredLength = mergeIntervals(intervals).reduce((total, [start, end]) => total + end - start, 0);
-    const coverage = Math.min(1, coveredLength / (descriptor.end - descriptor.start));
-    return { ...metric, coverage, complexity, crap: crapScore(complexity, coverage) };
-  });
-}
-
-function runGit(argumentsList) {
-  const result = spawnSync('git', argumentsList, { cwd: repositoryRoot, encoding: 'utf8' });
+function runGit(argumentsList, cwd = repositoryRoot) {
+  const result = spawnSync('git', argumentsList, { cwd, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr.trim() || `git ${argumentsList.join(' ')} failed`);
-  return result.stdout.trim();
+  return argumentsList[0] === 'show' ? result.stdout : result.stdout.trim();
 }
 
 function integrationBranch() {
@@ -232,35 +70,25 @@ function mergeBase(base) {
   return base || runGit(['merge-base', 'HEAD', integrationBranch()]);
 }
 
-async function baselineFunctions(base, relativePath) {
-  const text = runGit(['show', `${base}:${relativePath}`]);
-  return new Map((await collectFunctions(text, relativePath)).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
+export function diffEntries(base, pathspec, cwd = repositoryRoot) {
+  const args = ['diff', '--name-status', '-M', base];
+  if (pathspec) args.push('--', pathspec);
+  return runGit(args, cwd).split('\n').filter((line) => line && !line.startsWith('D')).map((line) => {
+    const [status, ...fields] = line.split('\t');
+    return status.startsWith('R') ? { path: fields[1], baselinePath: fields[0] } : { path: fields[0], baselinePath: fields[0] };
+  });
+}
+
+export async function baselineFunctions(base, relativePath, cwd = repositoryRoot) {
+  return collectFunctions(runGit(['show', `${base}:${relativePath}`], cwd), relativePath);
 }
 
 export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
-  const changed = new Set(changedPaths);
-  const changedMetrics = [];
-  const byPath = Map.groupBy(metrics, (metric) => metric.relativePath);
-  for (const [relativePath, fileMetrics] of byPath) {
-    if (!changed.has(relativePath)) continue;
-    let baseline = new Map();
-    try {
-      baseline = await readBaseline(base, relativePath);
-    } catch (error) {
-      if (!String(error.message).includes(`path '${relativePath}' does not exist`)) throw error;
-    }
-    changedMetrics.push(...fileMetrics.filter((metric) => baseline.get(metric.identity) !== metric.fingerprint));
-  }
-  return changedMetrics;
+  return changedMetrics(metrics, changedPaths, base, readBaseline);
 }
 
 export async function compareAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
-  const changedMetrics = await changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline);
-  return changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
-}
-
-function formatMetric(metric) {
-  return `${metric.relativePath}:${metric.line} ${metric.name} cc=${metric.complexity} coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}`;
+  return gateVerdict(await changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline)).failures;
 }
 
 function formatUnverifiedMetric(metric) {
@@ -277,57 +105,156 @@ export function emptyChangedFunctionWarning({ changedMetrics, workingTreeIsClean
   if (changedMetrics.length) return null;
   if (!allChangedPaths.length) return emptyDiffCaveat(baseWasExplicit, base);
   if (!changedPaths.length) {
-    return `CRAP gate result is out of scope, not vacuous: none of the ${allChangedPaths.length} changed path(s) fall under a scored root (plugins/*/lib, plugins/*/src): ${allChangedPaths.join(', ')}. Report CRAP as unverified or measure this change another way.`;
+    return `CRAP gate result is out of scope, not vacuous: none of the ${allChangedPaths.length} changed path(s) is a JavaScript or TypeScript source this gate scores: ${allChangedPaths.join(', ')}. Report CRAP as unverified or measure this change another way.`;
   }
   return workingTreeIsClean ? 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.' : null;
 }
 
-async function captureCoverage() {
+const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const NODE_TEST_ARGUMENTS = ['--test', '--test-timeout=300000', 'test/*.test.js'];
+
+async function optionalJson(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
+// Repository scripts outside the plugins, each with the documented command for its tests.
+const REPOSITORY_SUITES = [
+  { prefix: 'scripts/quality/', name: 'scripts/quality', args: ['--test', 'scripts/quality/*.test.mjs'] },
+  { prefix: 'scripts/release/', name: 'scripts/release', args: ['--test', 'scripts/release/test/*.test.mjs'] },
+  { prefix: 'docs/scripts/', name: 'docs', args: ['--test', 'docs/scripts/content.test.mjs'] },
+];
+
+async function suiteFor(plugin) {
+  const pluginRoot = path.join(repositoryRoot, 'plugins', plugin);
+  const { scripts = {} } = await optionalJson(path.join(pluginRoot, 'package.json'));
+  const script = ['test:full', 'test'].find((name) => scripts[name]);
+  if (script) return { name: plugin, cwd: pluginRoot, command: NPM_COMMAND, args: ['run', script] };
+  const testFiles = await fs.readdir(path.join(pluginRoot, 'test')).catch(() => []);
+  return testFiles.some((file) => file.endsWith('.test.js')) ? { name: plugin, cwd: pluginRoot, command: process.execPath, args: NODE_TEST_ARGUMENTS } : null;
+}
+
+function repositorySuites(changedPaths) {
+  return REPOSITORY_SUITES
+    .filter((suite) => changedPaths.some((changedPath) => changedPath.startsWith(suite.prefix)))
+    .map((suite) => ({ name: suite.name, cwd: repositoryRoot, command: process.execPath, args: suite.args }));
+}
+
+export async function selectSuites(changedPaths) {
+  const plugins = new Set(changedPaths.map((changedPath) => /^plugins\/([^/]+)\//.exec(changedPath)?.[1]).filter(Boolean));
+  const pluginSuites = (await Promise.all([...plugins].sort().map(suiteFor))).filter(Boolean);
+  return [...pluginSuites, ...repositorySuites(changedPaths)];
+}
+
+// node --test refuses to run files while NODE_TEST_CONTEXT says it is already inside a test, so
+// a gate started from a test (its own CLI fixture) must not hand that marker to the suites.
+function spawnSuite(suite, coverageDirectory) {
+  const { NODE_TEST_CONTEXT, NODE_V8_COVERAGE, ...environment } = process.env;
+  const preload = new URL('../../plugins/quality-gate/lib/core.mjs', import.meta.url).href;
+  return spawnSync(suite.command, suite.args, { cwd: suite.cwd, env: { ...environment, QUALITY_GATE_V8_CAPTURE: coverageDirectory, NODE_OPTIONS: `${environment.NODE_OPTIONS || ''} --import=${preload}` }, stdio: 'inherit', shell: process.platform === 'win32' });
+}
+
+async function runSuites(suites, runSuite) {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'toolshed-crap-'));
-  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const result = spawnSync(command, ['run', 'test:full'], { cwd: sidequestRoot, env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
-  if (result.status !== 0) throw new Error(`npm run test:full failed with exit ${result.status ?? 'signal'}`);
-  const quartermasterTests = spawnSync(process.execPath, ['--test', '--test-timeout=120000', 'test/*.test.js'], { cwd: path.join(repositoryRoot, 'plugins', 'quartermaster'), env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
-  if (quartermasterTests.status !== 0) throw new Error(`Quartermaster tests failed with exit ${quartermasterTests.status ?? 'signal'}`);
+  for (const suite of suites) {
+    const { status } = runSuite(suite, coverageDirectory);
+    if (status !== 0) throw new Error(`${suite.name} tests failed with exit ${status ?? 'signal'}`);
+  }
   return coverageDirectory;
 }
 
+export async function captureCoverage(changedPaths, suppliedDirectory, runSuite = spawnSuite) {
+  if (suppliedDirectory) return { coverageDirectory: suppliedDirectory, suiteSummary: 'none, --coverage supplied' };
+  const suites = await selectSuites(changedPaths);
+  return { coverageDirectory: await runSuites(suites, runSuite), suiteSummary: suites.map((suite) => suite.name).join(', ') || 'none, no suite covers the changed paths' };
+}
+
+export function changedPathContext(base, allChangedEntries = diffEntries(base)) {
+  const changedEntries = allChangedEntries.filter((entry) => isScoredSource(path.join(repositoryRoot, entry.path)));
+  return {
+    allChangedPaths: allChangedEntries.map((entry) => entry.path),
+    changedEntries,
+    changedPaths: changedEntries.map((entry) => entry.path),
+    unanalyzed: allChangedEntries.map((entry) => noAnalyzerMetric(entry.path)).filter(Boolean),
+  };
+}
+
+async function measureMetrics(changedPaths, coverageDirectory) {
+  const coverageScripts = await readCoverage(coverageDirectory);
+  return (await Promise.all(changedPaths.map((changedPath) => sourceMetrics(path.join(repositoryRoot, changedPath), coverageScripts)))).flat();
+}
+
+const UNCLASSIFIED = 'unclassified';
+const CLASS_SECTIONS = [
+  ['new', `NEW: not at base, must score below ${THRESHOLD}`],
+  ['modified-raised', `MODIFIED-RAISED: complexity rose since base, must score below ${THRESHOLD}`],
+  [LEGACY_UNCHANGED, 'LEGACY-UNCHANGED: physically modified with equal or lower complexity, must score below 6'],
+  [UNCLASSIFIED, 'UNCLASSIFIED: no base comparison (another language, or an unchanged function under --all)'],
+];
+const ENFORCEMENT_RULE = `every new or physically modified owned body must score strictly below ${THRESHOLD}; classifications never exempt changed bodies`;
+
+function metricStatus(metric) {
+  if (metric.unverified) return 'UNVERIFIED';
+  return metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
+}
+
+function metricRow(metric) {
+  return `${metricStatus(metric)} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`;
+}
+
+function writeMetricRows(metrics) {
+  metrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line);
+  const byClass = Map.groupBy(metrics, (metric) => metric.classification ?? UNCLASSIFIED);
+  for (const [classification, heading] of CLASS_SECTIONS) {
+    const rows = byClass.get(classification) ?? [];
+    if (rows.length) process.stdout.write(`${heading} (${rows.length})\n${rows.map(metricRow).join('')}`);
+  }
+}
+
+function classCounts(changedMetrics) {
+  const byClass = Map.groupBy(changedMetrics, (metric) => metric.classification);
+  return CLASS_SECTIONS.slice(0, 3).map(([classification]) => `${byClass.get(classification)?.length ?? 0} ${classification}`).join(', ');
+}
+
+function writeGateResult({ base, changedMetrics, failures, unverified, suiteSummary }) {
+  const counts = changedMetrics.length ? classCounts(changedMetrics) : 'no changed or new functions were scored';
+  if (failures.length || unverified.length) {
+    const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
+    process.stderr.write(`CRAP gate failed against ${base} (coverage suites: ${suiteSummary}): ${counts}; ${ENFORCEMENT_RULE}:\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(`CRAP gate passed against ${base} (coverage suites: ${suiteSummary}): ${counts}; ${ENFORCEMENT_RULE}.\n`);
+}
+
+export async function reportMetrics({ allChangedPaths, base, baseWasExplicit, changedEntries, changedPaths, metrics, options, suiteSummary, unanalyzed = [] }) {
+  const changedMetrics = [...await changedMetricsAgainstBase(metrics, changedEntries, base), ...unanalyzed];
+  const { failures, unverified } = gateVerdict(changedMetrics);
+  writeMetricRows(options.all ? [...metrics, ...unanalyzed] : changedMetrics);
+  const warning = emptyChangedFunctionWarning({
+    changedMetrics,
+    workingTreeIsClean: !runGit(['status', '--porcelain']),
+    baseWasExplicit,
+    base,
+    allChangedPaths,
+    changedPaths,
+  });
+  if (warning) process.stderr.write(`${warning}\n`);
+  writeGateResult({ base, changedMetrics, failures, unverified, suiteSummary });
+  return { metrics, changedMetrics, failures, unverified };
+}
+
 export async function run(options = parseArguments(process.argv.slice(2))) {
-  const coverageDirectory = options.coverageDirectory ?? await captureCoverage();
+  const base = mergeBase(options.base);
+  const changes = changedPathContext(base);
+  const { coverageDirectory, suiteSummary } = await captureCoverage(changes.changedPaths, options.coverageDirectory);
   try {
-    const coverageScripts = await readCoverage(coverageDirectory);
-    const base = mergeBase(options.base);
-    const allChangedPaths = runGit(['diff', '--name-only', base]).split('\n').filter(Boolean);
-    const changedPaths = runGit(['diff', '--name-only', base, '--', 'plugins']).split('\n').filter(Boolean);
-    const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
-    const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-    if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
-    const lizardRecords = parseLizardCsv(lizardResult.stdout ?? '');
-    const lizardByPath = Map.groupBy(lizardRecords, (entry) => normalizedPath(entry.file));
-    const metrics = (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)) ?? [])))).flat();
-    const changedMetrics = await changedMetricsAgainstBase(metrics, changedPaths, base);
-    const unverified = changedMetrics.filter((metric) => metric.unverified);
-    const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
-    const displayedMetrics = options.all ? metrics : changedMetrics;
-    displayedMetrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line).forEach((metric) => {
-      const status = metric.unverified ? 'UNVERIFIED' : metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
-      process.stdout.write(`${status} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
-    });
-    const warning = emptyChangedFunctionWarning({
-      changedMetrics,
-      workingTreeIsClean: !runGit(['status', '--porcelain']),
-      baseWasExplicit: Boolean(options.base),
-      base,
-      allChangedPaths,
-      changedPaths,
-    });
-    if (warning) process.stderr.write(`${warning}\n`);
-    if (failures.length || unverified.length) {
-      const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
-      process.stderr.write(`CRAP gate failed against ${base}:\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
-      process.exitCode = 1;
-    } else process.stdout.write(`CRAP gate passed against ${base}: ${changedMetrics.length ? `${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.` : 'no changed or new functions were scored.'}\n`);
-    return { metrics, changedMetrics, failures, unverified };
+    const metrics = await measureMetrics(changes.changedPaths, coverageDirectory);
+    return reportMetrics({ ...changes, base, baseWasExplicit: Boolean(options.base), metrics, options, suiteSummary });
   } finally {
     if (!options.coverageDirectory) await fs.rm(coverageDirectory, { recursive: true, force: true });
   }

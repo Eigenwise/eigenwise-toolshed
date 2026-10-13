@@ -33,6 +33,7 @@ const store = require('../lib/store.js') as {
   VALID_EFFORTS: readonly string[];
   resolveExec(model: string, effort: string): ResolvedExec | null;
   classifyModelFilter(model: string): string;
+  modelsPayload(options: { project?: string; full?: boolean }): { discovered: Array<Record<string, unknown>> };
 };
 
 function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = {
@@ -200,6 +201,82 @@ test('SQ-2937: a stale installed gateway catalog with no refresh command is stil
   assert.equal(discovery.providerReadiness('codex'), null);
 });
 
+function seedGatewayCommand(t: { after(fn: () => void): void }, stored: unknown, script: (catalogPath: string) => string) {
+  seedGatewayHome(t, stored, {});
+  const claudeHome = String(process.env.SIDEQUEST_CLAUDE_HOME);
+  const installPath = path.join(claudeHome, 'gateway-install');
+  fs.mkdirSync(path.join(installPath, 'bin'), { recursive: true });
+  const catalogPath = path.join(claudeHome, 'model-gateway', 'catalog.json');
+  fs.writeFileSync(path.join(installPath, 'bin', 'model-gateway.js'), script(catalogPath));
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'model-gateway@eigenwise-toolshed': [{ installPath, version: '0.51.7' }] },
+  }));
+  return catalogPath;
+}
+
+test('GH-227: a gateway refresh that declines to write puts its own reason in the dispatch refusal', (t) => {
+  const agedOut = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+  seedGatewayCommand(t, readyCatalog(agedOut), () => [
+    "process.stderr.write('model-gateway: catalog refresh did not write (shim /healthz on 127.0.0.1:18764 returned 503); kept the stored catalog\\n');",
+    'process.exit(1);',
+  ].join('\n'));
+  const dispatchRouteRefusal = (store as unknown as { dispatchRouteRefusal(route: { model: string; effort: string }): string | null }).dispatchRouteRefusal;
+
+  const refusal = dispatchRouteRefusal({ model: 'codex-gpt-test', effort: 'high' });
+
+  assert.match(String(refusal), /^Codex dispatch refused: model-gateway readiness is unavailable\./);
+  assert.match(String(refusal), /Last gateway catalog refresh: model-gateway: catalog refresh did not write \(shim \/healthz on 127\.0\.0\.1:18764 returned 503\)/);
+});
+
+test('GH-175: a refreshed catalog that is still unready is asked again after 30 s, not held for the catalog window', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 1000 });
+  const catalogPath = seedGatewayCommand(t, unreadyCatalog(), (writtenPath) => [
+    "const fs = require('fs');",
+    `const catalogPath = ${JSON.stringify(writtenPath)};`,
+    "const recovered = fs.existsSync(catalogPath + '.recovered');",
+    `const ready = ${JSON.stringify(readyCatalog())};`,
+    `const unready = ${JSON.stringify(unreadyCatalog())};`,
+    "fs.writeFileSync(catalogPath, JSON.stringify({ ...(recovered ? ready : unready), updatedAt: new Date().toISOString() }));",
+  ].join('\n'));
+
+  assert.equal(discovery.providerReadiness('codex')?.ready, false, 'the refresh right after the failure still reports it');
+  fs.writeFileSync(`${catalogPath}.recovered`, '');
+  t.mock.timers.tick(20 * 1000);
+  assert.equal(discovery.providerReadiness('codex')?.ready, false, 'inside the 30 s retry window the refusal holds');
+  t.mock.timers.tick(15 * 1000);
+  assert.equal(discovery.providerReadiness('codex')?.ready, true, 'the next refresh after the window clears it');
+});
+
+test('GH-263/GH-361: a discovered provider the gateway shim does not serve runs its own id from a pinned definition, not the Agent model', () => {
+  writeCatalog([
+    { slug: 'oc-flash', id: 'claude-opencode-flash', label: 'Flash', provider: 'opencode' },
+    { slug: 'grok-build', id: 'claude-grok-build', label: 'Grok Build', provider: 'grok' },
+    { slug: 'relay-opus', id: 'claude-relay-opus-5', label: 'Relay Opus', provider: 'claude' },
+  ], {
+    schemaVersion: 4,
+    source: 'model-gateway',
+    providers: {
+      opencode: { ready: true, state: 'ready', message: 'ready' },
+      grok: { ready: true, state: 'ready', message: 'ready' },
+      claude: { ready: true, state: 'ready', message: 'ready' },
+    },
+  });
+  const resolveExec = store.resolveExec as (model: string, effort: string) => (Omit<ResolvedExec, 'model'> & { model: string | null; readOnlyAgent?: string; backend: string; apiModel: string; dispatchModel?: string }) | null;
+
+  const direct = resolveExec('oc-flash', 'high');
+  assert.equal(direct?.backend, 'opencode');
+  assert.equal(direct?.model, null, 'the Agent model enum refuses a full id, so the spawn carries none');
+  assert.equal(direct?.apiModel, 'claude-opencode-flash');
+  assert.equal(direct?.agent, 'sidequest-exec-model-oc-flash-high');
+  assert.equal(direct?.readOnlyAgent, 'sidequest-exec-readonly-model-oc-flash-high');
+  assert.equal(direct?.dispatchModel, undefined);
+  assert.equal(resolveExec('grok-build', 'high')?.backend, 'codex', 'the shim still serves grok through the marker');
+  const relay = resolveExec('relay-opus', 'high');
+  assert.equal(relay?.model, null, 'a catalog entry calling itself claude is still not one of the four aliases');
+  assert.equal(relay?.agent, 'sidequest-exec-model-relay-opus-high');
+  assert.equal(resolveExec('opus', 'high')?.model, 'opus', 'the Claude runtimes keep their alias');
+});
+
 test('discovery validates concrete catalog identity and drops routing hints', () => {
   writeCatalog([
     { slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', suggestedTier: 'ignored' },
@@ -236,6 +313,33 @@ test('discovery reads schema-4 providers and model providers', () => {
     provider: 'grok', ready: false, state: 'credentials-missing', message: 'Sign in to Grok CLI, then retry.',
   });
   assert.equal(discovery.providerReadiness('gemini'), null);
+});
+
+test('SQ-3183: discovery carries every row context window and billing note into the models payload', () => {
+  const codexNote = 'OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it';
+  writeCatalog([
+    { slug: 'codex-gpt-capped', id: 'claude-gpt-capped[1m]', label: 'Capped', provider: 'codex', contextWindow: 272000, contextWindowNote: codexNote },
+    { slug: 'grok-full', id: 'claude-grok-full[1m]', label: '  ', provider: 'grok', contextWindow: 500000, contextWindowNote: ' ' },
+    { slug: 'codex-gpt-fraction', id: 'claude-gpt-fraction', label: 'Fraction', provider: 'codex', contextWindow: 1.5 },
+    { slug: 'codex-gpt-text', id: 'claude-gpt-text', label: 'Text', provider: 'codex', contextWindow: '272000' },
+    { slug: 'codex-gpt-upper', id: 'claude-gpt-upper', label: 'Upper', provider: 'Codex' },
+  ], {
+    schemaVersion: 4,
+    source: 'model-gateway',
+    providers: {
+      codex: { ready: true, state: 'ready', message: 'Codex is ready.' },
+      grok: { ready: true, state: 'ready', message: 'Grok is ready.' },
+    },
+  });
+  const expected = [
+    { slug: 'codex-gpt-capped', id: 'claude-gpt-capped[1m]', label: 'Capped', provider: 'codex', source: 'model-gateway', contextWindow: 272000, contextWindowNote: codexNote },
+    { slug: 'grok-full', id: 'claude-grok-full[1m]', label: 'grok-full', provider: 'grok', source: 'model-gateway', contextWindow: 500000 },
+    { slug: 'codex-gpt-fraction', id: 'claude-gpt-fraction', label: 'Fraction', provider: 'codex', source: 'model-gateway' },
+    { slug: 'codex-gpt-text', id: 'claude-gpt-text', label: 'Text', provider: 'codex', source: 'model-gateway' },
+  ];
+  assert.deepEqual(discovery.discoverExternalModels(), expected);
+  const payloadRows = store.modelsPayload({}).discovered.filter((row) => row.source === 'model-gateway');
+  assert.deepEqual(payloadRows, expected);
 });
 
 test('discovery ignores future catalog schemas', () => {

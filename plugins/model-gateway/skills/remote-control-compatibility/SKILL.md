@@ -22,7 +22,7 @@ node ~/.claude/model-gateway/model-gateway.js remote-control <command>
 
 Use this when the user wants Remote Control and does not need gateway models in this project.
 
-1. In the project's `.claude/settings.local.json`, remove only `ANTHROPIC_BASE_URL` from the `env` object. Keep the other gateway keys unchanged. `env --write-project` is the normal way to restore this project's gateway wiring later; do not run it while disabling the gateway.
+1. In the project's `.claude/settings.local.json`, remove only `ANTHROPIC_BASE_URL` from the `env` object. Keep the other gateway keys unchanged. SessionStart keeps the Claude alias pins among those keys current (only values Model Gateway wrote; it never adds `ANTHROPIC_BASE_URL` back), so the project still follows new Claude releases from the next session. `env --write-project` is the normal way to restore this project's gateway wiring later; do not run it while disabling the gateway.
 2. Restart Claude Code. With no `ANTHROPIC_BASE_URL`, Claude Code calls `api.anthropic.com` directly and can offer `/remote-control`.
 3. State the full cost: this project now has no gateway models. Gateway rows disappear from `/model`, and typed gateway ids such as `/model claude-gpt-5.6-terra` do not work either.
 4. A process-exported `ANTHROPIC_BASE_URL` still has precedence after the file edit. If the user controls the Claude Code CLI launch, they can correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Model Gateway does not support Desktop routing under forced overrides on Windows or macOS, and settings, parent, or User-scope edits cannot be promised to win.

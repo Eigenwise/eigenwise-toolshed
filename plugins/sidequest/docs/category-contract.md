@@ -35,6 +35,10 @@ Resolution is deterministic:
 3. Otherwise resolve global `routing-fallback`, if valid.
 4. Otherwise launch hardwired `sonnet` at `high` and append a warning.
 
+The category fallback may name another provider, so a Codex category whose route can't run falls back to its
+Claude fallback, and the dispatch names it in `fallbackReason` and the briefing. The global fallback must
+match the primary's provider (GH-217).
+
 Catalog resolution only proves that a route can be launched in principle. Claude quota exhaustion is known
 only when the native Agent tool fails. `PostToolUseFailure` handles the exact supported Fable quota signature
 and requires the still-current dispatch token, executor, launch state, and matching Claude runtime before it

@@ -148,7 +148,7 @@ file is git-ignored so running the tool never dirties the repo.
 
 ---
 
-*Part of the [eigenwise-toolshed](../../README.md), free and MIT. If it helps you, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) keeps the shed stocked.*
+*This example is part of [Eigenwise Toolshed](../../README.md), free and MIT-licensed. Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance and are never required to use it.*
 
 | Ko-fi | GitHub Sponsors |
 |:-----:|:---------------:|

@@ -79,6 +79,9 @@ test('submitted guidance separates unbound rework from a locked bound candidate'
   assert.match(message, /While it is UNBOUND/);
   assert.match(message, /rework, clear, reclaim, and amendment all refuse without writing/i);
   assert.match(message, /kind `oracle`/);
+  assert.match(message, /--by <submitter id>/);
+  assert.match(message, /submittedBy/);
+  assert.doesNotMatch(message, /--by <reviewer>/);
 });
 
 test('manual candidate delivery guidance preserves every pinned authority', () => {
@@ -96,4 +99,15 @@ test('routing-disabled guidance names the enabled and direct paths', () => {
   const message = routingDisabledMessage('SQ-42');
   assert.match(message, /sidequest routing enabled/i);
   assert.match(message, /sidequest claim SQ-42 --direct/i);
+});
+
+
+test('negative control guidance names the frozen exemption path in two sentences', () => {
+  const message = require('../lib/refusal-guidance.js').negativeControlRecoveryGuidance();
+  assert.equal(message.split('. ').length, 2);
+  assert.match(message, /workProvenance.kind/);
+  assert.match(message, /type-annotation-only/);
+  assert.match(message, /not_required/);
+  assert.match(message, /failure-kind=assertion/);
+  assert.match(message, /import or collection failures never prove assertion failure/);
 });

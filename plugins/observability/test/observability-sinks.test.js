@@ -87,6 +87,8 @@ test('prices every active model label and token type from one table', () => {
     'claude-opus-5-5[1m]',
     'claude-sonnet-5',
     'claude-sonnet-5[1m]',
+    'claude-sonnet-5-5',
+    'claude-sonnet-5-5[1m]',
     'claude-fable-5',
     'claude-fable-5[1m]',
     'claude-fable-5-1',

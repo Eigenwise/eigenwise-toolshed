@@ -72,7 +72,8 @@ function escapeRegex(value) {
 function childProcessCallPattern(source) {
   const namespaces = [...source.matchAll(CHILD_PROCESS_NAMESPACE)].map((match) => escapeRegex(match[1]));
   const prefix = namespaces.length ? `(?:(?:${namespaces.join('|')})\\s*\\.\\s*)?` : '';
-  return new RegExp(`(?<![\\w$.])${prefix}${CHILD_PROCESS_CALL}`, 'g');
+  // A wrapper that re-exports `execFileSync` declares it; the definition is not a spawn.
+  return new RegExp(`(?<![\\w$.])(?<!function\\s)${prefix}${CHILD_PROCESS_CALL}`, 'g');
 }
 
 function inspectSource(source, file) {

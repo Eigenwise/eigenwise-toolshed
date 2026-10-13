@@ -1,7 +1,6 @@
 [
   {
     "name": "context_page",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -75,7 +74,6 @@
   },
   {
     "name": "pulse",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -111,7 +109,6 @@
   },
   {
     "name": "story",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -148,7 +145,6 @@
   },
   {
     "name": "story_contract",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -240,7 +236,6 @@
   },
   {
     "name": "add",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -313,11 +308,15 @@
           "maxLength": 1000,
           "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
+        "verifyCwd": {
+          "type": "string"
+        },
         "verifyKind": {
           "type": "string",
           "enum": [
             "suite",
             "command",
+            "typecheck",
             "document",
             "link",
             "schema",
@@ -410,7 +409,6 @@
   },
   {
     "name": "update",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -501,11 +499,15 @@
           "maxLength": 1000,
           "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
+        "verifyCwd": {
+          "type": "string"
+        },
         "verifyKind": {
           "type": "string",
           "enum": [
             "suite",
             "command",
+            "typecheck",
             "document",
             "link",
             "schema",
@@ -593,6 +595,160 @@
               "const": "none"
             }
           ]
+        },
+        "admitComposition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "historicalCheckout",
+            "by",
+            "evidence",
+            "candidate",
+            "base",
+            "ownCommits",
+            "ownPaths",
+            "sources"
+          ],
+          "properties": {
+            "authority": {
+              "const": "main-attestation"
+            },
+            "historicalCheckout": {
+              "const": false
+            },
+            "by": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "candidate": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "base": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "ownCommits": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              },
+              "uniqueItems": true
+            },
+            "ownPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ref",
+                  "commit",
+                  "submittedAt"
+                ],
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{40}$"
+                  },
+                  "submittedAt": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 20
+            },
+            "expected": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attemptCount",
+                "releasedAt",
+                "preparedAt",
+                "sources"
+              ],
+              "properties": {
+                "attemptCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "releasedAt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "preparedAt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "ref",
+                      "reviewTicketId",
+                      "reviewOutcome",
+                      "correctedAt",
+                      "snapshot"
+                    ],
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "reviewTicketId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "reviewOutcome": {
+                        "enum": [
+                          "planned",
+                          "accepted",
+                          "rejected",
+                          "inconclusive",
+                          null
+                        ]
+                      },
+                      "correctedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "snapshot": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "minItems": 1,
+                  "maxItems": 20
+                }
+              }
+            }
+          }
         }
       },
       "required": [
@@ -602,7 +758,6 @@
   },
   {
     "name": "remove",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -623,7 +778,6 @@
   },
   {
     "name": "archive",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -641,7 +795,6 @@
   },
   {
     "name": "unarchive",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -710,7 +863,7 @@
   },
   {
     "name": "checkpoint",
-    "description": "",
+    "description": "Advisory; review binds after submit.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -762,7 +915,6 @@
   },
   {
     "name": "sweepClaims",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -774,7 +926,6 @@
   },
   {
     "name": "next",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -862,7 +1013,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
+    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -899,6 +1050,18 @@
             "manual"
           ]
         },
+        "deliveryRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable."
+        },
+        "resolvedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence."
+        },
         "verificationSupersession": {
           "type": "object",
           "properties": {
@@ -924,7 +1087,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; retires unclaimed attempts past deadline; CLI too."
+          "description": "Unclaimed: preparing session retires now; others past deadline; CLI too."
         }
       },
       "required": [
@@ -1001,7 +1164,6 @@
   },
   {
     "name": "verdict",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1028,6 +1190,76 @@
         },
         "constraint": {
           "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "correct": {
+          "type": "object",
+          "properties": {
+            "expectedOutcome": {
+              "type": "string",
+              "enum": [
+                "accepted"
+              ]
+            },
+            "expectedVerdictAt": {
+              "type": "string"
+            },
+            "sourceRef": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "value"
+              ]
+            },
+            "evidence": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedOutcome",
+            "expectedVerdictAt",
+            "sourceRef",
+            "evidence"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "commit"
+              ],
+              "not": {
+                "required": [
+                  "sourceRevision"
+                ]
+              }
+            },
+            {
+              "required": [
+                "sourceRevision"
+              ],
+              "not": {
+                "required": [
+                  "commit"
+                ]
+              }
+            }
+          ],
+          "description": "Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision."
         }
       },
       "required": [
@@ -1039,7 +1271,6 @@
   },
   {
     "name": "scopeRequest",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1069,7 +1300,6 @@
   },
   {
     "name": "commit",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1229,7 +1459,7 @@
   },
   {
     "name": "integrate",
-    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.",
+    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1268,7 +1498,22 @@
             "manual"
           ]
         },
+        "deliveryRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable."
+        },
+        "resolvedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence."
+        },
         "reason": {
+          "type": "string"
+        },
+        "integrationBranch": {
           "type": "string"
         },
         "skipVerify": {
@@ -1359,7 +1604,6 @@
   },
   {
     "name": "comment",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1384,7 +1628,6 @@
   },
   {
     "name": "plan",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1443,7 +1686,6 @@
   },
   {
     "name": "link",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1474,7 +1716,6 @@
   },
   {
     "name": "unlink",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1496,7 +1737,6 @@
   },
   {
     "name": "assign",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1545,7 +1785,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; latest signal grace; only the bound runtime name counts."
+          "description": "Unverified; preparer retires now, else latest signal grace; bound name only."
         },
         "retireOnly": {
           "type": "boolean"
@@ -1555,6 +1795,57 @@
         },
         "worktree": {
           "type": "string"
+        },
+        "workProvenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "sources"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "new-behavior",
+                "behavior-preserving-refactor",
+                "inherited-read-only",
+                "docs",
+                "type-annotation-only",
+                "fixture-only"
+              ]
+            },
+            "sources": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ref",
+                  "preparedAt",
+                  "commit"
+                ],
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "preparedAt": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{40}$"
+                  },
+                  "captureId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
         },
         "full": {
           "type": "boolean"
@@ -1567,7 +1858,6 @@
   },
   {
     "name": "profile_list",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1579,7 +1869,6 @@
   },
   {
     "name": "profile_get",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1594,7 +1883,6 @@
   },
   {
     "name": "profile_create",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1618,7 +1906,6 @@
   },
   {
     "name": "profile_edit",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1639,7 +1926,6 @@
   },
   {
     "name": "profile_retire",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1654,7 +1940,6 @@
   },
   {
     "name": "profile_use",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1676,7 +1961,6 @@
   },
   {
     "name": "profile_repoint",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1701,7 +1985,6 @@
   },
   {
     "name": "profile_promote",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1737,7 +2020,6 @@
   },
   {
     "name": "new_board_profile",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1749,7 +2031,6 @@
   },
   {
     "name": "route_recipe",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1770,7 +2051,6 @@
   },
   {
     "name": "category_list",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1797,7 +2077,6 @@
   },
   {
     "name": "category_add",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1868,7 +2147,6 @@
   },
   {
     "name": "category_edit",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1931,6 +2209,12 @@
         },
         "readonly": {
           "type": "boolean"
+        },
+        "deniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -1940,7 +2224,6 @@
   },
   {
     "name": "category_detach",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1959,7 +2242,6 @@
   },
   {
     "name": "category_relink",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1978,7 +2260,6 @@
   },
   {
     "name": "global_fallback",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2003,7 +2284,6 @@
   },
   {
     "name": "category_rm",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2046,6 +2326,12 @@
             "type": "string"
           }
         },
+        "deniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "generatedPairs": {},
         "integrationMode": {
           "type": "string"
@@ -2062,6 +2348,14 @@
         },
         "worktreeIsolation": {
           "type": "boolean"
+        },
+        "verifyEnvironment": {
+          "type": "string",
+          "enum": [
+            "isolated",
+            "shared"
+          ],
+          "description": "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)."
         },
         "worktreeBase": {
           "type": "string",
@@ -2121,7 +2415,6 @@
   },
   {
     "name": "models",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2136,7 +2429,6 @@
   },
   {
     "name": "projects",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2148,7 +2440,6 @@
   },
   {
     "name": "archive_board",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2163,7 +2454,6 @@
   },
   {
     "name": "unarchive_board",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {

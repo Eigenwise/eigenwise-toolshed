@@ -24,3 +24,7 @@ Never capture a live board or dashboard for committed docs images.
 `npm run build` type-checks and builds the static site into `dist/`. The `docs.yml` workflow deploys
 that directory to GitHub Pages after a push to `main` when docs, the docs workflow, or reference
 sources under `plugins/` and `.claude-plugin/marketplace.json` changed. It can also run manually.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of this documentation site. Donations are never required to use the files in this directory.

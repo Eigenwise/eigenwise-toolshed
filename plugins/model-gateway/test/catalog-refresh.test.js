@@ -143,7 +143,19 @@ test('issue #227: an explicit refresh against an unhealthy shim fails instead of
   });
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /catalog refresh did not write \(shim is not answering \/healthz on 127\.0\.0\.1:\d+\)/);
+  assert.match(result.stderr, /catalog refresh did not write \(shim \/healthz on 127\.0\.0\.1:\d+ returned 503\)/);
+  assert.equal(result.after, result.before);
+});
+
+test('issue #227: a shim that drops the /healthz connection is reported as not answering, with the error', async (t) => {
+  const result = await runCatalogCommand(t, {
+    updatedAt: STALE,
+    commandArguments: ['--refresh', '--json'],
+    respond: (request) => { request.socket.destroy(); },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /catalog refresh did not write \(shim is not answering \/healthz on 127\.0\.0\.1:\d+ \(socket hang up\)\)/);
   assert.equal(result.after, result.before);
 });
 
@@ -158,7 +170,7 @@ test('a stale-triggered refresh stays advisory: it reports the reason but keeps 
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /catalog refresh did not write \(shim is not answering/);
+  assert.match(result.stderr, /catalog refresh did not write \(shim \/healthz on 127\.0\.0\.1:\d+ returned 503\)/);
   assert.equal(result.after, result.before);
   assert.equal(JSON.parse(result.stdout).updatedAt, result.storedUpdatedAt);
 });

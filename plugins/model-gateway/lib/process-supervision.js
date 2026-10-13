@@ -194,8 +194,16 @@ function stopProcess(name, options) {
 async function stopProcessAsync(name) {
   const pid = recordedGatewayPid(name);
   if (!pid) return true;
-  if (await killPidAsync(pid, { name, record: readPidRecord(name) }) !== true) return false;
-  return removePid(name);
+  if (!(await stopAndConfirmExit(pid, { name, record: readPidRecord(name) }))) return false;
+  // A supervisor's recovery can record a replacement while the exit is confirmed; its record stays.
+  removePid(name, pid);
+  return true;
+}
+// taskkill /T /F exits non-zero when any process in the tree slips away mid-kill, even after the
+// target itself died (GH-371), so a stop counts by whether the target is gone, never by the kill's result.
+async function stopAndConfirmExit(pid, { kill = killPidAsync, ...killOptions } = {}) {
+  await kill(pid, killOptions);
+  return waitForProcessExit(pid, PROCESS_STOP_TIMEOUT_MS);
 }
 function recordStopRequest(operation, name) {
   const pid = recordedGatewayPid(name);
@@ -244,18 +252,24 @@ function processOwningPortInProc(port) {
   } catch {}
   return null;
 }
+function portListingCommand(port) {
+  return WIN ? ['netstat', ['-ano', '-p', 'tcp']] : ['lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']];
+}
+function portOwnerFromListing(result, port) {
+  if (result.status !== 0) return null;
+  const pids = WIN ? listeningPidsFromNetstat(result.stdout, port) : String(result.stdout).split(/\s+/).map(Number);
+  return pids.find(Boolean) || null;
+}
 function processOwningPortSync(port) {
   if (!port) return null;
-  const result = WIN
-    ? commandResultSync('netstat', ['-ano', '-p', 'tcp'])
-    : commandResultSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
-  if (!WIN) {
-    const ownerPid = result.status === 0 ? Number(String(result.stdout).trim().split(/\s+/)[0]) || null : null;
-    return ownerPid || processOwningPortInProc(port);
-  }
-  if (result.status !== 0) return null;
-  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
-  return Number(String(result.stdout).match(portPattern)?.[1]) || null;
+  const ownerPid = portOwnerFromListing(commandResultSync(...portListingCommand(port)), port);
+  return ownerPid || (WIN ? null : processOwningPortInProc(port));
+}
+// netstat prints the state column in the Windows UI language (ABHÖREN, À L'ÉCOUTE), so a listener is
+// recognized by its unconnected foreign address and the numeric PID column instead (#296).
+function listeningPidsFromNetstat(output, port) {
+  const listener = new RegExp(`^\\s*TCP\\s+\\S*:${port}\\s+(?:0\\.0\\.0\\.0|\\[::\\]):0\\s.*\\s(\\d+)\\s*$`, 'gim');
+  return [...new Set(Array.from(String(output).matchAll(listener), (match) => Number(match[1])).filter(Boolean))];
 }
 function processInfoFromOutput(output) {
   if (WIN) {
@@ -434,12 +448,9 @@ function commandResultAsync(command, commandArgs, { timeout = probeTimeoutMs(), 
 }
 async function processOwningPortAsync(port, { commandResult = commandResultAsync, probeChildren = null, timeout } = {}) {
   if (!port) return null;
-  const result = await commandResult(WIN ? 'netstat' : 'lsof', WIN ? ['-ano', '-p', 'tcp'] : ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { probeChildren, timeout });
-  if (result.timedOut) return undefined;
-  if (result.status !== 0) return null;
-  if (!WIN) return Number(String(result.stdout).trim().split(/\s+/)[0]) || null;
-  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
-  return Number(String(result.stdout).match(portPattern)?.[1]) || null;
+  const [command, args] = portListingCommand(port);
+  const result = await commandResult(command, args, { probeChildren, timeout });
+  return result.timedOut ? undefined : portOwnerFromListing(result, port);
 }
 async function processInfoAsync(pid, { commandResult = commandResultAsync, probeChildren = null, timeout } = {}) {
   if (!pid) return null;
@@ -562,7 +573,7 @@ function unknownPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
   return `could not confirm the owner of :${port} (last observed PID ${owner.pid || 'unknown'}); the owning process could not be identified as this model-gateway install; left the listener untouched`;
 }
 function stopFailureReason(pid, port = PUBLIC_SHIM_PORT, component = 'shim supervisor') {
-  return `could not stop the ${component} on :${port} (PID ${pid}); the stop request failed. If it is elevated, run stop or setup from a session with the same privileges`;
+  return `could not stop the ${component} on :${port} (PID ${pid}); it is still running after the stop request`;
 }
 function isDescendantInProcessTable(pid, ancestorPid, processes) {
   const visited = new Set();
@@ -633,11 +644,11 @@ async function stopAll({ report = console.log, resolveOwner = resolvePortOwner }
   for (const name of ['shim', 'guardian', 'proxy']) {
     if (!(await stopProcessAsync(name))) return { ok: false, reason: stopFailureReason(readPid(name), PUBLIC_SHIM_PORT) };
   }
-  if (owner.pid && processInfoSync(owner.pid) && !(await killPidAsync(owner.pid))) return { ok: false, reason: stopFailureReason(owner.pid, PUBLIC_SHIM_PORT) };
+  if (owner.pid && processInfoSync(owner.pid) && !(await stopAndConfirmExit(owner.pid))) return { ok: false, reason: stopFailureReason(owner.pid, PUBLIC_SHIM_PORT) };
   reapGatewayOrphans(null);
   return { ok: true };
 }
-async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log, resolveOwner = resolvePortOwner } = {}) {
+async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log, resolveOwner = resolvePortOwner, kill = killPidAsync } = {}) {
   const owner = await resolveOwner(PUBLIC_SHIM_PORT);
   if (owner.state === 'foreign-install') return { ok: false, reason: foreignPortOwnerReason(owner) };
   if (owner.state === 'unknown') {
@@ -655,7 +666,7 @@ async function stopRunningSupervisor({ quiet = false, operation = 'restart', rep
       signal: WIN ? 'TASKKILL' : 'SIGTERM',
     });
   }
-  if (pid && !(await killPidAsync(pid, { name: 'guardian', record: readPidRecord('guardian') }))) return { ok: false, reason: stopFailureReason(pid, PUBLIC_SHIM_PORT) };
+  if (pid && !(await stopAndConfirmExit(pid, { kill, name: 'guardian', record: readPidRecord('guardian') }))) return { ok: false, reason: stopFailureReason(pid, PUBLIC_SHIM_PORT) };
   if (!pid && !(await stopProcessAsync('guardian'))) return { ok: false, reason: stopFailureReason(targetPid, PUBLIC_SHIM_PORT) };
   if (!((await waitForProcessExit(targetPid, 3000)) && (await waitForShimExit(3000)))) {
     return { ok: false, reason: `could not stop the shim supervisor on :${PUBLIC_SHIM_PORT}${pid ? ` (PID ${pid})` : ''}; run node "${CLI_PATH}" stop, then ensure` };
@@ -808,10 +819,14 @@ function createProxyRecovery({
   recordLifecycle = () => {},
   initialBackoffMs = 1000,
   maximumBackoffMs = 30000,
+  // The proxy binds its port at once but answers /v1/models only after model discovery, so a second
+  // proxy started inside that window can only die on EADDRINUSE (#251).
+  startupGraceMs = 30000,
 } = {}) {
   let recovery = null;
   let halted = false;
   let supervisedProxy = null;
+  let supervisedProxyStartedAt = 0;
   let restartAttempt = 0;
   let nextRestartAt = 0;
 
@@ -824,6 +839,17 @@ function createProxyRecovery({
     nextRestartAt = 0;
   }
 
+  function supervisedProxyIsWarmingUp() {
+    return Boolean(supervisedProxy) && now() - supervisedProxyStartedAt < startupGraceMs;
+  }
+
+  async function stopSupervisedProxy() {
+    const proxy = supervisedProxy;
+    if (!proxy) return;
+    await stop(proxy.pid);
+    await waitForRelease(proxyPort, { listening });
+  }
+
   async function recover() {
     if (recovery) return recovery;
     if (halted) return { ok: false, state: 'foreign-port-owner' };
@@ -833,6 +859,7 @@ function createProxyRecovery({
         return { ok: true, state: 'healthy' };
       }
       if (halted) return { ok: false, state: 'stopped' };
+      if (supervisedProxyIsWarmingUp()) return { ok: false, state: 'starting', pid: supervisedProxy.pid };
       if (now() < nextRestartAt) return { ok: false, state: 'backing-off', nextRestartAt };
 
       const proxyIsListening = await listening(proxyPort);
@@ -899,10 +926,15 @@ function createProxyRecovery({
           recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-stuck' });
           return { ok: false, state: 'port-stuck', retryAt: nextRestartAt };
         }
+      } else {
+        await stopSupervisedProxy();
       }
       if (halted) return { ok: false, state: 'stopped' };
       const proxy = await start({ command: proxyBinary, port: proxyPort });
-      if (proxy?.pid) supervisedProxy = proxy;
+      if (proxy?.pid) {
+        supervisedProxy = proxy;
+        supervisedProxyStartedAt = now();
+      }
       onStarted(proxy?.pid);
       if (proxy?.pid) {
         recordLifecycle('proxy-started', {
@@ -940,18 +972,14 @@ function createProxyRecovery({
     halted = true;
     await probeChildren.stop();
     if (recovery) await recovery;
-    const proxy = supervisedProxy;
-    if (proxy?.pid) {
-      await stop(proxy.pid);
-      await waitForRelease(proxyPort, { listening });
-    }
+    await stopSupervisedProxy();
   }
 
   return { recover, stop: stopRecovery, stopSync: () => probeChildren.stopSync() };
 }
 
 module.exports = {
-  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
+  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, listeningPidsFromNetstat, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopProcessAsync, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,

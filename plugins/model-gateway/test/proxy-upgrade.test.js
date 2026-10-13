@@ -147,7 +147,7 @@ test('stable command launcher follows registry changes and forwards command exit
   });
 
   assert.equal(update.status, 11, update.stderr);
-  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(newInstall, 'bin', 'model-gateway.js'), 'setup']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(newInstall, 'bin', 'model-gateway.js'), 'setup', '--preserve-wiring']);
 
   const newer = spawnGatewayProcessSync(process.execPath, [launcher, 'status', '--json'], {
     encoding: 'utf8',
@@ -173,4 +173,44 @@ test('stable command launcher follows registry changes and forwards command exit
 
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /no installed Model Gateway CLI was found in Claude Code's plugin registry/);
+});
+
+function writeForkRegistry(home, installs) {
+  const registryDirectory = path.join(home, '.claude', 'plugins');
+  fs.mkdirSync(registryDirectory, { recursive: true });
+  fs.writeFileSync(path.join(registryDirectory, 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'model-gateway@fork-toolshed': installs },
+  }));
+}
+
+test('GH-380: stable command launcher finds a model-gateway installed from another marketplace', (t) => {
+  const home = temporaryDirectory(t);
+  const install = path.join(home, 'model-gateway-fork');
+  const result = path.join(home, 'result.json');
+  fs.mkdirSync(path.join(install, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(install, 'bin', 'model-gateway.js'),
+    "require('node:fs').writeFileSync(process.env.MODEL_GATEWAY_TEST_RESULT, JSON.stringify(process.argv.slice(1)));");
+  writeForkRegistry(home, [{ scope: 'user', version: '0.1.0', installPath: install }]);
+  const launcher = writer.writeCommandLauncher({ home }).file;
+
+  const run = spawnGatewayProcessSync(process.execPath, [launcher, 'doctor'], {
+    encoding: 'utf8',
+    env: { ...process.env, MODEL_GATEWAY_CLAUDE_HOME: path.join(home, '.claude'), MODEL_GATEWAY_TEST_RESULT: result },
+  });
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(install, 'bin', 'model-gateway.js'), 'doctor']);
+});
+
+test('GH-380: installScope reads a model-gateway installed from another marketplace', (t) => {
+  const home = temporaryDirectory(t);
+  assert.equal(commands.installScope(home), 'unknown');
+  writeForkRegistry(home, []);
+  assert.equal(commands.installScope(home), 'unknown');
+
+  writeForkRegistry(home, [{ scope: 'project', version: '0.1.0' }]);
+  assert.equal(commands.installScope(home), 'project-only');
+
+  writeForkRegistry(home, [{ scope: 'project', version: '0.1.0' }, { scope: 'user', version: '0.1.0' }]);
+  assert.equal(commands.installScope(home), 'user');
 });

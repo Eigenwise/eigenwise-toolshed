@@ -9,7 +9,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { normalizeObservation } = require('../lib/observability/ingest.js');
-const { drainHookSpool } = require('../lib/observability/hook-spool.js');
+const { WITHHELD_MAX_AGE_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { canonicalPath } = require('../lib/observability/path-identity.js');
 const { buildObservation, projectMetadata, repositoryRoot, spool, EVENT_MAP } = require('../hooks/observability.js');
@@ -459,7 +459,7 @@ test('a denied preexisting spool row stays eligible after re-opt-in', async (t) 
   const observation = {
     ...buildObservation({
       hook_event_name: 'PostToolUse', session_id: 'session-retained', tool_name: 'Read', tool_use_id: 'tool-retained',
-    }, NOW),
+    }, new Date()),
     project_id: projectId,
   };
   spool(spoolPath, observation);
@@ -467,14 +467,53 @@ test('a denied preexisting spool row stays eligible after re-opt-in', async (t) 
   assert.deepEqual(await drainHookSpool({ spoolPath, store, batchSize: 1 }), {
     drained: 0, duplicates: 0, rejected: 1, malformed: 0, droppedBytes: 0,
   });
-  assert.deepEqual(fs.readFileSync(`${spoolPath}.draining`, 'utf8').trim(), JSON.stringify(observation));
+  assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
+  assert.deepEqual(fs.readFileSync(spoolPath, 'utf8').trim(), JSON.stringify(observation));
 
   optedIn = true;
   assert.deepEqual(await drainHookSpool({ spoolPath, store, batchSize: 1 }), {
     drained: 1, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0,
   });
   assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
+  assert.equal(fs.existsSync(spoolPath), false);
   assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 1);
+});
+
+test('a withheld spool row does not stop later drains from rotating the spool (GH-368)', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-hook-withheld-'));
+  const spoolPath = path.join(dir, 'hook-spool.jsonl');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const ingested = [];
+  const store = {
+    ingestBatch: async (observations) => observations.map((observation) => {
+      if (observation.session_id.startsWith('denied')) {
+        return { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true };
+      }
+      ingested.push(observation.session_id);
+      return { accepted: true, duplicate: false };
+    }),
+  };
+  const failureState = { consecutive_failures: 0, last_error: null };
+  const freshDenied = JSON.stringify({ session_id: 'denied-fresh', observed_at: new Date().toISOString() });
+  const expiredDenied = JSON.stringify({
+    session_id: 'denied-expired', observed_at: new Date(Date.now() - WITHHELD_MAX_AGE_MS - 60_000).toISOString(),
+  });
+  fs.writeFileSync(spoolPath, `${freshDenied}\n${expiredDenied}\n{"session_id":"ok-1"}\n`);
+
+  assert.deepEqual(await drainHookSpool({ spoolPath, store, failureState }), {
+    drained: 1, duplicates: 0, rejected: 2, malformed: 0, droppedBytes: 0,
+  });
+  for (let drain = 2; drain <= 4; drain += 1) {
+    fs.appendFileSync(spoolPath, `{"session_id":"ok-${drain}"}\n`);
+    assert.deepEqual(await drainHookSpool({ spoolPath, store, failureState }), {
+      drained: 1, duplicates: 0, rejected: 1, malformed: 0, droppedBytes: 0,
+    }, `drain ${drain}`);
+    assert.equal(fs.existsSync(`${spoolPath}.draining`), false, `drain ${drain} left .draining behind`);
+    assert.equal(fs.readFileSync(spoolPath, 'utf8'), `${freshDenied}\n`, `drain ${drain} spool holds only the withheld row`);
+  }
+  assert.deepEqual(ingested, ['ok-1', 'ok-2', 'ok-3', 'ok-4']);
+  assert.equal(failureState.consecutive_failures, 0);
+  assert.equal(failureState.last_error, null);
 });
 
 test('hook wake signals annotate only the first subsequent orchestrator request', (t) => {

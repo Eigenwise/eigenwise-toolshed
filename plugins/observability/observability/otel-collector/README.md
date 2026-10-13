@@ -38,3 +38,7 @@ otelcol-contrib --config <target-path>
 Requires the OpenTelemetry Collector Contrib distribution (for the `transform`,
 `filter`, and `file_storage` components). Point Claude Code's `OTEL_EXPORTER_OTLP_ENDPOINT`
 at `http://127.0.0.1:4318`.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of these Collector configuration tools. Donations are never required to use the files in this directory.

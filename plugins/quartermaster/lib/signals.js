@@ -230,8 +230,6 @@ function createSignalCollector() {
             bump(errorsByTool, event.name ?? 'unknown', event.sessionId);
           }
           if (event.denial) {
-            totals.denials += 1;
-            tally.denials += 1;
             bump(denialsByKind, event.denial, event.sessionId);
             bump(denialsByTool, event.name ?? 'unknown', event.sessionId);
             if (denialTargets.length < MAX_SAMPLES) {
@@ -241,6 +239,14 @@ function createSignalCollector() {
                 target: clip(event.input?.command ?? event.input?.file_path ?? '', 160),
                 sessionId: event.sessionId,
               });
+            }
+            // A PreToolUse hook's own stderr block (kind 'hook_block') is not a permission
+            // decision: counting it toward friction let one hook-heavy session drown out real
+            // denials and corrections in verifyDecisions' before/after comparison (GH-302). It
+            // still shows up in byKind/byTool/targets above, just not in the total.
+            if (event.denial !== 'hook_block') {
+              totals.denials += 1;
+              tally.denials += 1;
             }
           }
           return;
@@ -323,7 +329,7 @@ function createSignalCollector() {
           },
           denials: {
             total: totals.denials,
-            meaning: 'Host-reported policy blocks. permission-rule cannot distinguish a permission rule from a PreToolUse hook policy block.',
+            meaning: 'Host-reported policy blocks. A hook that exits nonzero with stderr is detected and counted separately as hook_block in byKind, excluded from this total. A hook using the structured JSON deny protocol still cannot be told apart from a permission-rule denial.',
             byKind: countsOf(denialsByKind),
             byTool: countsOf(denialsByTool),
             targets: denialTargets,

@@ -134,3 +134,55 @@ test('Windows process probes inherit their existing environment', () => {
   assertProbeEnvironment(fixture.asyncEnvironment, 'fr_FR.UTF-8');
   assert.equal(fixture.parentEnvironmentUnchanged, true);
 });
+
+const netstatOwnerProgram = `
+(async () => {
+const [modulePath] = process.argv.slice(1);
+Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+const { listeningPidsFromNetstat, processOwningPortAsync, resolvePortOwner } = require(modulePath);
+const rows = (state, pid) => [
+  '  TCP    0.0.0.0:135            0.0.0.0:0              ' + state + '         1204',
+  '  TCP    127.0.0.1:18764        0.0.0.0:0              ' + state + '         ' + pid,
+  '  TCP    127.0.0.1:18764        127.0.0.1:50123        ESTABLISHED     ' + pid,
+  '  TCP    127.0.0.1:50123        127.0.0.1:18764        ESTABLISHED     4400',
+  '  TCP    [::]:18764             [::]:0                 ' + state + '         ' + pid,
+].join('\\r\\n');
+const german = 'Aktive Verbindungen\\r\\n\\r\\n  Proto  Lokale Adresse         Remoteadresse          Status           PID\\r\\n' + rows('ABHÖREN', 19252);
+const french = 'Connexions actives\\r\\n\\r\\n  Proto  Adresse locale         Adresse distante       État            PID\\r\\n' + rows("À L'ÉCOUTE", 19253);
+const english = rows('LISTENING', 19254);
+const netstatOutput = (output) => async () => ({ status: 0, stdout: output, stderr: '', timedOut: false });
+const cacheCommand = 'node C:/Users/example/.claude/plugins/cache/eigenwise-toolshed/model-gateway/0.50.5/bin/model-gateway.js serve-shim';
+process.stdout.write(JSON.stringify({
+  germanPids: listeningPidsFromNetstat(german, 18764),
+  frenchPids: listeningPidsFromNetstat(french, 18764),
+  englishPids: listeningPidsFromNetstat(english, 18764),
+  otherPortPids: listeningPidsFromNetstat(german, 1876),
+  germanOwner: await processOwningPortAsync(18764, { commandResult: netstatOutput(german) }),
+  frenchOwner: await processOwningPortAsync(18764, { commandResult: netstatOutput(french) }),
+  resolvedGermanOwner: await resolvePortOwner(18764, {
+    owner: (port, options) => processOwningPortAsync(port, { ...options, commandResult: netstatOutput(german) }),
+    inspectProcess: async (pid) => ({ pid, command: cacheCommand, parentPid: 1, startedAt: null }),
+    belongsToThisInstall: () => true,
+    listening: async () => true,
+  }),
+}));
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+`;
+
+test('Windows port owners are read from numeric netstat columns in German and French UI languages (#296)', () => {
+  const result = spawnSync(process.execPath, ['-e', netstatOwnerProgram, supervisionPath], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  const fixture = JSON.parse(result.stdout);
+
+  assert.deepEqual(fixture.germanPids, [19252]);
+  assert.deepEqual(fixture.frenchPids, [19253]);
+  assert.deepEqual(fixture.englishPids, [19254]);
+  assert.deepEqual(fixture.otherPortPids, []);
+  assert.equal(fixture.germanOwner, 19252);
+  assert.equal(fixture.frenchOwner, 19253);
+  assert.equal(fixture.resolvedGermanOwner.state, 'same-install', 'a localized netstat no longer leaves the owner unidentified');
+  assert.equal(fixture.resolvedGermanOwner.pid, 19252);
+});

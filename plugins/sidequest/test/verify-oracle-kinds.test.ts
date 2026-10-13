@@ -78,6 +78,15 @@ test('manual verifier prefixes normalize stored kinds and requirements', () => {
   });
 });
 
+test('SQ-3423: a deferred verification status is a known status that is never accepted', () => {
+  assert.ok(verification.VERIFICATION_STATUSES.includes('deferred'));
+  assert.deepStrictEqual([...verification.VERIFICATION_ENVIRONMENTS], ['isolated', 'shared']);
+  const deferred = { kind: 'suite', status: 'deferred', evidence: 'pinned verifier runs in the shared checkout at integrate' };
+  assert.equal(verification.verificationAccepted(deferred), false);
+  assert.equal(verification.verificationOutcome(deferred), 'verification_deferred');
+  assert.equal(verification.verificationFailureDiagnostic(deferred).code, 'verification_deferred');
+});
+
 test('verification failures retain domain-specific actionable identities', () => {
   for (const kind of ['document', 'link', 'schema', 'review']) {
     const failure = verification.verificationFailureDiagnostic({
@@ -113,4 +122,47 @@ test('verification requirements pin suite execution and validate bounded waivers
   assert.equal(verification.verificationAccepted({ kind: 'link', status: 'skipped', evidence: waiver.reason, waiver }), true);
   assert.equal(verification.verificationAccepted({ kind: 'link', status: 'skipped', evidence: 'unapproved', waiver: {} }), false);
   assert.equal(verification.verificationAccepted({ kind: 'link', status: 'skipped', evidence: 'unapproved' }), false);
+});
+
+// GitHub #189: the first word has to be a command the shell can run, known to the board or found on PATH.
+test('command verify accepts a first word PATH resolves and refuses one nothing resolves', () => {
+  const toolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-path-tool-'));
+  const toolName = `sq-path-tool-${process.pid}`;
+  fs.writeFileSync(path.join(toolDirectory, process.platform === 'win32' ? `${toolName}.cmd` : toolName), '@echo off\n', { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${toolDirectory}${path.delimiter}${originalPath || ''}`;
+  try {
+    assert.deepStrictEqual(store.verifyCommandErrors(`${toolName} --check`), []);
+    assert.deepStrictEqual(store.verifyCommandErrors('test -d plugins'), []);
+    assert.match(store.verifyCommandErrors(`sq-unresolvable-${process.pid} --flag`)[0], /must start with a runnable command/);
+  } finally {
+    process.env.PATH = originalPath;
+    fs.rmSync(toolDirectory, { recursive: true, force: true });
+  }
+});
+
+// GitHub #259: verifyCwd is where the command runs, so it stays inside the project and anchors the npm script check.
+test('verifyCwd normalizes a project-relative directory, refuses one that leaves the project, and anchors verify checks', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-cwd-project-'));
+  fs.mkdirSync(path.join(project, 'packages', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'packages', 'app', 'package.json'), JSON.stringify({ scripts: { check: 'node -e 0' } }));
+  const slug = store.ensureProject(project, 'verify cwd').slug;
+
+  for (const outside of ['../sibling', 'C:/elsewhere', '/abs', 'packages\\..\\..']) {
+    assert.throws(() => store.normalizeVerifyCwd(outside), /verifyCwd must be a directory relative to the project root/);
+  }
+  assert.equal(store.normalizeVerifyCwd('.\\packages\\app\\'), 'packages/app');
+  assert.equal(store.normalizeVerifyCwd('.'), '');
+
+  assert.throws(
+    () => store.createTicket(slug, { title: 'root npm script', executorVerify: 'npm run check' }),
+    /requires package\.json/,
+  );
+  const nested = store.createTicket(slug, { title: 'nested npm script', executorVerify: 'npm run check', executorVerifyCwd: './packages/app' });
+  assert.equal(nested.executorVerifyCwd, 'packages/app');
+  assert.throws(() => store.updateTicket(slug, nested.ref, { executorVerifyCwd: '../outside' }), /verifyCwd must be/);
+  assert.throws(() => store.updateTicket(slug, nested.ref, { executorVerifyCwd: '' }), /requires package\.json/);
+
+  const briefing = agentsync.renderTicketBriefing(nested, 'verify-cwd-token', slug);
+  assert.match(briefing, /verifyCwd: the wrapper runs it from packages\/app, relative to the checkout root/);
 });

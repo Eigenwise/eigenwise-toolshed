@@ -7,7 +7,10 @@ ready-for-integration with `sidequest submit` (claim released, status stays `doi
 verification, completing tickets in the control plane, then gating, assigning versions, and pushing
 main — is ONE serialized transaction owned by the orchestrator. This file is that transaction.
 
-`submit` derives the admitted range from the base recorded on the ticket's dispatch. Pass `--base <commit>`
+`submit` derives the admitted range from the base recorded on the ticket's dispatch, for isolated and shared-tree
+dispatches alike; the merge base replaces it only when upstream work was synced into the candidate after dispatch.
+Paths whose bytes at the tip already equal the integration target's do not count against scope, and a tip still at
+the recorded base is a no-op. Pass `--base <commit>`
 (or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must always lie on the
 submitted tip's history, and it must additionally either sit at or after the current merge base or already be
 reachable from the integration branch. A base that is not reachable from the integration branch must match the
@@ -21,6 +24,10 @@ A submitted range may contain merge commits; validate its reachable range and sc
 merge commit as an automatic refusal.
 
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
+
+Use the project's configured quality gate, if any. Hold integration for missing quality measurement
+only when a gate is configured. Without one, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. User rules injected by
+the host still apply; gate absence alone never holds, parks or marks work UNVERIFIED.
 
 ## When to run it (event-driven, never polled)
 
@@ -40,13 +47,25 @@ push — instead of one transaction per ticket. Don't wait on work that isn't in
 The orchestrator is the integrator. A submitted range stays pinned at `refs/sidequest/<SQ-n>` until
 its exact assembled wave has delivered. A singleton can be assembled and gated during `integrate`; for
 a group, first run `sidequest assemble-wave <SQ-n> [SQ-n...] --verify "<gate evidence>"`, then pass
-that exact same participant set to `sidequest integrate`. The engine refuses delivery when the group
-has no passing assembled-wave gate, includes a participant from another wave, omits a participant, or
-tries to deliver one participant from a multi-ticket wave. It records delivery only after one passing
-wave delivers its exact Git participant set and the resulting revision passes its delivery verification.
+that exact same participant set to `sidequest integrate`. When the participants pin a command, the gate
+runs it itself (`--verify` is only read for other verifier kinds), unless its requirement pins
+`environment: shared`: that assembled gate records `gate_deferred`, with no checkout or verifier run.
+An isolated requirement runs in a temporary detached checkout of
+the wave baseline with every candidate merged, cwd at its root, `CLAUDE_PLUGIN_*` stripped from the
+environment, and `verification.verifiedTree` naming the tree it checked. Candidates that do not merge
+cleanly refuse with `assembled_wave_compose_failed` and reject nobody. The engine refuses delivery when the group
+has neither a passing assembled-wave gate nor an environment-bound `gate_deferred`, includes a participant from another wave, omits a participant, or
+tries to deliver one participant from a multi-ticket wave. It records delivery only after the gated
+wave (including an environment-bound deferred wave) delivers its exact Git participant set and the resulting revision passes its delivery verification.
 `integrate <ref> --by <who> --mode <merge|replay|apply>` performs that delivery and closes every
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
+
+Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
+(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
+`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
+The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
+refuses `branch_not_checked_out`.
 
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
@@ -57,7 +76,10 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 - `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
   the configured integration branch.
 - `replay` cherry-picks the submitted commits in order, keeping atomic history. A conflict aborts the
-  cherry-pick and restores the prior HEAD.
+  cherry-pick and restores the prior HEAD. To deliver it by hand, merge the pinned candidate itself
+  (`git merge --no-ff <candidate>`, never a cherry-pick), resolve the conflict in that merge commit,
+  re-gate, then record it with `integrate --delivery-commit <candidate>`. A hand-resolved cherry-pick
+  has a new patch identity and changed blobs, so its content check always refuses.
 - `apply` materializes the range without a commit so the user can review it in their changes view. It
   refuses overlapping uncommitted paths and names them. Its delivery record plus pinned ref is enough
   to close the ticket, no user-side commit is required.
@@ -65,14 +87,39 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   is not an ancestor of the integration branch. Pass that candidate as `--delivery-commit` with
   `--delivery-method reset|working-tree|manual` and evidence naming the mechanism. Sidequest compares
   every submitted path against the integration working tree, reruns the delivery gate, then records
-  the pinned candidate with the observed integration revision. A missing or different path refuses.
-- When a working-tree delivery cannot record its initial dirty baseline, it still dispatches without an inherited-path exemption, so every dirty path is attributed to the executor at closeout.
+  the pinned candidate with the observed integration revision. A missing or different path refuses
+  `delivery_content_missing`; a candidate deletion the tree also lacks counts as preserved.
+- A candidate that was rebased, squash-merged, or conflict-resolved before it landed never matches that
+  working tree byte for byte, and later merges keep moving it. Add `--delivery-revision <sha>` (MCP
+  `deliveryRevision`) naming the landed revision. It must resolve in the integration checkout and be
+  reachable from the recorded target, or delivery refuses `delivery_revision_not_reachable`. A revision
+  that is an ancestor of the candidate's own base predates every line of the candidate and refuses
+  `delivery_revision_predates_candidate`, attested or not. Each submitted path is then proven at that
+  revision's tree instead of the working tree: identical blob and mode, candidate deletion absent there,
+  or the candidate's base-relative patch reverse-applying onto that tree. A path both trees carry with
+  the same content but a different mode (for example the candidate's chmod never landed) refuses
+  `delivery_content_diverged` on its own, ahead of the reverse-apply check. Anything left over refuses
+  `delivery_content_diverged` and names it. Reverse-apply proves the candidate's own hunks are present
+  in that tree, not that the landed blob equals the reviewed one, so a landing that also carries
+  unrelated drift still records as `reverseApplied`. `git apply` allows offsets, so a hunk whose context
+  also matches a different copy of a repeated block still reverse-applies and records `reverseApplied`
+  against that copy. Two hunks landing within 3 lines of each other lose that context distinction and
+  refuse instead, so a candidate shaped like that needs `resolvedPaths` to close.
+- Name a genuinely hand-resolved path with `--resolved-path <path>` (MCP `resolvedPaths`), repeated per
+  path, and let the closure reason carry the resolution evidence. Only submitted paths the proof itself
+  found diverging may be attested — anything else, including `resolvedPaths` without
+  `deliveryRevision` and `resolvedPaths` on a delivery whose candidate is already reachable, refuses
+  `resolved_paths_invalid`. `deliveryRevision` alone stays ignored on a reachable delivery, but an
+  attestation there can only be a mistake, so it is refused rather than dropped. The record keeps `contentEvidence`
+  `delivery_revision_contains_candidate`, or `:operator_resolved` when anything was attested, plus a
+  `contentProof` listing the identical, reverse-applied, deleted, and operator-resolved paths.
+- Working-tree closeout attributes only declared paths and the ticket's own release fragment, even when the initial dirty baseline is unavailable. Outside-scope dirt is recorded on completion and returned as `ignoredDirtyPaths`; completed sibling drift is returned and recorded as a warning naming the sibling. Neither refuses this ticket. Own committed paths, an empty deliverable, and failed own-candidate verification still refuse. Preserve other work without reverting, absorbing, or committing it.
 
 ### Overlapping candidates with different pinned verifiers
 
-A wave refuses when participants pin different verifier requirements. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
+A wave refuses `wave_verifier_mismatch` when participants pin different verifier requirements. Non-executable kinds (document, link, manual, attestation, review) only need to agree on kind, so three document tickets with different verify text still assemble as one wave; executable kinds must pin the same command, and a mix of executable and non-executable kinds refuses. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
 
-This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ. `groomClose` compares the pinned candidate to the registered target working tree and reruns delivery verification before it records delivery.
+This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ without naming the hand-resolved ones in `resolvedPaths`. `groomClose` compares the pinned candidate to the registered target working tree, or to the tree at `deliveryRevision` when one is named, and reruns delivery verification before it records delivery.
 
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
@@ -88,12 +135,17 @@ File the repair so all of this holds before dispatching it:
 
 - Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
   the overlap is refused; an unrelated submitted range is never inherited.
-- The source's candidate needs an oracle-confirmed rejection: a bound `review-audit` ticket whose verdict
-  rejected that exact candidate. A source-side `submission.review` mirror alone is not authority, and a
-  rejection pinned to a different commit than the submission now records does not count.
+- The source's candidate needs an effective oracle-confirmed rejection: a bound `review-audit` ticket whose
+  verdict rejected that exact candidate, or whose mistaken finalized acceptance has an authorized
+  [MCP `verdict.correct`](invocation-contracts.md) rejection. Both binding halves must agree. A source-side
+  `submission.review` mirror alone is not authority, and a rejection pinned to a different commit than the
+  submission now records does not count.
 - Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
   deleted or added and the repair never touches. Scope admission covers every path in the range.
 - The rejected range is inherited whole. A range carrying only part of it is refused.
+- The rejected source's release fragment doesn't need declaring. Submit admits it and records it in the
+  repair's scope snapshot, so a repair that renames `.release/unreleased/<source>.md` to its own fragment
+  passes the same range check again at integrate.
 
 An active, unrelated, unreviewed, or not-yet-rejected overlapping submission still refuses
 `duplicate_submission`, and the refusal names which half is missing. Do not answer that refusal with
@@ -122,6 +174,49 @@ and bind it:
 
 `integrate` with `deliveryCommit` refuses a closed repair with `submission_required`; the refusal names
 this same flow. Nothing here edits board state by hand or moves the immutable candidate.
+
+### A squash-merged branch whose source was deleted
+
+`integrate` refuses `expected_upstream_diverged` when the dispatch's frozen expected upstream no longer
+resolves from the target — typically because a maintainer squashed and deleted the branch by hand, so the
+candidate's own commit never lands and no automatic merge can reconcile it. The refusal names the
+recovery:
+
+1. Re-apply the verified candidate onto the current target (cherry-pick or squash) and re-gate it there.
+2. Record it with `groomClose`, passing `deliveryCommit: <the pinned candidate>` and
+   `deliveryMethod: "manual"` (CLI `--delivery-commit <sha> --delivery-method manual`).
+3. Keep the candidate's content present in the integration working tree; the merged-tree verifier and
+   content check still run against it.
+
+When the squash reached the target as its own commit, record that landed commit instead: `groomClose`
+with `deliveryCommit: <squash commit>` and no `deliveryMethod`. It passes when the squash commit's patch
+equals each candidate commit's patch or the patch of the whole submitted range. A squash that also
+carries another ticket's work matches neither and still refuses `delivery_content_missing`.
+
+### A conflict integrate cannot merge
+
+`integrate` never resolves a conflict. It aborts, restores the target, records `merge_failed` (or
+`replay_failed`) with the conflicted paths, and the refusal names this recovery:
+
+1. On the target branch, `git merge --no-ff <the pinned candidate>`, resolve the conflict, and commit the
+   merge. Keep the candidate as a parent of that merge: that ancestry is the content proof.
+2. Re-gate the merged tree.
+3. Record it with `groomClose`, passing `deliveryCommit: <the merge commit>`, `deliveryMethod: "manual"`,
+   and a reason (CLI `--delivery-commit <sha> --delivery-method manual --reason "…"`), or with `integrate`
+   passing `deliveryCommit: <the pinned candidate>` and a reason. Omit `integration: true`, which selects
+   the assembled-wave route instead.
+
+Don't submit the merge from a second ticket: its range contains the candidate's commits, so it is
+refused as `duplicate_submission`. A squash or cherry-pick of the resolution loses the ancestry and is
+refused as `delivery_content_missing`.
+
+### A post-merge suite failure
+
+When the merged tree fails its verifier, `integrate` hard-resets the target to the recorded pre-merge
+head. A sibling candidate submitted while that suite ran recorded the rolled-back merge as its expected
+upstream, so the same rollback rewrites that record back to the pre-merge head. The next `integrate` of
+the sibling, or a retry of the failed candidate, then runs normally. When the rollback itself is refused
+because the target moved past the delivery, nothing is rewritten; follow the refusal's manual recovery.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
@@ -181,14 +276,16 @@ the ticket.
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
-4. **Put the project's registered checkout on a clean configured target branch.** `integrate` always
+4. **Put the project's registered checkout on the configured target branch, clean where the delivery writes.** `integrate` always
    merges and verifies in that registered checkout: the control plane folds whatever directory you call
    it from back to the registered repo root, so adding a scratch linked worktree does NOT move the
    target. Check out the configured integration branch there and confirm
-   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. Any staged,
-   modified, or untracked file in that checkout refuses with `integration_target_dirty` and names the
-   offending paths before a branch moves or a verifier runs, so commit, stash, or remove them first
-   rather than trying to hide them in another worktree. Install the touched plugin's dependencies
+   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. A modified or
+   untracked file the delivery writes (a rename's source included), and any staged or unmerged entry,
+   refuses with `integration_target_dirty` and names only those paths before a branch moves or a
+   verifier runs, so commit, stash, or remove them first rather than trying to hide them in another
+   worktree. Unstaged edits and untracked files outside the delivery (a running service's logs or
+   JSON) stay put: the merge goes around them and the delivery record lists them in `ignoredDirtyPaths`. Install the touched plugin's dependencies
    before reverifying, for this repo: `cd plugins/<name> && npm ci`.
 5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
    still points to the submitted tip. Require the recorded upstream commit to remain reachable from
@@ -199,7 +296,9 @@ the ticket.
    queued ticket. A merge commit inside the submitted range is admissible when this reconstruction and
    scope admission pass. Scope admission is mechanical at queue read and again at delivery closure,
    against the immutable submit-time snapshot. Leave rejected submissions parked.
-6. **Assemble and deliver exact waves**, oldest compatible waves first. For every group, call
+6. **Assemble and deliver exact waves**, oldest compatible waves first. Preserve the real pinned
+   verifier and all immutable capture/candidate checks; assembled-tree proof is reusable only when
+   the runtime authorizes its exact tree, command, candidate, and capture identities. For every group, call
    `sidequest assemble-wave` with every intended participant and its project-defined gate evidence.
    A moved baseline, missing verifier, out-of-scope surface, or overlapping participant surface refuses
    assembly and reports the affected candidates without changing their submissions. Pass only the exact
@@ -212,23 +311,28 @@ the ticket.
    every participant and completes them as control-plane tickets. A conflict or failed delivery
    verification rolls back the delivery, leaves the wave parked, and requires a repair or refreshed
    assembly. This local completion does not wait for remote reachability.
-7. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
-   (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
-   plugins) so per-ticket-green but jointly-red seams are caught before versioning or the push.
+7. **Run one combined full merged-tree gate per wave** after delivery and before versioning,
+   including a singleton. Use the project's documented full gate covering the touched suites; combine
+   the wave's checks in that gate rather than adding a second seam suite or per-ticket full runs.
+   Preserve delivery's pinned verifier. A changed tree after rebase requires a fresh full gate.
 8. **Apply review at the sized depth**: consume each submission report and the delivery and
    merged-tree gate evidence. Do not inspect executor source or diffs as an orchestrator review.
-   A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
-   candidate when the oracle is weak, consumers remain materially unchecked, or the work is
-   high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
+   A deterministic oracle that covers the contract needs no bound review, at any wave size.
+   Bind a `review-audit` ticket to the exact candidate only for a contract-named seam the oracle
+   cannot exercise or a required high-stakes review. Multiple lenses need distinct named risks,
+   never merely multiple waves. Bind required candidate reviews before step 6; step 8 consumes
+   their terminal evidence, since a bound candidate cannot deliver while review is pending. A bound candidate
    cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes.
    Neither the candidate nor its bound review can ever be deleted, even with `force`; keep both
    immutable records instead of cancelling the review. This guard does not repair older orphaned
    records. A fresh independently reviewed replacement is separate work. No caller-controlled route
    can reject the candidate: `rework` and every other direct route return
    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
-   the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
-   defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
-   reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
+   the review ticket and releases that review with `kind=oracle`. When the defect means the bound
+   candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and
+   verdict text does not override the enum. For a mistaken finalized `accepted`, the main thread uses MCP
+   `verdict` with `correct` under the [correction contract](invocation-contracts.md). After a fresh repair
+   is reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
    Integration also needs the immutable terminal dispatch identities for the submitted source and
    completed review, and refuses when either is missing or both are the same agent. Resolve or
    explicitly accept every finding before versioning or pushing. A finding that needs repair leaves
@@ -239,7 +343,7 @@ the ticket.
    published plugin left a fragment in `.release/unreleased/`, and that the window is the one you mean
    to ship: `node scripts/release/plan.mjs` then `node scripts/release/cut.mjs --prepare --dry-run`.
    A missing fragment is what `node scripts/release/note.mjs <REF> --plugins <name> --bump <level>
-   --commit <sha>` is for. If this or the seam/review gate fails, the locally delivered ticket is
+   --commit <sha>` is for. If this or the full/review gate fails, the locally delivered ticket is
    already done; record the failure and do not claim that it was pushed.
 10. **Push and confirm**: push the integration branch the dispatch recorded, from the registered
     checkout — never a new branch. Where that branch is protected (Toolshed: both `develop` and
@@ -261,13 +365,35 @@ the ticket.
     failed, retain the refs or executor worktrees needed for recovery, record the failure on the done
     ticket, and still release the publish lock.
 
+## Environment-bound delivery
+
+The environment lane is integrate's delivery gate. An isolated dispatch pinned to
+`environment: shared` runs focused checks without the environment, commits and submits. Submit records
+`deferred`; executor capture and assembled-wave verification do not run that command. The orchestrator
+runs CLI `integrate <ref> --project <path> --json` through Bash `run_in_background` and acts on its
+completion notification while continuing independent work. MCP refuses `environment_lane_requires_cli`
+because running the environment gate inside the board server stalls executor board calls.
+
+The lane merges the pinned candidate onto the current shared-checkout tip and verifies that merged tree
+under the delivery lock. Delivery must be `merge` or `replay`: `apply` leaves the target dirty, so
+the next item refuses `integration_target_dirty`. `delivery_in_progress` names the holder, commit,
+start time and log; retry after its run finishes. Multi-ref CLI integrate can batch candidates in one
+all-or-nothing gate. `groomClose` with `deliveryCommit` also runs delivery verification in the registered
+checkout, so that closure is a lane run.
+
+A post-merge verify failure or `--no-ff` merge conflict rolls back and bounces an unbound candidate
+through rework once. The next briefing carries Pending rework with the command, log, failures and tail
+(or conflict evidence). Only the orchestrator dispatches again; nothing spawns automatically. A second
+lane failure stays parked with `environment_lane_second_failure` naming both logs. Review-bound
+candidates never auto-rework.
+
 ## Integration failures fail closed
 
 A submission that conflicts or fails post-integration reverify before local delivery closure is never
-force-merged and never silently dropped. A seam, review, version, or push failure after local delivery
+force-merged and never silently dropped. A full gate, review, version, or push failure after local delivery
 is recorded against the already-done ticket; it must not be described as remotely reachable:
 
-- Before local delivery closure, leave its submission parked (do NOT `done`, do NOT clear it reflexively).
+- Before local delivery closure, an environment-bound unbound candidate follows the one-bounce rule above. Otherwise leave its submission parked (do NOT `done`, do NOT clear it reflexively).
 - File a narrowly scoped integration ticket for a local delivery conflict or verification failure: the
   conflicting ref, the exact failure output, the submitted commit + durable ref, and what the integrator
   may touch. Link it `blocks` the original.
@@ -276,7 +402,9 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
-  normal repair claim.
+  normal repair claim. The repair dispatch's briefing carries a "Pending rework" section naming
+  the rejected candidate, reason, and review above the comment thread, so do not restate the rework
+  as a comment before dispatching.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
   returned an unbound candidate to its producer without a review rejection, and the candidate must
   be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate
@@ -296,7 +424,7 @@ just to run `submit` or `done`.
 The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction leaves: a
 held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the TTL or
 `--steal`s a provably stale holder), a registered checkout left mid-delivery or dirty (`git status`,
-and `integrate` refuses it as `integration_target_dirty` until it is clean), and either parked
+and `integrate` refuses it as `integration_target_dirty` until the paths the delivery writes are clean), and either parked
 submissions from a pre-delivery failure or done tickets whose local delivery has not reached the remote
 yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's completion and delivery
 record, recover any durable refs needed for the push, then finish the push or record the failure on the

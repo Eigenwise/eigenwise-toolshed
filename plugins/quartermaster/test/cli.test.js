@@ -100,9 +100,12 @@ test('decline-resupply records the decline without clearing the current accumula
 
 test('allowlist summarizes large blocked sets and caps requested details', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  // Space-separated, not `;`-joined: a `;` now blocks fingerprintFor from
+  // producing a fingerprint at all (the compound-command veto runs on the
+  // raw command), so it would never reach the blocked set this test sizes.
   const commands = Array.from({ length: 30 }, (_, index) => {
     const label = String(index).padStart(2, '0');
-    return Array.from({ length: 3 }, () => `safe-${label} list; rm -rf /tmp/quartermaster-${label}`);
+    return Array.from({ length: 3 }, () => `safe-${label} list rm -rf /tmp/quartermaster-${label}`);
   }).flat();
   const environment = permissionEnvironment(projectPath, commands);
 
@@ -129,16 +132,59 @@ test('allowlist identifies rule vetoes and sighted destructive commands', () => 
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
   const environment = permissionEnvironment(projectPath, [
     ...Array.from({ length: 3 }, () => 'git push origin main'),
-    ...Array.from({ length: 3 }, () => 'git log --oneline; rm -f /tmp/quartermaster-log'),
+    // Space-separated, not `;`-joined: a `;` now blocks fingerprintFor from
+    // producing a fingerprint at all, so this is a destructive verb tucked
+    // past the kept two-word prefix without a compound operator in the way.
+    ...Array.from({ length: 3 }, () => 'git log --oneline rm -f /tmp/quartermaster-log'),
   ]);
 
   const result = run('allowlist', projectPath, environment);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /permission:Bash:git push: vetoed as too broad a rule \(wildcard would cover destructive siblings\)/);
-  assert.match(result.stdout, /permission:Bash:git log: sighted destructive command "git log --oneline; rm -f \/tmp\/quartermaster-log"/);
+  assert.match(result.stdout, /permission:Bash:git log: sighted destructive command "git log --oneline rm -f \/tmp\/quartermaster-log"/);
   const report = jsonReport(result);
   const push = report.blocked.top.find((entry) => entry.fingerprint === 'permission:Bash:git push');
   const log = report.blocked.top.find((entry) => entry.fingerprint === 'permission:Bash:git log');
   assert.equal(push.reason, 'vetoed as too broad a rule (wildcard would cover destructive siblings)');
-  assert.equal(log.reason, 'sighted destructive command "git log --oneline; rm -f /tmp/quartermaster-log"');
+  assert.equal(log.reason, 'sighted destructive command "git log --oneline rm -f /tmp/quartermaster-log"');
+});
+
+test('decisions update rewrites the row in place; decisions remove drops it, leaving other rows alone', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  const environment = { QUARTERMASTER_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-decisions-')) };
+
+  const added = run(['decisions', 'add', '--title', 'x', '--fingerprint', 'rule:x', '--status', 'deferred'], projectPath, environment);
+  assert.equal(added.status, 0, added.stderr);
+  const otherAdded = run(['decisions', 'add', '--title', 'y', '--fingerprint', 'rule:y', '--status', 'applied'], projectPath, environment);
+  assert.equal(otherAdded.status, 0, otherAdded.stderr);
+  const entry = jsonReport(added);
+  const other = jsonReport(otherAdded);
+
+  const updated = run(['decisions', 'update', entry.id, '--status', 'applied'], projectPath, environment);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.equal(jsonReport(updated).status, 'applied');
+
+  const afterUpdate = JSON.parse(run(['decisions', 'list'], projectPath, environment).stdout);
+  assert.equal(afterUpdate.length, 2, 'the status change rewrote the row instead of appending a second one');
+  assert.equal(afterUpdate.find((decision) => decision.id === entry.id).status, 'applied');
+
+  const removed = run(['decisions', 'remove', entry.id], projectPath, environment);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.deepEqual(jsonReport(removed), { id: entry.id, removed: true });
+
+  const afterRemove = JSON.parse(run(['decisions', 'list'], projectPath, environment).stdout);
+  assert.deepEqual(afterRemove.map((decision) => decision.id), [other.id]);
+});
+
+test('decisions update and decisions remove need an id, and refuse an unknown one', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  const environment = { QUARTERMASTER_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-decisions-')) };
+
+  const noId = run(['decisions', 'update', '--status', 'applied'], projectPath, environment);
+  assert.notEqual(noId.status, 0);
+  assert.match(noId.stderr, /decisions update needs an id/);
+
+  const unknown = run(['decisions', 'remove', 'not-a-real-id'], projectPath, environment);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /no decision with id/);
 });

@@ -10,6 +10,7 @@ export type ReviewMirror = Readonly<{
   candidate?: ReviewCandidate;
   createdAt?: string;
   outcome?: ReviewOutcome;
+  correctedAt?: string;
 }>;
 
 // Which half of the binding survived. A candidate written before this store
@@ -221,14 +222,27 @@ export function reviewOutcomeFromOracleVerdict(outcome: OracleVerdictOutcome): R
   return outcome;
 }
 
+export function effectiveOracleVerdictOutcome(oracle?: {
+  corrections?: readonly { to: OracleVerdictOutcome }[];
+  verdict?: { outcome: OracleVerdictOutcome };
+}): OracleVerdictOutcome | undefined {
+  if (!oracle) return;
+  const { corrections = [], verdict } = oracle;
+  const correction = corrections.at(-1);
+  if (correction) return correction.to;
+  return verdict?.outcome;
+}
+
 export function reviewRelationOutcome(relation?: ReviewRelation | null): string {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || 'planned');
 }
 
-export function reviewLockMessage(operation: string, ticket: any, relation: ReviewRelation): string {
+export function reviewLockMessage(operation: string, ticket: { ref?: string } | null | undefined, relation: ReviewRelation): string {
   const candidate = relation.candidate?.value || 'its candidate';
   return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)}`
     + ' and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.'
     + ' A failed review records its evidence on the review ticket and releases it for an external oracle;'
-    + ' an oracle-confirmed defect records the candidate rejection, and only an integrated repair may supersede it.';
+    + ' Record outcome rejected when the candidate must not ship. A mistaken finalized accepted can be corrected'
+    + ' by the main thread using MCP verdict with correct, original list verdict timestamp, exact source/candidate, and evidence;'
+    + ' only an integrated repair may supersede it. The repair still requires independent review before integration.';
 }

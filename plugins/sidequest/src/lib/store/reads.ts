@@ -4,7 +4,7 @@ function createReads(dependencies: any) {
   const {
     checkpointProjection,
     claimIdleMs,
-    claimReclaimable,
+    claimStaleness,
     classifierCategories,
     contractMetadata,
     countTickets,
@@ -56,7 +56,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
       files: Array.isArray(t.files) ? t.files : [],
       contracts: contractMetadata(t),
     } : {}),
-    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: claimReclaimable(t) } : null,
+    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, ...claimStaleness(t) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     checkpoint: checkpointProjection(t),

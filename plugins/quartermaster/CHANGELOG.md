@@ -1,5 +1,185 @@
 # Changelog
 
+## 0.12.1 (2026-10-12)
+
+Released in v3.595.0, up from 0.12.0.
+
+### Fixes
+
+- The CRAP gate enforces only new complexity and reports touched legacy functions as informational (SQ-3523)
+  The quality-gate core classifies every changed function against the base: `new` (no partner at the base), `modified-raised` (its cyclomatic complexity rose) or `legacy-unchanged` (equal or lower). Only `new` and `modified-raised` rows must score below 6 or count as unverified; a `legacy-unchanged` row is printed as `LEGACY` with its number and never fails or touches the exit code, so a pass-through edit inside a big legacy function is no longer a refactor demand. The repository gate (`scripts/quality/crap.mjs`) prints the three classes as separate sections with their counts in the summary line, and gap pairing now prefers an equal name before falling back to order, so a helper inserted above an edited function does not take its partner. The Quartermaster `crap-gate` reference and the Sidequest `verify-discipline` skill tell executors to block only on new complexity the change introduced.
+- Quartermaster never installs per-turn blocking quality hooks (SQ-3635)
+  The CRAP gate reference, setup, and resupply skills now say plainly that the gate is an on-demand command or CI step, and that Quartermaster never writes UserPromptSubmit, Stop, or PreToolUse hooks that block a turn on a receipt. Resupply routes an existing receipt-demanding hook to a removal recommendation, and scoring never demands files that arrived through a merge, rebase, or pull.
+- Resupply offers no longer force another turn (SQ-3642)
+  Quartermaster's Stop hook now shows a non-blocking resupply offer to the user after the reply instead of making Claude continue. Once-per-session offers, cooldowns and decline bookkeeping stay unchanged.
+
+## 0.12.0 (2026-10-07)
+
+Released in v3.593.0, up from 0.11.10.
+
+### Features
+
+- quartermaster crap: every lizard row is bound to its own definition, misread spans are corrected, and the gate fails closed on a changed line no row measures; adds --cc-only and the stale-base warning (SQ-3459)
+  Closes GitHub issues #357, #471, #476, #477, #482, #433 and #423; supersedes PRs #478, #358, #434 and #425.
+
+  The CRAP gate no longer skips a `function`, method or constructor whose parameter list holds a call,
+  such as `load(path = resolve(), opts)`. lizard reports no row at all for that function, and can lose
+  plain functions after it in the same file, so the gate never checked them, and a file holding only
+  such functions exited 2 with "lizard reported zero functions". The gate now reads each definition
+  lizard left out from the source and scores it by its own branch count, labelled `source=source-scan`.
+  An edit to it counts as a change against the base revision, and it passes or fails on coverage like
+  any other function.
+
+  The CRAP gate no longer trusts the span lizard 1.24.0 reports for a JavaScript-family function. It
+  reads where each function really starts and ends from the source and corrects three misreads:
+
+  - A template literal nested in another one's `${...}` (#471) made lizard run a row past the function's
+    end, charging an edit in a later function to the wrong one at the wrong complexity, or drop every
+    function after it, so a new over-ceiling function passed as `0 of 0`. The gate now clamps that row to
+    the real body, recounts its branches, and reads the functions lizard lost from the source
+    (`source=source-scan`).
+  - lizard's TypeScript reader could end a `.tsx` component inside its JSX (#476), so an edit near the
+    bottom of the component sat outside every row and passed. The gate now widens the row to the
+    component's real end.
+  - For an arrow whose `=>` ends a line (#477), lizard started and ended the row on the body's first
+    line, so the gate exited 2 for a line with no coverage data, and an edit lower in the arrow sat in no
+    row. The gate now starts the row at the arrow and ends it with the arrow's body.
+
+  User-visible change: a change the gate used to pass can now exit 2. When a changed or new line lies
+  inside a function the source scan finds but no row of that function's own measures, even after these
+  corrections, the gate exits 2 with "changed lines are unmeasured at `<file>:<line>`" instead of passing
+  code nothing measured. A parent's row never stands in for a nested function lizard dropped, and the
+  gate now ends an honest row where the body ends, so a change to the next function's signature line no
+  longer counts as a change to the function above it. A regex literal holding an unbalanced `(` or `{`
+  shifts every later lizard row up a line; the gate widens such a row back onto its signature where it
+  can, and exits 2 for an edit below one it cannot place.
+
+  A change could also fail on functions it never touched (#482). A `<` comparison such as
+  `s.pages < maxPages` makes lizard read a type argument, so the same unchanged text got different bounds
+  on the base and candidate sides. An untouched function then had no base copy to pair with and failed as
+  new code. In a JavaScript-family file, the gate now counts a function as changed or new only when a
+  changed line falls inside its span. A changed line is an added or edited line, or for a deletion, the
+  line just above it.
+
+  The unverified-measurement guard counts function-like tokens in code only (#433): in a JavaScript-family
+  file, `function`, `=>` or `name(...) {` inside a comment or string text is no definition, while a
+  template's `${...}` expression is code. Other languages keep the raw-text count.
+
+  `crap --cc-only` checks the cc 6 ceiling without coverage (#423): lizard only, no coverage command, no
+  lcov, the same changed-function selection and exit codes. A full-gate failure whose cc alone reaches the
+  ceiling says so (`cc 6 or more fails at any coverage`), and a local base behind its upstream warns on
+  stderr without failing the gate.
+
+### Fixes
+
+- Recommend native Claude Code mods through resupply (SQ-3408)
+- Quality gates are discovered per project (SQ-3451)
+  Sidequest briefings discover the project quality gate instead of imposing a shipped CRAP threshold. Projects without a gate run their pinned verifier and continue. Quartermaster setup and resupply offer the gate as an opt-in proposal, with its command and measurement costs.
+- CRAP gate's regex-literal test passes on lizard 1.24.0 and 1.24.1 (SQ-3468)
+  The real-lizard test for a function below a regex literal holding `(` assumed every lizard misreads it. CI has no `lizard` on PATH and gets PyPI's latest (1.24.1) through `pipx run`, which reads the function on its real lines, so the test failed there. It now asks the resolved lizard for the row first and expects exit 1 with the row at line 10 when the row is right, or exit 2 naming line 12 as unmeasured when it sits one line high. A new injected-CSV test pins that fail-closed path for any lizard version. Only tests changed.
+
+## 0.11.10 (2026-10-03)
+
+Released in v3.589.0, up from 0.11.9.
+
+### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Make directory-alias verification portable on Windows (SQ-3306) [`736c299`](https://github.com/Eigenwise/eigenwise-toolshed/commit/736c299c)
+  Use a directory junction for the Windows realpath fixture while preserving its alias-resolution assertions. The full Quartermaster suite can run without directory-symlink privilege.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+## 0.11.9 (2026-09-30)
+
+Released in v3.585.0, up from 0.11.8.
+
+### Fixes
+
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+## 0.11.8 (2026-09-30)
+
+Released in v3.584.0, up from 0.11.7.
+
+### Fixes
+
+- CRAP gate measures a function lizard cuts off at its parameter list over its real body and complexity (GH-315)
+  The CRAP gate no longer exits 2 "coverage unverified" for a function whose parameter list holds
+  parentheses of its own, such as a React component with a function-typed prop
+  (`onSelect: (card: Card) => void`) or a function with a default arrow parameter. lizard's JavaScript,
+  TypeScript and TSX readers end such a function inside its own signature, where coverage has no line
+  data, and leave every branch in its body out of its complexity. The gate now reads the source, measures
+  coverage over the function's real body, and scores the larger of lizard's complexity and the body's own
+  branch count, so an uncovered branchy function fails instead of passing at complexity 1. An edit to
+  that body counts as a change against the base revision. When the gate cannot find where the body ends,
+  the function is still reported as unverified.
+
+## 0.11.7 (2026-09-29)
+
+Released in v3.582.0, up from 0.11.6.
+
+### Fixes
+
+- Quartermaster CRAP gate reports phantom complexity in .tsx: lizard loses a self-closing JSX tag after brace attributes plus a hyphenated attribute and attributes later functions to that component (GH-239)
+  lizard 1.24.0's TSX reader abandons an opening tag as soon as an attribute is not `name="text"` or `name={expr}` — a hyphenated attribute like `data-testid`, a valueless one like `required`, a spread, even tag text holding `(`, `)`, `;` or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced braces kept the enclosing component open to the end of the file, so a React component was charged with a complexity nothing in it branches on and the functions it swallowed were never gated at all. The gate now measures `.tsx` and `.jsx` through lizard's TypeScript reader, from a byte-for-byte copy of the file under a `.ts` or `.js` name, on both sides of the ratchet. Nothing in the source is rewritten, so line numbers, coverage ranges and baseline identity still come from the real file, and every offender line for those files names the measurement behind it.
+
+## 0.11.6 (2026-09-28)
+
+Released in v3.581.0, up from 0.11.5.
+
+### Fixes
+
+- Auto-allowlist vetoes loop keywords, shell fragments, variable-only cd, and version-pinned paths (GH-165) [`e222dd0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e222dd0e6676e9cbf9ca5e1f7fffffdc8b7a3e08)
+- CRAP ratchet pairs each function one-to-one with its baseline copy by source text, so an inserted anonymous function no longer shifts its neighbours onto the wrong row (GH-167)
+- CRAP gate measures the worktree it runs in and isolates coverage output per run (GH-169)
+- CRAP ratchet pairs a function to its baseline by source text, so an insertion cannot flag its untouched neighbours (GH-182)
+  Inserting one function shifted the position of every later function sharing its name, so the ratchet compared untouched namesakes against the wrong baseline row: one came back as a regression and the one pushed past the baseline's ordinals came back as a new function over the ceiling. Every function now pairs with its baseline copy by exact source text first, then by name and position among its namesakes, and pairing is one-to-one: a baseline function is claimed by at most one of today's functions, and a function that claims nothing answers to the ceiling on its own. A byte-identical copy of an over-ceiling function is therefore new code over the ceiling, and so is a third `run` in a file that already had two.
+- CRAP gate's unmeasured-files check now honours the config's exclude patterns (GH-270)
+  The CRAP gate's unmeasured-files check now skips files covered by the configured `exclude`
+  patterns instead of treating every excluded, function-bearing file as an unverified measurement.
+  A changed file that matches an exclude pattern no longer forces the gate to exit with a spurious
+  "lizard reported zero functions" error.
+- status, doctor and ensure agree on the shim's state, and ensure stops fighting its own shim (SQ-3124)
+  `status`, `doctor` and `ensure` now read the shim through one shared probe and print the same state:
+  `running-ours`, `running-foreign`, `starting` or `stopped` (#275). `ensure` against a shim that is ours
+  and already at the installed version is a no-op success instead of a second supervisor failing on
+  `EADDRINUSE` (#230), and a supervisor that is still starting gets the startup window to answer before
+  anything replaces it.
+
+  The supervisor no longer starts a second proxy while the first is still warming up: a proxy it started
+  gets 30 seconds to answer `/v1/models` before recovery replaces it, and a replacement stops the old
+  child first (#251).
+
+  On Windows, port-owner detection reads `netstat`'s foreign-address and PID columns instead of the
+  localized `LISTENING` text, so a German or French UI no longer hides the owner and upgrades replace the
+  running shim (#296). The advised command path already falls back to the CLI until SessionStart writes
+  the stable launcher (#77).
+
+  Quartermaster's session-start gateway audit reads the new shim line: `running-ours` counts as a running
+  shim, and a `running-foreign` listener no longer passes for one.
+- Model Gateway keeps its built-in fallback model list out of Claude Code's discovery cache, and updating Toolshed no longer wires the directory the updater runs from (SQ-3126)
+  GH-297: the discovery cache is written only from a list the proxy answered. While the proxy is
+  unreachable the shim serves `models.json` or its built-in list from memory, keeps the previous cache,
+  retries the proxy on its next refresh tick, and `status` reports `fallback catalog (proxy unreachable)`.
+
+  GH-292: the stable updater runs `setup --preserve-wiring`. It refreshes Claude alias pins only in
+  projects already recorded as wired, and only when a pin changed, so an update that changes no version
+  touches no settings file. Wiring a project stays a deliberate `setup` or `env --write-project` inside it.
+- Quartermaster: fix crap base/ratchet docs, add decisions update/remove, name real doctor failures, and stop counting hook blocks as denials (SQ-3128)
+  Four small fixes: the crap gate's config key is documented and read as base, with ratchet kept as a deprecated alias (GH-267). decisions gained update and remove verbs so a status change no longer needs a stale duplicate row (GH-265). The model-gateway health notice now names doctor's own first failing check instead of always blaming Grok auth (GH-141). mine/verify now detect a PreToolUse hook's own stderr wrapper, classify it as hook_block, and exclude it from denial friction and allowlist candidates while still showing its count separately (GH-302 item 2).
+
+## 0.11.5 (2026-09-28)
+
+Released in v3.580.0, up from 0.11.4.
+
+### Fixes
+
+- Quartermaster CLI loads again from the plugin cache: the CRAP module now ships inside the plugin (GH-261, GH-262, GH-301, GH-302, GH-309) (SQ-3095)
+
 ## 0.11.4 (2026-09-22)
 
 Released in v3.575.0, up from 0.11.3.

@@ -69,6 +69,18 @@ test('CLI command help stays focused on the requested command', () => {
   }
 });
 
+test('CLI help tells rework to pass the submitter identity, never a reviewer label (GH-375)', () => {
+  const env = isolatedEnv();
+  const topLevel = run(['--help'], env);
+  assert.equal(topLevel.status, 0, topLevel.stderr);
+  assert.match(topLevel.stdout, /rework.*--by <submitter/);
+  assert.doesNotMatch(topLevel.stdout, /--by reviewer/);
+
+  const reworkHelp = run(['rework', '--help'], env);
+  assert.equal(reworkHelp.status, 0, reworkHelp.stderr);
+  assert.doesNotMatch(reworkHelp.stdout, /--by reviewer/);
+});
+
 test('worktree sweep help and retention docs use the classification order and the real thresholds', () => {
   const worktrees = require('../lib/worktrees');
   const order = worktrees.WORKTREE_SWEEP_CLASSIFICATION_ORDER as string[];

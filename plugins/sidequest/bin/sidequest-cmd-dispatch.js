@@ -77,6 +77,7 @@ async function cmdDispatch(opts, positional) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
+    ...dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {},
     warnings: presentedWarnings,
     spawn: spawn2,
     guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} and its dispatched token file.`
@@ -215,37 +216,77 @@ async function cmdRoute(opts, positional) {
     ...ticket ? { ticket: { ref: ticket.ref, route: ticket.route || null } } : {}
   }), null, 2) + "\n");
 }
+const BOARD_CONFIG_OPTION_PATCH_KEYS = {
+  name: "name",
+  "always-in-scope": "alwaysInScope",
+  "read-only-denied-tool": "readOnlyDeniedTools",
+  "integration-mode": "integrationMode",
+  "integration-branch": "integrationBranch",
+  delivery: "delivery",
+  "integration-verify-timeout-ms": "integrationVerifyTimeoutMs",
+  "worktree-isolation": "worktreeIsolation",
+  "verify-environment": "verifyEnvironment",
+  "worktree-base": "worktreeBase",
+  "not-integrated-salvage-age-hours": "notIntegratedSalvageAgeHours",
+  "worktree-recovery-retention-age-hours": "worktreeRecoveryRetentionAgeHours",
+  "auto-approve-test-scope": "autoApproveTestScope",
+  "auto-approve-scope": "autoApproveScope",
+  "worktree-setup": "worktreeSetup"
+};
+const BOARD_CONFIG_JSON_OPTIONS = {
+  "generated-pairs": { key: "generatedPairs", shape: "a JSON array of { from, to } patterns" },
+  "worktree-dependency-paths": { key: "worktreeDependencyPaths", shape: "a JSON array of { path, mode } entries" }
+};
+function parseBoardConfigJsonOption(option, raw, shape) {
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return fail(`board-config: --${option} must be ${shape}.`);
+  }
+}
+function boardConfigPatch(opts) {
+  const patch = {};
+  for (const [option, key] of Object.entries(BOARD_CONFIG_OPTION_PATCH_KEYS)) {
+    if (opts[option] != null) patch[key] = opts[option];
+  }
+  for (const [option, { key, shape }] of Object.entries(BOARD_CONFIG_JSON_OPTIONS)) {
+    if (opts[option] != null) patch[key] = parseBoardConfigJsonOption(option, opts[option], shape);
+  }
+  return patch;
+}
+function listOrNone(values) {
+  return values.length ? values.join(", ") : "(none)";
+}
+function enabledOrDisabled(flag) {
+  return flag ? "enabled" : "disabled";
+}
+function generatedPairLabel(pair) {
+  return `${pair.from} -> ${pair.to}`;
+}
+function dependencyPathLabel(dependency) {
+  return `${dependency.mode} ${dependency.path}`;
+}
+function printBoardConfig(payload) {
+  console.log(`board name: ${payload.name}`);
+  console.log(`always in scope: ${listOrNone(payload.alwaysInScope)}`);
+  console.log(`generated pairs: ${listOrNone(payload.generatedPairs.map(generatedPairLabel))}`);
+  console.log(`integration mode: ${payload.integrationMode}`);
+  console.log(`integration branch: ${payload.integrationBranch}`);
+  console.log(`delivery: ${payload.delivery}`);
+  console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
+  console.log(`worktree isolation: ${enabledOrDisabled(payload.worktreeIsolation)}`);
+  console.log(`verify environment: ${payload.verifyEnvironment}`);
+  console.log(`worktree base: ${payload.worktreeBase}`);
+  console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
+  console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h`);
+  console.log(`test scope auto-approval: ${enabledOrDisabled(payload.autoApproveTestScope)}`);
+  console.log(`configured scope auto-approval: ${listOrNone(payload.autoApproveScope)}`);
+  console.log(`worktree setup command: ${payload.worktreeSetup || "(none)"}`);
+  console.log(`worktree dependency paths: ${listOrNone(payload.worktreeDependencyPaths.map(dependencyPathLabel))}`);
+}
 async function cmdBoardConfig(opts) {
   const { slug, meta } = await resolveProject(Object.assign({}, opts, { name: void 0 }));
-  const patch = {};
-  if (opts.name != null) patch.name = opts.name;
-  if (opts["always-in-scope"] != null) patch.alwaysInScope = opts["always-in-scope"];
-  if (opts["read-only-denied-tool"] != null) patch.readOnlyDeniedTools = opts["read-only-denied-tool"];
-  if (opts["generated-pairs"] != null) {
-    try {
-      patch.generatedPairs = JSON.parse(opts["generated-pairs"]);
-    } catch (_) {
-      fail("board-config: --generated-pairs must be a JSON array of { from, to } patterns.");
-    }
-  }
-  if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
-  if (opts["integration-branch"] != null) patch.integrationBranch = opts["integration-branch"];
-  if (opts.delivery != null) patch.delivery = opts.delivery;
-  if (opts["integration-verify-timeout-ms"] != null) patch.integrationVerifyTimeoutMs = opts["integration-verify-timeout-ms"];
-  if (opts["worktree-isolation"] !== void 0) patch.worktreeIsolation = opts["worktree-isolation"];
-  if (opts["worktree-base"] != null) patch.worktreeBase = opts["worktree-base"];
-  if (opts["not-integrated-salvage-age-hours"] != null) patch.notIntegratedSalvageAgeHours = opts["not-integrated-salvage-age-hours"];
-  if (opts["worktree-recovery-retention-age-hours"] != null) patch.worktreeRecoveryRetentionAgeHours = opts["worktree-recovery-retention-age-hours"];
-  if (opts["auto-approve-test-scope"] !== void 0) patch.autoApproveTestScope = opts["auto-approve-test-scope"];
-  if (opts["auto-approve-scope"] != null) patch.autoApproveScope = opts["auto-approve-scope"];
-  if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
-  if (opts["worktree-dependency-paths"] != null) {
-    try {
-      patch.worktreeDependencyPaths = JSON.parse(opts["worktree-dependency-paths"]);
-    } catch (_) {
-      fail("board-config: --worktree-dependency-paths must be a JSON array of { path, mode } entries.");
-    }
-  }
+  const patch = boardConfigPatch(opts);
   const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
   const payload = Object.assign({ project: slug, projectName: result.config.name }, result.config);
@@ -253,24 +294,10 @@ async function cmdBoardConfig(opts) {
     process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
     return;
   }
-  console.log(`board name: ${payload.name}`);
-  console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(", ") : "(none)"}`);
-  console.log(`generated pairs: ${payload.generatedPairs.length ? payload.generatedPairs.map((pair) => `${pair.from} -> ${pair.to}`).join(", ") : "(none)"}`);
-  console.log(`integration mode: ${payload.integrationMode}`);
-  console.log(`integration branch: ${payload.integrationBranch}`);
-  console.log(`delivery: ${payload.delivery}`);
-  console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
-  console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
-  console.log(`worktree base: ${payload.worktreeBase}`);
-  console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
-  console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h`);
-  console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? "enabled" : "disabled"}`);
-  console.log(`configured scope auto-approval: ${payload.autoApproveScope.length ? payload.autoApproveScope.join(", ") : "(none)"}`);
-  console.log(`worktree setup command: ${payload.worktreeSetup || "(none)"}`);
-  console.log(`worktree dependency paths: ${payload.worktreeDependencyPaths.length ? payload.worktreeDependencyPaths.map((dependency) => `${dependency.mode} ${dependency.path}`).join(", ") : "(none)"}`);
+  printBoardConfig(payload);
 }
 async function cmdProjects(opts) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + "\n");
     return;
@@ -304,6 +331,15 @@ function resolveExplicitBoard(opts, positional, action) {
   if (!found.ok) fail(`${action}: board "${ref}" ${describeFindFailure(found, ref)}`);
   return found;
 }
+function keptArchivedNote(candidateRefs) {
+  const kept = candidateRefs.keptArchived?.length || 0;
+  return kept ? `, ${kept} kept under refs/sidequest-archived/ because another board holds the live name` : "";
+}
+function candidateRefsNote(candidateRefs) {
+  if (!candidateRefs) return "";
+  if (candidateRefs.error) return `; candidate refs left in place: ${candidateRefs.error}`;
+  return `; moved ${candidateRefs.moved.length} candidate ref(s)${keptArchivedNote(candidateRefs)}`;
+}
 async function cmdArchiveBoard(opts, positional) {
   const board = resolveExplicitBoard(opts, positional, "archive-board");
   const res = store.archiveProject(board.slug);
@@ -312,7 +348,7 @@ async function cmdArchiveBoard(opts, positional) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + "\n");
     return;
   }
-  console.log(`✓ ${res.alreadyArchived ? "already archived" : "archived"} board ${board.meta.name}`);
+  console.log(`✓ ${res.alreadyArchived ? "already archived" : "archived"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 async function cmdUnarchiveBoard(opts, positional) {
   const board = resolveExplicitBoard(opts, positional, "unarchive-board");
@@ -322,7 +358,7 @@ async function cmdUnarchiveBoard(opts, positional) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + "\n");
     return;
   }
-  console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}`);
+  console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 function describeFindFailure(res, ref) {
   if (res.reason === "ambiguous") {

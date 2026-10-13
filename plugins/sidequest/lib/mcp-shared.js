@@ -1,6 +1,7 @@
 "use strict";
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const store = require("./store");
 const work = require("./work");
@@ -36,26 +37,32 @@ function serverVersion() {
     return "0.0.0";
   }
 }
+function registeredBoard(registration) {
+  if (!registration.ok) throw new Error(registration.reason);
+  return registration;
+}
+function namedBoard(arg) {
+  const res = store.findProject(arg);
+  if (res.ok) return { slug: res.slug, meta: res.meta };
+  if (res.reason === "ambiguous") {
+    throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
+  }
+  if (path.isAbsolute(arg)) return registeredBoard(store.registerProject(store.explicitProjectRoot(arg)));
+  throw unknownBoardError(arg, res.known);
+}
+function unknownBoardError(arg, knownNames) {
+  const known = Array.from(new Set(knownNames || []));
+  return new Error(`project "${arg}" does not match any registered board.${known.length ? " Known: " + known.join(", ") : ""}`);
+}
+function sessionBoard() {
+  const registration = store.registerProject(store.sessionProjectRoot(), void 0, { implicit: true });
+  if (registration.ok) return registration;
+  const known = store.listProjects().map((project) => project.name);
+  throw new Error(`${registration.reason} Pass project to name a registered board${known.length ? ": " + known.join(", ") : ""}.`);
+}
 function resolveProject(projectArg) {
   const arg = projectArg == null ? "" : String(projectArg).trim();
-  if (arg) {
-    const res = store.findProject(arg);
-    if (res.ok) return { slug: res.slug, meta: res.meta };
-    if (res.reason === "ambiguous") {
-      throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
-    }
-    if (path.isAbsolute(arg)) {
-      let isDir = false;
-      try {
-        isDir = fs.statSync(arg).isDirectory();
-      } catch (_) {
-      }
-      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)));
-    }
-    const known = Array.from(new Set(res.known || []));
-    throw new Error(`project "${arg}" does not match any registered board.${known.length ? " Known: " + known.join(", ") : ""}`);
-  }
-  return store.ensureProject(store.sessionProjectRoot());
+  return arg ? namedBoard(arg) : sessionBoard();
 }
 function callerWorktreePath(args) {
   const supplied = String(args?.worktree || "").trim();
@@ -65,17 +72,22 @@ function callerWorktreePath(args) {
     return null;
   }
 }
+function worktreeBindsCaller(dispatch, callerWorktree) {
+  const recorded = String(dispatch.worktree || "").trim();
+  if (!recorded) return false;
+  const caller = callerWorktree();
+  return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+}
+function claimNamesCaller(ticket, args) {
+  const by = String(args?.by || "").trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
 function boardBindsCaller(ticket, args, callerWorktree) {
   const dispatch = ticket?.dispatch;
   if (!dispatch) return false;
-  if (dispatch.sharedTree === false) {
-    const recorded = String(dispatch.worktree || "").trim();
-    if (!recorded) return false;
-    const caller = callerWorktree();
-    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
-  }
-  const by = String(args?.by || "").trim();
-  return Boolean(by) && ticket.claim?.by === by;
+  if (dispatch.sharedTree !== false) return claimNamesCaller(ticket, args);
+  if (args?.worktree) return worktreeBindsCaller(dispatch, callerWorktree);
+  return claimNamesCaller(ticket, args) || worktreeBindsCaller(dispatch, callerWorktree);
 }
 function resolveLifecycleProject(projectArg, args, action) {
   const explicit = projectArg == null ? "" : String(projectArg).trim();
@@ -94,8 +106,17 @@ function resolveLifecycleProject(projectArg, args, action) {
   }
   return sessionProject;
 }
+function hostSessionId() {
+  try {
+    const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), ".claude");
+    const record = JSON.parse(fs.readFileSync(path.join(claudeHome, "sessions", `${process.ppid}.json`), "utf8"));
+    return record.pid === process.ppid && typeof record.sessionId === "string" ? record.sessionId.trim() : "";
+  } catch (_) {
+    return "";
+  }
+}
 function runtimeSessionId() {
-  const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+  const v = hostSessionId() || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
   return String(v).trim() || null;
 }
 function sessionOf(args) {
@@ -180,7 +201,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   story: "",
   story_contract: "",
   story_log: "Story log.",
-  checkpoint: "",
+  checkpoint: "Advisory; review binds after submit.",
   sweepClaims: "",
   next: "",
   scopeRequest: "",
@@ -190,7 +211,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   rework: "repair unbound; bound needs oracle.",
   supersede_submission: "candidate rejection permits supersession.",
   submit: "clear/force need owner.",
-  integrate: "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.",
+  integrate: "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.",
   comment: "",
   comments: "Read comments before work.",
   plan: "",
@@ -200,7 +221,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   dispatch: "Tree. token and spawn spec; retireOnly.",
   done: "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
   release: "reason/kind required; oracle handoff.",
-  groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
+  groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.",
   native_agent: "Agent spawn.",
   verdict: "",
   archive: "",
@@ -414,12 +435,14 @@ function listContextRows(project, args) {
   });
   return brief ? payload.tickets.map(compactListRow) : payload.tickets.map((ticket) => ticketWithContextHandles(project, ticket));
 }
+const CLAIM_LIVENESS_FIELDS = /* @__PURE__ */ new Set(["stale", "staleAfterMs"]);
+function rowWithoutClaimLiveness(row) {
+  if (!row?.claim || typeof row.claim !== "object" || !Object.prototype.hasOwnProperty.call(row.claim, "stale")) return row;
+  const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => !CLAIM_LIVENESS_FIELDS.has(key)));
+  return Object.assign({}, row, { claim });
+}
 function listContextRevision(rows) {
-  return contextRevision(rows.map((row) => {
-    if (!row?.claim || typeof row.claim !== "object" || !Object.prototype.hasOwnProperty.call(row.claim, "stale")) return row;
-    const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => key !== "stale"));
-    return Object.assign({}, row, { claim });
-  }));
+  return contextRevision(rows.map(rowWithoutClaimLiveness));
 }
 function listRowsContextRetrieval(project, args, position) {
   const sourceArguments = listContextArguments(args);
@@ -810,7 +833,8 @@ function compactPulse(pulse) {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
-      outcome: pulse.dispatch.outcome
+      outcome: pulse.dispatch.outcome,
+      ...pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}
     },
     ...pulse.scope ? { scope: compactScope(pulse.scope) } : {}
   };

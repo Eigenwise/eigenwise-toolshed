@@ -10,6 +10,7 @@ const { makeCliRunner } = require('./_helpers.js');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-body-file-test-'));
 const PROJ = path.join(os.tmpdir(), 'sq-body-file-fixtures', 'board');
+fs.mkdirSync(PROJ, { recursive: true });
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
 

@@ -12,6 +12,7 @@ const ANTHROPIC_PRICES_PER_MILLION = {
   'claude-opus-5-5': { input: 4, cacheRead: 0.2, cacheCreation: 5, output: 20 },
   'claude-sonnet-4-6': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
   'claude-sonnet-5': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
+  'claude-sonnet-5-5': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
   'claude-fable-5': { input: 10, cacheRead: 1, cacheCreation: 12.5, output: 50 },
   'claude-fable-5-1': { input: 10, cacheRead: 1, cacheCreation: 12.5, output: 50 },
   'claude-haiku-4-5': { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 },
@@ -69,6 +70,7 @@ const ANTHROPIC_ONE_MILLION_CONTEXT_MODEL_PRICES_PER_MILLION = Object.fromEntrie
   'claude-opus-5',
   'claude-opus-5-5',
   'claude-sonnet-5',
+  'claude-sonnet-5-5',
   'claude-fable-5',
   'claude-fable-5-1',
 ].map((model) => [`${model}[1m]`, ANTHROPIC_PRICES_PER_MILLION[model]]));

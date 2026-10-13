@@ -6,7 +6,9 @@ import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 import {
   bindObservedRuntimeIdentity,
+  boardVerificationEvidencePath,
   canonicalPath,
+  dispatchEvidenceDirectory,
   enclosingCheckout,
   executorAgent,
   identityDiagnosis,
@@ -159,22 +161,32 @@ function terminalRefusal(found: IsolationExpectation, target: string): string {
 // writing somewhere it was never sent. Inside a linked worktree it means the board cannot resolve a run
 // that IS where it belongs, and calling that a shared-checkout write pointed every reader at the wrong
 // fault while the real one, an unresolvable dispatch identity, went unnamed (SQ-2189).
+// Live dispatches that all carry another session id are what a board server that outlived /clear leaves
+// behind (GH-467): it recorded the dispatch under its startup id. Nothing the executor did causes that.
+function unmatchedWorktreeSummary(diagnosis: IdentityDiagnosis | null): string {
+  if (diagnosis && diagnosis.live > 0 && diagnosis.session === 0) {
+    return 'No live dispatch record carries this session id. The dispatch was likely recorded under an older one (a board server started before /clear), not an executor fault.';
+  }
+  return 'This isolated worktree matches no dispatch record, so it holds no write authority here.';
+}
+
+function unknownRefusalSummary(repo: CheckoutLocation, diagnosis: IdentityDiagnosis | null, unboundRef: string | null): string {
+  if (unboundRef) return `this executor's claim on ${unboundRef} is not bound to an agent id.`;
+  if (!repo.linked) return 'This executor has no active dispatch record for a shared-checkout write.';
+  return unmatchedWorktreeSummary(diagnosis);
+}
+
 function unknownRefusal(target: string, repo: CheckoutLocation, diagnosis: IdentityDiagnosis | null, unboundRef: string | null = null): string {
   // Terse on purpose: the fact lines are byte-capped, and a prose version of these five counts is long
   // enough that the last and most diagnostic of them gets truncated away.
   const matches = diagnosis
     ? `live ${diagnosis.live}, session ${diagnosis.session}, session+executor ${diagnosis.sessionExecutor}, agent id ${diagnosis.agent}, worktree ${diagnosis.worktree}`
     : '(unavailable)';
-  const unboundSummary = unboundRef
-    ? `this executor's claim on ${unboundRef} is not bound to an agent id.`
-    : repo.linked
-      ? 'This executor is in an isolated worktree the board cannot match to any dispatch record, so it holds no write authority here.'
-      : 'This executor has no active dispatch record for a shared-checkout write.';
   const recovery = unboundRef
     ? 'Claim through the Sidequest MCP hook so it can attach this runtime agent id. Redispatch alone does not bind this claim; stop and report this refusal.'
     : 'Do not work around this. If this is the same live claim after an API resume, call mcp__plugin_sidequest_board__dispatch({ ref: "<ref>", recoveryEvidence: "<observed refusal>", claimHolder: "<your by>", worktree: "<linked checkout>" }) before writing. It verifies the stored executor, re-mints the token, and re-binds this worktree without releasing. Otherwise stop owned background tasks, report these dispatch-record counts, and redispatch before making more changes.';
   return boundedRefusal(
-    unboundSummary,
+    unknownRefusalSummary(repo, diagnosis, unboundRef),
     [['writing to', target], [repo.linked ? 'isolated worktree' : 'shared checkout', repo.root], ['dispatch records', matches]],
     recovery,
   );
@@ -220,6 +232,9 @@ function main(): void {
 
   const target = targetPath(input);
   if (!target) return;
+  // No enclosing checkout at all already means the guard allows the write, so that case is resolved
+  // first: it is the common shape of an evidence or scratch write, and it must not pay for loading
+  // `lib/store.js` just to learn what the next line would have told it for free.
   const repo = enclosingCheckout(path.dirname(canonicalPath(target)));
   if (!repo) return;
   let found = isolationExpectation(input, agentId, executor, true, repo.root);
@@ -227,6 +242,11 @@ function main(): void {
     bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
     found = isolationExpectation(input, agentId, executor, true, repo.root);
   }
+  // The board's evidence directory can itself sit inside a Git checkout that belongs to nobody's
+  // dispatch, and resolving that checkout is what turned the write the briefing asked for into a lease
+  // refusal (GH-163). Checked against the just-resolved dispatch's OWN recorded evidenceDirectory,
+  // never a path shape, so an invented slug or another ticket's directory stays refused.
+  if (boardVerificationEvidencePath(target, dispatchEvidenceDirectory(found))) return;
   if (found?.terminal) {
     writeDeny('PreToolUse', terminalRefusal(found, target));
     return;

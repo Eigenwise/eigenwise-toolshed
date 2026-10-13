@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, ChildProcess, type SpawnOptions } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { getEventListeners, once } from 'node:events';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import test, { after } from 'node:test';
+import test, { after, type TestContext } from 'node:test';
 
 type ProcessState = 'gone' | 'zombie' | 'live';
 
@@ -19,6 +21,7 @@ interface OwnedPhaseOptions {
   args?: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   timeoutMilliseconds?: number | null;
   retainedOutputBytes?: number;
   terminationGraceMilliseconds?: number;
@@ -46,6 +49,7 @@ interface OwnedPhaseResult {
   stderr: string;
   stdoutBytes: number;
   stderrBytes: number;
+  jobClosedProcessIds?: number[] | null;
 }
 
 const runnerModulePath = path.join(__dirname, '..', 'scripts', 'owned-process-tree.js');
@@ -285,6 +289,215 @@ function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boo
     markerWritten: () => fs.existsSync(markerPath),
   };
 }
+
+interface ObservedLeaf {
+  child: ChildProcess;
+  exited: boolean;
+}
+
+function observeDirectLeaves(context: TestContext) {
+  const runnerRequire = createRequire(__filename);
+  const childProcesses: typeof import('node:child_process') = runnerRequire('node:child_process');
+  const spawnLeaf = childProcesses.spawn;
+  const leaves: ObservedLeaf[] = [];
+  context.mock.method(childProcesses, 'spawn', (command: string, argumentsList: string[], options: SpawnOptions) => {
+    const child = spawnLeaf(command, argumentsList, options);
+    const leaf = { child, exited: false };
+    leaves.push(leaf);
+    child.once('exit', () => { leaf.exited = true; });
+    return child;
+  });
+  const cachedRunner = runnerRequire.cache[runnerModulePath];
+  delete runnerRequire.cache[runnerModulePath];
+  const directRunner: typeof ownedProcessTree = runnerRequire(runnerModulePath);
+  context.after(() => { runnerRequire.cache[runnerModulePath] = cachedRunner; });
+  return { runPhase: directRunner.runOwnedPhase, leaves };
+}
+
+function spawnedLeaf(leaves: ObservedLeaf[]): ObservedLeaf {
+  const leaf = leaves[0];
+  assert.ok(leaf, 'the phase spawned no leaf');
+  return leaf;
+}
+
+function assertLeafExited(leaf: ObservedLeaf, result: OwnedPhaseResult) {
+  assert.equal(leaf.exited, true, 'successful settlement preceded the retained child exit event');
+  assert.equal(result.cleanupError, null);
+  assert.equal(result.ownedGroupId, null);
+  assert.equal(result.phasePid, leaf.child.pid);
+}
+
+test('Windows pre-aborted caller input rejects without spawning a leaf', windowsOnly, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const reason = new Error('caller already cancelled');
+  await assert.rejects(runPhase(silently({
+    command: process.execPath,
+    args: [helloScript],
+    signal: AbortSignal.abort(reason),
+  })), (error: unknown) => error === reason);
+  assert.equal(leaves.length, 0, 'pre-aborted input spawned a child');
+});
+
+test('Windows caller cancellation waits for the retained leaf exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const result = await runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+    onPhaseStarted: () => controller.abort('caller cancelled'),
+  }));
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.error?.code, 'ABORT_ERR');
+  assert.equal(result.error?.cause, 'caller cancelled');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0, 'settlement retained the caller abort listener');
+  assert.equal(result.timedOut, false);
+  // The job owner exits on request after accounting for its job, so the phase has no status or signal.
+  assert.equal(result.status, null);
+  assert.equal(result.signal, null);
+  assert.equal(result.jobClosedProcessIds?.length, 1, 'the job owner did not account for the sleeping phase');
+});
+
+test('Windows cancellation immediately after spawn waits for real exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  controller.abort();
+  const result = await phase;
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.error?.code, 'ABORT_ERR');
+  assert.equal(result.timedOut, false);
+});
+
+test('Windows deadline settlement waits for the retained leaf exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const result = await runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    timeoutMilliseconds: 20,
+  }));
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.error, null);
+  assert.equal(result.status, null);
+  assert.equal(result.signal, null);
+});
+
+test('Windows normal exit removes cancellation and preserves the reported result', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const killLeaf = context.mock.method(ChildProcess.prototype, 'kill');
+  const result = await runPhase(silently({
+    command: process.execPath,
+    args: [helloScript],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  assertLeafExited(spawnedLeaf(leaves), result);
+  controller.abort();
+  assert.equal(killLeaf.mock.callCount(), 0, 'cancellation signalled an already-exited child');
+  assert.equal(result.error, null);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'phase stdout\n');
+  assert.equal(result.stderr, 'phase stderr\n');
+});
+
+test('Windows cancellation racing an observed exit preserves normal completion', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [helloScript],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  spawnedLeaf(leaves).child.prependOnceListener('exit', () => controller.abort());
+  const result = await phase;
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.error, null, 'exit-racing cancellation replaced the terminal result');
+  assert.equal(result.status, 0);
+  assert.equal(result.timedOut, false);
+});
+
+test('Windows successful signal requests do not substitute for a real exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '100'],
+    timeoutMilliseconds: 20,
+    terminationGraceMilliseconds: 20,
+    cleanupDrainMilliseconds: 5000,
+  }));
+  // Neither the lost exit request nor the kill that claims success counts; only the owner's real exit does.
+  context.mock.method(spawnedLeaf(leaves).child.stdin!, 'end', () => spawnedLeaf(leaves).child.stdin);
+  context.mock.method(spawnedLeaf(leaves).child, 'kill', () => true);
+  const result = await phase;
+  assertLeafExited(spawnedLeaf(leaves), result);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.status, 0);
+  assert.equal(result.signal, null);
+});
+
+test('Windows spawn failure is distinct from live-child termination failure', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const result = await runPhase(silently({
+    command: 'sidequest-no-such-leaf-sq3396',
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+  }));
+  controller.abort();
+  // The retained leaf is the job owner, which did start; it is the phase command it could not.
+  const ownerLeaf = spawnedLeaf(leaves);
+  assert.equal(ownerLeaf.exited, true, 'settlement preceded the job owner exit');
+  assert.equal(result.ownerPid, ownerLeaf.child.pid);
+  assert.equal(result.error?.code, 'ENOENT');
+  assert.equal(result.status, null);
+  assert.equal(result.cleanupError, null);
+  assert.equal(result.phasePid, null);
+});
+
+test('Windows termination errors cannot masquerade as child exit', { ...windowsOnly, timeout: 20_000 }, async (context) => {
+  const { runPhase, leaves } = observeDirectLeaves(context);
+  const controller = new AbortController();
+  const phase = runPhase(silently({
+    command: process.execPath,
+    args: [sleepScript, '180000'],
+    signal: controller.signal,
+    timeoutMilliseconds: 10_000,
+    terminationGraceMilliseconds: 20,
+    cleanupDrainMilliseconds: 20,
+  }));
+  const leaf = spawnedLeaf(leaves);
+  const killLeaf = leaf.child.kill.bind(leaf.child);
+  context.mock.method(leaf.child.stdin!, 'end', () => leaf.child.stdin);
+  context.mock.method(leaf.child, 'kill', () => {
+    leaf.child.emit('error', Object.assign(new Error('synthetic retained-handle refusal'), { code: 'EPERM' }));
+    return false;
+  });
+  try {
+    controller.abort();
+    const result = await phase;
+    assert.equal(leaf.exited, false, 'the live child error was counted as exit');
+    assert.match(result.cleanupError ?? '', /still alive/);
+    assert.equal(result.unexpectedSignalErrorCode, 'EPERM');
+    assert.equal(result.terminationLatencyMilliseconds, null);
+    assert.equal(result.status, null);
+  } finally {
+    leaf.child.ref();
+    const exited = once(leaf.child, 'exit');
+    killLeaf('SIGKILL');
+    await exited;
+  }
+  assert.equal(leaf.exited, true, 'fixture cleanup completed before the retained child exit event');
+});
 
 test('an owned phase reports its root status and forwards output with no control frames on its streams', async () => {
   const result = await runOwnedPhase(silently({ command: process.execPath, args: [helloScript], timeoutMilliseconds: 20_000 }));
@@ -964,4 +1177,84 @@ test('SQ-2195: a value that is not a process id is refused rather than answered 
     assert.throws(() => isProcessTerminal(notAProcessId), /is not a process id/);
   }
   assert.throws(() => requireProcessId(Number(''), 'an empty pid file'), /never reported a usable process id/);
+});
+
+// SQ-3425: the script's CLI entry runs one verifier shell for a synchronous caller (runProcessVerification).
+// Windows runs the phase under the job owner, which names the missing file in its own words.
+const MISSING_VERIFIER_MESSAGE = process.platform === 'win32'
+  ? /^The Windows job owner could not run the phase: The system cannot find the file specified$/m
+  : /ENOENT/;
+// SQ-3488: the entry reports only on the caller's channel, so records come back from that file, never stderr.
+function runOwnedVerifyCli(spec: Record<string, unknown>) {
+  const reportPath = workspacePath(`owned-verify-${randomUUID()}.jsonl`);
+  const nonce = randomUUID();
+  const result = spawnSync(process.execPath, [runnerModulePath, JSON.stringify({ ...spec, reportPath, nonce })], {
+    encoding: 'utf8',
+    env: process.env,
+    windowsHide: true,
+    timeout: PROBE_BUDGET_MILLISECONDS,
+  });
+  const lines = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8').split('\n').filter(Boolean) : [];
+  const records = lines.map((line) => JSON.parse(line));
+  assert.ok(records.every((record) => record.nonce === nonce), 'every record carries the caller nonce');
+  return { ...result, records: records.map(({ record, value }) => (value === undefined ? [record] : [record, value])) };
+}
+
+test('SQ-3425: the owned verify entry reports a deadline on its channel and exits 124 after ending the descendant', { timeout: 60_000 }, async () => {
+  const fixture = descendantFixture(SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS, false, 'spin');
+  const result = runOwnedVerifyCli({ command: process.execPath, args: fixture.args, cwd: workspace, timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS });
+
+  assert.equal(result.status, 124, result.stderr);
+  assert.deepEqual(result.records, [['timeout', SPAWN_ARMED_DEADLINE_MILLISECONDS], ['done']], 'the done record follows the timeout record');
+  await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the descendant of the owned verify entry');
+  assert.equal(fixture.markerWritten(), false);
+});
+
+test('SQ-3425: the owned verify entry forwards output and passes the verifier exit code through', () => {
+  const exited = runOwnedVerifyCli({ command: process.execPath, args: [exitWithScript, '17'], cwd: workspace, timeoutMilliseconds: 20_000 });
+  assert.equal(exited.status, 17, exited.stderr);
+  assert.deepEqual(exited.records, [['exit', 17], ['done']]);
+
+  const spoken = runOwnedVerifyCli({ command: process.execPath, args: [helloScript], cwd: workspace, timeoutMilliseconds: 20_000 });
+  assert.equal(spoken.status, 0, spoken.stderr);
+  assert.equal(spoken.stdout, 'phase stdout\n');
+  assert.equal(spoken.stderr, 'phase stderr\n', 'the owner adds nothing to the verifier output');
+  assert.deepEqual(spoken.records, [['exit', 0], ['done']]);
+
+  const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
+  assert.equal(unspawned.status, 2, unspawned.stderr);
+  assert.match(unspawned.stderr, MISSING_VERIFIER_MESSAGE);
+  assert.deepEqual(unspawned.records, [['done']], 'a phase that never ran reports no exit');
+});
+
+// A detached descendant leaves libuv's job, so before the job owner (SQ-3456) it outlived a Windows deadline
+// and kept the phase's output open. The job owner's job holds it, so the deadline ends it with the root.
+const rootWithDetachedOutputHolderScript = writeScript(
+  'root-with-detached-output-holder.js',
+  "const { spawn } = require('node:child_process');\n"
+    + "const fs = require('node:fs');\n"
+    + 'const [descendantPidPath, markerPath] = process.argv.slice(2);\n'
+    + `const descendant = spawn(process.execPath, [${JSON.stringify(descendantScript)}, markerPath, '5000', '0'], { detached: true, stdio: 'inherit', windowsHide: true });\n`
+    + descendantPidWriteSource
+    + 'descendant.unref();\n'
+    + 'setInterval(() => {}, 1000);\n',
+);
+
+test('SQ-3477: a Windows deadline ends a detached descendant holding the output open and records the timeout', { skip: process.platform !== 'win32' && 'detached is a new session on POSIX, which escapes the process group by design', timeout: 60_000 }, async () => {
+  const descendantPidPath = workspacePath('detached-output-holder.pid');
+  const markerPath = workspacePath('detached-output-holder.marker');
+  const deadlineMilliseconds = 1500;
+  const result = runOwnedVerifyCli({
+    command: process.execPath,
+    args: [rootWithDetachedOutputHolderScript, descendantPidPath, markerPath],
+    // Outside the workspace: Windows keeps a killed process's cwd busy for a moment after it dies, and the
+    // suite's cleanup removes the workspace.
+    cwd: os.tmpdir(),
+    timeoutMilliseconds: deadlineMilliseconds,
+  });
+
+  assert.equal(result.status, 124, result.stderr);
+  assert.deepEqual(result.records, [['timeout', deadlineMilliseconds], ['done']]);
+  await assertTerminalWithin(requireProcessId(recordedDescendantPid(descendantPidPath), 'the detached descendant'), SETTLED_BUDGET_MILLISECONDS, 'the detached descendant');
+  assert.equal(fs.existsSync(markerPath), false, 'the detached descendant acted after the deadline');
 });

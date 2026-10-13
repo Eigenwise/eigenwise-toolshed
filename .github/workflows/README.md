@@ -39,3 +39,7 @@ daily catch-up publishes the newest unreleased `v*` tag. Its generated notes inc
 intermediate marketplace versions since the previous GitHub Release. The `v*` workflow notifies
 users after a marketplace commit is already on `main`; it does not own plugin or marketplace version
 bumps.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of these GitHub workflows. Donations are never required to use the files in this directory.

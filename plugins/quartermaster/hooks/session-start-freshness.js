@@ -265,8 +265,14 @@ function gatewayCheckFailure(check) {
   return finding(text, DRIFTING_ON_THE_USER, notice);
 }
 
+function newestGatewayInstance(instances) {
+  return instances
+    .filter((instance) => pluginIdParts(instance.id)?.name === 'model-gateway')
+    .reduce((newest, instance) => (!newest || compareVersions(newest.version, instance.version) === -1 ? instance : newest), null);
+}
+
 function gatewayFreshness(instances, checkGateway) {
-  const gateway = instances.find((instance) => instance.id === 'model-gateway@eigenwise-toolshed');
+  const gateway = newestGatewayInstance(instances);
   if (!gateway) return [];
   const check = checkGateway(gateway);
   if (!check?.available) return [gatewayCheckFailure(check)];

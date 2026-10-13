@@ -1,6 +1,6 @@
 'use strict';
 
-const { execFileSync } = require('node:child_process');
+const { execFileSync } = require('../git-process.js');
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
 const { stopOutlivesClaim } = require('./claims.js');
 
@@ -71,6 +71,7 @@ function createPulse(dependencies: any) {
     boardConfig,
     checkpointProjection,
     claimPulse,
+    claimStaleness,
     commitScope,
     dispatchState,
     effectiveScope,
@@ -180,6 +181,7 @@ function createPulse(dependencies: any) {
     return {
       reclaimable: claim.reclaimable,
       ...claim,
+      ...claimStaleness(ticket, now),
       boardQuietMs,
       boardQuietNote: 'Time since the claim holder last wrote to the board; this is not process liveness.',
       lastBoardActivityAt: boardQuietMs == null ? null : new Date(now - boardQuietMs).toISOString(),
@@ -336,6 +338,10 @@ function createPulse(dependencies: any) {
         terminalAt: dispatch.terminalAt || null,
         terminalSource: dispatch.terminalSource || null,
         outcome: dispatch.outcome || null,
+        // The identity `rework` needs after CI rejects a submitted candidate. Once submitted, the claim is
+        // cleared (see submitTicket), so this is the only place left on a live dispatch that names who owns
+        // the pending candidate; before this, recovering it meant reading the executor's own comments (SQ-59).
+        submittedBy: ticket.submission?.by || null,
         failureShape: dispatch.failureShape || null,
         localAheadWarning: dispatch.localAheadWarning || null,
       } : null,

@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const store = require('./store');
 const work = require('./work');
@@ -54,23 +55,38 @@ function serverVersion() {
  *  Project resolution (a non-exiting mirror of the CLI's resolveProject)
  * ------------------------------------------------------------------ */
 
+function registeredBoard(registration: any) {
+  if (!registration.ok) throw new Error(registration.reason);
+  return registration;
+}
+
+function namedBoard(arg: string) {
+  const res = store.findProject(arg);
+  if (res.ok) return { slug: res.slug, meta: res.meta };
+  if (res.reason === 'ambiguous') {
+    throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
+  }
+  if (path.isAbsolute(arg)) return registeredBoard(store.registerProject(store.explicitProjectRoot(arg)));
+  throw unknownBoardError(arg, res.known);
+}
+
+function unknownBoardError(arg: string, knownNames?: string[]) {
+  const known = Array.from(new Set(knownNames || []));
+  return new Error(`project "${arg}" does not match any registered board.${known.length ? ' Known: ' + known.join(', ') : ''}`);
+}
+
+// Without a project argument the session cwd decides, and that cwd may be a scratch
+// or temp dir that must not become a board, so the refusal names the boards to pick from.
+function sessionBoard() {
+  const registration = store.registerProject(store.sessionProjectRoot(), undefined, { implicit: true });
+  if (registration.ok) return registration;
+  const known = store.listProjects().map((project: any) => project.name);
+  throw new Error(`${registration.reason} Pass project to name a registered board${known.length ? ': ' + known.join(', ') : ''}.`);
+}
+
 function resolveProject(projectArg?: any) {
   const arg = projectArg == null ? '' : String(projectArg).trim();
-  if (arg) {
-    const res = store.findProject(arg);
-    if (res.ok) return { slug: res.slug, meta: res.meta };
-    if (res.reason === 'ambiguous') {
-      throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
-    }
-    if (path.isAbsolute(arg)) {
-      let isDir = false;
-      try { isDir = fs.statSync(arg).isDirectory(); } catch (_) { /* not a dir */ }
-      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)));
-    }
-    const known = Array.from(new Set(res.known || []));
-    throw new Error(`project "${arg}" does not match any registered board.${known.length ? ' Known: ' + known.join(', ') : ''}`);
-  }
-  return store.ensureProject(store.sessionProjectRoot());
+  return arg ? namedBoard(arg) : sessionBoard();
 }
 
 // A lifecycle call comes from the executor holding the claim, but the MCP server
@@ -88,19 +104,29 @@ function callerWorktreePath(args?: any): string | null {
   }
 }
 
+function worktreeBindsCaller(dispatch: any, callerWorktree: () => string | null) {
+  const recorded = String(dispatch.worktree || '').trim();
+  if (!recorded) return false;
+  const caller = callerWorktree();
+  return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+}
+
+function claimNamesCaller(ticket: any, args: any) {
+  const by = String(args?.by || '').trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
+
+// A shared-tree dispatch records no worktree of its own, so the claim owner named by
+// "by" binds it. An isolated caller that names a worktree is held to that worktree. One
+// that names none (comment, plan, comments) is measured against the MCP server's cwd,
+// which is the orchestrating session's checkout and never the executor's, so there the
+// live claim it holds is the binding (GH-161).
 function boardBindsCaller(ticket: any, args: any, callerWorktree: () => string | null) {
   const dispatch = ticket?.dispatch;
   if (!dispatch) return false;
-  if (dispatch.sharedTree === false) {
-    const recorded = String(dispatch.worktree || '').trim();
-    if (!recorded) return false;
-    const caller = callerWorktree();
-    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
-  }
-  // A shared-tree dispatch records no worktree of its own, so the claim owner named
-  // by "by" is what binds it to its board.
-  const by = String(args?.by || '').trim();
-  return Boolean(by) && ticket.claim?.by === by;
+  if (dispatch.sharedTree !== false) return claimNamesCaller(ticket, args);
+  if (args?.worktree) return worktreeBindsCaller(dispatch, callerWorktree);
+  return claimNamesCaller(ticket, args) || worktreeBindsCaller(dispatch, callerWorktree);
 }
 
 function resolveLifecycleProject(projectArg?: any, args?: any, action?: any) {
@@ -123,10 +149,22 @@ function resolveLifecycleProject(projectArg?: any, args?: any, action?: any) {
   return sessionProject;
 }
 
-// The MCP server inherits its Claude Code session identity. Tool callers only
-// know labels, which cannot be used by the Agent lifecycle hooks.
+// Claude Code spawns this server with the session id of that moment, then /clear or /resume switches the
+// session while the server keeps running (GH-467). The host rewrites sessions/<its pid>.json on every switch
+// and sends no session id on tool calls, so that record outranks the startup environment.
+function hostSessionId(): string {
+  try {
+    const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+    const record = JSON.parse(fs.readFileSync(path.join(claudeHome, 'sessions', `${process.ppid}.json`), 'utf8'));
+    return record.pid === process.ppid && typeof record.sessionId === 'string' ? record.sessionId.trim() : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// Tool callers only know labels, which cannot be used by the Agent lifecycle hooks.
 function runtimeSessionId() {
-  const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  const v = hostSessionId() || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   return String(v).trim() || null;
 }
 
@@ -247,7 +285,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   story: '',
   story_contract: '',
   story_log: 'Story log.',
-  checkpoint: '',
+  checkpoint: 'Advisory; review binds after submit.',
   sweepClaims: '',
   next: '',
   scopeRequest: '',
@@ -257,7 +295,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   rework: 'repair unbound; bound needs oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'clear/force need owner.',
-  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.',
+  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.',
   comment: '',
   comments: 'Read comments before work.',
   plan: '',
@@ -267,7 +305,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   dispatch: 'Tree. token and spawn spec; retireOnly.',
   done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason/kind required; oracle handoff.',
-  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.',
+  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',
   verdict: '',
   archive: '',
@@ -527,12 +565,16 @@ function listContextRows(project: string, args: any) {
     : payload.tickets.map((ticket: any) => ticketWithContextHandles(project, ticket));
 }
 
+const CLAIM_LIVENESS_FIELDS = new Set(['stale', 'staleAfterMs']);
+
+function rowWithoutClaimLiveness(row: any) {
+  if (!row?.claim || typeof row.claim !== 'object' || !Object.prototype.hasOwnProperty.call(row.claim, 'stale')) return row;
+  const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => !CLAIM_LIVENESS_FIELDS.has(key)));
+  return Object.assign({}, row, { claim });
+}
+
 function listContextRevision(rows: any[]) {
-  return contextRevision(rows.map((row: any) => {
-    if (!row?.claim || typeof row.claim !== 'object' || !Object.prototype.hasOwnProperty.call(row.claim, 'stale')) return row;
-    const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => key !== 'stale'));
-    return Object.assign({}, row, { claim });
-  }));
+  return contextRevision(rows.map(rowWithoutClaimLiveness));
 }
 
 function listRowsContextRetrieval(project: string, args: any, position: number) {
@@ -924,6 +966,7 @@ function compactPulse(pulse?: any) {
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
       outcome: pulse.dispatch.outcome,
+      ...(pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}),
     },
     ...(pulse.scope ? { scope: compactScope(pulse.scope) } : {}),
   };

@@ -1,5 +1,14 @@
 'use strict';
 
+const BOARD_CONFIG_PATCH_KEYS = new Set(['name', 'alwaysInScope', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
+// These settings read null as "leave it alone"; the others hand null to their normalizer (worktreeSetup: null clears the command).
+const BOARD_CONFIG_NULL_LEAVES_ALONE = new Set(['alwaysInScope', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'verifyEnvironment']);
+
+function boardConfigPatchAccepts(key: string, value: unknown): boolean {
+  if (!BOARD_CONFIG_PATCH_KEYS.has(key) || value === undefined) return false;
+  return value !== null || !BOARD_CONFIG_NULL_LEAVES_ALONE.has(key);
+}
+
 const {
   path,
   fs,
@@ -296,6 +305,7 @@ const tools: ToolDefinition[] = [
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: ['string', 'null'], description: 'Set null to clear the fallback route.' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
+        deniedTools: { type: 'array', items: { type: 'string' } },
       },
       required: ['id'],
     },
@@ -317,7 +327,7 @@ const tools: ToolDefinition[] = [
       const existing: any = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch: Record<string, unknown> = {};
-      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly']) if (args[key] !== undefined) patch[key] = args[key];
+      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly', 'deniedTools']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel === null) patch.fallback = null;
       else if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
@@ -420,12 +430,14 @@ const tools: ToolDefinition[] = [
         name: { type: 'string' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
         readOnlyDeniedTools: { type: 'array', items: { type: 'string' } },
+        deniedTools: { type: 'array', items: { type: 'string' } },
         generatedPairs: {},
         integrationMode: { type: 'string', description: 'auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'false runs executors in the shared checkout (default true).' },
+        verifyEnvironment: { type: 'string', enum: ['isolated', 'shared'], description: 'shared: the pinned verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated).' },
         worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Isolated-worktree base.' },
         notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Default 168 hours.' },
         worktreeRecoveryRetentionAgeHours: { type: 'integer', minimum: 1, description: 'Hours, default 336.' },
@@ -434,7 +446,7 @@ const tools: ToolDefinition[] = [
         worktreeSetup: { type: ['string', 'null'], description: 'One-line command Sidequest runs after creating an isolated worktree; null clears it.' },
         worktreeDependencyPaths: {
           type: 'array',
-          description: 'Dependency directories to provision from the primary checkout before dispatch. Each entry is { path: repo-relative directory, mode: "link" | "copy" }.',
+          description: 'Copied or linked from the primary checkout into each isolated worktree. copy: repo file or directory, tracked too, working-tree version. link: untracked directory; "../<name>" links a sibling checkout beside the worktree.',
           items: {
             type: 'object',
             properties: {
@@ -448,23 +460,7 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const patch: any = {};
-      if (args.name !== undefined) patch.name = args.name;
-      if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
-      if (args.readOnlyDeniedTools !== undefined) patch.readOnlyDeniedTools = args.readOnlyDeniedTools;
-      if (args.generatedPairs !== undefined) patch.generatedPairs = args.generatedPairs;
-      if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
-      if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
-      if (args.delivery != null) patch.delivery = args.delivery;
-      if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
-      if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
-      if (args.worktreeBase !== undefined) patch.worktreeBase = args.worktreeBase;
-      if (args.notIntegratedSalvageAgeHours !== undefined) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
-      if (args.worktreeRecoveryRetentionAgeHours !== undefined) patch.worktreeRecoveryRetentionAgeHours = args.worktreeRecoveryRetentionAgeHours;
-      if (args.autoApproveTestScope !== undefined) patch.autoApproveTestScope = args.autoApproveTestScope;
-      if (args.autoApproveScope !== undefined) patch.autoApproveScope = args.autoApproveScope;
-      if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
-      if (args.worktreeDependencyPaths !== undefined) patch.worktreeDependencyPaths = args.worktreeDependencyPaths;
+      const patch = Object.fromEntries(Object.entries(args).filter(([key, value]) => boardConfigPatchAccepts(key, value)));
       const result = Object.keys(patch).length
         ? store.setBoardConfig(slug, patch)
         : { ok: true, config: store.boardConfig(slug) };
@@ -474,7 +470,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'models',
-    description: 'Available models, global fallback, and compact effective category routes. Pass full:true for configured routes, resolved executors, and warnings.',
+    description: 'Available models, global fallback, and compact effective category routes. Discovered rows carry contextWindow tokens and a contextWindowNote. Pass full:true for configured routes, resolved executors, and warnings.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP, full: { type: 'boolean', description: 'Include configured/resolved category detail and warnings.' } } },
     handler(args) {
       const { slug } = resolveProject(args.project);
@@ -486,7 +482,7 @@ const tools: ToolDefinition[] = [
     description: 'Every registered board with open/doing/done counts — the switcher across all projects. Pass archived:true to list archived boards only.',
     inputSchema: { type: 'object', properties: { archived: { type: 'boolean', description: 'List archived boards only.' } } },
     handler(args) {
-      return { projects: store.listProjects({ archived: !!args.archived }) };
+      return { projects: store.listProjectsFlaggingMissingPaths({ archived: !!args.archived }) };
     },
   },
   {

@@ -12,8 +12,10 @@ const {
   ensureObservability,
   healthSnapshot,
   launchEnsure,
+  launchWithNotices,
   startManagedProcess,
 } = require('../lib/observability/ensure.js');
+const { userExportEnvironment } = require('../bin/project-telemetry.js');
 const { readObservabilityConfig, writeObservabilityConfig } = require('../observability/sinks/index.js');
 
 function temporaryDirectory(t) {
@@ -60,6 +62,43 @@ test('SessionStart launch is a silent no-op without enabled consent', async (t) 
   });
   assert.equal(await launchEnsure({ dataDir, spawn: () => { spawned = true; } }), false);
   assert.equal(spawned, false);
+});
+
+test('the SessionStart launch command prints nothing without consent', (t) => {
+  const localAppData = temporaryDirectory(t);
+  const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'lib', 'observability', 'ensure.js'), '--launch'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, LOCALAPPDATA: localAppData, AI_AGENT: 'claude-code_2-1-285_harness' },
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+});
+
+test('SessionStart launch warns, without writing, when current Claude Code has no user-level telemetry export', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const config = enabledConfig();
+  config.observability.optedInProjects = [{ project_id: 'a'.repeat(64), project_name: 'sample' }];
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), config);
+  let launched = 0;
+  const launch = {
+    dataDir,
+    checkPort: async () => false,
+    spawn: () => ({ unref() { launched += 1; } }),
+    userSettingsPath: path.join(dataDir, 'user-settings.json'),
+    environment: { AI_AGENT: 'claude-code_2-1-285_harness' },
+  };
+
+  const warned = JSON.parse(await launchWithNotices(launch));
+  assert.match(warned.systemMessage, /Claude Code 2\.1\.285 ignores telemetry export settings in project files/);
+  assert.equal(fs.existsSync(launch.userSettingsPath), false);
+  assert.equal(launched, 1);
+
+  fs.writeFileSync(launch.userSettingsPath, JSON.stringify({ env: userExportEnvironment(config.observability.ports) }));
+  assert.equal(await launchWithNotices(launch), '');
+  fs.writeFileSync(launch.userSettingsPath, '{not json');
+  assert.equal(await launchWithNotices(launch), '');
+  assert.equal(launched, 3);
 });
 
 test('SessionStart launch detaches the bounded ensure worker after consent', async (t) => {
@@ -896,6 +935,38 @@ test('SessionStart keeps a managed observer whose record mtime is a fraction of 
   // the ~50% of real writes that land that way by chance.
   const pinnedNow = Date.now();
   const mtimeSeconds = (pinnedNow + 0.4) / 1000;
+  fs.utimesSync(recordFile, mtimeSeconds, mtimeSeconds);
+
+  const notices = [];
+  await launchEnsure({
+    dataDir,
+    now: pinnedNow,
+    checkPort: async () => true,
+    observerIdentity: async () => null,
+    portOwner: () => 202,
+    reportNotice(message) { notices.push(message); },
+    spawn() { return { unref() {} }; },
+  });
+
+  assert.deepEqual(notices, []);
+});
+
+test('SessionStart keeps a managed observer whose record mtime is a whole millisecond ahead', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  const recordFile = path.join(dataDir, 'observer.pid.json');
+  fs.writeFileSync(recordFile, `${JSON.stringify({
+    pid: 202,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+  })}
+`);
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+
+  // Windows reads a just-written file a full millisecond ahead of Date.now() in about a third of
+  // writes (1152 of 3000 measured), which flooring cannot hide. Pin the pair so this run is one of them.
+  const pinnedNow = Date.now();
+  const mtimeSeconds = (pinnedNow + 1) / 1000;
   fs.utimesSync(recordFile, mtimeSeconds, mtimeSeconds);
 
   const notices = [];

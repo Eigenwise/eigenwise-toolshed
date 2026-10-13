@@ -34,6 +34,7 @@ type WorktreeSweepOutputEntry = {
   path: string;
   ticket?: string | null;
   reason: string;
+  detail?: string;
   clean: boolean | null;
   ahead: number | null;
   patchEquivalent: boolean | null;
@@ -66,7 +67,10 @@ function worktreeSweepEntryLine(entry: WorktreeSweepOutputEntry): string {
   const patchEquivalent = entry.patchEquivalent == null ? 'unavailable' : entry.patchEquivalent;
   const age = entry.ageMs == null ? 'unavailable' : `${Math.round(entry.ageMs / 60000)}m`;
   const quarantine = entry.quarantine ? `; quarantined ${entry.quarantine}` : '';
-  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}${quarantine}]`;
+  // A reason code alone left an operator with nothing to act on: `dependency_link_untrusted` named no
+  // link and no target, so 29 retained trees read as one unexplained refusal (SQ-21).
+  const detail = entry.detail ? `: ${entry.detail}` : '';
+  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}${detail}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}${quarantine}]`;
 }
 
 function formatBytes(bytes: number | null | undefined): string {

@@ -10,6 +10,7 @@ const { test, beforeEach } = require('node:test');
 const { slugForProject } = require('../lib/paths.js');
 const {
   appendDecision,
+  decisionsFile,
   declineResupply,
   markNudged,
   markOffered,
@@ -21,8 +22,10 @@ const {
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
+  removeDecision,
   resupplyThresholds,
   statusFor,
+  updateDecision,
   verifyDecisions,
 } = require('../lib/state.js');
 
@@ -276,6 +279,55 @@ test('decisions ledger separates applied from rejected fingerprints', () => {
   const { applied, rejected } = rejectedFingerprints(environment);
   assert.deepEqual(applied, ['plugin-install:context7']);
   assert.deepEqual(rejected, ['rule:no-force-push']);
+});
+
+test('updateDecision rewrites the existing row in place instead of appending a second one', () => {
+  const first = appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'deferred', title: 'x' }, environment);
+  appendDecision({ projectDir: PROJECT, fingerprint: 'rule:y', status: 'applied', title: 'y' }, environment);
+
+  const updated = updateDecision(first.id, { status: 'applied' }, environment);
+  assert.equal(updated.status, 'applied');
+  assert.equal(updated.fingerprint, 'rule:x', 'the rest of the row is preserved');
+
+  const decisions = readDecisions(environment);
+  assert.equal(decisions.length, 2, 'no second row was appended for the status change');
+  assert.equal(decisions.find((decision) => decision.id === first.id).status, 'applied');
+});
+
+test('updateDecision on an unknown id throws and leaves the ledger untouched', () => {
+  appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'deferred', title: 'x' }, environment);
+  assert.throws(() => updateDecision('not-a-real-id', { status: 'applied' }, environment), /no decision with id/);
+  assert.equal(readDecisions(environment).length, 1);
+});
+
+test('updateDecision and removeDecision pass a corrupt line through untouched', () => {
+  const target = appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'deferred', title: 'x' }, environment);
+  fs.appendFileSync(decisionsFile(environment), 'not valid json\n', 'utf8');
+
+  updateDecision(target.id, { status: 'applied' }, environment);
+  const afterUpdate = fs.readFileSync(decisionsFile(environment), 'utf8');
+  assert.match(afterUpdate, /not valid json/, 'the corrupt line survives a rewrite of an unrelated row');
+
+  removeDecision(target.id, environment);
+  const afterRemove = fs.readFileSync(decisionsFile(environment), 'utf8');
+  assert.match(afterRemove, /not valid json/, 'the corrupt line survives a removal of an unrelated row');
+});
+
+test('removeDecision drops only the targeted row', () => {
+  const first = appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'deferred', title: 'x' }, environment);
+  const second = appendDecision({ projectDir: PROJECT, fingerprint: 'rule:y', status: 'applied', title: 'y' }, environment);
+
+  const result = removeDecision(first.id, environment);
+  assert.deepEqual(result, { id: first.id, removed: true });
+
+  const decisions = readDecisions(environment);
+  assert.deepEqual(decisions.map((decision) => decision.id), [second.id]);
+});
+
+test('removeDecision on an unknown id throws and leaves the ledger untouched', () => {
+  appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'deferred', title: 'x' }, environment);
+  assert.throws(() => removeDecision('not-a-real-id', environment), /no decision with id/);
+  assert.equal(readDecisions(environment).length, 1);
 });
 
 test('a rejection recorded against another project does not suppress the fingerprint here', () => {

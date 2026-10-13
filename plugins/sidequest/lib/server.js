@@ -140,7 +140,7 @@ async function readJsonBody(req) {
 function categoryDraftPrompt(sentence, project) {
   const catalog = store.modelsPayload(project ? { project, full: true } : { full: true });
   const examples = catalog.categories.slice(0, 4).map((category) => ({ id: category.id, name: category.name, description: category.description, contract: category.contract, route: category.route, fallback: category.fallback }));
-  const positioning = "Haiku is for fast straightforward work; Sonnet for coding and analysis; Opus for complex autonomous work; Fable for the most demanding long-running work. Luna is clear repeatable high-volume work; Terra is the everyday tool-using workhorse; Sol is complex open-ended work.";
+  const positioning = "Haiku is for fast straightforward work; Sonnet for coding and analysis; Opus for complex autonomous work; Fable for the most demanding long-running work. Luna is clear repeatable high-volume work; Terra is the everyday tool-using workhorse; Sol is complex open-ended work. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets.";
   return 'Return strict JSON only, with no markdown. Draft one Sidequest category from the user sentence. The JSON schema is {"id":string,"name":string,"description":string,"contract":string,"route":{"model":string,"effort":string},"fallback":{"model":string,"effort":string}|null}. The id must be lowercase kebab-case or dot-namespaced. The description must classify requested work, not restate a title. The contract is executor instructions. Pick route and optional fallback only from the live catalog.\n\nUser sentence:\n' + JSON.stringify(String(sentence || "").trim()) + "\n\nLive catalog:\n" + JSON.stringify({ models: catalog.models, efforts: catalog.efforts, discovered: catalog.discovered, positioning }) + "\n\nStyle examples:\n" + JSON.stringify(examples);
 }
 function validateCategoryDraft(raw, project) {
@@ -280,6 +280,16 @@ function routingPreview(project, profileId) {
     preparedDispatches
   };
 }
+function namedBoardSlug(body) {
+  const named = body.project && String(body.project);
+  return named && named !== "all" ? named : null;
+}
+function boardForNewWork(body) {
+  const named = namedBoardSlug(body);
+  if (named || !body.projectPath) return { slug: named };
+  const registration = store.registerProject(store.explicitProjectRoot(String(body.projectPath)), body.projectName);
+  return registration.ok ? { slug: registration.slug } : { slug: null, error: registration.reason };
+}
 function storiesWithCounts(slug) {
   const counts = {};
   for (const t of store.listTickets(slug)) {
@@ -316,11 +326,11 @@ async function handle(req, res) {
     return;
   }
   if (req.method === "GET" && pathname === "/api/projects") {
-    sendJson(res, 200, { projects: store.listProjects() });
+    sendJson(res, 200, { projects: store.listProjectsFlaggingMissingPaths() });
     return;
   }
   if (req.method === "GET" && pathname === "/api/projects/archived") {
-    sendJson(res, 200, { projects: store.listProjects({ archived: true }) });
+    sendJson(res, 200, { projects: store.listProjectsFlaggingMissingPaths({ archived: true }) });
     return;
   }
   const projectAction = /^\/api\/projects\/([^/]+)\/(archive|unarchive)$/.exec(pathname);
@@ -488,10 +498,12 @@ async function handle(req, res) {
       sendJson(res, 400, { error: "bad JSON body" });
       return;
     }
-    let slug = body.project && String(body.project);
-    if ((!slug || slug === "all") && body.projectPath) {
-      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    const target = boardForNewWork(body);
+    if (target.error) {
+      sendJson(res, 400, { error: target.error });
+      return;
     }
+    const slug = target.slug;
     if (!slug || slug === "all") {
       sendJson(res, 400, { error: "a project is required to create a story" });
       return;
@@ -812,10 +824,12 @@ async function handle(req, res) {
       sendJson(res, 400, { error: "bad JSON body" });
       return;
     }
-    let slug = body.project && String(body.project);
-    if ((!slug || slug === "all") && body.projectPath) {
-      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    const target = boardForNewWork(body);
+    if (target.error) {
+      sendJson(res, 400, { error: target.error });
+      return;
     }
+    const slug = target.slug;
     if (!slug || slug === "all") {
       sendJson(res, 400, { error: "a project is required to create a ticket" });
       return;

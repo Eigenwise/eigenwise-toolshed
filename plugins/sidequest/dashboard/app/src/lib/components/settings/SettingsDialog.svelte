@@ -5,6 +5,7 @@
   import { getTourState } from '../../state/context';
   import Dialog from '../ui/Dialog.svelte';
   import Select, { type SelectOption } from '../ui/Select.svelte';
+  import { contextWindowNotes, discoveredModels, modelOptionLabel } from './model-windows';
 
   let { state: board }: { state: BoardState } = $props();
   const tour = getTourState();
@@ -57,7 +58,9 @@
   let profileOptions = $derived<SelectOption[]>(board.routingProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · r${profile.revision}` })));
   let models = $derived(modelOptions());
   let efforts = $derived(effortOptions());
-  let modelSelectOptions = $derived<SelectOption[]>(models.map((value) => ({ value, label: value })));
+  let discovered = $derived(discoveredModels(board.routingCatalog.discovered));
+  let modelSelectOptions = $derived<SelectOption[]>(models.map((value) => ({ value, label: modelOptionLabel(value, discovered) })));
+  let windowNotes = $derived(contextWindowNotes(discovered));
   let effortSelectOptions = $derived<SelectOption[]>(efforts.map((value) => ({ value, label: value })));
   let globalFallback = $derived(record(board.routingCatalog.globalFallback));
   let visibleProjects = $derived((board.raw?.projects ?? []).filter((project) => !project.archivedAt));
@@ -314,6 +317,7 @@
           <p class="eyebrow">Execution</p>
           <h3>Availability fallback</h3>
           <p class="hint">Used after a category route and category fallback are unavailable.</p>
+          {#each windowNotes as note (note)}<p class="hint">{note}</p>{/each}
           <label class="field"><span>Global fallback model</span><Select label="Global fallback model" value={text(globalFallback.model, 'sonnet')} options={modelSelectOptions} onchange={updateFallback} /></label>
           <label class="field"><span>Global fallback effort</span><Select label="Global fallback effort" value={text(globalFallback.effort, 'high')} options={effortSelectOptions} onchange={updateFallbackEffort} /></label>
 

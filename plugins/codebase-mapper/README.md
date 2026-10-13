@@ -43,9 +43,17 @@ You can also ask directly:
 
 Codebase Mapper works with existing and greenfield projects. It leaves `CLAUDE.md` alone.
 
+## Privacy and local execution
+
+[Privacy statement](PRIVACY.md)
+
+The bundled Node.js hooks read the local project map and hook metadata, inject map context into Claude Code, and coordinate map maintenance through local state files. The map-state script writes document hashes and records the local Git commit. Map skills read relevant project files and can create local commits; they do not instruct Claude to push them.
+
+The hooks and scripts make no network requests to an Eigenwise service. Your assistant still processes map and project content through the model provider and tools you configure. Optional Sidequest dispatch follows that separate plugin's executor configuration. The privacy statement describes local storage, retention, and these boundaries.
+
 ## Support
 
-Optional support is welcome through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Codebase Mapper's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 

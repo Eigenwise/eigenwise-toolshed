@@ -149,12 +149,14 @@ handing off implementation. Draw from three sources, in this order:
     not-a-codebase.
   - **CRAP gate**: propose it for every codebase, including one short explanation: it scores each
     function's branching complexity and test coverage together, so big untested functions stand out.
-    Quartermaster starts at 6, which means every function stays small or tested. Show the detected
+    The gate is opt-in; an unconfigured project runs its tests and continues. Show the detected
     stack's LCOV recipe from [references/crap-gate.md](references/crap-gate.md), the proposed
     `.claude/quartermaster/crap.json`, the derived `.claude/live-rules/rules/crap-gate.md`, and the
-    threshold choice. New projects apply 6 to every function. Existing projects ratchet against the
-    default branch while applying 6 to new functions, and show the current count at or above 6 before
-    asking whether the user wants another ceiling.
+    exact gate command and its cost (the analyzer, LCOV setup, and coverage execution). Only write
+    the config and live rule after approval. The gate owns the threshold; keep numbers out of
+    executor and orchestrator instructions.
+    The gate is an on-demand command, never a per-turn blocking hook; see "What the gate is not" in
+    [references/crap-gate.md](references/crap-gate.md).
 
 Before putting a named plugin or external recommendation in the plan, keep the local catalog first and
 use it as the source for installed state. Research only candidates that would lead to an install or
@@ -200,8 +202,8 @@ After the reload or restart: `claude plugin list --json` confirms every selected
 enabled at its requested scope. Then verify each piece is actually usable, not just present:
 build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
 is visibly injected in your context, bring up the sidequest board if selected, and check each
-LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap
---project "${CLAUDE_PROJECT_DIR}"` once and report the real result: pass, fail with its offender
+LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap`
+from `${CLAUDE_PROJECT_DIR}` once and report the real result: pass, fail with its offender
 count, or exit 2 with the missing prerequisite. Do not say the gate is live before that command ran.
 If model-gateway is installed but unwired, point at its skill rather than wiring it yourself. Fix what
 fails and re-verify; report what you confirmed, concretely.

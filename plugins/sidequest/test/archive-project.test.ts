@@ -5,11 +5,12 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { spawnSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-archive-project-test-'));
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
+const commitScope = require('../lib/commit-scope.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 
 function runCli(args?: any, cwd?: any) {
@@ -123,6 +124,77 @@ test('legacy metadata remains active and ensureProject does not silently restore
   assert.strictEqual(meta(archived.slug).archivedAt, result.archivedAt);
   assert.ok(!store.listProjects().some((project?: any) => project.slug === archived.slug));
   store.unarchiveProject(archived.slug);
+});
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function commitOn(repo: string, message: string): string {
+  git(repo, ['-c', 'user.name=Sidequest Test', '-c', 'user.email=sidequest-test@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', message]);
+  return git(repo, ['rev-parse', 'HEAD']);
+}
+
+function refTip(repo: string, ref: string): string | null {
+  const shown = spawnSync('git', ['rev-parse', '--verify', '--quiet', ref], { cwd: repo, encoding: 'utf8', windowsHide: true });
+  return shown.status === 0 ? shown.stdout.trim() : null;
+}
+
+function recordOnTicket(slug: string, ref: string, fields: Record<string, unknown>) {
+  const ticket = Object.assign(store.getTicket(slug, ref), fields);
+  db.putRow(database, 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status, archived: 0, ord: ticket.order, claim_by: null, data: ticket,
+  });
+}
+
+test('GH-378: archiving a board moves the candidate refs its tickets recorded out of refs/sidequest/, and restoring brings back the free ones', () => {
+  const oldPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-archive-refs-old-'));
+  git(oldPath, ['init', '-b', 'main', '--quiet']);
+  commitOn(oldPath, 'base');
+  const oldBoard = store.ensureProject(oldPath, 'Repathed Old Board');
+  const submitted = store.createTicket(oldBoard.slug, { title: 'old submitted candidate' });
+  const rejected = store.createTicket(oldBoard.slug, { title: 'old rejected candidate' });
+  const submittedCommit = commitOn(oldPath, 'old SQ-1 candidate');
+  const rejectedCommit = commitOn(oldPath, 'old SQ-2 candidate');
+  recordOnTicket(oldBoard.slug, submitted.ref, { submission: { commit: submittedCommit, gitRef: `refs/sidequest/${submitted.ref}` } });
+  recordOnTicket(oldBoard.slug, rejected.ref, { rejectedSubmissions: [{ commit: rejectedCommit.slice(0, 12), quarantineRef: `refs/sidequest/${rejected.ref}-rejected` }] });
+  git(oldPath, ['update-ref', `refs/sidequest/${submitted.ref}`, submittedCommit]);
+  git(oldPath, ['update-ref', `refs/sidequest/${rejected.ref}-rejected`, rejectedCommit]);
+  git(oldPath, ['update-ref', `refs/sidequest/${rejected.ref}`, submittedCommit]);
+
+  const archivedBoard = store.archiveProject(oldBoard.slug);
+  const archivedPrefix = `refs/sidequest-archived/${oldBoard.slug}/`;
+  assert.deepStrictEqual(archivedBoard.candidateRefs.moved.map((move: any) => move.to).sort(), [
+    `${archivedPrefix}${submitted.ref}`,
+    `${archivedPrefix}${rejected.ref}-rejected`,
+  ]);
+  assert.strictEqual(refTip(oldPath, `refs/sidequest/${submitted.ref}`), null);
+  assert.strictEqual(refTip(oldPath, `${archivedPrefix}${submitted.ref}`), submittedCommit);
+  assert.strictEqual(refTip(oldPath, `${archivedPrefix}${rejected.ref}-rejected`), rejectedCommit);
+  assert.strictEqual(refTip(oldPath, `refs/sidequest/${rejected.ref}`), submittedCommit, 'a tip the ticket never recorded stays where it is');
+
+  const newPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-archive-refs-new-')), 'moved');
+  git(oldPath, ['worktree', 'add', '--quiet', '--detach', newPath]);
+  const newBoard = store.ensureProject(newPath, 'Repathed New Board');
+  const reused = store.createTicket(newBoard.slug, { title: 'new board reuses SQ-1' });
+  assert.strictEqual(reused.ref, submitted.ref);
+  const newCommit = commitOn(newPath, 'new SQ-1 candidate');
+  const pinned = commitScope.preserveCommitRef(newPath, newCommit, `refs/sidequest/${reused.ref}`);
+  assert.strictEqual(pinned.ok, true, pinned.message);
+  assert.strictEqual(refTip(oldPath, `${archivedPrefix}${submitted.ref}`), submittedCommit, 'the archived candidate survives the new board');
+
+  const restored = store.unarchiveProject(oldBoard.slug);
+  assert.deepStrictEqual(restored.candidateRefs.moved.map((move: any) => move.to), [`refs/sidequest/${rejected.ref}-rejected`]);
+  assert.deepStrictEqual(restored.candidateRefs.keptArchived.map((move: any) => move.from), [`${archivedPrefix}${submitted.ref}`]);
+  assert.strictEqual(refTip(oldPath, `refs/sidequest/${submitted.ref}`), newCommit);
+  assert.strictEqual(refTip(oldPath, `refs/sidequest/${rejected.ref}-rejected`), rejectedCommit);
+  assert.strictEqual(refTip(oldPath, `${archivedPrefix}${submitted.ref}`), submittedCommit);
+
+  const cli = runCli(['archive-board', oldBoard.slug]);
+  assert.strictEqual(cli.status, 0, cli.stderr);
+  assert.match(cli.stdout, /archived board Repathed Old Board; moved 1 candidate ref\(s\)/);
+  const cliRestore = runCli(['unarchive-board', oldBoard.slug]);
+  assert.match(cliRestore.stdout, /restored board Repathed Old Board; moved 1 candidate ref\(s\), 1 kept under refs\/sidequest-archived\//);
 });
 
 test('exact-slug project deletion removes only the named board', () => {

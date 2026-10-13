@@ -245,11 +245,15 @@ function createClaims(dependencies: any) {
     return { kind: 'complete', noOp: false };
   }
 
-  function verificationCompletionCheck(slug?: any, ticket?: any, comment?: any) {
-    const event = verificationComment(comment?.body);
-    if (!event || event.kind !== 'complete') return { ok: true };
-    if (ticket?.claim?.by === comment?.by && (event.status === 'failed_suite' || event.status === 'could_not_run')) return { ok: true };
-    return completionTreeCheck(slug, ticket, { explicitNoOp: event.noOp });
+  function verificationCompletionCheck(slug: string, ticket: { claim?: { by?: string } }, comment: { body?: string; by?: string }) {
+    const event = verificationComment(comment.body);
+    if (event?.kind !== 'complete') return { ok: true };
+    if ([ticket?.claim?.by === comment.by, ['failed_suite', 'could_not_run'].includes(String(event.status))].every(Boolean)) return { ok: true };
+    const completion = completionTreeCheck(slug, ticket, { explicitNoOp: event.noOp });
+    if (completion.negativeControl?.startsWith('not_required(')) {
+      comment.body += '\nnegativeControl: ' + completion.negativeControl;
+    }
+    return completion;
   }
 
   function recordClaimVerification(ticket?: any, comment?: any) {
@@ -350,6 +354,13 @@ function createClaims(dependencies: any) {
     return Boolean(claimReleaseVerdict(ticket, now));
   }
 
+  // A dispatched or verifying claim is judged against the abandon backstop, so `stale` printed beside
+  // claimIdleMs alone read as healthy long past that threshold (GH-228). List and pulse both carry this.
+  function claimStaleness(ticket?: any, now?: any) {
+    const dispatched = Boolean(dispatchState(ticket) || claimVerification(ticket));
+    return { stale: claimReclaimable(ticket, now), staleAfterMs: dispatched ? claimAbandonMs() : claimIdleMs() };
+  }
+
   function autoReleasedClaimMessage(ref?: any, release?: any) {
     const when = release && release.at ? ` at ${release.at}` : '';
     const why = (release && (release.reason || release.kind)) || 'the claim sweep released it';
@@ -419,6 +430,7 @@ function createClaims(dependencies: any) {
     claimReleaseBlocker,
     claimReleaseNote,
     claimReleaseVerdict,
+    claimStaleness,
     claimVerification,
     hasNoOpReleaseProof,
     observedStop,

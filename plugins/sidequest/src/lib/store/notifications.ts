@@ -3,6 +3,7 @@
 function createNotifications(dependencies: any) {
   const {
     acquireLock,
+    afterCommit,
     crypto,
     getTicket,
     path,
@@ -16,6 +17,8 @@ function createNotifications(dependencies: any) {
   const NOTIFICATION_KINDS = ['comment', 'created', 'status', 'reminder'];
   const NOTIFY_PREF_DEFAULTS: Record<string, boolean> = { comment: true, created: true, status: true };
   const MAX_READ_KEPT = 100;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const PRUNED_ON_OPEN_KEY = 'notifications-pruned-on-open';
 
   function notificationsLockPath() {
     return path.join(projectsRoot(), '.notifications.lock');
@@ -29,8 +32,41 @@ function createNotifications(dependencies: any) {
     const data = readGlobal('notifications', null);
     return data && Array.isArray(data.notifications) ? data.notifications : [];
   }
+  // The whole inbox is one globals row that every write parses and rewrites, so an unbounded unread
+  // list made each write slower until writers timed out on the lock (GH-351).
   function writeNotifications(list?: any) {
-    writeGlobal('notifications', { notifications: list });
+    writeGlobal('notifications', { notifications: boundUnreadList(list) });
+  }
+
+  function positiveNumberFromEnv(name: string, fallback: number) {
+    const value = Number(process.env[name]);
+    return value > 0 ? value : fallback;
+  }
+
+  // A pending reminder's fireAt is in the future, so it sorts newest and never ages out before it fires.
+  function notificationTime(notification?: any) {
+    return String(notification.fireAt || notification.createdAt || '');
+  }
+
+  function boundUnreadList(list?: any) {
+    const maxUnread = positiveNumberFromEnv('SIDEQUEST_NOTIFICATIONS_MAX_UNREAD', 200);
+    const maxAgeDays = positiveNumberFromEnv('SIDEQUEST_NOTIFICATIONS_MAX_AGE_DAYS', 30);
+    const oldestKept = new Date(Date.now() - maxAgeDays * DAY_MS).toISOString();
+    const keptUnread = list
+      .filter((n?: any) => !n.readAt)
+      .filter((n?: any) => notificationTime(n) >= oldestKept)
+      .sort((a?: any, b?: any) => notificationTime(b).localeCompare(notificationTime(a)))
+      .slice(0, maxUnread);
+    const kept = new Set([...list.filter((n?: any) => n.readAt), ...keptUnread]);
+    return list.filter((n?: any) => kept.has(n));
+  }
+
+  function pruneOversizedNotificationsOnce() {
+    if (readGlobal(PRUNED_ON_OPEN_KEY, null)) return;
+    transaction(() => {
+      writeNotifications(readNotifications());
+      writeGlobal(PRUNED_ON_OPEN_KEY, { at: new Date().toISOString() });
+    });
   }
 
   function withNotificationsLock(fn?: any) {
@@ -118,25 +154,39 @@ function createNotifications(dependencies: any) {
     return { title: `${ref} → ${ticket.status}`, body: ticket.title };
   }
 
+  function eventNotificationWanted(slug?: any, kind?: any, source?: any) {
+    if (!source || String(source) === 'dashboard') return false;
+    return Boolean(getNotifyPrefs()[kind]) && readMeta(slug)?.notify !== false;
+  }
+
+  function ticketEventKey(notification?: any) {
+    return `${notification.ticketId}|${notification.kind}|${notification.ticketEventAt}`;
+  }
+
+  // Runs after the ticket's transaction commits. Losing this notification is acceptable; failing the
+  // already-committed ticket event over it is not.
+  function saveEventNotification(event?: any) {
+    try {
+      const duplicate = readNotifications().some((n?: any) => ticketEventKey(n) === ticketEventKey(event));
+      if (!duplicate) addNotification(event);
+    } catch (error) {
+      process.stderr.write(`sidequest: the ${event.kind} notification for ${event.ticketRef} was not saved: ${error}\n`);
+    }
+  }
+
   function queueEventNotification(slug?: any, ticket?: any, kind?: any, source?: any, extra?: any) {
-    if (!ticket || !source || String(source) === 'dashboard') return null;
-    if (NOTIFY_PREF_DEFAULTS[kind] == null) return null;
-    if (!getNotifyPrefs()[kind]) return null;
-    const pmeta = readMeta(slug);
-    if (pmeta && pmeta.notify === false) return null;
-    const eventAt = ticket.updatedAt;
-    const dup = readNotifications().some((n?: any) => n.ticketId === ticket.id && n.kind === kind && n.ticketEventAt === eventAt);
-    if (dup) return null;
+    if (!ticket || !eventNotificationWanted(slug, kind, source)) return;
     const copy = eventNotificationCopy(ticket, kind, extra);
-    return addNotification({
+    const event = {
       kind,
       title: copy.title,
       body: copy.body,
       projectSlug: slug,
       ticketRef: ticket.ref,
       ticketId: ticket.id,
-      ticketEventAt: eventAt,
-    });
+      ticketEventAt: ticket.updatedAt,
+    };
+    afterCommit(() => saveEventNotification(event));
   }
 
   function markRead(id?: any) {
@@ -273,6 +323,7 @@ function createNotifications(dependencies: any) {
     markAllRead,
     markRead,
     pendingReminders,
+    pruneOversizedNotificationsOnce,
     pruneRead,
     queueEventNotification,
     setNotifyPrefs,

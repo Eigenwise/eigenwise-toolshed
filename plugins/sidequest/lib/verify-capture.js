@@ -3,9 +3,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
-const { execFileSync } = require("node:child_process");
-const { runProcessVerification, shellCommand } = require("./ports/process.js");
+const { execFileSync } = require("./git-process.js");
+const { runOwnedProcessVerification, shellCommand } = require("./ports/process.js");
 const { canonicalPath } = require("./kernel/worktree.js");
+const { crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1e3;
 const captureSlotRetryMilliseconds = 50;
 const captureSlotOperationRetryLimit = 20;
@@ -14,7 +15,7 @@ function captureRequirement(command) {
   return Object.freeze({ kind: "command", command, evidenceContract: "command output" });
 }
 async function runVerifyCapture(command, cwd = process.cwd(), timeoutMilliseconds, environment) {
-  const result = runProcessVerification(captureRequirement(command), {
+  const result = await runOwnedProcessVerification(captureRequirement(command), {
     cwd,
     ...timeoutMilliseconds === void 0 ? {} : { timeoutMilliseconds },
     ...environment === void 0 ? {} : { environment }
@@ -26,7 +27,7 @@ async function runVerifyCapture(command, cwd = process.cwd(), timeoutMillisecond
   });
 }
 function isFullSuiteCommand(command) {
-  return /(?:^|[\s&;()])npm\s+run\s+test:full(?:\s|$)/.test(command);
+  return /(?:^|[\s&;()])npm(?:\.cmd|\.exe)?\s+(?:(?:--(?:prefix|workspace)|-w)(?:=|\s+)(?:"[^"]+"|'[^']+'|[^\s&;|()]+)\s+|(?:--workspaces|-ws)\s+)*run\s+(?:test:full|quality:crap)(?:\s|$)/.test(command);
 }
 function repositoryRoot(directory) {
   try {
@@ -402,6 +403,17 @@ function dispatchBoundWorktree(target) {
   const worktree = String(dispatch.worktree || "").trim();
   return worktree || null;
 }
+function crossedCaptureRefusal(target, actualWorktree) {
+  const project = captureProject(target);
+  if (!project) return null;
+  const store = require("./store.js");
+  const ticket = store.getTicket(project.slug, target.ticket);
+  const crossing = store.crossedWorktreeBinding(project.slug, ticket, actualWorktree);
+  return crossing ? crossedWorktreeRefusalMessage("verify-capture", crossing) : null;
+}
+function boundWorktreeRefusal(target, actualWorktree, mismatch) {
+  return crossedCaptureRefusal(target, actualWorktree) || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalPath(dispatchBoundWorktree(target))}, but ${mismatch}`;
+}
 function isWithinWorktree(root, candidate) {
   const relative = path.relative(root, canonicalPath(candidate));
   if (relative === "") return true;
@@ -419,7 +431,7 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
     if (canonicalBound && canonicalWorktree !== canonicalBound) {
       return Object.freeze({
         cwd,
-        refusal: `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+        refusal: boundWorktreeRefusal(target, canonicalWorktree, `--worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`)
       });
     }
     if (!isWithinWorktree(canonicalWorktree, cwd)) {
@@ -431,10 +443,29 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
   if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
     return Object.freeze({
       cwd,
-      refusal: `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+      refusal: boundWorktreeRefusal(target, cwd, `this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`)
     });
   }
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });
+}
+function checkoutRoot(directory) {
+  try {
+    return String(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: directory,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    })).trim() || directory;
+  } catch {
+    return directory;
+  }
+}
+function verifyCommandDirectory(target, captureCwd) {
+  const project = captureProject(target);
+  const store = require("./store.js");
+  const ticket = project ? store.getTicket(project.slug, target.ticket) : null;
+  const directory = String(ticket?.executorVerifyCwd || "");
+  return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
 }
 async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs, explicitWorktree) {
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
@@ -449,7 +480,8 @@ async function runCapturedVerification(command, target, cwd = process.cwd(), fil
 Verification capture for ${target.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
     });
   }
-  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem) : await runVerifyCapture(command, captureCwd);
+  const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
+  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, commandCwd, fileSystem) : await runVerifyCapture(command, commandCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }
@@ -540,18 +572,54 @@ function report(capture, recorded) {
 `);
   }
 }
-async function main() {
-  const args = process.argv.slice(2);
+const usage = "Usage: node verify-capture.js --project <path> --ticket <ref> [--worktree <path>]\n       node verify-capture.js --base64 <base64 verify command> [--worktree <path>]";
+function base64Command(args) {
   const encoded = args[0] === "--base64" ? args[1] : "";
-  const command = encoded ? Buffer.from(encoded, "base64").toString("utf8").trim() : "";
-  if (!command) {
-    process.stderr.write("Usage: node verify-capture.js --base64 <base64 verify command> [--project <path> --ticket <ref>] [--worktree <path>]\n");
-    process.exitCode = 2;
-    return;
+  return encoded ? Buffer.from(encoded, "base64").toString("utf8").trim() : "";
+}
+function unrecordedRefusal(reason, message) {
+  return Object.freeze({ refusal: `verify-capture: capture=unrecorded reason=${reason}
+${message}` });
+}
+function pinnedRequirementCommand(target, requirement) {
+  const command = String(requirement.command || "").trim();
+  if (!command) return unrecordedRefusal("verification_capture_no_pinned_command", `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
+  if (requirement.environment === "shared") {
+    return unrecordedRefusal("verification_capture_environment_lane", `${target.ticket}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`);
   }
+  return Object.freeze({ command });
+}
+function pinnedTicketCommand(target) {
+  const project = captureProject(target);
+  if (!project) return unrecordedRefusal("project_not_found", `No Sidequest board is registered for ${target.project}, so there is no pinned verify command to run for ${target.ticket}.`);
+  const store = require("./store.js");
+  const ticket = store.getTicket(project.slug, target.ticket);
+  if (!ticket) return unrecordedRefusal("not_found", `Ticket ${target.ticket} does not exist on the board for ${target.project}.`);
+  return pinnedRequirementCommand(target, store.pinnedVerificationRequirement(ticket));
+}
+function pinnedCommandMatching(target, passedCommand) {
+  const pinned = pinnedTicketCommand(target);
+  if ("refusal" in pinned || !passedCommand || passedCommand === pinned.command) return pinned;
+  return unrecordedRefusal("verification_capture_command_mismatch", [
+    `The command passed with --base64 is not the verify command pinned on ${target.ticket}, so nothing ran.`,
+    `Pinned command: ${JSON.stringify(pinned.command)}`,
+    `Passed command: ${JSON.stringify(passedCommand)}`,
+    "Drop --base64 and rerun with only --project and --ticket (and --worktree if the briefing gave one): the wrapper then loads the pinned command from the ticket itself."
+  ].join("\n"));
+}
+function captureCommand(args, target) {
+  const passedCommand = base64Command(args);
+  if (target) return pinnedCommandMatching(target, passedCommand);
+  return passedCommand ? Object.freeze({ command: passedCommand }) : Object.freeze({ refusal: usage });
+}
+async function captureFromArguments(args) {
   const target = captureTarget(args);
-  const explicitWorktree = explicitWorktreeArgument(args);
-  const { capture, recorded, refusal } = await runCapturedVerification(command, target, process.cwd(), fs, explicitWorktree);
+  const resolved = captureCommand(args, target);
+  if ("refusal" in resolved) return Object.freeze({ capture: null, recorded: null, refusal: resolved.refusal });
+  return runCapturedVerification(resolved.command, target, process.cwd(), fs, explicitWorktreeArgument(args));
+}
+async function main() {
+  const { capture, recorded, refusal } = await captureFromArguments(process.argv.slice(2));
   if (refusal) {
     process.stderr.write(`${refusal}
 `);
@@ -559,7 +627,7 @@ async function main() {
     return;
   }
   report(capture, recorded);
-  process.exitCode = capture.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
+  process.exitCode = capture.exitCode === 0 && (!recorded || recorded.ok) ? 0 : 2;
 }
-module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 if (require.main === module) void main();

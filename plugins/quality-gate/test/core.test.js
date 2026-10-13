@@ -1,0 +1,163 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { changedMetricsAgainstBase, createAnalyzer, functionCoverage } from '../lib/core.mjs';
+import { resolveCompiler } from '../lib/compiler.mjs';
+import { crapScore, gateVerdict, measureFiles } from '../lib/measure.mjs';
+
+const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
+
+async function isolatedPlugin() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'quality-gate-'));
+  assert.deepEqual(await fs.readdir(root), []);
+  const plugin = path.join(root, 'plugin');
+  const project = path.join(root, 'project');
+  await fs.mkdir(project);
+  await fs.cp(pluginRoot, plugin, { recursive: true, filter: (sourcePath) => !sourcePath.includes('node_modules') });
+  return { root, plugin, project };
+}
+
+function runNode(argumentsList, options = {}) {
+  return spawnSync(process.execPath, argumentsList, { encoding: 'utf8', timeout: 60000, ...options });
+}
+
+function git(project, argumentsList) {
+  const result = spawnSync('git', argumentsList, { cwd: project, encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+test('resolves the scored project compiler before the plugin dependency', async () => {
+  const { root, project } = await isolatedPlugin();
+  try {
+    await fs.cp(path.join(pluginRoot, 'node_modules'), path.join(project, 'node_modules'), { recursive: true });
+    assert.ok(resolveCompiler(project).resolve('typescript/unstable/ast').startsWith(project));
+    assert.deepEqual((await (await createAnalyzer(project)).collectFunctions('const double = (value) => value * 2;', 'subject.js')).map((descriptor) => descriptor.name), ['double']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('an isolated plugin uses its own compiler and refuses plainly when neither location has one', async () => {
+  const { root, plugin, project } = await isolatedPlugin();
+  try {
+    const entry = pathToFileURL(path.join(plugin, 'lib/core.mjs')).href;
+    const script = `const { createAnalyzer } = await import(${JSON.stringify(entry)}); const analyzer = await createAnalyzer(${JSON.stringify(project)}); console.log(JSON.stringify(await analyzer.collectFunctions('function subject() { return 1; }', 'subject.js')));`;
+    const missing = runNode(['--input-type=module', '-e', script], { cwd: project });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /No supported typescript dependency was found in the scored project .* or in the quality-gate plugin/);
+    await fs.cp(path.join(pluginRoot, 'node_modules'), path.join(plugin, 'node_modules'), { recursive: true });
+    const fallback = runNode(['--input-type=module', '-e', script], { cwd: project });
+    assert.equal(fallback.status, 0, fallback.stderr);
+    assert.equal(JSON.parse(fallback.stdout)[0].complexity, 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('measure consumes real V8 coverage, preserves report JSON and fails at six', async () => {
+  const { root, project } = await isolatedPlugin();
+  try {
+    const subject = path.join(project, 'subject.mjs');
+    await fs.writeFile(subject, 'export function subject(value) { return value; }\n');
+    git(project, ['init', '-q']);
+    git(project, ['add', '.']);
+    git(project, ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'baseline']);
+    const base = git(project, ['rev-parse', 'HEAD']);
+    await fs.writeFile(subject, 'export function subject(value) {\n if (value === 1) return 1;\n if (value === 2) return 2;\n if (value === 3) return 3;\n if (value === 4) return 4;\n if (value === 5) return 5;\n return 0;\n}\n');
+    const coverage = path.join(root, 'coverage');
+    await fs.mkdir(coverage);
+    assert.deepEqual(await fs.readdir(coverage), []);
+    const execution = runNode(['--import', new URL('../lib/core.mjs', import.meta.url).href, '--input-type=module', '-e', `const { subject } = await import(${JSON.stringify(pathToFileURL(subject).href)}); for (let value = 0; value <= 5; value += 1) subject(value);`], { cwd: project, env: { ...process.env, QUALITY_GATE_V8_CAPTURE: coverage } });
+    assert.equal(execution.status, 0, execution.stderr);
+    const report = await measureFiles(['subject.mjs'], { projectRoot: project, base, coverageDirectory: coverage });
+    assert.equal(report.changedMetrics[0].crap, 6);
+    assert.equal(report.changedMetrics[0].coverage, 1);
+    const cli = runNode([path.join(pluginRoot, 'bin/quality-gate.js'), 'measure', '--project', project, '--base', base, '--coverage', coverage, 'subject.mjs']);
+    assert.equal(cli.status, 1, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout), report);
+    assert.deepEqual(await measureFiles([subject], { projectRoot: project, base, coverageDirectory: coverage }), report);
+    assert.equal(report.failures.length, 1);
+    const emptyCoverage = path.join(root, 'empty-coverage');
+    await fs.mkdir(emptyCoverage);
+    const missing = await measureFiles(['subject.mjs'], { projectRoot: project, base, coverageDirectory: emptyCoverage });
+    assert.equal(missing.unverified.length, 1);
+    assert.match(missing.unverified[0].unverified, /no suite loaded this file/);
+    await fs.writeFile(path.join(project, 'fresh.mjs'), 'export function fresh() { return 1; }\n');
+    const newFile = await measureFiles(['fresh.mjs'], { projectRoot: project, base, coverageDirectory: coverage });
+    assert.equal(newFile.changedMetrics.length, 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+const legacyAtBase = [
+  'export function legacy(items) {',
+  '  let total = 0;',
+  '  for (const item of items) {',
+  '    if (item.a) total += 1;',
+  '    if (item.b) total += 2;',
+  '    if (item.c) total += 3;',
+  '    if (item.d) total += 4;',
+  '    if (item.e) total += 5;',
+  '  }',
+  '  return total;',
+  '}',
+  '',
+].join('\n');
+
+async function classifiedAgainstLegacyBase(head, { coverage = 1, unverified } = {}) {
+  const { collectFunctions } = await createAnalyzer(pluginRoot);
+  const metrics = (await collectFunctions(head, 'legacy.mjs')).map((descriptor) => (unverified
+    ? { ...descriptor, relativePath: 'legacy.mjs', unverified }
+    : { ...descriptor, relativePath: 'legacy.mjs', coverage, crap: crapScore(descriptor.complexity, coverage) }));
+  const changed = await changedMetricsAgainstBase(metrics, ['legacy.mjs'], 'base', () => collectFunctions(legacyAtBase, 'legacy.mjs'));
+  return { byName: Object.fromEntries(changed.map((metric) => [metric.name, metric.classification])), verdict: gateVerdict(changed) };
+}
+
+test('a function absent at base is new and enforced', async () => {
+  const { byName, verdict } = await classifiedAgainstLegacyBase(`${legacyAtBase}export function fresh(value) {\n  return value ? 1 : 0;\n}\n`);
+  assert.deepEqual(byName, { fresh: 'new' });
+  assert.deepEqual(verdict, { failures: [], unverified: [] });
+});
+
+test('an equal-complexity legacy edit keeps its classification and fails or stays unverified', async () => {
+  const passThrough = legacyAtBase.replace('total += 1', 'total += 10');
+  const scored = await classifiedAgainstLegacyBase(passThrough, { coverage: 0 });
+  assert.deepEqual(scored.byName, { legacy: 'legacy-unchanged' });
+  assert.equal(scored.verdict.failures.length, 1);
+  const unmeasured = await classifiedAgainstLegacyBase(passThrough, { unverified: 'no suite loaded this file' });
+  assert.deepEqual(unmeasured.byName, { legacy: 'legacy-unchanged' });
+  assert.equal(unmeasured.verdict.unverified.length, 1);
+});
+
+test('a legacy function that gains a branch is modified-raised and fails at or above six', async () => {
+  const { byName, verdict } = await classifiedAgainstLegacyBase(legacyAtBase.replace('  }\n  return', '    if (item.f) total += 6;\n  }\n  return'));
+  assert.deepEqual(byName, { legacy: 'modified-raised' });
+  assert.deepEqual(verdict.failures, ['legacy.mjs:1 legacy cc=8 coverage=100.00% CRAP=8.0000']);
+});
+
+test('a new helper cannot exempt its physically modified legacy caller', async () => {
+  const { byName, verdict } = await classifiedAgainstLegacyBase(`function bonus(item) {\n  return item.f ? 6 : 0;\n}\n${legacyAtBase.replace('  }\n  return', '    total += bonus(item);\n  }\n  return')}`);
+  assert.deepEqual(byName, { bonus: 'new', legacy: 'legacy-unchanged' });
+  assert.deepEqual(verdict.failures, ['legacy.mjs:4 legacy cc=7 coverage=100.00% CRAP=7.0000']);
+});
+
+test('unbound named build records never establish source ownership', () => {
+  const descriptor = { identity: '<root>/FunctionDeclaration:subject#0', parent: '<root>', name: 'subject', start: 0, end: 10 };
+  const source = { descriptors: [descriptor], records: [] };
+  const matched = { functionName: 'subject', ranges: [{ startOffset: 100, endOffset: 110, count: 1 }] };
+  const unrelated = { functionName: 'another', ranges: [{ startOffset: 100, endOffset: 110, count: 1 }] };
+  assert.match(functionCoverage(descriptor, [source, { records: [matched, unrelated, { functionName: 'subject', ranges: [] }] }]).unverified, /capture binding/);
+  assert.match(functionCoverage(descriptor, [source, { records: [unrelated] }]).unverified, /capture binding/);
+});
+
+test('the measurement entry refuses incomplete arguments', () => {
+  const result = runNode([path.join(pluginRoot, 'bin/quality-gate.js'), 'measure']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Usage: quality-gate measure/);
+});

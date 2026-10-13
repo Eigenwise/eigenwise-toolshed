@@ -4,9 +4,21 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { observabilityEnvironment, setupObservability } = require('./setup-observability.js');
+const {
+  DEFAULT_PORTS,
+  compareVersions,
+  observabilityEnvironment,
+  setupObservability,
+  verifyCommand,
+} = require('./setup-observability.js');
 const { projectMetadata, repositoryRoot } = require('../hooks/observability.js');
-const { mergeProjectEnvironment, projectSettingsPath, writeProjectSettings } = require('../lib/project-settings.js');
+const {
+  mergeProjectEnvironment,
+  projectSettingsPath,
+  readSettings,
+  writeProjectSettings,
+  writeSettings,
+} = require('../lib/project-settings.js');
 const {
   defaultConfigPath,
   defaultDataDir,
@@ -18,6 +30,22 @@ const STATE_FILE = 'settings.local.workbench-telemetry.json';
 const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git']);
 const MAX_SCAN_DEPTH = 8;
 const MAX_SCAN_DIRECTORIES = 4096;
+// From 2.1.282 Claude Code ignores these in project and local settings (only user, managed,
+// --settings or the launch environment can turn export on). OTEL_RESOURCE_ATTRIBUTES is not on
+// its list, so project.id still comes from each session directory's settings.
+const PROJECT_EXPORT_IGNORED_SINCE = '2.1.282';
+const USER_EXPORT_VARIABLES = Object.freeze([
+  'CLAUDE_CODE_ENABLE_TELEMETRY',
+  'CLAUDE_CODE_ENHANCED_TELEMETRY_BETA',
+  'OTEL_METRICS_EXPORTER',
+  'OTEL_LOGS_EXPORTER',
+  'OTEL_TRACES_EXPORTER',
+  'OTEL_EXPORTER_OTLP_PROTOCOL',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+]);
 
 function projectName(projectDir) {
   return projectMetadata(path.resolve(projectDir)).project_name;
@@ -311,14 +339,106 @@ async function enableProjectTelemetry(projectDir, options = {}) {
   };
 }
 
+function claudeUserSettingsPath(options = {}) {
+  if (options.userSettingsPath) return options.userSettingsPath;
+  const environment = options.environment || process.env;
+  return path.join(environment.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'settings.json');
+}
+
+function userExportEnvironment(ports) {
+  const environment = observabilityEnvironment({ ...DEFAULT_PORTS, ...ports });
+  return Object.fromEntries(USER_EXPORT_VARIABLES.map((name) => [name, environment[name]]));
+}
+
+function configuredPorts(options = {}) {
+  return readObservabilityConfig(registryConfigPath(options)).observability.ports;
+}
+
+// Claude Code sets AI_AGENT=claude-code_<major>-<minor>-<patch>_<source> for the hooks and tools it runs.
+function claudeVersionFromAgent(environment = process.env) {
+  return /^claude-code[_/](\d+)-(\d+)-(\d+)/.exec(environment.AI_AGENT || '')?.slice(1).join('.') || null;
+}
+
+function claudeCliVersion(options) {
+  return /\d+\.\d+\.\d+/.exec(verifyCommand(options.claude || 'claude', ['--version'], options.spawnSync))?.[0] || null;
+}
+
+function installedClaudeVersion(options = {}) {
+  if (options.claudeVersion !== undefined) return options.claudeVersion;
+  try {
+    return claudeCliVersion(options);
+  } catch {
+    return claudeVersionFromAgent(options.environment);
+  }
+}
+
+// An unknown version counts as current: every release since 2.1.282 needs user-level export.
+function projectSettingsCanExport(version) {
+  return Boolean(version) && compareVersions(version, PROJECT_EXPORT_IGNORED_SINCE) < 0;
+}
+
+function missingUserExport(ports, options = {}) {
+  const userEnvironment = readSettings(claudeUserSettingsPath(options)).env || {};
+  const launchEnvironment = options.environment || process.env;
+  const exportsNowhere = ([name, value]) => userEnvironment[name] !== value && launchEnvironment[name] !== value;
+  return Object.entries(userExportEnvironment(ports)).filter(exportsNowhere).map(([name]) => name);
+}
+
+function applyUserExport(options = {}) {
+  const settingsPath = claudeUserSettingsPath(options);
+  const settings = readSettings(settingsPath);
+  const existing = settings.env || {};
+  const wanted = Object.entries(userExportEnvironment(options.ports));
+  const alreadySet = ([name]) => Object.hasOwn(existing, name);
+  const heldByOtherValue = ([name, value]) => alreadySet([name]) && existing[name] !== value;
+  const written = Object.fromEntries(wanted.filter((entry) => !alreadySet(entry)));
+  const conflicting = wanted.filter(heldByOtherValue).map(([name]) => name);
+  if (Object.keys(written).length > 0) writeSettings(settingsPath, mergeProjectEnvironment(settings, written));
+  return { settingsPath, written, conflicting };
+}
+
+function userExportCommand() {
+  return `node "${path.join(__dirname, 'project-telemetry.js')}" --user-export`;
+}
+
+function userExportAdvice(ports, options = {}) {
+  const version = installedClaudeVersion(options);
+  if (projectSettingsCanExport(version)) return '';
+  const missing = missingUserExport(ports, options);
+  if (missing.length === 0) return '';
+  return `Nothing exports yet. Claude Code ${version || '(version unknown)'} ignores telemetry export settings in project files (since ${PROJECT_EXPORT_IGNORED_SINCE}), so those directories only carry this project's id. `
+    + `Export has to be turned on once in your user settings (${claudeUserSettingsPath(options)}). That makes every Claude Code session on this machine send telemetry to the local collector. The observer keeps only projects you opted in, but traces and metrics from other projects still reach a configured sink or dashboard, because that path has no opt-in gate. `
+    + `To do it, run:\n  ${userExportCommand()}\n`;
+}
+
+function userExportNotice(config, options = {}) {
+  const version = claudeVersionFromAgent(options.environment);
+  if (projectSettingsCanExport(version || '0.0.0') || !config.observability.optedInProjects?.length) return null;
+  if (missingUserExport(config.observability.ports, options).length === 0) return null;
+  return `Observability: Claude Code ${version} ignores telemetry export settings in project files, so opted-in projects record no claude_code metrics or events. Run /observability:enable-project-telemetry to turn export on in your user settings.`;
+}
+
+function userExportReport({ settingsPath, written, conflicting }) {
+  const writtenLines = Object.entries(written).map(([name, value]) => `  ${name}=${value}\n`);
+  const lines = writtenLines.length > 0
+    ? [`Turned on telemetry export for every Claude Code session on this machine. Wrote to ${settingsPath} env:\n`, ...writtenLines]
+    : [`Nothing written: ${settingsPath} already has every export variable.\n`];
+  if (conflicting.length > 0) {
+    lines.push(`Left alone because ${settingsPath} already gives them other values: ${conflicting.join(', ')}. Export reaches this plugin's collector only with the values listed by verify-project-telemetry.js --audit.\n`);
+  }
+  lines.push('Restart running Claude Code sessions before their telemetry appears.\n');
+  return lines.join('');
+}
+
+const FLAG_OPTIONS = Object.freeze({ '--disable': 'disable', '--user-export': 'userExport' });
+
 function parseArgs(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    const next = argv[index + 1];
-    if (argument === '--project' && next) { options.projectDir = argv[++index]; continue; }
-    if (argument === '--disable') { options.disable = true; continue; }
-    throw new Error(`Unknown or incomplete argument: ${argument}`);
+    if (argument === '--project' && argv[index + 1]) { options.projectDir = argv[++index]; continue; }
+    if (!Object.hasOwn(FLAG_OPTIONS, argument)) throw new Error(`Unknown or incomplete argument: ${argument}`);
+    options[FLAG_OPTIONS[argument]] = true;
   }
   return options;
 }
@@ -327,53 +447,73 @@ function directoryReport(directories) {
   return directories.map(({ directory }) => `  ${directory}\n`).join('');
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+function directoryCount(count) {
+  return `${count} director${count === 1 ? 'y' : 'ies'}`;
+}
+
+function disableReport(result) {
+  if (!result.changed) return 'Project telemetry was not enabled by Observability.\n';
+  const unwired = result.directories.filter((entry) => entry.changed);
+  if (unwired.length === 0) return `Removed ${projectName(result.repositoryRoot)} from the local registry; no wired directory remained.\n`;
+  return `Project telemetry disabled for ${projectName(result.repositoryRoot)} in ${directoryCount(unwired.length)}:\n`
+    + directoryReport(unwired)
+    + 'Restart Claude Code in each of them for the change to take effect.\n';
+}
+
+function enableReport(result) {
+  return `Project telemetry enabled for ${projectName(result.repositoryRoot)} (repository ${result.repositoryRoot}) in ${directoryCount(result.directories.length)}:\n`
+    + directoryReport(result.directories)
+    + 'Every Claude Code session running in those directories must restart before its metrics appear.\n';
+}
+
+async function runCommand(argv, dependencies = {}) {
+  const options = { ...dependencies, ...parseArgs(argv) };
+  if (options.userExport) return userExportReport(applyUserExport({ ...options, ports: configuredPorts(options) }));
   const projectDir = path.resolve(options.projectDir || process.cwd());
-  if (options.disable) {
-    const result = disableProjectTelemetry(projectDir);
-    if (!result.changed) {
-      process.stdout.write('Project telemetry was not enabled by Observability.\n');
-      return;
-    }
-    const unwired = result.directories.filter((entry) => entry.changed);
-    if (unwired.length === 0) {
-      process.stdout.write(`Removed ${projectName(result.repositoryRoot)} from the local registry; no wired directory remained.\n`);
-      return;
-    }
-    process.stdout.write(`Project telemetry disabled for ${projectName(result.repositoryRoot)} in ${unwired.length} director${unwired.length === 1 ? 'y' : 'ies'}:\n`);
-    process.stdout.write(directoryReport(unwired));
-    process.stdout.write('Restart Claude Code in each of them for the change to take effect.\n');
-    return;
-  }
+  if (options.disable) return disableReport(disableProjectTelemetry(projectDir, options));
   const result = await enableProjectTelemetry(projectDir, options);
-  process.stdout.write(`Project telemetry enabled for ${projectName(result.repositoryRoot)} (repository ${result.repositoryRoot}) in ${result.directories.length} director${result.directories.length === 1 ? 'y' : 'ies'}:\n`);
-  process.stdout.write(directoryReport(result.directories));
-  process.stdout.write('Every Claude Code session running in those directories must restart before its metrics appear.\n');
+  return enableReport(result) + userExportAdvice(result.runtime.config.observability.ports, options);
 }
 
 module.exports = {
+  PROJECT_EXPORT_IGNORED_SINCE,
   STATE_FILE,
+  USER_EXPORT_VARIABLES,
   applyProjectTelemetry,
+  applyUserExport,
   claudeProjectsDir,
+  claudeUserSettingsPath,
+  claudeVersionFromAgent,
   disableProjectTelemetry,
   enableProjectTelemetry,
   encodedProjectDirectory,
+  installedClaudeVersion,
   mergeTelemetrySettings,
+  missingUserExport,
   parseArgs,
   projectName,
+  projectSettingsCanExport,
   projectSettingsPath,
   registryEntry,
   registryConfigPath,
   removeProjectRegistry,
   repositorySubdirectories,
+  runCommand,
   sessionDirectories,
   telemetryEnvironment,
   telemetryRoot,
   telemetryStatePath,
   updateProjectRegistry,
+  userExportAdvice,
+  userExportCommand,
+  userExportEnvironment,
+  userExportNotice,
   wiredDirectories,
   wiredProjectId,
 };
 
-if (require.main === module) main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
+if (require.main === module) {
+  runCommand(process.argv.slice(2))
+    .then((report) => process.stdout.write(report))
+    .catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
+}

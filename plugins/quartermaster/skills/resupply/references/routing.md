@@ -68,6 +68,61 @@ pattern, while a maintained package is an installable candidate after bounded re
 change behind per-item approval, honor the host reload boundary, and verify the tool is usable live
 before calling the gap closed.
 
+### Native Claude Code mod
+
+Use this destination for a proven on-screen or event-driven gap after checking native features,
+installed/live extensions, and existing skills. A repeated multi-step task already covered by a skill
+stays with that skill. A native mod can supply a status entry, band, pane, or toast when those choices
+actually help the goal; repeated-work counts alone do not justify one.
+
+Before proposing, load the host's `plugin-authoring` skill and inspect the generated types it names
+for the current build. Cite the checked skill/type declaration and exact event/API. For example,
+`ui.render` with `AbovePrompt`, `$.ui.status`, and `turn.complete` are possible only when those
+contracts are present. A turn completing does not establish user absence or idle time. If the skill,
+types, event, or needed data is unavailable, label that support unverified and defer that design.
+Do not invent an idle/away event or replace missing evidence with a confident recommendation.
+
+Include these in the per-item proposal, keeping mined evidence local:
+
+- **Evidence and benefit:** the aggregate's window, relevant counts or bounded samples, limits, and
+  the user goal this would help. Distinguish observed repetition from an inferred need; do not open
+  raw transcripts or put private evidence in external lookups.
+- **Host fit and screen behavior:** the verified event/API and data source, what appears where,
+  when it updates or clears, its project/session scope, and the exact proposed files/change.
+  Describe a proposal as unbuilt; authoring support alone proves neither loading nor usability.
+- **Owner:** name the runtime owner. Quartermaster assesses, sets up approved changes, and performs
+  bounded acceptance checks. Orchestration belongs to Sidequest or its existing equivalent;
+  recurring rules, scoring, mapping, and telemetry stay with their respective owners. If no suitable
+  runtime owner exists, recommend a separate package, never a Quartermaster runtime subsystem.
+- **Cost and savings:** state setup cost separately from ongoing trigger frequency, local work,
+  context/usage cost, and model calls (including delegation). A local status render can require zero
+  extra model calls only when its proposed data flow supports that claim. Label unknown costs as
+  unknown and estimates as estimates. Call savings measured only with a comparable timed baseline
+  and result; otherwise label them inferred, with assumptions, or say they are not quantified.
+
+Ask for approval of that exact item before building or loading it. Approval of resupply or an edit to
+this skill does not approve a mod, settings/hooks/permissions changes, deletion, publication, or paid
+actions. Show each separately proposed change; existing permissions still apply. After approved
+implementation, follow `plugin-authoring`'s validation and behavior checks, then honor the host's
+user-controlled hot-reload consent. Never answer that prompt for the user or substitute a permission
+rule. A written or validated mod awaiting activation stays pending. Verify the approved behavior live
+on the user's surface, including update/clear behavior and usability, before calling setup complete.
+
+Reuse `decisions add` with `--kind other --fingerprint "other:native-mod-<stable-slug>" --signal any`.
+Record the actual approval/rejection and setup phase in `--detail`; use `deferred` while an approved
+setup awaits activation or verification, and `decisions update <id> --status applied` after it works
+live. Only the user's no to the shown proposal is `rejected`. A declined hot reload leaves setup
+pending, without retiring the proposal. Later resupply checks use the same ledger and aggregate;
+missing attribution does not prove a UI-only mod unused. Do not add a watcher or telemetry subsystem.
+
+**Away Mode:** treat any proposal as a user-invoked mode for explicitly named tasks under the runtime
+owner. Show task scope, time and usage/model-call budget, concurrency limit, and stop conditions
+(completion, exhausted budget, cancellation, or a permission block). Verify host support for the
+proposed controls instead of inferring absence from inactivity. No automatic idle-work policy,
+permission changes, or paid/publishing/deletion authority comes with this mode; any such action needs
+its own approval and existing permission checks. Quartermaster may recommend and verify setup, but
+never runs the work or owns the recurring policy.
+
 ## 3. New skill (a workflow)
 
 For a multi-step workflow the user keeps performing by hand with no plugin match. Build it with

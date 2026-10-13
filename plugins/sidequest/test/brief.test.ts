@@ -26,6 +26,7 @@ const { makeCliRunner, makeMcpCaller } = require('./_helpers.js');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-brief-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const PROJ = path.join(os.tmpdir(), 'sq-brief-fixtures', 'board');
+fs.mkdirSync(PROJ, { recursive: true });
 process.env.CLAUDE_PROJECT_DIR = PROJ;
 
 const mcp = require('../lib/mcp.js');

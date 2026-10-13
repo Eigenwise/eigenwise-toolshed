@@ -1,6 +1,8 @@
 # Ticket authoring
 
-Declare scope by the surfaces a change reaches, not just the first file you found. For a cross-cutting change inside one plugin, declare its `src/lib`, `test`, and, where relevant, `hooks` directories. Use file-granular scope for surgical work where blast-radius control is the point.
+Declare scope by the surfaces a change reaches, not just the first file you found. For a cross-cutting change inside one plugin, declare its `src/lib`, `test`, and, where relevant, `hooks` directories. Use file-granular scope for surgical work where blast-radius control is the point. Scope requests also grant tracked `lib`, `bin`, and top-level `hooks` JavaScript outputs paired with an already declared or granted `plugins/<name>/src` TypeScript source, with reason `build output of <source>`. Foreign release fragments stay refused; the refusal names their owning ticket when it exists on this board.
+
+A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave requires 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens.
 
 ## Pinned planning contract
 
@@ -23,7 +25,28 @@ choices to its executor. It must name:
 
 A settled feature gets one authored contract. Use two or three bounded proposals only when the approach
 is genuinely contested. An exact small edit keeps the lightweight path: record its outcome and oracle,
-then use one ticket.
+then keep one owner, inline when it fits the small bounded path.
+
+For substantial or safety-sensitive changes, do a short architecture/feasibility preflight before
+expensive implementation or tests. Trace shared authority and callers, choose the smallest existing
+seam, and check the project's configured quality gate, if any. When configured, consume the dedicated
+quality owner's real touched-function complexity and measurement support. Check genuine native baseline/candidate ownership, protected state and dirty prerequisites,
+the runnable done-oracle, and its actual timeout/resource fit. Missing measurement stays UNVERIFIED only for a configured gate;
+Quartermaster owns setup only, never scoring or recurring audits. Leave untouched legacy code outside
+measurement scope and preserve standards.
+
+Choose verifiers by observed behavior, callers and real coverage/source identity. Inspect transitive
+test-file imports before choosing files or names: `--test-name-pattern` does not stop top-level imports
+from registering other suites. A narrow selection can avoid unrelated fan-out while preserving full
+measured coverage for touched functions when the project's configured quality gate calls for it, and required final acceptance. Never fabricate a passing
+capture or accept a timed-out command because later log text says green; preserve deadlines and
+protected assertions.
+
+Pin ordinary next steps within the contract: one producer owns patch, focused regressions, measurement,
+clean-candidate capture and submit. Preauthorize those steps, pause only the genuinely blocked step,
+and continue unaffected source work. Resource availability and authority changes still need their real
+owner's decision. For live advice, name the architectural risk, authorized snapshot/paths, inspection
+limits and budget under `readonly-guidance.md`; ask for a plan advisor only when that risk merits it.
 
 Ask the user once, in one batch, only for choices that change user-visible behavior, compatibility,
 migration, public API, dependency, or expensive-to-reverse scope. Explicit current-feature delegation
@@ -66,3 +89,9 @@ active ship only when the contract or a proven regression requires it.
 After two independently rejected candidates in one defect chain, stop local patching. Re-plan, narrow
 the contract, or replace the authority or architecture before another candidate; involve the user when
 the feature was not delegated. Do not dispatch a third local patch against the same unexamined premise.
+
+## Work kind and completion oracle
+
+The author pins `verifyKind` and `verify` before dispatch: `suite` or `command` for executable regressions, `typecheck` with a typechecker command for annotation work, or `schema` or `document` for their evidence contracts. Dispatch freezes that oracle. The main thread also freezes `workProvenance.kind`: `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only` or `fixture-only`. Successful completion records `negativeControl: not_required(<reason>)` for the non-behavior kinds. With no frozen kind, changed source under changed tests still requires a control; declare annotation/refactor intent before dispatch instead of asking the executor to infer it.
+
+New behavior requires the existing claim-holder marker: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.

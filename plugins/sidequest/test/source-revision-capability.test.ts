@@ -180,6 +180,103 @@ test('filesystem snapshot cap guidance names the bound and recourse', () => {
   assert.match(guidance, /path cap reached 501 paths; cap 500 paths/);
   assert.match(guidance, /Initialize a git repository at the project root/);
   assert.match(guidance, /point the board at a smaller directory/);
+  assert.match(guidance, /leaves out \.git, installed and build output directories/);
+  assert.match(guidance, /switches to git on its next dispatch once a \.git exists/);
+});
+
+function writeFiles(directory: string, count: number): void {
+  mkdirSync(directory, { recursive: true });
+  for (let index = 0; index < count; index += 1) writeFileSync(join(directory, `file-${index}.js`), `module.exports = ${index};\n`);
+}
+
+// GH-334: a 19-file repository refused dispatch at 501 paths because the walk counted .git and
+// node_modules. The digest must also ignore them, or an install would read as a source change.
+test('filesystem snapshot never counts .git and skips a 1000-file node_modules under the default cap', () => {
+  withSnapshotProject((projectPath) => {
+    writeFiles(join(projectPath, 'src'), 19);
+    const sourceOnly = sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt);
+
+    writeFiles(join(projectPath, 'node_modules', 'left-pad'), 1000);
+    writeFiles(join(projectPath, '.git', 'objects'), 600);
+    for (const name of ['.next', 'dist', 'build', 'target', '.venv', 'vendor']) writeFiles(join(projectPath, name), 2);
+    writeFiles(join(projectPath, 'src', 'node_modules'), 2);
+
+    const withGenerated = sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt);
+
+    assert.equal(withGenerated?.value, sourceOnly?.value);
+  });
+});
+
+test('filesystem snapshot skips what the root .gitignore excludes', () => {
+  withSnapshotProject((projectPath) => {
+    writeFileSync(join(projectPath, '.gitignore'), '# generated\n\ncoverage/\n*.log\n/out\n!keep.log\n');
+    writeFiles(join(projectPath, 'src'), 3);
+    const sourceOnly = sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt);
+
+    writeFiles(join(projectPath, 'coverage'), 20);
+    writeFiles(join(projectPath, 'src', 'coverage'), 20);
+    writeFileSync(join(projectPath, 'debug.log'), 'noise\n');
+    writeFileSync(join(projectPath, 'src', 'trace.log'), 'noise\n');
+    writeFiles(join(projectPath, 'out'), 20);
+
+    assert.equal(sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt)?.value, sourceOnly?.value);
+
+    writeFiles(join(projectPath, 'src', 'out'), 1);
+    const withNestedOut = sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt);
+    assert.notEqual(withNestedOut?.value, sourceOnly?.value, 'the anchored /out pattern leaves src/out counted');
+
+    mkdirSync(join(projectPath, 'notes'));
+    writeFileSync(join(projectPath, 'notes', 'coverage'), 'a file, not a coverage/ directory\n');
+    assert.notEqual(
+      sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt)?.value,
+      withNestedOut?.value,
+      'the directory-only coverage/ pattern leaves a file named coverage counted',
+    );
+  });
+});
+
+test('filesystem snapshot path cap refusal names what the walk skipped and counted', () => {
+  withSnapshotProject((projectPath) => {
+    writeFiles(join(projectPath, 'src'), 6);
+    writeFiles(join(projectPath, 'docs'), 2);
+    writeFiles(join(projectPath, 'node_modules'), 3);
+    writeFiles(join(projectPath, '.git'), 3);
+
+    assert.throws(
+      () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, { maxPaths: 9 }),
+      (error: unknown) => {
+        const walk = (error as { walk: { skipped: string[]; skippedTotal: number; counted: Array<{ path: string; paths: number }> } }).walk;
+        assert.equal((error as { bound: string }).bound, 'path cap');
+        assert.deepEqual(walk.skipped, ['.git', 'node_modules']);
+        assert.equal(walk.skippedTotal, 2);
+        assert.deepEqual(walk.counted, [{ path: 'src', paths: 6 }, { path: 'docs', paths: 3 }, { path: '.', paths: 1 }]);
+        const guidance = filesystemSnapshotLimitGuidance(projectPath, error as never);
+        assert.match(guidance, /This walk skipped \.git, node_modules; the most paths it counted were under src \(6\), docs \(3\), \. \(1\)\./);
+        return true;
+      },
+    );
+  });
+});
+
+test('filesystem snapshot of a missing project root keeps its fixed digest', () => {
+  withSnapshotProject((projectPath) => {
+    const revision = sourceRevisionCapability.filesystemSnapshotRevision(join(projectPath, 'not-created-yet'), observedAt);
+
+    assert.equal(revision?.value, '9c5250c3567577c02831e4ea907d81a08d81ccf52a80da0b321b4ff6ebc0b6f4');
+  });
+});
+
+test('filesystem snapshot guidance reports an empty skip and truncates a long one', () => {
+  const counted = [{ path: 'src', paths: 501 }];
+  const nothingSkipped = filesystemSnapshotLimitGuidance('/project', {
+    bound: 'path cap', observed: 501, cap: 500, walk: { skipped: [], skippedTotal: 0, counted },
+  });
+  const manySkipped = filesystemSnapshotLimitGuidance('/project', {
+    bound: 'path cap', observed: 501, cap: 500, walk: { skipped: ['a/node_modules', 'b/node_modules'], skippedTotal: 12, counted },
+  });
+
+  assert.match(nothingSkipped, /This walk skipped nothing; the most paths it counted were under src \(501\)\./);
+  assert.match(manySkipped, /This walk skipped a\/node_modules, b\/node_modules, and 10 more;/);
 });
 
 test('filesystem snapshot child that cannot run is reported as a child failure, not an unreadable project', () => {

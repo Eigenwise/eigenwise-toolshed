@@ -56,6 +56,12 @@ The GitHub Release workflow is notification-only. It runs for marketplace `v*` t
 
 `Test` fans out over a plugin/platform matrix whose job names truncate and collide, so no individual matrix check proves both platforms ran. The `test-complete` job is the aggregate: it needs every other test job and fails when any of them did not succeed. That is the name branch protection should require, alongside `guard` from `release-guard.yml`.
 
+The matrix checks manifest versions, release fragments, and supported suite resolution before selecting full suites. Marketplace changes that only move version fields, the repository changelog, release fragments, and this release guide use the focused release-engine tests and release guard without selecting unrelated plugin suites. Plugin manifest changes still select that plugin's full suite, including version-only bumps: those versions feed runtime freshness and registry decisions. Plugin READMEs and changelogs remain conservatively plugin-scoped too.
+
+Other plugin files select their own full suite on Linux and Windows, with the same setup and commands as before. Shared release code/tests, the suite resolver (including its Sidequest source), workflow changes, marketplace configuration or source/plugin membership changes, and unknown paths select every published plugin. A missing or unreadable target base also selects every plugin; it never substitutes a previous head. Focused metadata failures fail `plugin-matrix` and therefore `test-complete`, even when no full suite is selected. The separate release guard stays required.
+
+PR selection compares the target base with the current candidate. A docs-only push on top of unmerged Sidequest source still selects Sidequest. This reduces untouched-plugin fan-out; a bumped plugin still runs its own full suite. No results are reused across candidates.
+
 ## Workflow
 
 At integration time, record one fragment for the ticket:
@@ -116,3 +122,7 @@ node --test scripts/release/test/*.test.mjs
 ```
 
 The release tests use throwaway repositories and local bare remotes. They do not contact a network. They cover planning, version bumps, changelogs, the separate push stages, automatic pre-push rollback, tag checks, and suite safeguards.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of the release engine. Donations are never required to use the files in this directory.

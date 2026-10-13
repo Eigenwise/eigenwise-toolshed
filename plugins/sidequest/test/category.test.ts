@@ -68,7 +68,7 @@ test('category readonly is persisted and can be overridden per project', () => {
   assert.equal(store.getCategory('readonly-policy-test', { project: slug }).readonly, false);
 });
 
-test('unavailable routes retain their provider instead of crossing to a fallback', () => {
+test('an unavailable route crosses providers only to its own category fallback, never the global one (GH-217)', () => {
   const catalog = [{ slug: 'codex-gpt-test', id: 'gpt-test', label: 'GPT Test' }];
   const { store, slug, home } = freshStore({ catalog });
   store.setCategory({ id: 'route-test', name: 'Route test', route: { model: 'codex-gpt-test', effort: 'high' }, fallback: { model: 'opus', effort: 'medium' }, enabled: true });
@@ -76,7 +76,7 @@ test('unavailable routes retain their provider instead of crossing to a fallback
   assert.equal(store.getTicket(slug, created.ref).model, 'codex-gpt-test');
 
   process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-empty-'));
-  assert.equal(store.getTicket(slug, created.ref).model, 'codex-gpt-test');
+  assert.equal(store.getTicket(slug, created.ref).model, 'opus');
 
   store.setCategory('route-test', { fallback: { model: 'codex-also-gone', effort: 'low' } });
   store.setRoutingFallback({ model: 'fable', effort: 'xhigh' });

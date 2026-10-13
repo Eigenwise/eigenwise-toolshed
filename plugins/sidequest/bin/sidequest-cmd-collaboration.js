@@ -42,7 +42,8 @@ function worktreeSweepEntryLine(entry) {
   const patchEquivalent = entry.patchEquivalent == null ? "unavailable" : entry.patchEquivalent;
   const age = entry.ageMs == null ? "unavailable" : `${Math.round(entry.ageMs / 6e4)}m`;
   const quarantine = entry.quarantine ? `; quarantined ${entry.quarantine}` : "";
-  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}${quarantine}]`;
+  const detail = entry.detail ? `: ${entry.detail}` : "";
+  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}${detail}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}${quarantine}]`;
 }
 function formatBytes(bytes) {
   if (bytes == null) return "unavailable";

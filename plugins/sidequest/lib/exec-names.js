@@ -21,20 +21,25 @@ __export(exec_names_exports, {
   AGENT_NAME_MAX_LENGTH: () => AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX: () => CLAUDE_PREFIX,
   DIAGNOSTIC_PROBE_NAME: () => DIAGNOSTIC_PROBE_NAME,
+  DISCOVERED_MODEL_PREFIX: () => DISCOVERED_MODEL_PREFIX,
   DISPATCH_NAME: () => DISPATCH_NAME,
   DISPATCH_PREFIX: () => DISPATCH_PREFIX,
   EFFORTS: () => EFFORTS,
   LEGACY_TICKET_PREFIX: () => LEGACY_TICKET_PREFIX,
   READ_ONLY_CLAUDE_PREFIX: () => READ_ONLY_CLAUDE_PREFIX,
+  READ_ONLY_DISCOVERED_MODEL_PREFIX: () => READ_ONLY_DISCOVERED_MODEL_PREFIX,
   READ_ONLY_DISPATCH_NAME: () => READ_ONLY_DISPATCH_NAME,
   READ_ONLY_DISPATCH_PREFIX: () => READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX: () => TICKET_PREFIX,
   bundledAgentType: () => bundledAgentType,
   canonicalExecutorName: () => canonicalExecutorName,
   classify: () => classify,
+  discoveredModelExecutorName: () => discoveredModelExecutorName,
   dispatchLaunchName: () => dispatchLaunchName,
+  isDiscoveredModelExecutor: () => isDiscoveredModelExecutor,
   isEffort: () => isEffort,
   isReadOnlyExecutor: () => isReadOnlyExecutor,
+  readOnlyDiscoveredModelExecutorName: () => readOnlyDiscoveredModelExecutorName,
   refSlug: () => refSlug,
   stableClaudeName: () => stableClaudeName,
   stableDispatchName: () => stableDispatchName,
@@ -48,6 +53,8 @@ const CLAUDE_PREFIX = "sidequest-exec-";
 const DISPATCH_PREFIX = "sidequest-exec-dispatch-";
 const READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 const READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
+const DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
+const READ_ONLY_DISCOVERED_MODEL_PREFIX = "sidequest-exec-readonly-model-";
 const TICKET_PREFIX = "sidequest-sq-";
 const LEGACY_TICKET_PREFIX = "sidequest-ticket-";
 const DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
@@ -147,6 +154,23 @@ function stableReadOnlyClaudeName(effort) {
 function stableReadOnlyDispatchName(_effort) {
   return READ_ONLY_DISPATCH_NAME;
 }
+function discoveredModelExecutorName(agentSlug, effort) {
+  return `${DISCOVERED_MODEL_PREFIX}${agentSlug}-${effort}`;
+}
+function readOnlyDiscoveredModelExecutorName(agentSlug, effort) {
+  return `${READ_ONLY_DISCOVERED_MODEL_PREFIX}${agentSlug}-${effort}`;
+}
+const DISCOVERED_MODEL_SUFFIX_RE = /^[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)$/;
+function discoveredModelEffort(name, prefix) {
+  const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
+  return name.startsWith(prefix) && isEffort(effort) ? effort : null;
+}
+function classifyDiscoveredModel(name) {
+  const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
+  if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
+  const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
+  return effort ? { kind: "discovered_model", effort } : null;
+}
 const BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
@@ -166,7 +190,11 @@ function bundledAgentType(name) {
 }
 function isReadOnlyExecutor(name) {
   const kind = classify(name).kind;
-  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin";
+  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin" || kind === "read_only_discovered_model";
+}
+function isDiscoveredModelExecutor(name) {
+  const kind = classify(name).kind;
+  return kind === "discovered_model" || kind === "read_only_discovered_model";
 }
 function classify(value) {
   if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
@@ -174,6 +202,8 @@ function classify(value) {
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
   if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
   if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
+  const discoveredModel = classifyDiscoveredModel(name);
+  if (discoveredModel) return discoveredModel;
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
     const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
     if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
@@ -203,20 +233,25 @@ function classify(value) {
   AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX,
   DIAGNOSTIC_PROBE_NAME,
+  DISCOVERED_MODEL_PREFIX,
   DISPATCH_NAME,
   DISPATCH_PREFIX,
   EFFORTS,
   LEGACY_TICKET_PREFIX,
   READ_ONLY_CLAUDE_PREFIX,
+  READ_ONLY_DISCOVERED_MODEL_PREFIX,
   READ_ONLY_DISPATCH_NAME,
   READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX,
   bundledAgentType,
   canonicalExecutorName,
   classify,
+  discoveredModelExecutorName,
   dispatchLaunchName,
+  isDiscoveredModelExecutor,
   isEffort,
   isReadOnlyExecutor,
+  readOnlyDiscoveredModelExecutorName,
   refSlug,
   stableClaudeName,
   stableDispatchName,

@@ -254,7 +254,7 @@ async function cmdGroomClose(opts, positional) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? "integration" : opts["delivery-commit"] ? "delivery" : "grooming";
-  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts["recovery-evidence"] });
+  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts["recovery-evidence"], sessionId: sessionId(opts) });
   if (!recovery.ok) {
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + "\n");
@@ -271,7 +271,9 @@ async function cmdGroomClose(opts, positional) {
     abandonSubmission: opts["abandon-submission"] === true,
     deliveryCommit: opts["delivery-commit"],
     deliveryInteractionCommit: opts["delivery-interaction-commit"],
-    deliveryMethod: opts["delivery-method"]
+    deliveryMethod: opts["delivery-method"],
+    deliveryRevision: opts["delivery-revision"],
+    resolvedPaths: opts["resolved-path"]
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) Object.assign(res, await advanceAndSweepAfterIntegration(slug, meta.path, res.ticket));
@@ -354,11 +356,11 @@ async function cmdCommit(opts, positional) {
   if (foreignFragments.length) {
     fail(commitScope.foreignReleaseFragmentRefusalMessage("commit", ticket.ref, foreignFragments));
   }
-  const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
+  const result = await commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === "missing_scope") fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
     if (result.reason === "outside_scope") {
-      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(", ")}. Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
+      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(", ")}. ${commitScope.outsideScopeCommitState(result)} Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
     }
     if (result.reason === "no_existing_scope") fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);
@@ -409,7 +411,7 @@ function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
 }
 async function cmdRework(opts, positional) {
   const idOrRef = positional[0];
-  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by reviewer --review SQ-4 --reason "what needs repair"');
+  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by <submitter id> --review SQ-4 --reason "what needs repair"');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const review = String(opts.review || "").trim();
@@ -639,8 +641,9 @@ async function cmdIntegrate(opts, positional) {
       } else {
         target = store.ticketIntegrationTarget(slug, ticket);
       }
+      target = store.deliveryIntegrationTarget(slug, target, opts["integration-branch"]);
     } catch (error) {
-      fail(`integrate: ${error && error.message || error}`);
+      fail(`integrate:${error && error.message || error}`);
       return;
     }
   }
@@ -651,6 +654,9 @@ async function cmdIntegrate(opts, positional) {
       deliveryCommit: opts["delivery-commit"],
       deliveryInteractionCommit: opts["delivery-interaction-commit"],
       deliveryMethod: opts["delivery-method"],
+      deliveryRevision: opts["delivery-revision"],
+      resolvedPaths: opts["resolved-path"],
+      by,
       reason: opts.reason,
       skipVerify: !!opts["skip-verify"],
       verificationWaiver
@@ -675,11 +681,13 @@ async function cmdIntegrate(opts, positional) {
   const delivery = refs.length > 1 ? store.integrateSubmissionWave(slug, refs, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   }) : store.integrateSubmission(slug, idOrRef, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   });

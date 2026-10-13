@@ -18,6 +18,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var verification_exports = {};
 __export(verification_exports, {
+  VERIFICATION_ENVIRONMENTS: () => VERIFICATION_ENVIRONMENTS,
   VERIFICATION_KINDS: () => VERIFICATION_KINDS,
   VERIFICATION_STATUSES: () => VERIFICATION_STATUSES,
   captureVerificationResult: () => captureVerificationResult,
@@ -32,8 +33,9 @@ __export(verification_exports, {
   verificationWaiverDiagnostic: () => verificationWaiverDiagnostic
 });
 module.exports = __toCommonJS(verification_exports);
-const VERIFICATION_KINDS = ["suite", "command", "document", "link", "schema", "manual", "attestation", "review", "custom"];
-const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check"];
+const VERIFICATION_KINDS = ["suite", "command", "typecheck", "document", "link", "schema", "manual", "attestation", "review", "custom"];
+const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check", "deferred"];
+const VERIFICATION_ENVIRONMENTS = ["isolated", "shared"];
 function nonEmpty(value) {
   return String(value || "").trim();
 }
@@ -57,25 +59,31 @@ function suiteCommand(suite) {
 function validationDiagnostic(code, message) {
   return Object.freeze({ code, message, actionable: true });
 }
-function verificationRequirement(input) {
-  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
-  const evidence = nonEmpty(input.evidence);
-  const command = nonEmpty(input.command || (kind === "command" ? evidence : ""));
+function suiteVerificationRequirement(input, command, evidence) {
   const suite = suiteFrom(input);
+  if (suite) return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
+  return Object.freeze({ kind: "suite", ...command ? { command } : {}, evidenceContract: evidence || "named suite output" });
+}
+function executableVerificationRequirement(input, kind, evidence) {
+  const command = nonEmpty([input.command, ["command", "typecheck"].includes(kind) ? evidence : ""].find(Boolean));
+  if ([kind === "suite", [!command, Boolean(suiteFrom(input))].every(Boolean)].some(Boolean)) return suiteVerificationRequirement(input, command, evidence);
+  return Object.freeze({ kind, command: command || void 0, evidenceContract: command || "command output" });
+}
+function evidenceVerificationRequirement(input, kind, evidence) {
   if (kind === "attestation") {
     const artifact = nonEmpty(input.artifact);
     return Object.freeze({ kind, artifact, evidenceContract: `attestation evidence for ${artifact}` });
   }
-  if (kind === "review") return Object.freeze({ kind, evidenceContract: evidence || "independent review findings" });
-  if (kind === "manual") return Object.freeze({ kind, evidenceContract: evidence.replace(/^manual:\s*/i, "") || "manual verification evidence" });
-  if (kind === "suite" || !command && suite) {
-    if (!suite) return Object.freeze({ kind: "suite", ...command ? { command } : {}, evidenceContract: evidence || "named suite output" });
-    return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
-  }
-  if (["document", "link", "schema", "custom"].includes(kind)) {
-    return Object.freeze({ kind, evidenceContract: evidence || `${kind} verification evidence` });
-  }
-  return Object.freeze({ kind: "command", command: command || void 0, evidenceContract: command || "command output" });
+  const defaults = { review: "independent review findings", manual: "manual verification evidence" };
+  return Object.freeze({ kind, evidenceContract: evidence || defaults[kind] || `${kind} verification evidence` });
+}
+function verificationRequirement(input) {
+  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
+  const evidence = nonEmpty(input.evidence);
+  const evidenceOnly = ["attestation", "review", "manual"].includes(kind);
+  const executable = [["command", "suite", "typecheck"].includes(kind), [!evidenceOnly, !nonEmpty(input.command), Boolean(suiteFrom(input))].every(Boolean)].some(Boolean);
+  if (executable) return executableVerificationRequirement(input, kind, evidence);
+  return evidenceVerificationRequirement(input, kind, evidence.replace(/^manual:\s*/i, kind === "manual" ? "" : "$&"));
 }
 function verificationWaiverDiagnostic(waiver) {
   return validationDiagnostic("verification_waived", `Verification gate ${waiver.affectedGate} waived by ${waiver.authority}: ${waiver.reason}`);
@@ -109,7 +117,14 @@ function verificationFailureDiagnostic(result) {
   const identities = result.failureIdentities?.length ? ` Failures: ${result.failureIdentities.join(", ")}.` : "";
   return validationDiagnostic(`verification_${String(result.status).replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`, `Required ${result.kind} verification returned ${result.status}.${identities}`);
 }
-function commandVerificationResult(requirement, evidence, captures, ticket, candidate, dispatchNonce) {
+function captureAttemptLabel(dispatchNonce) {
+  return dispatchNonce ? `dispatch attempt ${dispatchNonce}` : "this direct claim";
+}
+function missingCaptureInstruction(command, directCaptureInvocation) {
+  if (!directCaptureInvocation) return `Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+  return `A direct claim has no dispatch briefing: from the checkout holding that candidate, run ${directCaptureInvocation} (it loads the pinned command from the ticket and records the capture), then resubmit.`;
+}
+function commandVerificationResult(requirement, evidence, captures, ticket, candidate, dispatchNonce, directCaptureInvocation = "") {
   const command = requirement.command || "";
   if (evidence !== command) {
     const message = "verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.";
@@ -124,7 +139,7 @@ function commandVerificationResult(requirement, evidence, captures, ticket, cand
   const completedCapture = captures.find((capture) => matchingCapture(capture) && provesCandidate(capture));
   if (!completedCapture) {
     const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
-    const message = dirtyCapture ? `Verification capture ${dirtyCapture.id} for ${ticket}, dispatch attempt ${dispatchNonce || "<none>"}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.` : `No completed passed verification capture exists for ${ticket}, dispatch attempt ${dispatchNonce || "<none>"}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+    const message = dirtyCapture ? `Verification capture ${dirtyCapture.id} for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.` : `No completed passed verification capture exists for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. ${missingCaptureInstruction(command, directCaptureInvocation)}`;
     return Object.freeze({
       result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze([dirtyCapture ? "verification:dirty-worktree-capture" : "verification:capture-required"]) }),
       expectedEvidence: null,
@@ -153,6 +168,7 @@ function captureVerificationResult(requirement, capture) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  VERIFICATION_ENVIRONMENTS,
   VERIFICATION_KINDS,
   VERIFICATION_STATUSES,
   captureVerificationResult,

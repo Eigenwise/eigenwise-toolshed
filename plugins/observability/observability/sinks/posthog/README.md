@@ -26,3 +26,7 @@ Use `https://us.i.posthog.com` or `https://eu.i.posthog.com`. Remote egress requ
 Each canonical event becomes `workbench.<canonical event name>`. `session_id` is PostHog's `distinct_id` and `$session_id` when present; observations without a session use `project_id`, then the observation ID. Canonical IDs, schema-approved attributes, and measurements are prefixed as `workbench_*` properties. `$process_person_profile` is disabled. Prompt text, responses, tool inputs/results, raw request bodies, credentials, and environment values never enter the mapping.
 
 The observer sends at most `batchSize` events per request. A successful response acknowledges the whole batch. HTTP or transport failures keep every event durable and retry the batch members with bounded exponential backoff until `maxAttempts`, after which they remain in the ledger with an exhausted outbox record.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of this PostHog sink integration. Donations are never required to use the files in this directory.

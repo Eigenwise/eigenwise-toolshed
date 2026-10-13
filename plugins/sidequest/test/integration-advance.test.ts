@@ -15,6 +15,7 @@ const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
 const commitScope = require('../lib/commit-scope.js');
 const worktrees = require('../lib/worktrees.js');
+const agentsync = require('../lib/agentsync.js');
 const { makeCliRunner } = require('./_helpers.js');
 
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
@@ -380,8 +381,8 @@ function deliveryTicket(label: string, opts: any = {}) {
   return { fixture, slug, ticket, runCli: runner.runCli };
 }
 
-test('one passing wave delivers its exact Git participant set before recording delivery', () => {
-  const fixture = makeRepo('wave-delivery');
+function assembledTwoCandidateWave(label: string) {
+  const fixture = makeRepo(label);
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
   git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
   const secondCommit = commitFile(secondWorktree, 'second.txt', 'second executor work\n');
@@ -422,6 +423,11 @@ test('one passing wave delivers its exact Git participant set before recording d
   });
   assert.equal(wave.ok, true, JSON.stringify(wave));
   assert.equal(wave.gate.state, 'gate_passed');
+  return { fixture, slug, first, second, target };
+}
+
+test('one passing wave delivers its exact Git participant set before recording delivery', () => {
+  const { fixture, slug, first, second, target } = assembledTwoCandidateWave('wave-delivery');
   const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
   assert.equal(individual.ok, false);
   assert.equal(individual.reason, 'assembled_wave_delivery_required');
@@ -1048,13 +1054,13 @@ function makeUnmergedTarget(repo: string, label: string) {
   assert.throws(() => git(['merge', competingBranch], repo));
 }
 
+// Staged and unmerged state blocks anywhere; an untracked file blocks where the delivery writes (feature.txt).
 const dirtyIntegrationTargetStates = [
-  ['unstaged', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'unstaged target edit\n')],
   ['staged', (fixture: any) => {
     fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'staged target edit\n');
     git(['add', 'README.md'], fixture.repo);
   }],
-  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'target-scratch.log'), 'untracked target file\n')],
+  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'untracked target file\n')],
   ['unmerged', (fixture: any, ticket: any) => makeUnmergedTarget(fixture.repo, ticket.ref)],
 ] as const;
 
@@ -1070,13 +1076,103 @@ for (const [state, dirtyTarget] of dirtyIntegrationTargetStates) {
 
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'integration_target_dirty');
-    if (state === 'untracked') assert.match(result.message, /target-scratch\.log/);
+    if (state === 'untracked') assert.match(result.message, /feature\.txt/);
     assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), checkoutBefore);
     assert.equal(head(fixture.repo), headBefore);
     assert.deepEqual(store.getTicket(slug, ticket.ref).submission, submissionBefore);
     assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
   });
 }
+
+// GH-340: a service rewriting files in the registered checkout keeps it dirty; paths the delivery never writes stay put.
+function dirtyOutsideDelivery(repo: string) {
+  fs.writeFileSync(path.join(repo, 'README.md'), 'service rewrote this\n');
+  fs.writeFileSync(path.join(repo, 'service.log'), 'service log line\n');
+}
+
+function assertOutsideDeliveryDirtKept(repo: string) {
+  assert.equal(fs.readFileSync(path.join(repo, 'README.md'), 'utf8'), 'service rewrote this\n');
+  assert.equal(fs.readFileSync(path.join(repo, 'service.log'), 'utf8'), 'service log line\n');
+}
+
+function failsOnMainVerify() {
+  return nodeVerify("const {execFileSync}=require('node:child_process'); if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main') process.exit(7)");
+}
+
+for (const mode of ['merge', 'apply']) {
+  test(`GH-340: integrate ${mode} goes around unstaged and untracked paths the delivery never writes and reports them`, () => {
+    const { fixture, slug, ticket } = deliveryTicket(`dirty-target-disjoint-${mode}`);
+    dirtyOutsideDelivery(fixture.repo);
+
+    const result = store.integrateSubmission(slug, ticket.ref, { mode, target: fixture.target });
+
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(result.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+    assert.deepEqual(result.integration.deliveredFiles, ['feature.txt']);
+    assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+    assertOutsideDeliveryDirtKept(fixture.repo);
+  });
+}
+
+test('GH-340: a failed post-merge verification rolls back without reverting dirt outside the delivery', () => {
+  const fixture = makeRepo('post-merge-dirty-disjoint');
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'rollback around unrelated dirt',
+    category: 'codebase-exploration',
+    description: 'A delivery fixture whose post-merge verifier fails while the checkout holds unrelated edits.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture);
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'suite', executorVerify: failsOnMainVerify() });
+  dirtyOutsideDelivery(fixture.repo);
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.reason, 'verification_failed_suite_post_merge', result.message);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.rollback.strategy, 'merge-reset-delivery-head');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
+
+test('GH-340: a wave refuses dirt on a participant path, naming only it, then delivers around dirt outside the delivery', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-dirty-target');
+  dirtyOutsideDelivery(fixture.repo);
+  fs.writeFileSync(path.join(fixture.repo, 'second.txt'), 'operator copy\n');
+  const before = head(fixture.repo);
+
+  const refused = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(refused.reason, 'integration_target_dirty', refused.message);
+  assert.deepEqual(refused.checkoutState, ['? second.txt']);
+  assert.deepEqual(refused.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+  assert.match(refused.message, /: second\.txt\. Commit, stash, or remove those paths.* 2 other dirty path\(s\) sit outside the delivery and were ignorable\./);
+  assert.equal(head(fixture.repo), before);
+
+  fs.rmSync(path.join(fixture.repo, 'second.txt'));
+  const delivered = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.deepEqual(delivered.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'service.log']);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
+
+test('GH-340: a wave whose delivery verification fails rolls back without reverting dirt outside the delivery', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-dirty-rollback');
+  store.updateTicket(slug, first.ref, { executorVerifyKind: 'suite', executorVerify: failsOnMainVerify() });
+  dirtyOutsideDelivery(fixture.repo);
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(result.reason, 'verification_failed_suite_wave_delivery', result.message);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+  assertOutsideDeliveryDirtKept(fixture.repo);
+});
 
 function makeGreenfieldRepo(label: string, locked = true) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-greenfield-${label}-`));
@@ -1166,4 +1262,677 @@ test('integration does not derive an unlocked greenfield suite after submission'
   assert.equal(payload.verify.status, 'passed');
   assert.equal(payload.verify.kind, 'custom');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
+});
+
+// GH-308. A sibling that submits while the post-merge suite runs records the delivery merge as its expected
+// upstream. Rolling the target back without rewriting that record left the sibling refused as diverged forever.
+test('a post-merge rollback restores a sibling expected upstream that recorded the rolled-back merge', () => {
+  const fixture = makeRepo('post-merge-sibling-upstream');
+  const { slug } = store.ensureProject(fixture.repo);
+  const first = store.createTicket(slug, { title: 'rolled back delivery', category: 'codebase-exploration', files: ['feature.txt'] });
+  submitFixture(slug, first, fixture);
+  const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-sibling');
+  git(['worktree', 'add', '-b', 'worktree-agent-sibling', siblingWorktree, 'main'], fixture.repo);
+  const siblingCommit = commitFile(siblingWorktree, 'sibling.txt', 'sibling work\n');
+  const sibling = store.createTicket(slug, { title: 'sibling submitted mid-suite', category: 'codebase-exploration', files: ['sibling.txt'] });
+  const siblingRef = `refs/sidequest/${sibling.ref}`;
+  git(['update-ref', siblingRef, siblingCommit], siblingWorktree);
+  assert.equal(store.claimTicket(slug, sibling.ref, 'sibling-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
+  const libDirectory = path.join(__dirname, '..', 'lib');
+  const verifier = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-sibling-verify-')), 'verify.js');
+  fs.writeFileSync(verifier, `
+process.env.SIDEQUEST_HOME = ${JSON.stringify(SIDEQUEST_HOME)};
+const { execFileSync } = require('node:child_process');
+if (execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim() !== 'main') process.exit(0);
+const store = require(${JSON.stringify(path.join(libDirectory, 'store.js'))});
+const commitScope = require(${JSON.stringify(path.join(libDirectory, 'commit-scope.js'))});
+const worktree = ${JSON.stringify(siblingWorktree)};
+const range = commitScope.submissionRange(worktree, { commit: ${JSON.stringify(siblingCommit)}, gitRef: ${JSON.stringify(siblingRef)}, upstream: 'main', integrationBranch: 'main' });
+const submitted = store.submitTicket(${JSON.stringify(slug)}, ${JSON.stringify(sibling.ref)}, 'sibling-worker', { commit: ${JSON.stringify(siblingCommit)}, gitRef: ${JSON.stringify(siblingRef)}, range, worktree });
+if (!submitted.ok) { console.error(JSON.stringify(submitted)); process.exit(3); }
+process.exit(7);
+`);
+  store.updateTicket(slug, first.ref, { executorVerifyKind: 'suite', executorVerify: `"${process.execPath}" "${verifier}"` });
+  const before = head(fixture.repo);
+
+  const rolledBack = store.integrateSubmission(slug, first.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(rolledBack.reason, 'verification_failed_suite_post_merge', rolledBack.message);
+  assert.equal(rolledBack.verify.exitCode, 7, 'the sibling submitted from inside the post-merge suite');
+  assert.equal(head(fixture.repo), before);
+  assert.equal(store.getTicket(slug, sibling.ref).submission.upstreamCommit, before);
+  const delivered = store.integrateSubmission(slug, sibling.ref, { mode: 'merge', target: fixture.target });
+  assert.equal(delivered.ok, true, delivered.message);
+});
+
+// GH-246 / GH-247 / GH-273: the gate verifier reports where it ran and what it saw, so each case proves
+// the tree and environment instead of trusting an exit code that any directory could produce.
+function gateProbeVerify(passCondition: string) {
+  return nodeVerify(`const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const tree=execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(); console.log('SQ_GATE_PROBE '+JSON.stringify({cwd:process.cwd(),pluginRoot:process.env.CLAUDE_PLUGIN_ROOT||null,pluginData:process.env.CLAUDE_PLUGIN_DATA||null,sidequestHome:process.env.SIDEQUEST_HOME||null,path:Boolean(process.env.PATH||process.env.Path),tree})); process.exit(${passCondition}?0:7)`);
+}
+
+function gateProbe(verification: any) {
+  const line = fs.readFileSync(verification.logPath, 'utf8').split(/\r?\n/).find((entry: string) => entry.startsWith('SQ_GATE_PROBE '));
+  assert.ok(line, `the gate log must carry the probe line: ${verification.outputTail || verification.evidence}`);
+  return JSON.parse(line.slice('SQ_GATE_PROBE '.length));
+}
+
+function twoCandidateWave(label: string, verify: string) {
+  const fixture = makeRepo(label);
+  const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
+  git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
+  const secondCommit = commitFile(secondWorktree, 'second.txt', 'second executor work\n');
+  const { slug } = store.ensureProject(fixture.repo);
+  const [first, second] = ['feature.txt', 'second.txt'].map((file) => store.createTicket(slug, {
+    title: `wave gate candidate ${file}`,
+    category: 'codebase-exploration',
+    description: `Adds ${file} for the composed-tree gate.`,
+    files: [file],
+  }));
+  submitFixture(slug, first, fixture, verify);
+  submitFixture(slug, second, { executor: secondWorktree, submitted: secondCommit }, verify);
+  return { fixture, slug, secondWorktree, refs: [first.ref, second.ref] };
+}
+
+function samePath(left: string, right: string) {
+  return path.resolve(left).toLowerCase() === fs.realpathSync.native(right).toLowerCase();
+}
+
+test('GH-273: a multi-ticket gate runs the pinned command in the composed wave tree, not the un-merged project root', () => {
+  const { fixture, slug, secondWorktree, refs } = twoCandidateWave('wave-gate-composed', gateProbeVerify("fs.existsSync('feature.txt')&&fs.existsSync('second.txt')"));
+  const projectHead = head(fixture.repo);
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+  const probe = gateProbe(wave.gate.verification);
+  for (const uncomposed of [fixture.repo, fixture.executor, secondWorktree]) {
+    assert.equal(samePath(probe.cwd, uncomposed), false, `the gate ran in ${probe.cwd}, an un-composed tree`);
+  }
+  assert.equal(wave.gate.verification.verifiedTree, probe.tree, 'the gate result names the tree it verified');
+  assert.equal(store.getTicket(slug, refs[0]).submission.wave.gate.verification.verifiedTree, probe.tree);
+  assert.equal(fs.existsSync(probe.cwd), false, 'the composed checkout is removed after the gate');
+  assert.doesNotMatch(git(['worktree', 'list', '--porcelain'], fixture.repo), /wave-gates/);
+  assert.equal(head(fixture.repo), projectHead, 'the gate never moves the project checkout');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+});
+
+test('GH-246: a multi-ticket gate fails when the composed candidates fail even though the baseline passes', () => {
+  const { slug, refs } = twoCandidateWave('wave-gate-baseline-passes', gateProbeVerify("!fs.existsSync('second.txt')"));
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, false, JSON.stringify(wave));
+  assert.equal(wave.reason, 'assembled_wave_gate_failed');
+  assert.equal(wave.gate.verification.status, 'failed_suite');
+  assert.equal(wave.gate.verification.verifiedTree, gateProbe(wave.gate.verification).tree);
+});
+
+test('a multi-ticket gate whose candidates conflict refuses without a verdict and leaves no checkout behind', () => {
+  const fixture = makeRepo('wave-gate-conflict');
+  const conflictWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-conflict');
+  git(['worktree', 'add', '-b', 'worktree-agent-conflict', conflictWorktree, 'main'], fixture.repo);
+  const conflictCommit = commitFile(conflictWorktree, 'feature.txt', 'conflicting executor work\n');
+  const { slug } = store.ensureProject(fixture.repo);
+  const verify = gateProbeVerify('true');
+  const [first, second] = ['first', 'second'].map((label) => store.createTicket(slug, {
+    title: `${label} conflicting gate candidate`,
+    category: 'codebase-exploration',
+    description: 'Both candidates rewrite feature.txt.',
+    files: ['feature.txt'],
+  }));
+  submitFixture(slug, first, fixture, verify);
+  submitFixture(slug, second, { executor: conflictWorktree, submitted: conflictCommit }, verify);
+  const projectHead = head(fixture.repo);
+
+  const wave = store.assembleSubmissionWave(slug, [first.ref, second.ref]);
+
+  assert.equal(wave.ok, false, JSON.stringify(wave));
+  assert.equal(wave.reason, 'assembled_wave_compose_failed');
+  assert.match(wave.message, /Conflicted paths: feature\.txt/);
+  assert.match(wave.message, /No candidate was rejected/);
+  assert.equal(store.getTicket(slug, first.ref).submission.wave, undefined, 'no gate verdict is stamped on the candidates');
+  assert.doesNotMatch(git(['worktree', 'list', '--porcelain'], fixture.repo), /wave-gates/);
+  assert.equal(head(fixture.repo), projectHead);
+});
+
+test('a composed wave gate provisions linked dependencies and its cleanup leaves the linked source intact', () => {
+  const dependencyName = 'gate-dependency';
+  const { fixture, slug, refs } = twoCandidateWave('wave-gate-linked-dependency', gateProbeVerify(`fs.existsSync('${dependencyName}/sentinel')&&fs.existsSync('second.txt')`));
+  fs.mkdirSync(path.join(fixture.repo, dependencyName));
+  fs.writeFileSync(path.join(fixture.repo, dependencyName, 'sentinel'), 'ready\n');
+  store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: dependencyName, mode: 'link' }] });
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+  assert.equal(fs.existsSync(gateProbe(wave.gate.verification).cwd), false);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, dependencyName, 'sentinel'), 'utf8'), 'ready\n', 'removing the composed checkout must not empty the linked source');
+});
+
+test('GH-157: a composed wave gate copies ignored dependency files but never overwrites what the candidates carry', () => {
+  const { fixture, slug, refs } = twoCandidateWave('wave-gate-copied-dependency', gateProbeVerify("fs.readFileSync('.claude/gate-env/api.env','utf8')==='KEY=secret\\n'&&fs.readFileSync('README.md','utf8')==='advance fixture\\n'"));
+  fs.mkdirSync(path.join(fixture.repo, '.claude', 'gate-env'), { recursive: true });
+  fs.writeFileSync(path.join(fixture.repo, '.claude', 'gate-env', 'api.env'), 'KEY=secret\n');
+  fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'uncommitted local edit\n');
+  store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '.claude/gate-env', mode: 'copy' }, { path: 'README.md', mode: 'copy' }] });
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+});
+
+test('GH-247: the gate verifier does not inherit the board process plugin-host variables', () => {
+  const saved = { root: process.env.CLAUDE_PLUGIN_ROOT, data: process.env.CLAUDE_PLUGIN_DATA };
+  process.env.CLAUDE_PLUGIN_ROOT = path.join(__dirname, '..');
+  process.env.CLAUDE_PLUGIN_DATA = path.join(os.tmpdir(), 'sidequest-plugin-data');
+  try {
+    const { slug, refs } = twoCandidateWave('wave-gate-environment', gateProbeVerify('!process.env.CLAUDE_PLUGIN_ROOT'));
+
+    const wave = store.assembleSubmissionWave(slug, refs);
+
+    assert.equal(wave.ok, true, JSON.stringify(wave));
+    const probe = gateProbe(wave.gate.verification);
+    assert.equal(probe.pluginRoot, null);
+    assert.equal(probe.pluginData, null);
+    assert.equal(probe.sidequestHome, SIDEQUEST_HOME, 'the board keeps its own SIDEQUEST_* variables');
+    assert.equal(probe.path, true, 'PATH survives the scrub');
+  } finally {
+    for (const [name, value] of [['CLAUDE_PLUGIN_ROOT', saved.root], ['CLAUDE_PLUGIN_DATA', saved.data]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+// SQ-3425: the environment lane. A dispatch pins environment:'shared' onto the requirement; the fixture's
+// direct claim never gets a pin, so the row is written the way the legacy preflight test writes its row.
+function persistTicket(slug: string, ticket: any) {
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: 0, ord: ticket.order, claim_by: ticket.claim?.by ?? null, data: ticket,
+  });
+}
+
+function pinSharedEnvironment(slug: string, ref: string, command: string) {
+  const ticket = store.getTicket(slug, ref);
+  const requirement = { kind: 'command', command, evidenceContract: command, environment: 'shared' };
+  const lifecycleAttempt = { ...(ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt || {}), execution: 'dispatched', verificationRequirement: requirement };
+  ticket.lifecycleAttempt = lifecycleAttempt;
+  ticket.dispatch = { ...(ticket.dispatch || {}), verificationRequirement: requirement, lifecycleAttempt, terminalAt: new Date().toISOString() };
+  persistTicket(slug, ticket);
+}
+
+function forwardSlashes(target: string) {
+  return target.replace(/\\/g, '/');
+}
+
+function processAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: any) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function waitUntilDead(pid: number, budgetMilliseconds: number) {
+  const deadline = Date.now() + budgetMilliseconds;
+  while (processAlive(pid) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  return !processAlive(pid);
+}
+
+// Passes in the candidate worktree (the singleton gate), then on main spawns a grandchild sleeper, copies
+// the delivery lock, and hangs until the deadline ends its tree.
+function environmentVerifier(repo: string, evidenceDirectory: string) {
+  const pidFile = forwardSlashes(path.join(evidenceDirectory, 'grandchild.pid'));
+  const lockCopy = forwardSlashes(path.join(evidenceDirectory, 'lock.json'));
+  const envFile = forwardSlashes(path.join(evidenceDirectory, 'owned-phase.env'));
+  const lockFile = forwardSlashes(path.join(repo, '.git', 'sidequest-delivery.lock'));
+  return nodeVerify([
+    "const fs=require('node:fs');const {spawn,execFileSync}=require('node:child_process');",
+    `fs.writeFileSync('${envFile}', String(process.env.SIDEQUEST_OWNED_VERIFY_PHASE||''));`,
+    "if(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()!=='main') process.exit(0);",
+    `fs.copyFileSync('${lockFile}', '${lockCopy}');`,
+    "const sleeper=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'ignore',windowsHide:true});",
+    `fs.writeFileSync('${pidFile}', String(sleeper.pid));`,
+    'setTimeout(()=>{},60000);',
+  ].join(''));
+}
+
+test('SQ-3425: CLI integrate on the environment lane ends the verifier tree at the deadline and rolls the delivery back', { timeout: 120_000 }, () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-evidence-'));
+  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-timeout', { timeoutMs: 2000 });
+  const verify = environmentVerifier(fixture.repo, evidenceDirectory);
+  pinSharedEnvironment(slug, ticket.ref, verify);
+  const before = head(fixture.repo);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null, result.stdout);
+  assert.equal(payload.verify.status, 'timeout', JSON.stringify(payload));
+  assert.equal(payload.verify.timeoutMilliseconds, 2000);
+  assert.equal(payload.verify.exitCode, 124, 'the recorded timeout carries the owned tree\'s exit code');
+  assert.equal(head(fixture.repo), before, 'the timed-out delivery was rolled back');
+  assert.equal(store.getTicket(slug, ticket.ref).rejectedSubmissions[0].integration.reason, 'verification_timeout_post_merge');
+  assert.equal(fs.readFileSync(path.join(evidenceDirectory, 'owned-phase.env'), 'utf8'), '1', 'the lane ran under the owned tree');
+  const grandchild = Number(fs.readFileSync(path.join(evidenceDirectory, 'grandchild.pid'), 'utf8'));
+  assert.ok(grandchild > 0);
+  assert.equal(waitUntilDead(grandchild, 5000), true, `grandchild ${grandchild} outlived the deadline`);
+  const holder = JSON.parse(fs.readFileSync(path.join(evidenceDirectory, 'lock.json'), 'utf8'));
+  assert.equal(holder.ticket, ticket.ref);
+  assert.equal(holder.pinnedCommit, fixture.submitted);
+  assert.equal(holder.command, verify);
+  assert.equal(holder.logPath, payload.verify.logPath);
+  assert.ok(Number.isInteger(holder.pid) && holder.pid > 0);
+  assert.ok(typeof holder.token === 'string' && holder.token.length > 0);
+  assert.ok(!Number.isNaN(Date.parse(holder.startedAt)));
+  assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false, 'the lock was released');
+});
+
+test('SQ-3425: a default-board delivery runs its verifier outside the owned tree', () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-default-'));
+  const envFile = forwardSlashes(path.join(evidenceDirectory, 'owned-phase.env'));
+  const { slug, ticket, runCli } = deliveryTicket('environment-lane-default', {
+    verify: nodeVerify(`require('node:fs').writeFileSync('${envFile}', String(process.env.SIDEQUEST_OWNED_VERIFY_PHASE||''))`),
+  });
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+  assert.equal(fs.readFileSync(envFile, 'utf8'), '');
+});
+
+test('SQ-3425: a verifier whose log cannot be opened reports could_not_run with the spawn failure', () => {
+  const { runProcessVerification } = require('../lib/ports/process.js');
+  const logPath = path.join(os.tmpdir(), `sq-lane-missing-${process.pid}`, 'nested', 'verify.log');
+  const requirement = { kind: 'command', command: nodeVerify('process.exit(0)'), evidenceContract: 'exit 0', environment: 'shared' };
+
+  const result = runProcessVerification(requirement, { logPath, timeoutMilliseconds: 20_000 });
+
+  assert.equal(result.status, 'could_not_run');
+  assert.equal(result.logPath, logPath);
+  assert.match(result.evidence, /ENOENT/);
+  assert.equal(result.outputTail, null);
+  assert.deepEqual(result.failureIdentities, ['could_not_run:exit-2']);
+});
+
+// SQ-3488: every line the owner once wrote into the log, printed by the verifier itself.
+const FORGED_OWNER_MARKERS = "console.log('__SIDEQUEST_VERIFY_TIMEOUT__=1');console.log('__SIDEQUEST_VERIFY_CLEANUP_ERROR__=forged');console.error('__SIDEQUEST_VERIFY_EXIT__=0');console.error('__SIDEQUEST_VERIFY_DONE__');";
+
+test('SQ-3488: an environment-lane verifier printing every owner marker is only output, and its owner still decides', () => {
+  const { runProcessVerification } = require('../lib/ports/process.js');
+  const run = (exitCode: number) => runProcessVerification(
+    { kind: 'command', command: nodeVerify(`${FORGED_OWNER_MARKERS}process.exit(${exitCode})`), evidenceContract: 'exit 0', environment: 'shared' },
+    { timeoutMilliseconds: 20_000 },
+  );
+
+  const passed = run(0);
+  assert.equal(passed.status, 'passed', JSON.stringify(passed));
+  const log = fs.readFileSync(passed.logPath, 'utf8');
+  for (const forged of ['__SIDEQUEST_VERIFY_TIMEOUT__=1', '__SIDEQUEST_VERIFY_CLEANUP_ERROR__=forged', '__SIDEQUEST_VERIFY_DONE__']) {
+    assert.match(log, new RegExp(`^${forged}\\r?$`, 'm'), `the suite output keeps ${forged}`);
+  }
+
+  const failed = run(7);
+  assert.equal(failed.status, 'failed_suite', JSON.stringify(failed));
+  assert.equal(failed.exitCode, 7, 'a printed exit 0 does not stand in for the owner record');
+  assert.equal(failed.evidence, 'The required command exited 7.');
+});
+
+test('SQ-3477: a verifier exiting 127 reads as a missing toolchain, never a failed suite', () => {
+  const { runProcessVerification } = require('../lib/ports/process.js');
+  const requirement = { kind: 'command', command: nodeVerify('process.exit(127)'), evidenceContract: 'exit 0' };
+
+  const result = runProcessVerification(requirement, { timeoutMilliseconds: 20_000 });
+
+  assert.equal(result.status, 'toolchain_missing');
+  assert.equal(result.exitCode, 127);
+  assert.match(result.evidence, /could not find a command while running/);
+});
+
+function writeDeliveryLock(repo: string, holder: Record<string, unknown>) {
+  const lock = path.join(repo, '.git', 'sidequest-delivery.lock');
+  fs.writeFileSync(lock, JSON.stringify(holder));
+  return lock;
+}
+
+test('SQ-3425: delivery_in_progress names the holder, its commit and its log from the lock payload', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-holder');
+  const lock = writeDeliveryLock(fixture.repo, {
+    pid: process.pid, token: 'live-lane', ticket: 'SQ-77', pinnedCommit: 'abc1234', command: 'node -e 0',
+    logPath: '/evidence/SQ-77/lane.log', startedAt: '2026-10-07T10:00:00.000Z',
+  });
+  try {
+    const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'delivery_in_progress');
+    assert.equal(result.message, `Integration is already delivering SQ-77 (abc1234) into this checkout since 2026-10-07T10:00:00.000Z; log /evidence/SQ-77/lane.log. Retry ${ticket.ref} after it finishes.`);
+    assert.equal(result.holder.ticket, 'SQ-77');
+    assert.equal(result.holder.pid, process.pid);
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+});
+
+test('SQ-3425: a delivery lock left by a dead process is reclaimed', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-stale-lock');
+  const deadPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }));
+  assert.equal(waitUntilDead(deadPid, 5000), true);
+  writeDeliveryLock(fixture.repo, {
+    pid: deadPid, token: 'dead-lane', ticket: 'SQ-78', pinnedCommit: 'def5678', command: 'node -e 0',
+    logPath: '/evidence/SQ-78/lane.log', startedAt: '2026-10-07T10:00:00.000Z',
+  });
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.ok, true, result.message);
+  assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false);
+});
+
+test('SQ-3477: a replayed wave cherry-picks every participant onto the target without a merge commit', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-replay');
+  const before = head(fixture.repo);
+
+  const delivered = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'replay' });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.equal(delivered.integration.mode, 'replay');
+  assert.equal(execFileSync('git', ['rev-list', '--merges', `${before}..HEAD`], { cwd: fixture.repo, encoding: 'utf8' }).trim(), '');
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+});
+
+test('SQ-3477: a wave whose merge git refuses rolls the target back to its pre-delivery head', () => {
+  const { fixture, slug, first, second } = assembledTwoCandidateWave('wave-merge-refused');
+  const hook = path.join(fixture.repo, '.git', 'hooks', 'pre-merge-commit');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmissionWave(slug, [first.ref, second.ref], { mode: 'merge' });
+
+  assert.equal(result.reason, 'wave_delivery_failed', JSON.stringify(result));
+  assert.equal(result.before, before);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
+});
+
+// Holds a reader open on the delivery lock from the instant it is created until the delivery ends, reading the
+// file through that handle right after the create and after every write to it.
+function deliverUnderHeldLockReader(repo: string, deliver: () => any) {
+  const lockPath = path.resolve(repo, '.git', 'sidequest-delivery.lock');
+  const { openSync, writeSync } = fs;
+  const reader: { descriptor: number | null; lockDescriptor: number | null; observed: string[] } = { descriptor: null, lockDescriptor: null, observed: [] };
+  const readThroughReader = () => {
+    const buffer = Buffer.alloc(4096);
+    reader.observed.push(buffer.toString('utf8', 0, fs.readSync(reader.descriptor, buffer, 0, buffer.length, 0)));
+  };
+  fs.openSync = (target: string, flags: string, ...rest: unknown[]) => {
+    const descriptor = openSync.call(fs, target, flags, ...rest);
+    if (flags === 'wx' && path.resolve(String(target)) === lockPath) {
+      reader.lockDescriptor = descriptor;
+      reader.descriptor = openSync.call(fs, lockPath, 'r');
+      readThroughReader();
+    }
+    return descriptor;
+  };
+  fs.writeSync = (descriptor: number, ...rest: unknown[]) => {
+    const written = writeSync.call(fs, descriptor, ...rest);
+    if (descriptor === reader.lockDescriptor) readThroughReader();
+    return written;
+  };
+  try {
+    return { result: deliver(), reader, lockPath };
+  } finally {
+    fs.openSync = openSync;
+    fs.writeSync = writeSync;
+    if (reader.descriptor !== null) fs.closeSync(reader.descriptor);
+  }
+}
+
+test('SQ-3480: a reader holding the delivery lock open never aborts the delivery and sees no holder or the whole holder', () => {
+  const { fixture, slug, ticket } = deliveryTicket('lock-held-reader');
+
+  const { result, reader, lockPath } = deliverUnderHeldLockReader(fixture.repo, () => store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target }));
+
+  assert.equal(result.ok, true, result.message);
+  assert.notEqual(reader.descriptor, null, 'the reader held the lock open while the holder was published');
+  const published = String(reader.observed.at(-1));
+  const holder = JSON.parse(published);
+  assert.equal(holder.ticket, ticket.ref);
+  assert.equal(holder.pinnedCommit, fixture.submitted);
+  assert.equal(holder.pid, process.pid);
+  assert.ok(typeof holder.token === 'string' && holder.token.length > 0);
+  for (const content of reader.observed) assert.ok(content === '' || content === published, `the held reader saw ${JSON.stringify(content)}`);
+  assert.equal(fs.existsSync(lockPath), false, 'the lock was released');
+  assert.deepEqual(fs.readdirSync(path.dirname(lockPath)).filter((name: string) => name.startsWith('sidequest-delivery.lock')), []);
+});
+
+// The test plants this fault in the owned tree's own process through NODE_OPTIONS; the verifier has no
+// hand in it. On main, reading the Windows job owner's report runs `fault` instead (SQ-3490).
+function runCliWithJobReportFault(repo: string, fault: string) {
+  const preload = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-job-report-fault-')), 'fault.js');
+  fs.writeFileSync(preload, [
+    "const { execFileSync } = require('node:child_process');",
+    "const fs = require('node:fs');",
+    "const ownedTree = /owned-process-tree\\.js$/.test(process.argv[1] || '');",
+    "if (ownedTree && execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim() === 'main') {",
+    '  const read = fs.readFileSync;',
+    `  fs.readFileSync = function (target, ...rest) { if (/sidequest-job-[^/\\\\]*\\.log$/.test(String(target))) { ${fault} } return read.call(this, target, ...rest); };`,
+    '}',
+    '',
+  ].join('\n'));
+  const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --require "${forwardSlashes(preload)}"`.trim();
+  return makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: repo, NODE_OPTIONS: nodeOptions }, { cwd: repo }).runCli;
+}
+
+const JOB_OWNER_LEFT_NO_ACCOUNT = "return '';";
+const JOB_OWNER_CRASHED = "throw new Error('test-injected owner crash');";
+
+// The candidate gate passes untouched; on main the verifier runs `mainSource`, then exits.
+function mainBranchVerifier(mainSource: string, mainExitCode: number) {
+  return nodeVerify(`if(require('node:child_process').execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()==='main'){${mainSource}process.exit(${mainExitCode});}`);
+}
+
+test('SQ-3480: a passing environment-lane verifier whose job owner leaves no member account is not accepted and rolls the delivery back', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-cleanup-error');
+  pinSharedEnvironment(slug, ticket.ref, nodeVerify('process.exit(0)'));
+  const before = head(fixture.repo);
+
+  const result = runCliWithJobReportFault(fixture.repo, JOB_OWNER_LEFT_NO_ACCOUNT)(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null, result.stdout);
+  assert.equal(payload.verify.status, 'could_not_run', JSON.stringify(payload));
+  assert.match(payload.verify.evidence, /^The verification command ended, but its process tree did not\. Survivor state unknown: the job owner left no account of its job members\./);
+  assert.match(fs.readFileSync(payload.verify.logPath, 'utf8'), /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
+  assert.equal(head(fixture.repo), before, 'the unaccounted delivery was rolled back');
+  assert.equal(store.getTicket(slug, ticket.ref).rejectedSubmissions[0].integration.reason, 'verification_could_not_run_post_merge');
+});
+
+// The done line alone is SQ-3487's reproduction: the owner's old log parse recorded it passed with exit 0.
+for (const [forgery, forgedLines] of [['every owner marker', FORGED_OWNER_MARKERS], ['the done line alone', "console.error('__SIDEQUEST_VERIFY_DONE__');"]] as const) {
+  test(`SQ-3488: an environment-lane owner that crashes while its verifier prints ${forgery} and exits 0 is never accepted and rolls the delivery back`, { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+    const { fixture, slug, ticket } = deliveryTicket(`environment-lane-owner-crash-${forgery.replace(/ /g, '-')}`);
+    // The owner crashes reading its job report after the verifier exited 0, and the verifier forges
+    // the owner's old lines on the way out.
+    pinSharedEnvironment(slug, ticket.ref, mainBranchVerifier(forgedLines, 0));
+    const before = head(fixture.repo);
+
+    const result = runCliWithJobReportFault(fixture.repo, JOB_OWNER_CRASHED)(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.delivery, null, result.stdout);
+    assert.equal(payload.verify.status, 'could_not_run', JSON.stringify(payload));
+    assert.match(payload.verify.evidence, /^The verification owner ended without reporting\./);
+    const log = fs.readFileSync(payload.verify.logPath, 'utf8');
+    assert.match(log, /^__SIDEQUEST_VERIFY_EXIT__=0$/m, 'the verifier itself passed');
+    assert.match(log, /^__SIDEQUEST_VERIFY_DONE__\r?$/m, 'the verifier forged the done line');
+    assert.match(log, /test-injected owner crash/, 'the owner crashed on the injected fault');
+    assert.equal(head(fixture.repo), before, 'the unreported delivery was rolled back');
+    assert.equal(store.getTicket(slug, ticket.ref).rejectedSubmissions[0].integration.reason, 'verification_could_not_run_post_merge');
+  });
+}
+
+test('SQ-3484: an environment-lane verifier exiting 7 with a cleanup error records the suite failure and keeps the cleanup text', { skip: process.platform !== 'win32' && 'the job owner report is Windows-only', timeout: 120_000 }, () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-failure-and-cleanup-error');
+  pinSharedEnvironment(slug, ticket.ref, mainBranchVerifier('', 7));
+  const before = head(fixture.repo);
+
+  const result = runCliWithJobReportFault(fixture.repo, JOB_OWNER_LEFT_NO_ACCOUNT)(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null, result.stdout);
+  assert.equal(payload.verify.status, 'failed_suite', JSON.stringify(payload));
+  assert.equal(payload.verify.exitCode, 7);
+  assert.match(payload.verify.evidence, /^The required command exited 7\. Its process tree did not end either: Survivor state unknown: the job owner left no account of its job members\./);
+  assert.equal(head(fixture.repo), before, 'the failed delivery was rolled back');
+  assert.equal(store.getTicket(slug, ticket.ref).rejectedSubmissions[0].integration.reason, 'verification_failed_suite_post_merge');
+});
+
+// SQ-3426: a failed lane run goes back to the ticket once, through the ordinary rework record.
+function laneFailure(slug: string, ticket: any, fixture: any) {
+  return store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+}
+
+test('SQ-3426: the first failed environment-lane run sends the ticket back to todo with the log, and the second parks it naming both logs', { timeout: 120_000 }, () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('environment-lane-bounce');
+  pinSharedEnvironment(slug, ticket.ref, nodeVerify("console.log('lane output');process.exit(7)"));
+  const before = head(fixture.repo);
+
+  const first = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(first.status, 1, first.stderr + first.stdout);
+  const payload = JSON.parse(first.stdout);
+  assert.equal(payload.delivery, null);
+  assert.equal(payload.reason, 'environment_lane_reworked');
+  assert.equal(payload.verify.status, 'failed_suite');
+  assert.equal(head(fixture.repo), before, 'the failed delivery was rolled back');
+  assert.ok(payload.message.includes(`${ticket.ref} returned to todo for rework with this evidence in its briefing; dispatch it again. The candidate is preserved at refs/sidequest/${ticket.ref}-rejected.`), payload.message);
+  const bounced = store.getTicket(slug, ticket.ref);
+  assert.equal(bounced.status, 'todo');
+  assert.equal(bounced.submission, null);
+  const [rejected] = bounced.rejectedSubmissions;
+  assert.equal(rejected.rejectionKind, 'rework');
+  assert.equal(rejected.source, 'environment-lane');
+  assert.equal(rejected.rejectedBy, 'fixture-worker');
+  assert.equal(rejected.commit, fixture.submitted);
+  assert.equal(rejected.integration.pinnedCommit, fixture.submitted);
+  assert.equal(rejected.integration.deliveryHead, payload.deliveryHead, 'the record carries the merged head that was rolled back');
+  assert.notEqual(rejected.integration.deliveryHead, before);
+  assert.equal(rejected.integration.verify.logPath, payload.verify.logPath);
+  assert.equal(rejected.integration.reason, 'verification_failed_suite_post_merge');
+  assert.equal(rejected.quarantineRef, `refs/sidequest/${ticket.ref}-rejected`);
+  assert.equal(head(fixture.repo, rejected.quarantineRef), fixture.submitted, 'the candidate is preserved');
+  const evidence = bounced.comments.find((comment: any) => /^Integration verification returned failed_suite\./.test(comment.body));
+  assert.ok(evidence, JSON.stringify(bounced.comments));
+  assert.ok(evidence.body.includes(`Log: ${payload.verify.logPath}`));
+  assert.match(evidence.body, /Output tail:\n[\s\S]*lane output/);
+  assert.equal(rejected.review, evidence.body.slice(0, 1000));
+  const briefing = agentsync.renderTicketBriefing(bounced, 'lane-token', slug, fixture.repo);
+  assert.match(briefing, /## Pending rework/);
+  assert.ok(briefing.includes(`Rejected candidate: ${fixture.submitted} (preserved at refs/sidequest/${ticket.ref}-rejected)`));
+  assert.ok(briefing.includes(`Log: ${payload.verify.logPath}`));
+
+  // The repair dispatch: a fresh candidate off the current target, claimed and submitted the way the fixture does.
+  const reopened = store.getTicket(slug, ticket.ref);
+  delete reopened.dispatch;
+  delete reopened.lifecycleAttempt;
+  persistTicket(slug, reopened);
+  git(['reset', '--hard', 'main'], fixture.executor);
+  const repaired = commitFile(fixture.executor, 'feature.txt', 'repaired executor work\n');
+  submitFixture(slug, ticket, { ...fixture, submitted: repaired });
+  pinSharedEnvironment(slug, ticket.ref, nodeVerify('process.exit(7)'));
+
+  const second = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(second.status, 1, second.stderr + second.stdout);
+  const parked = JSON.parse(second.stdout);
+  assert.equal(parked.reason, 'environment_lane_second_failure');
+  assert.equal(parked.message, `${ticket.ref} failed its environment lane run twice, so it stays parked for a decision instead of a second automatic rework. First failure, candidate ${fixture.submitted}: ${payload.verify.logPath}. Second failure, candidate ${repaired}: ${parked.verify.logPath}.`);
+  assert.notEqual(parked.verify.logPath, payload.verify.logPath);
+  assert.equal(head(fixture.repo), before, 'the second failed delivery was rolled back too');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'doing');
+  assert.equal(stored.submission.commit, repaired, 'the submission stays parked');
+  assert.equal(stored.submission.integration.reason, 'environment_lane_second_failure');
+  assert.equal(stored.submission.integration.message, parked.message);
+  assert.equal(stored.rejectedSubmissions.length, 1, 'no second rework record');
+});
+
+test('SQ-3426: a conflicting --no-ff merge of a deferred candidate bounces the ticket the same way', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-conflict');
+  pinSharedEnvironment(slug, ticket.ref, nodeVerify('process.exit(0)'));
+  const before = commitFile(fixture.repo, 'feature.txt', 'conflicting main work\n');
+
+  const result = laneFailure(slug, ticket, fixture);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'environment_lane_reworked');
+  assert.deepEqual(result.conflictedPaths, ['feature.txt']);
+  assert.equal(head(fixture.repo), before);
+  const bounced = store.getTicket(slug, ticket.ref);
+  assert.equal(bounced.status, 'todo');
+  const [rejected] = bounced.rejectedSubmissions;
+  assert.equal(rejected.source, 'environment-lane');
+  assert.equal(rejected.commit, fixture.submitted);
+  assert.equal(rejected.integration.reason, 'merge_failed');
+  const conflict = `Merge --no-ff of ${fixture.submitted} onto main at ${before} conflicted in feature.txt.`;
+  assert.equal(rejected.review, conflict);
+  assert.equal(rejected.reason, `${conflict} Rebase the candidate onto the current main, resolve the conflict in the candidate, and resubmit.`);
+  assert.ok(bounced.comments.some((comment: any) => comment.body === conflict), JSON.stringify(bounced.comments));
+  assert.ok(result.message.startsWith(rejected.reason), result.message);
+  assert.doesNotMatch(result.message, /Resolve it by hand/, 'the orchestrator hand-resolution recipe is not what the executor is told');
+});
+
+test('SQ-3426: a reviewed candidate that fails its environment-lane run stays parked, never auto-reworked', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-reviewed');
+  pinSharedEnvironment(slug, ticket.ref, nodeVerify('process.exit(7)'));
+  const review = store.createTicket(slug, { title: 'lane review', category: 'review-audit', files: ['feature.txt'] }, { ref: ticket.ref, commit: fixture.submitted });
+  const submittedAt = new Date().toISOString();
+  const source = store.getTicket(slug, ticket.ref);
+  source.dispatch = { ...source.dispatch, outcome: 'submitted', agentId: 'source-a', attempts: [{ outcome: 'submitted', commit: fixture.submitted, agentId: 'source-a', terminalAt: submittedAt }] };
+  persistTicket(slug, source);
+  const done = store.getTicket(slug, review.ref);
+  done.status = 'done';
+  done.dispatch = { terminalAt: submittedAt, outcome: 'done', agentId: 'review-b', attempts: [{ outcome: 'done', agentId: 'review-b', terminalAt: submittedAt }] };
+  persistTicket(slug, done);
+  const before = head(fixture.repo);
+
+  const result = laneFailure(slug, ticket, fixture);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'verification_failed_suite_post_merge', result.message);
+  assert.equal(head(fixture.repo), before);
+  const parked = store.getTicket(slug, ticket.ref);
+  assert.equal(parked.status, 'doing');
+  assert.equal(parked.submission.commit, fixture.submitted);
+  assert.equal(parked.submission.integration.reason, 'verification_failed_suite_post_merge');
+  assert.equal(parked.rejectedSubmissions, undefined);
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.ref, ticket.ref, 'the binding is untouched');
+});
+
+test('SQ-3426: a default-board post-merge failure keeps its submission parked with the failure record', () => {
+  const { fixture, slug, ticket } = deliveryTicket('environment-lane-default-failure');
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'command', executorVerify: mainBranchVerifier('', 7) });
+  const before = head(fixture.repo);
+
+  const result = laneFailure(slug, ticket, fixture);
+
+  assert.equal(result.reason, 'verification_failed_suite_post_merge');
+  assert.equal(head(fixture.repo), before);
+  const parked = store.getTicket(slug, ticket.ref);
+  assert.equal(parked.status, 'doing');
+  assert.equal(parked.submission.commit, fixture.submitted);
+  assert.equal(parked.rejectedSubmissions, undefined);
+  assert.deepEqual(parked.comments, [], 'no evidence comment on a default board');
 });
