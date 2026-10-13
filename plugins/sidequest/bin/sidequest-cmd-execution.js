@@ -304,31 +304,34 @@ function outOfScopeComment(paths) {
 function scopeRemedy(ticket, paths) {
   return store.scopeExpansionCommand(ticket, paths);
 }
+function reportScopeJson(slug, res) {
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+  if (!res.ok) process.exitCode = 1;
+}
+function scopeRefusalNextStep(res) {
+  if (res.noBounce) return "the orchestrator can widen this live claim in place — MCP update addFiles, or MCP scopeRequest grant:true, from its own main-thread identity. Commit in-scope work and hand back only if no one can.";
+  return "commit in-scope work, then release with --release-kind handback and name the refused paths.";
+}
+function scopeRulingLines(res, project) {
+  if (res.state === "refused") {
+    return [`✓ ${res.ticket.ref} scope expansion refused: ${res.refused.join(", ")} — ${project}`, `  ${scopeRefusalNextStep(res)}`];
+  }
+  if (res.approved?.length) return [`✓ ${res.ticket.ref} scope auto-approved: ${res.approved.join(", ")} — ${project}`];
+  return [`✓ ${res.ticket.ref} already covers: ${res.covered.join(", ")} — ${project}`];
+}
+function reportScopeRuling(idOrRef, res, meta) {
+  if (!res.ok) return reportClaimFailure("scope-request", idOrRef, res, meta);
+  for (const line of scopeRulingLines(res, meta.name)) console.log(line);
+}
 async function cmdScopeRequest(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.");
-  const files = opts.file != null ? opts.file : opts.files;
-  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files.");
+  const files = opts.file ?? opts.files;
+  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files. Granting an outstanding refused request is MCP-only: scopeRequest grant:true from the orchestrator.");
   const { slug, meta } = await resolveProject(opts);
-  const by = workerId(opts);
-  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || "cli", force: !!opts.force });
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
-    if (!res.ok) process.exitCode = 1;
-    return;
-  }
-  if (res.ok) {
-    if (res.state === "refused") {
-      console.log(`✓ ${res.ticket.ref} scope expansion refused: ${res.refused.join(", ")} — ${meta.name}`);
-      console.log("  commit in-scope work, then release with --release-kind handback and name the refused paths.");
-    } else if (res.approved?.length) {
-      console.log(`✓ ${res.ticket.ref} scope auto-approved: ${res.approved.join(", ")} — ${meta.name}`);
-    } else {
-      console.log(`✓ ${res.ticket.ref} already covers: ${res.covered.join(", ")} — ${meta.name}`);
-    }
-  } else {
-    reportClaimFailure("scope-request", idOrRef, res, meta);
-  }
+  const res = store.requestScope(slug, idOrRef, workerId(opts), files, { source: opts.source, force: !!opts.force });
+  if (opts.json) return reportScopeJson(slug, res);
+  reportScopeRuling(idOrRef, res, meta);
 }
 async function cmdCommit(opts, positional) {
   const idOrRef = positional[0];

@@ -368,7 +368,17 @@ def main():
     request = json.load(sys.stdin)
     if "oracles" in request and request["oracles"] is None:
         raise ValueError("oracles must be an array, not null")
-    print(json.dumps(analyze(request["text"], request["file"], request.get("policy", VERSION), request.get("oracles"))))
+    try:
+        result = analyze(request["text"], request["file"], request.get("policy", VERSION), request.get("oracles"))
+    except (UnicodeEncodeError, UnicodeDecodeError, SyntaxError) as error:
+        result = {"adapterVersion": VERSION, "rows": [{
+            "identity": "<root>/unsupported:" + request["file"] + "#0",
+            "parent": "<root>", "name": request["file"], "line": 1,
+            "endLine": len(request["text"].split("\n")), "complexity": None,
+            "fingerprint": hashlib.sha256(request["text"].encode("utf-8", errors="surrogatepass")).hexdigest(),
+            "unverified": type(error).__name__ + ": " + str(error), "informational": True,
+        }]}
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

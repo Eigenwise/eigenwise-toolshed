@@ -143,8 +143,10 @@ for (const [label, text, expectedExitCode, expectedCoverage, reason] of [
   });
 }
 
-test('Python runtime and syntax failures are actionable prerequisites', () => {
-  assert.throws(() => pythonDescriptors('def broken(:', 'broken.py', pluginRoot), /Python source adapter failed.*broken.py/s);
+test('Python syntax failures are per-file unverified rows and runtime remains available', () => {
+  let rows;
+  assert.doesNotThrow(() => { rows = pythonDescriptors('def broken(:', 'broken.py', pluginRoot); });
+  assert.match(rows[0].unverified, /SyntaxError/);
   assert.ok(pythonRuntime(pluginRoot).command);
 });
 
@@ -212,4 +214,53 @@ test('Python bodies without native executable lines stay unverified', () => {
   const descriptors = pythonDescriptors('def subject():\n    "docstring only"\n', 'subject.py', pluginRoot);
   assert.deepEqual(descriptors[0].executableLines, []);
   assert.match(functionLineCoverage(descriptors[0], descriptors, new Map()).unverified, /No executable LCOV lines/);
+});
+
+for (const [label, bytes, reason] of [
+  ['invalid UTF-8', Buffer.from([0x23, 0x81, 0x0a]), /UTF-8 decode failed/],
+  ['syntax error', Buffer.from('def broken(:'), /SyntaxError/],
+]) {
+  test('Python changed body stays measured beside unchanged ' + label, async (context) => {
+    const root = await project(context);
+    await fs.writeFile(path.join(root, '.claude/quality-gate/crap.json'), JSON.stringify({ sources: ['.'] }));
+    await fs.writeFile(path.join(root, 'broken.py'), bytes);
+    const base = baseline(root);
+    await fs.appendFile(path.join(root, 'subject.py'), '\ndef added():\n    return 1\n');
+    let report;
+    await assert.doesNotReject(async () => { report = await crapReport({ project: root, base, ccOnly: true }); });
+    assert.equal(report.checked, 1);
+    assert.equal(report.changedMetrics.find((row) => row.name === 'added').complexity, 1);
+    assert.equal(report.unverified[0].relativePath, 'broken.py');
+    assert.match(report.unverified[0].unverified, reason);
+    assert.equal(report.failures.length, 0);
+  });
+}
+
+test('Python source protocol isolates a lone surrogate as an unverified row', () => {
+  let rows;
+  assert.doesNotThrow(() => { rows = pythonDescriptors('# ' + String.fromCharCode(0xdc81), 'broken.py', pluginRoot); });
+  const [row] = rows;
+  assert.match(row.unverified, /UnicodeEncodeError.*surrogates not allowed/);
+  assert.equal(row.informational, true);
+});
+
+test('repeatable CLI source selectors narrow configured scope and keep exclusions', async (context) => {
+  const root = await project(context);
+  await fs.mkdir(path.join(root, 'src'));
+  await fs.writeFile(path.join(root, 'src/first.py'), 'def first():\n    return 1\n');
+  await fs.writeFile(path.join(root, 'src/second.py'), 'def second():\n    return 2\n');
+  await fs.writeFile(path.join(root, 'src/excluded.py'), 'def excluded():\n    return 3\n');
+  const configPath = path.join(root, '.claude/quality-gate/crap.json');
+  const config = JSON.stringify({ sources: ['src'], exclude: ['**/excluded.py'] });
+  await fs.writeFile(configPath, config);
+  const entry = path.join(pluginRoot, 'bin/quality-gate.js');
+  const result = spawnSync(process.execPath, [entry, 'crap', '--project', root, '--cc-only', '--json', '--source', 'src/first.py', '--source', 'src/excluded.py', '--source', 'subject.py'], { cwd: pluginRoot, encoding: 'utf8', timeout: 60000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(Object.keys(JSON.parse(result.stdout).files), ['src/first.py']);
+  assert.equal(await fs.readFile(configPath, 'utf8'), config);
+  const defaults = await crapReport({ project: root, ccOnly: true, source: ['src'] });
+  assert.deepEqual(Object.keys(defaults.files).sort(), ['src/first.py', 'src/second.py']);
+  await fs.rm(configPath);
+  const selected = await crapReport({ project: root, ccOnly: true, source: ['src/second.py', 'subject.py'] });
+  assert.deepEqual(Object.keys(selected.files).sort(), ['src/second.py', 'subject.py']);
 });

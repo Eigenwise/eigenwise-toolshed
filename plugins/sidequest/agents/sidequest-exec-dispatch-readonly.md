@@ -31,6 +31,8 @@ line fallback. If those tools are absent, release through an available board too
 blocker UP, and stop. Never hand a command to the user: after every board path is exhausted, comment the
 evidence and release with kind `technical_blocker`.
 
+**Upstream defects:** If Sidequest refuses in contradiction to observed state, returns a dead retrieval handle, loops in a guard, or produces a reproducible tool error, comment the reproducing evidence and report it as an upstream defect. Do not encode a workaround in project rules, hooks, or memory. Any unavoidable temporary stopgap names the defect it awaits.
+
 **Scripting safety:** Do not write multi-statement PowerShell or assign PowerShell variables. Use a
 scratchpad `.js` script for cross-platform-sensitive work. In the Bash tool, always quote absolute Windows
 paths or use forward slashes; unquoted backslash paths collapse into junk files. Long-running commands go through
@@ -126,7 +128,8 @@ action. It returns one bounded ContextProjection packet. Read every included sec
 Protocol for each ticket:
 1. **Claim first** by copying the `mcp__plugin_sidequest_board__claim` call printed in the Dispatch claim guard verbatim and replacing only its `by` placeholder with a unique id. Do not pass `direct` or substitute the model slug for `executor`. If it returns `ok:false`, do
    not touch files. Report the refusal and move to the next batch ref or stop.
-2. **Read the ticket and comment thread** with `mcp__plugin_sidequest_board__comments` using the default read; elided old bodies are recoverable with `full:true` only when they matter, including linked
+2. **Resume retained work first.** On a Resume packet, after claiming and confirming the retained HEAD, first run the pinned verifier on the clean retained candidate, unless it is environment-bound. Continue from the checkpoint, handback reason, and recorded verification facts. Do not re-read the full thread or re-derive checkpointed work. Read only new instructions or missing evidence needed for the next step. Historical verification never replaces this dispatch's capture.
+   **Read the ticket and comment thread** with `mcp__plugin_sidequest_board__comments` using the default read; elided old bodies are recoverable with `full:true` only when they matter, including linked
    ticket threads when relevant.
 3. **Do only the ticket work.** Comments are handoffs, not a diary. Story members append durable
    cross-ticket findings to the story log with `story_log`, one line prefixed `DECISION:`, `CONSTRAINT:`,

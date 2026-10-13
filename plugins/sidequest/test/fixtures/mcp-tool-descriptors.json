@@ -299,6 +299,9 @@
         "workingTreeDelivery": {
           "type": "boolean"
         },
+        "externalDeliverable": {
+          "type": "boolean"
+        },
         "anchors": {
           "type": "string",
           "maxLength": 4000
@@ -330,27 +333,6 @@
           "type": "string",
           "maxLength": 1000
         },
-        "storyId": {
-          "type": "string"
-        },
-        "dependsOn": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "complexity": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10,
-          "description": "Legacy score; why required."
-        },
-        "why": {
-          "type": "string"
-        },
-        "category": {
-          "type": "string"
-        },
         "reviewTarget": {
           "type": "object",
           "properties": {
@@ -375,6 +357,27 @@
           "required": [
             "ref"
           ]
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "complexity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Legacy score; why required."
+        },
+        "why": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
         },
         "route": {
           "type": "object",
@@ -433,15 +436,6 @@
             "urgent"
           ]
         },
-        "status": {
-          "type": "string",
-          "enum": [
-            "todo",
-            "doing",
-            "awaiting-oracle",
-            "done"
-          ]
-        },
         "highStakes": {
           "type": "boolean"
         },
@@ -456,9 +450,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "by": {
-          "type": "string"
         },
         "produces": {
           "type": "array",
@@ -521,27 +512,6 @@
           "type": "string",
           "maxLength": 1000
         },
-        "storyId": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "const": "none"
-            }
-          ]
-        },
-        "complexity": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10
-        },
-        "why": {
-          "type": "string"
-        },
-        "category": {
-          "type": "string"
-        },
         "reviewTarget": {
           "type": "object",
           "properties": {
@@ -566,6 +536,53 @@
           "required": [
             "ref"
           ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "doing",
+            "awaiting-oracle",
+            "done"
+          ]
+        },
+        "addFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Appends, keeps rest. Refused with files. Applied before removeFiles."
+        },
+        "removeFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+        },
+        "by": {
+          "type": "string"
+        },
+        "storyId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "const": "none"
+            }
+          ]
+        },
+        "complexity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "why": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
         },
         "route": {
           "anyOf": [
@@ -1127,6 +1144,40 @@
           "type": "string",
           "description": "Required for blocker/contradiction."
         },
+        "mcpRefusal": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool",
+            "reason",
+            "message"
+          ]
+        },
+        "hookRefusal": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session",
+            "text"
+          ]
+        },
         "exitCode": {
           "type": "integer"
         },
@@ -1289,12 +1340,15 @@
             "type": "string"
           },
           "minItems": 1
+        },
+        "grant": {
+          "type": "boolean",
+          "description": "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."
         }
       },
       "required": [
         "ref",
-        "by",
-        "files"
+        "by"
       ]
     }
   },
@@ -1354,7 +1408,6 @@
       },
       "required": [
         "ref",
-        "by",
         "review",
         "reason"
       ]
@@ -1596,7 +1649,6 @@
       },
       "required": [
         "ref",
-        "by",
         "supersededBy",
         "reason"
       ]

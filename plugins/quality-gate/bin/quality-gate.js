@@ -9,7 +9,7 @@ import { PYTHON_POLICIES, DEFAULT_PYTHON_POLICY } from '../lib/python.mjs';
 const HELP = `Usage:
   quality-gate crap [--project <root>] [--base <revision>] [--lcov <path>]
                     [--coverage-command "<command>"] [--cc-only] [--json]
-                    [--complexity <lizard.csv>] [--python-policy <policy>]
+                    [--complexity <lizard.csv>] [--python-policy <policy>] [--source <path>]...
   quality-gate measure [--project <root>] [--base <revision>] --coverage <V8-directory>
                        [--new-external-file <absolute path>]... [files...]
 
@@ -24,8 +24,10 @@ capture-launch command supports that exact boundary. Stop after that actual refu
 
 crap reads .claude/quality-gate/crap.json (falls back to .claude/quartermaster/crap.json).
 --project selects the tree measured, including a linked worktree; without it the cwd's Git root is used.
+--source <path> is repeatable and narrows configured/default sources to files or directories relative to --project; exclusions still apply.
 JS/TS runtime functions use the TypeScript AST, PHP/Vue use lizard. Python uses the versioned
 stdlib AST adapter through python3 or py -3 (no radon dependency), with qualified oracle rows. No JavaScript or TypeScript lizard row is scored, including --complexity input.
+Invalid UTF-8 and Python syntax/surrogate errors leave per-file informational UNVERIFIED rows; other files are still measured.
 --python-policy (config pythonPolicy) explicitly selects ${PYTHON_POLICIES.join(" or ")}; default ${DEFAULT_PYTHON_POLICY}.
 config pythonOracles optionally supplies exact {file, name, reason} entries as an authoritative allowlist.
 Absent collection uses source-name rules; [] qualifies no oracles. Fixtures/setup always take precedence.
@@ -37,9 +39,14 @@ Comments and formatting count; equal/lowered complexity never exempts a changed 
 Untouched bodies and independently edited nested bodies do not charge their parents.
 --base defaults to the local develop, main or master branch; HEAD means score all selected bodies.
 --cc-only checks the complexity floor without running coverage; it cannot prove a full CRAP pass.
---lcov requires a sibling <lcov>.sources.json SHA-256 map from the same-byte coverage capture.
+--lcov overrides both isolated command output and config lcov. Config lcov is a fallback
+behind fresh isolated command output, then coverage/lcov.info when unset.
+Without a command, existing LCOV requires a sibling <lcov>.sources.json SHA-256 map
+from the same-byte coverage capture.
 --coverage-command captures source hashes and requires fresh LCOV. It sets QUALITY_GATE_COVERAGE_DIR
 and QUARTERMASTER_COVERAGE_DIR to an empty isolated directory; write lcov.info there.
+Existing explicit or fallback output must be rewritten during the command. Missing or
+invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
 Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 unverified/prerequisite.
 Receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
@@ -49,8 +56,10 @@ Receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-s
 function argumentsForCommand() {
   const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'complexity', 'ratchet', 'max', 'python-policy'].map((name) => [name, { type: 'string' }]));
   Object.assign(options, Object.fromEntries(['cc-only', 'json', 'help'].map((name) => [name, { type: 'boolean' }])));
+  options.source = { type: 'string', multiple: true };
   options['new-external-file'] = { type: 'string', multiple: true };
   const parsed = parseArgs({ allowPositionals: true, options });
+  if (parsed.values.source && parsed.positionals[0] !== 'crap') throw new Error('--source belongs to crap only');
   if (parsed.values['new-external-file'] && parsed.positionals[0] !== 'measure') throw new Error('--new-external-file belongs to measure only');
   return parsed;
 }
@@ -74,7 +83,7 @@ async function capturedReport(values) {
 }
 
 async function runCrap(values, files) {
-  if (files.length) throw new Error('crap takes no positional files. Set sources in .claude/quality-gate/crap.json.');
+  if (files.length) throw new Error('crap takes no positional files. Use --source <path> or set sources in .claude/quality-gate/crap.json.');
   if (values.coverage) throw new Error('crap consumes LCOV. Use --lcov, or use measure for a V8 coverage directory.');
   const report = await capturedReport(values);
   report.receipt = writeReceipt(report);

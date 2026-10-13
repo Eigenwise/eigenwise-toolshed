@@ -75,7 +75,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // payload bytes on the W1 tree, so the 2.5KB reserve holds.
 // Raised from 27300 for dispatch.workProvenance (SQ-3630): measured payload 25325 bytes, all added schema structure since compactSchema strips the authored description. Keeps the 2.5KB reserve.
 // Raised from 27850 for add/update verifyKind typecheck (SQ-3644): +44 bytes of enum structure, measured 25394 payload bytes. Keeps the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 27900;
+// Raised from 27900 for the GH-424 shared add/update field schema merged with develop: measured 25425 payload bytes, +31 net over develop (add now also accepts externalDeliverable). Keeps the 2.5KB reserve.
+// Raised from 27900 for update.addFiles/removeFiles and scopeRequest.grant (GitHub #173): +535 bytes compacted, measured 25929 payload bytes on the merged tree. Keeps the 2.5KB reserve.
+// Merged 13 Oct: both raises apply (shared field schema plus addFiles/removeFiles/scopeRequest.grant); measured 26255 payload bytes on the merged tree. Keeps the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 28800;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -193,6 +196,23 @@ function argumentSuggestion(key: string, allowed: Set<string>) {
   return matches.length === 1 ? ` did you mean ${matches[0]}?` : '';
 }
 
+// Callers write "A depends on B" as {from: A, dependsOn: B} or spell the verb dependsOn. Both are the existing
+// depends-on relation, so neither costs a schema property in the byte-budgeted tools/list (GH-424).
+function dependsOnConflicts(args: any) {
+  return args.to !== undefined || (args.verb !== undefined && args.verb !== 'depends-on');
+}
+
+function foldLinkDependsOn(args: any, aliases: string[]) {
+  if (args.verb === 'dependsOn') args.verb = 'depends-on';
+  if (args.dependsOn === undefined) return;
+  if (dependsOnConflicts(args)) {
+    throw new Error('link: dependsOn names the target of a depends-on link; pass dependsOn alone or verb + to, not both.');
+  }
+  Object.assign(args, { verb: 'depends-on', to: args.dependsOn });
+  delete args.dependsOn;
+  aliases.push('accepted dependsOn as verb "depends-on" + to');
+}
+
 function validateToolArguments(tool: ToolDefinition, rawArgs: any) {
   if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) {
     throw new Error(`${tool.name}: arguments must be an object.`);
@@ -206,6 +226,7 @@ function validateToolArguments(tool: ToolDefinition, rawArgs: any) {
     delete args[from];
     aliases.push(`accepted ${from} as ${to}`);
   }
+  if (tool.name === 'link') foldLinkDependsOn(args, aliases);
   if (args.priority === COERCED_PRIORITY.from) {
     args.priority = COERCED_PRIORITY.to;
     aliases.push(`accepted priority "${COERCED_PRIORITY.from}" as "${COERCED_PRIORITY.to}"`);
@@ -264,15 +285,21 @@ function assertMutationFreshness(projectArg: unknown) {
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
 
-function groomCloseArgs(tool: ToolDefinition, args: Record<string, unknown>) {
-  if (tool.name !== 'groomClose' || String(args.by || '').trim()) return args;
+// Control-plane mutations name no worker of their own, so the main session's runtime identity is the caller
+// when `by` is omitted. rework is here too: the store's candidate-owner check still judges the defaulted value,
+// and the PreToolUse hook settles a subagent caller before this runs: rework gets its dispatch owner label, the other
+// two are refused, so this default only ever serves the main thread (GH-424, SQ-160).
+const CONTROL_PLANE_DEFAULT_BY = new Set(['groomClose', 'rework', 'supersede_submission']);
+
+function controlPlaneByArgs(tool: ToolDefinition, args: Record<string, unknown>) {
+  if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || '').trim()) return args;
   const sessionId = runtimeSessionId();
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
 
 async function runTool(tool: ToolDefinition, rawArgs: any) {
   const validated = validateToolArguments(tool, rawArgs);
-  const args = groomCloseArgs(tool, validated.args);
+  const args = controlPlaneByArgs(tool, validated.args);
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
@@ -299,7 +326,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
-  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  update: {
+    verify: ATTESTATION_VERIFY_CONTRACT,
+    addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
+    removeFiles: 'Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
+  },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
     since: 'Comment id or ISO timestamp.',
@@ -334,6 +365,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
     correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
+  },
+  scopeRequest: {
+    grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
   },
 };
 
@@ -440,6 +474,7 @@ module.exports = {
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,
   COERCED_PRIORITY,
+  CONTROL_PLANE_DEFAULT_BY,
   TOOLS,
   toolDescriptors,
   toolDescriptorByteReport,

@@ -57,7 +57,7 @@ function coverageStamp(file) {
 }
 
 export function acquireCoverage(root, settings, files) {
-  const defaultPath = path.join(root, 'coverage/lcov.info');
+  const defaultPath = path.resolve(root, settings.fallbackLcov || 'coverage/lcov.info');
   const explicitPath = settings.lcov ? path.resolve(root, settings.lcov) : null;
   if (!settings.coverageCommand) {
     const lcovPath = explicitPath || defaultPath;

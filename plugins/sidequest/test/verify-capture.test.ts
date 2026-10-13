@@ -8,14 +8,39 @@ const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture, captureCommand, isFullSuiteCommand } = require('../lib/verify-capture.js');
-const { runProcessVerification } = require('../lib/ports/process.js');
+const { runProcessVerification, shellScript } = require('../lib/ports/process.js');
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
+
+// GH-171: zsh (unlike sh/bash) glob-expands an unquoted path, and with `nomatch` set (its
+// default) aborts the whole verify command with "no matches found" when nothing matches a
+// pattern like `[fulfillmentId]`. Force SHELL=zsh when it's actually on the box so this test
+// exercises the real regression; on a host without zsh (Windows CI) there is no `SHELL`-based
+// POSIX shell selection to force at all, so the case is skipped rather than faked.
+function isExecutableFile(candidate: string): boolean {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findOnPath(name: string): string | null {
+  const directories = (process.env.PATH || '').split(path.delimiter);
+  return directories.map((directory) => path.join(directory, name)).find(isExecutableFile) ?? null;
+}
+
+function locateZsh(): string | null {
+  return process.platform === 'win32' ? null : findOnPath('zsh');
+}
+const ZSH_EXECUTABLE = locateZsh();
+const UNQUOTED_GLOB_SHELL = ZSH_EXECUTABLE || (process.platform === 'win32' ? null : '/bin/sh');
 
 function deleteLog(capture: { logPath: string }) {
   fs.rmSync(capture.logPath, { force: true });
@@ -698,6 +723,95 @@ test('verify capture preserves quoted absolute paths in verify commands', async 
   } finally {
     fs.rmSync(scriptPath, { force: true });
     deleteLog(capture);
+  }
+});
+
+test('verify capture passes an unquoted [param] dynamic-route path through literally', { skip: !UNQUOTED_GLOB_SHELL }, async () => {
+  const scriptPath = path.join(os.tmpdir(), `sidequest-unquoted-glob-${Date.now()}.js`);
+  fs.writeFileSync(scriptPath, 'process.stdout.write(process.argv[2] + \'\\n\');\n', 'utf8');
+  const dynamicRoutePath = 'src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts';
+  const originalShell = process.env.SHELL;
+  process.env.SHELL = UNQUOTED_GLOB_SHELL as string;
+  try {
+    const capture = await runVerifyCapture(`"${process.execPath}" "${scriptPath}" ${dynamicRoutePath}`);
+    try {
+      assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+      if (ZSH_EXECUTABLE) assert.match(capture.shell || '', /zsh/i);
+      assert.match(fs.readFileSync(capture.logPath, 'utf8'), /fulfillments\/\[fulfillmentId\]\/pick\/pick-row\.test\.ts/);
+    } finally {
+      fs.rmSync(scriptPath, { force: true });
+      deleteLog(capture);
+    }
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+  }
+});
+
+// GH-171 owner review, section 1: `setopt nonomatch` alone only covers zsh's no-match abort.
+// An unbalanced bracket, like a dynamic-route path missing its closing `]`, hits zsh's separate
+// bad-pattern abort instead, and that one requires `nobadpattern`. This needs real zsh (not the
+// `/bin/sh` fallback the no-match test above accepts), because bash/sh never had this abort at
+// all, so skip if zsh genuinely isn't on the box rather than run a case that proves nothing.
+test('verify capture passes an unbalanced-bracket path through literally instead of hitting zsh\'s bad-pattern abort', { skip: !ZSH_EXECUTABLE }, async () => {
+  const scriptPath = path.join(os.tmpdir(), `sidequest-badpattern-${Date.now()}.js`);
+  fs.writeFileSync(scriptPath, 'process.stdout.write(process.argv[2] + \'\\n\');\n', 'utf8');
+  const badPatternPath = 'src/app/[id/a.ts';
+  const originalShell = process.env.SHELL;
+  process.env.SHELL = ZSH_EXECUTABLE as string;
+  try {
+    const capture = await runVerifyCapture(`"${process.execPath}" "${scriptPath}" ${badPatternPath}`);
+    try {
+      assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+      assert.match(fs.readFileSync(capture.logPath, 'utf8'), /src\/app\/\[id\/a\.ts/);
+    } finally {
+      fs.rmSync(scriptPath, { force: true });
+      deleteLog(capture);
+    }
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+  }
+});
+
+// GH-171 owner review, "Test status" section: the wrapper change has zero automated coverage on
+// a host without zsh, since UNQUOTED_GLOB_SHELL is null there. This assertion needs no real zsh
+// (or any shell at all): it calls shellScript directly with a fake `{ isZsh: true }` definition
+// and checks the generated preamble line, so it runs identically on every platform including
+// Windows CI.
+test('shellScript writes the zsh nonomatch/nobadpattern preamble as the first line, independent of the host platform', () => {
+  const fakeZsh = { executable: '/usr/bin/zsh', label: 'POSIX shell (/usr/bin/zsh, nonomatch nobadpattern)', scriptExtension: '.sh' as const, isZsh: true };
+  const script = shellScript('echo ok', fakeZsh);
+  assert.strictEqual(script.split('\n')[0], 'setopt nonomatch nobadpattern');
+});
+
+test('shellScript omits the zsh preamble for a non-zsh POSIX shell', () => {
+  const fakeBash = { executable: '/bin/bash', label: 'POSIX shell (/bin/bash)', scriptExtension: '.sh' as const, isZsh: false };
+  const script = shellScript('echo ok', fakeBash);
+  assert.strictEqual(script.split('\n')[0], '(');
+});
+
+// A SHELL that is a symlink under another name (/opt/bin/mysh -> zsh) still runs zsh, so it
+// needs the same literal-passthrough preamble. The target only has to be named zsh; nothing runs.
+test('a SHELL symlink under another name that resolves to zsh is treated as zsh', { skip: process.platform === 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-zsh-symlink-'));
+  const originalShell = process.env.SHELL;
+  try {
+    const target = path.join(dir, 'zsh');
+    const link = path.join(dir, 'mysh');
+    fs.writeFileSync(target, '');
+    fs.symlinkSync(target, link);
+    process.env.SHELL = link;
+    assert.strictEqual(shellCommand('verify-script.sh', 'linux').isZsh, true);
+    process.env.SHELL = path.join(dir, 'other');
+    fs.writeFileSync(process.env.SHELL, '');
+    assert.strictEqual(shellCommand('verify-script.sh', 'linux').isZsh, false);
+    process.env.SHELL = path.join(dir, 'missing');
+    assert.strictEqual(shellCommand('verify-script.sh', 'linux').isZsh, false);
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

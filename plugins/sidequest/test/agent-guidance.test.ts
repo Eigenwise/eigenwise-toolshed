@@ -273,11 +273,13 @@ test('dynamic survival guidance checkpoints incomplete work instead of submittin
     executorVerifyKind: 'command',
     executorVerify: 'npm run typecheck',
   }, 'ticket-token', undefined, ROOT);
-  assert.match(briefing, /use the existing Continuation checkpoint path/);
-  assert.match(briefing, /exact remaining work and verification status/);
-  assert.match(briefing, /release the ticket to `todo`/);
-  assert.match(briefing, /Do not submit incomplete ticket work as ready/);
+  assert.match(briefing, /Lifecycle reference: .*Execution survival/);
+  assert.match(executorTemplate, /headed `Continuation checkpoint`/);
+  assert.match(executorTemplate, /next steps, and verification status/);
+  assert.match(executorTemplate, /`release` the ticket to `todo`/);
+  assert.match(executorTemplate, /Do not submit at a checkpoint/);
   assert.doesNotMatch(briefing, /commit and submit the verified portion/);
+  assert.doesNotMatch(executorTemplate, /commit and submit the verified portion/);
 });
 
 test("GH-339: TaskStop closeout guidance never names the executor's own launch, and a reduced Agent-schema dispatch briefing carries no launch name at all", () => {

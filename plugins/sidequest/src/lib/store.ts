@@ -73,7 +73,7 @@ const { createRouting } = require('./store/routing.js');
 const { createTickets } = require('./store/tickets.js');
 const { createSubmissions } = require('./store/submissions.js');
 const { createDispatch } = require('./store/dispatch.js');
-import { ownedWorkPaths, provenanceAdmissionHold } from './store/work-provenance';
+import { ownedWorkPaths } from './store/work-provenance';
 import type { WorkProvenance } from './store/work-provenance';
 const { createPaths } = require('./store/paths.js');
 const { createCache } = require('./store/cache.js');
@@ -613,6 +613,7 @@ const {
   dispatchIdentityDiagnosis,
   crossedWorktreeBinding,
   dispatchIsolationExpectation,
+  dispatchCallerOwners,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
@@ -887,6 +888,41 @@ function capturedTestName(match?: RegExpMatchArray | null) {
   return name.replace(/\\(['"`\\])/g, '$1');
 }
 
+// A table-driven `it.each([...])('name', ...)` carries its name after the table, so
+// a hunk inside the table has no name on its own line. Without this the hunk fell
+// through to the nearest preceding plain `it(` and the negative control demanded a
+// test the diff never touched.
+function eachTableTestName(lines: string[], startIndex: number) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    // The loop bound above already guarantees index < lines.length, so this index
+    // always yields a string; a `?? ''` fallback here was a branch for a case the loop
+    // can never reach. The `!` only tells the type checker what the bound already proves.
+    const line = lines[index]!;
+    const name = capturedTestName(line.match(/[)`]\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/));
+    if (name) return name;
+    if (index > startIndex && /(?<![.\w$])(?:test|it|specify)\s*\(/.test(line)) return null;
+  }
+  return null;
+}
+
+// What test (if any) does this source line define — a plain `test`/`it`/`specify`/`def
+// test_*`, or, when the line opens an `.each` table, the name printed after the table.
+function testDefinitionName(lines: string[], index: number) {
+  const line = lines[index]!;
+  const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+  return capturedTestName(match) ?? (/(?<![.\w$])(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+}
+
+function testDefinitions(source: string) {
+  const lines = source.split(/\r?\n/);
+  const definitions: Array<{ line: number; name: string }> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = testDefinitionName(lines, index);
+    if (name) definitions.push({ line: index + 1, name });
+  }
+  return definitions;
+}
+
 function changedTestNames(delta?: any, changedPaths?: any[]) {
   if (!delta?.workspace) return [];
   const names = new Set<string>();
@@ -908,11 +944,7 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
     } catch (_: any) {
       continue;
     }
-    const definitions = source.split(/\r?\n/).map((line: string, index: number) => {
-      const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-      const name = capturedTestName(match);
-      return name ? { line: index + 1, name } : null;
-    }).filter(Boolean) as Array<{ line: number; name: string }>;
+    const definitions = testDefinitions(source);
     try {
       execFileSync('git', ['cat-file', '-e', `${delta.workspace.base}:${file}`], {
         cwd: delta.workspace.root,
@@ -924,21 +956,30 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
       continue;
     }
     let newLine = 0;
-    let changedInHunk = false;
+    let addedInHunk = false;
+    let removedInHunk = false;
     const addNearestDefinition = (line: number) => {
       const definition = definitions.filter((entry) => entry.line <= line).at(-1);
       if (definition) names.add(definition.name);
     };
+    // A removal has no new-side line of its own, so it is attributed at the position
+    // the hunk left off. An added line is attributed where it lands, and newLine has
+    // already moved past it, so repeating that here would reach into whatever test
+    // follows the hunk and demand evidence for a test the diff never touched.
+    const attributeRemovals = () => {
+      if (removedInHunk && !addedInHunk) addNearestDefinition(newLine);
+    };
     for (const line of diff.split(/\r?\n/)) {
       const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       if (hunk) {
-        if (changedInHunk) addNearestDefinition(newLine);
+        attributeRemovals();
         newLine = Number(hunk[1]);
-        changedInHunk = false;
+        addedInHunk = false;
+        removedInHunk = false;
         continue;
       }
       if (line.startsWith('+') && !line.startsWith('+++')) {
-        changedInHunk = true;
+        addedInHunk = true;
         const addedDefinition = line.match(/(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
         const addedName = capturedTestName(addedDefinition);
         if (addedName) names.add(addedName);
@@ -947,18 +988,45 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
         continue;
       }
       if (line.startsWith('-') && !line.startsWith('---')) {
-        changedInHunk = true;
+        removedInHunk = true;
         continue;
       }
       if (line.startsWith(' ')) newLine += 1;
     }
-    if (changedInHunk) addNearestDefinition(newLine);
+    attributeRemovals();
   }
   return Array.from(names);
 }
 
 function normalizedNegativeControlTestName(name: unknown) {
   return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// An each-table name carries its placeholders verbatim (`adds %s to the row`), but the
+// runner substitutes them (`adds a to the row`), so a literal substring comparison never
+// matches a parameterised name back to what an agent actually reports; treat %s, %d, and
+// $name (the placeholders node:test actually expands — not %p, %i, or %#) as wildcards
+// instead. A joined `.+` regex backtracks polynomially across a long repetitive line, so
+// this walks the literal segments with indexOf instead of a compiled pattern: each
+// segment is a single linear scan, so the whole match stays O(segments * length). It is
+// deliberately unanchored, the same substring tolerance the no-placeholder path below
+// gives, so a reported name with extra context around it (e.g. a trailing "(3 cases)"
+// suffix) still matches.
+function negativeControlTestNameMatches(normalizedExpectedName: string, reportedName: string): boolean {
+  const segments = normalizedExpectedName.split(/%s|%d|\$\w+/);
+  if (segments.length === 1) {
+    return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
+  }
+  let searchFrom = 0;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const foundAt = reportedName.indexOf(segments[i]!, searchFrom);
+    if (foundAt < 0) return false;
+    // A placeholder follows every segment but the last, and the regex it replaces
+    // required it to consume at least one character (`.+`), so the next segment must
+    // start at least one character past this one's end.
+    searchFrom = foundAt + segments[i]!.length + 1;
+  }
+  return reportedName.indexOf(segments[segments.length - 1]!, searchFrom) >= 0;
 }
 
 function negativeControlTestReport(comments: Array<{ body?: unknown }>, expectedTestNames: string[] = []) {
@@ -971,9 +1039,52 @@ function negativeControlTestReport(comments: Array<{ body?: unknown }>, expected
     .filter(Boolean);
   const unreported = expectedTestNames.filter((expectedName) => {
     const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
-    return !reportedNames.some((reportedName) => reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName));
+    return !reportedNames.some((reportedName) => negativeControlTestNameMatches(normalizedExpectedName, reportedName));
   });
   return { markerLines, unreported };
+}
+
+const NEGATIVE_CONTROL_MARKER_TAG = '[sidequest:negative-control]';
+
+type NegativeControlMarker =
+  | { ok: true; target: string; assertion: string; command: string; failed: number }
+  | { ok: false; detail: string };
+
+// The assertion's own terminating ';' is the first one outside a double-quoted or
+// backtick-quoted span, so prose like assertion=returns "a; failed=2" on empty input
+// keeps its ';' and its failed=<n> as data. Masking with same-length spaces keeps every
+// index valid for the unmasked text, and an unpaired quote is left alone so it cannot
+// swallow the real terminator.
+function assertionTerminatorAt(assertionText: string): number {
+  return assertionText.replace(/"[^"]*"|`[^`]*`/g, (span) => ' '.repeat(span.length)).indexOf(';');
+}
+
+// Each field ends where the next one begins, not at the first ';' in the line: a
+// target= value legitimately holds semicolon-joined paths or prose, and reading it
+// with [^;]+ ended the whole parse there, so a marker that named its evidence was
+// refused as though it named none.
+function parseNegativeControlMarker(markerLine: string): NegativeControlMarker {
+  const afterTag = markerLine.slice(NEGATIVE_CONTROL_MARKER_TAG.length).replace(/^\s+/, '');
+  if (!afterTag.startsWith('target=')) return { ok: false, detail: 'it does not begin with target=' };
+  const targetText = afterTag.slice('target='.length);
+  const assertionAt = targetText.search(/;\s*assertion=/);
+  if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
+  const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, '');
+  const assertionEnd = assertionTerminatorAt(assertionText);
+  if (assertionEnd < 0) return { ok: false, detail: 'no ";" ends its assertion= value' };
+  // Only the command segment after that terminator is searched, so a failed=<n> inside
+  // the assertion value never counts, and a segment that is just "failed=<n>" has no
+  // command before it and is refused. The first failed=<n> after the command wins, so
+  // later context such as "; base run failed=0" is ignored (see SQ-83).
+  const tail = assertionText.slice(assertionEnd + 1).match(/^\s*(?!failed=)(.+?)\s+failed=(\d+)/);
+  if (!tail) return { ok: false, detail: 'no non-empty "<command> failed=<n>" follows its assertion= value' };
+  return {
+    ok: true,
+    target: targetText.slice(0, assertionAt).trim(),
+    assertion: assertionText.slice(0, assertionEnd).trim(),
+    command: String(tail[1]),
+    failed: Number(tail[2]),
+  };
 }
 
 function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
@@ -981,7 +1092,7 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
   if (!claimHolder) return { kind: 'missing' };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = '';
-  let malformedMarkerLine = '';
+  let skippedMalformed: { markerLine: string; detail: string } | null = null;
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || '').trim();
     const markerLine = body.split(/\r?\n/).map((line: string) => line.trim()).find((line: string) => line.startsWith('[sidequest:negative-control]'));
@@ -993,36 +1104,61 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
     const waived = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/);
     const waiverReason = waived?.[1]?.trim();
     if (waiverReason) return waiverReason.length >= 20 ? { kind: 'waived' } : { kind: 'short_waiver' };
-    const failed = markerLine.match(/^\[sidequest:negative-control\]\s+target=([^;]+);\s*assertion=([^;]+);\s*(.+?)\s+failed=(\d+)/);
-    if (failed) {
-      if (!failed[1]?.trim() || !failed[2]?.trim()) return { kind: 'missing_target_or_assertion' };
-      if (Number(failed[4]) === 0) return { kind: 'zero_failures' };
+    const parsed = parseNegativeControlMarker(markerLine);
+    if (parsed.ok) {
+      if (!parsed.target || !parsed.assertion) {
+        const blank = !parsed.target ? 'target' : 'assertion';
+        return { kind: 'missing_target_or_assertion', markerLine, detail: `its ${blank}= value is blank` };
+      }
+      if (parsed.failed === 0) return { kind: 'zero_failures' };
       const declaredFailureKind = negativeControlDeclaredFailureKind(markerLine);
       if (!declaredFailureKind) return { kind: 'undeclared_failure_kind' };
       if (declaredFailureKind !== 'assertion') return { kind: `${declaredFailureKind}_error` };
       const testReport = negativeControlTestReport(comments.filter((comment: { by?: unknown, body?: unknown }) => comment.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: 'unreported_tests', tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: 'failed' };
     }
-    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) return { kind: 'missing_target_or_assertion' };
-    if (!malformedMarkerLine) malformedMarkerLine = markerLine;
+    // A marker that still carries a real failed=<n> count named a genuine attempt gone
+    // wrong, not a stray pointer, so it is reported immediately: an older, unrelated
+    // marker must not paper over evidence this newer one already tried to give. A
+    // marker with no failed=<n> at all (e.g. "see the marker above") is skipped in
+    // favor of an older valid marker, the same way develop always has.
+    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
+      return { kind: 'missing_target_or_assertion', markerLine, detail: parsed.detail };
+    }
+    if (!skippedMalformed) skippedMalformed = { markerLine, detail: parsed.detail };
   }
-  if (malformedMarkerLine) return { kind: 'malformed_marker', markerLine: malformedMarkerLine };
+  // The parse names the field it stopped at in every failure case, so that detail is
+  // always worth surfacing rather than only when the line happens to look conformant.
+  if (skippedMalformed) return { kind: 'missing_target_or_assertion', markerLine: skippedMalformed.markerLine, detail: skippedMalformed.detail };
   return otherControlAuthor ? { kind: 'wrong_author', by: otherControlAuthor } : { kind: 'missing' };
 }
 
+// Comment bodies are capped at 16000 characters, so echoing a posted marker line back
+// unbounded lets one long line crowd out the recovery recipe that actually tells the
+// agent what to do; quote only a head slice and say how much more there was.
+function boundedMarkerLineQuote(markerLine: string, maxChars = 200): string {
+  if (markerLine.length <= maxChars) return markerLine;
+  return `${markerLine.slice(0, maxChars)} [… ${markerLine.length - maxChars} more characters]`;
+}
+
+// The parse names the field it stopped at, so the refusal quotes the line it read and
+// says where it gave up instead of leaving the agent to guess which field was wrong.
+function foundMarkerLineClause(result: { markerLine?: string; detail?: string }): string {
+  return result.markerLine ? ' (found negative-control marker line "' + boundedMarkerLineQuote(result.markerLine) + '", but ' + result.detail + ')' : '';
+}
+
 type NegativeControlRefusalTicket = { ref?: string; claim?: { by?: string } };
-type NegativeControlFailure = { kind: string; tests?: string[]; markerLines?: string[]; markerLine?: string; by?: string };
+type NegativeControlFailure = { kind: string; tests?: string[]; markerLines?: string[]; markerLine?: string; detail?: string; by?: string };
 
 function negativeControlRefusal(ticket: NegativeControlRefusalTicket, result: NegativeControlFailure) {
   const messages: Record<string, string> = {
     import_error: 'the recorded negative control failed with an ImportError',
     collection_error: 'the recorded negative control failed with a collection error',
     undeclared_failure_kind: 'the negative control must declare failure-kind=assertion, failure-kind=import, or failure-kind=collection',
-    missing_target_or_assertion: 'the negative control must name the broken target and the assertion that failed',
+    missing_target_or_assertion: 'the negative control must name the broken target and the assertion that failed' + foundMarkerLineClause(result),
     zero_failures: 'failed=0 means tests passed against the pre-change code and do not test the change',
     unreported_tests: 'the negative control did not report these added or modified tests: ' + result.tests?.join(', '),
     short_waiver: 'a negative-control waiver needs a reason of at least 20 characters',
-    malformed_marker: 'found negative-control marker line "' + result.markerLine + '", but the number was not where it was expected',
     wrong_author: 'a negative control was recorded by "' + result.by + '", but the current claim holder is "' + ticket.claim?.by + '"',
     missing: 'new behavior needs a claim-holder negative control',
   };
@@ -1104,10 +1240,6 @@ function completionTreeCheck(slug: string, ticket: ProvenanceCompletionTicket, o
   if (!control.ok) return control;
   return { ok: true, applicable: true, changedPaths: facts.changedPaths, ownedPaths: facts.ownedPaths,
     noOp: !facts.changedPaths.length, workProvenance: facts.provenance, negativeControl: control.negativeControl };
-}
-
-function submissionCompletionTreeCheck(slug: string, ticket: ProvenanceCompletionTicket, opts?: { explicitNoOp?: boolean }) {
-  return provenanceAdmissionHold(ticket.dispatch?.workProvenance) || completionTreeCheck(slug, ticket, opts);
 }
 
 const {
@@ -1214,6 +1346,7 @@ const {
   scopeExpansionFiles,
   scopeExpansionCommand,
   requestScope,
+  grantScope,
   migrateLegacyScopeRequest,
   overlappingScopePaths,
   scopesOverlap,
@@ -1398,7 +1531,7 @@ const {
   boundedExcerptForSubmission: (...args: any[]) => boundedExcerpt(...args),
   claimReclaimable,
   commitScope,
-  completionTreeCheck: submissionCompletionTreeCheck,
+  completionTreeCheck,
   coerceStatus,
   createComment,
   crypto,
@@ -3092,7 +3225,7 @@ function releaseReasonText(opts: ReleaseOptions): string | null {
 // The checkout facts were observed before BEGIN, so the terminal revision is captured from them and
 // setDispatchTerminal gets no slug, which keeps it from reading Git under the write lock.
 function terminateReleasedDispatch(request: ReleaseRequest, closeout: ReleaseCloseout, terminalOutcome: string | undefined, release: ReleaseRecord | null, now: string): void {
-  captureTerminalWorktreeRevision(request.slug, closeout.dispatch, now, closeout.releaseWorktreeFacts);
+  captureTerminalWorktreeRevision(request.slug, closeout.t, closeout.dispatch, now, closeout.releaseWorktreeFacts);
   setDispatchTerminal(closeout.t, terminalOutcome, request.opts.source || 'cli', {
     failureShape: request.opts.failureShape || release?.kind || 'unknown',
     releaseKind: release?.kind,
@@ -4423,6 +4556,7 @@ module.exports = {
   dispatchIdentityDiagnosis,
   crossedWorktreeBinding,
   dispatchIsolationExpectation,
+  dispatchCallerOwners,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
@@ -4480,6 +4614,7 @@ module.exports = {
   scopeExpansionFiles,
   scopeExpansionCommand,
   requestScope,
+  grantScope,
   migrateLegacyScopeRequest,
   normalizeContracts,
   contractCollisionReasons,

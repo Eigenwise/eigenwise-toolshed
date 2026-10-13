@@ -11,7 +11,7 @@ type ShellToken = { operator: string } | { word: string };
 type ShellSegment = { words: string[]; redirects: string[] };
 type WriteTargetReader = (words: string[]) => string[];
 
-const SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|("(?:[^"\\]|\\.)*"|'[^']*'|[^\s|;&<>"']+)/g;
+const SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*'|[^\s|;&<>"']+)/g;
 const SEGMENT_OPERATORS = new Set(['&&', '||', '|', ';', '\n']);
 const NULL_SINKS = new Set(['/dev/null', 'nul', '$null']);
 const MUTATING_GIT = new Set([
@@ -38,7 +38,10 @@ function inPlaceEditTargets(words: string[]): string[] {
 // reading them as targets refused fixture writes to the evidence root (SQ-3202).
 function contentCmdletTargets(words: string[]): string[] {
   const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
-  return pathFlag > 0 ? words.slice(pathFlag + 1, pathFlag + 2) : operands(words).slice(0, 1);
+  if (pathFlag > 0) return words.slice(pathFlag + 1, pathFlag + 2);
+  return words.slice(1).filter((word, index) => (
+    !word.startsWith('-') && !/^-(value|encoding|itemtype|width|name)$/i.test(words[index]!)
+  )).slice(0, 1);
 }
 
 const WRITE_TARGET_READERS = new Map<string, WriteTargetReader>([
@@ -52,8 +55,16 @@ const WRITE_TARGET_READERS = new Map<string, WriteTargetReader>([
   ['git', gitWriteTargets],
 ]);
 
+function commandName(words: string[]): string {
+  return path.basename(words[0] || '').toLowerCase().replace(/\.exe$/, '');
+}
+
+function isGitMutation(words: string[]): boolean {
+  return commandName(words) === 'git' && gitWriteTargets(words).length > 0;
+}
+
 function commandWriteTargets(words: string[]): string[] {
-  const name = path.basename(words[0] || '').toLowerCase().replace(/\.exe$/, '');
+  const name = commandName(words);
   const reader = WRITE_TARGET_READERS.get(name);
   return reader ? reader(words) : [];
 }
@@ -146,8 +157,11 @@ function firstCheckoutWrite(command: string, cwd: string): string | null {
 }
 
 export function readOnlyShellRefusal(command: string, cwd: string): string | null {
+  if (shellSegments(command).some((segment) => isGitMutation(segment.words))) {
+    return 'sidequest: read-only executor, refusing a git mutation. Comment the needed change and release the ticket.';
+  }
   const blocked = firstCheckoutWrite(command, cwd);
   return blocked
-    ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. Writes under the ticket's verification directory (~/.claude/sidequest/projects/<slug>/verification/<ref>/) are permitted whatever the file says; move the fixture there. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.`
+    ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Use scratch files outside the checkout, under ${os.tmpdir()}, or the ticket's verification directory. For repository edits, comment the needed change and release the ticket.`
     : null;
 }

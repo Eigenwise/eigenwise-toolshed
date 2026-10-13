@@ -24,8 +24,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/session-start.ts
-var import_node_fs7 = __toESM(require("node:fs"));
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_fs8 = __toESM(require("node:fs"));
+var import_node_path8 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -396,26 +396,33 @@ async function runSweep(data) {
 
 // src/hooks/shared/worktree-sweep.ts
 var import_node_child_process2 = require("node:child_process");
-var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_fs5 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
+var import_node_os4 = __toESM(require("node:os"));
+var import_node_path5 = __toESM(require("node:path"));
+
+// src/lib/worktree-sweep-lock.ts
+var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_os3 = __toESM(require("node:os"));
 var import_node_path4 = __toESM(require("node:path"));
+
+// src/hooks/shared/worktree-sweep.ts
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 function stateFile2() {
-  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path4.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
-  return import_node_path4.default.join(home, "worktree-sweep-sessions.json");
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path5.default.join(import_node_os4.default.homedir(), ".claude", "sidequest");
+  return import_node_path5.default.join(home, "worktree-sweep-sessions.json");
 }
 function readState() {
   try {
-    return JSON.parse(import_node_fs4.default.readFileSync(stateFile2(), "utf8"));
+    return JSON.parse(import_node_fs5.default.readFileSync(stateFile2(), "utf8"));
   } catch (_) {
     return {};
   }
 }
 function writeState2(state) {
   try {
-    import_node_fs4.default.mkdirSync(import_node_path4.default.dirname(stateFile2()), { recursive: true });
-    import_node_fs4.default.writeFileSync(stateFile2(), JSON.stringify(state), "utf8");
+    import_node_fs5.default.mkdirSync(import_node_path5.default.dirname(stateFile2()), { recursive: true });
+    import_node_fs5.default.writeFileSync(stateFile2(), JSON.stringify(state), "utf8");
   } catch (_) {
   }
 }
@@ -423,15 +430,15 @@ function sessionId(data) {
   return stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
 }
 function sessionWorktreePath(start) {
-  const resolved = import_node_path4.default.resolve(start);
+  const resolved = import_node_path5.default.resolve(start);
   let candidate = resolved;
   for (; ; ) {
     try {
-      if (import_node_fs4.default.existsSync(import_node_path4.default.join(candidate, ".git"))) return candidate;
+      if (import_node_fs5.default.existsSync(import_node_path5.default.join(candidate, ".git"))) return candidate;
     } catch (_) {
       return resolved;
     }
-    const parent = import_node_path4.default.dirname(candidate);
+    const parent = import_node_path5.default.dirname(candidate);
     if (parent === candidate) return resolved;
     candidate = parent;
   }
@@ -461,29 +468,29 @@ function registerSweepSession(data) {
 }
 
 // src/hooks/diagnostic-worktree-warning.ts
-var import_node_fs5 = __toESM(require("node:fs"));
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_fs6 = __toESM(require("node:fs"));
+var import_node_path6 = __toESM(require("node:path"));
 var ENDED_RUN_WINDOW_MS = 2 * 60 * 60 * 1e3;
 function gitDirectory(entry) {
   try {
-    if (import_node_fs5.default.statSync(entry).isDirectory()) return entry;
-    const linkedGitDirectory = /^gitdir:\s*(.+)$/m.exec(import_node_fs5.default.readFileSync(entry, "utf8"))?.[1];
-    return linkedGitDirectory ? import_node_path5.default.resolve(import_node_path5.default.dirname(entry), linkedGitDirectory.trim()) : null;
+    if (import_node_fs6.default.statSync(entry).isDirectory()) return entry;
+    const linkedGitDirectory = /^gitdir:\s*(.+)$/m.exec(import_node_fs6.default.readFileSync(entry, "utf8"))?.[1];
+    return linkedGitDirectory ? import_node_path6.default.resolve(import_node_path6.default.dirname(entry), linkedGitDirectory.trim()) : null;
   } catch (_) {
     return null;
   }
 }
 function checkoutLocation(start) {
-  let current = import_node_path5.default.resolve(start);
+  let current = import_node_path6.default.resolve(start);
   for (; ; ) {
-    const found = gitDirectory(import_node_path5.default.join(current, ".git"));
+    const found = gitDirectory(import_node_path6.default.join(current, ".git"));
     if (found) {
-      if (import_node_path5.default.basename(found) === ".git") return { checkoutRoot: current, projectRoot: current };
-      const commonGitDirectory = import_node_path5.default.resolve(found, "..", "..");
-      if (import_node_path5.default.basename(commonGitDirectory) === ".git") return { checkoutRoot: current, projectRoot: import_node_path5.default.dirname(commonGitDirectory) };
+      if (import_node_path6.default.basename(found) === ".git") return { checkoutRoot: current, projectRoot: current };
+      const commonGitDirectory = import_node_path6.default.resolve(found, "..", "..");
+      if (import_node_path6.default.basename(commonGitDirectory) === ".git") return { checkoutRoot: current, projectRoot: import_node_path6.default.dirname(commonGitDirectory) };
       return null;
     }
-    const parent = import_node_path5.default.dirname(current);
+    const parent = import_node_path6.default.dirname(current);
     if (parent === current) return null;
     current = parent;
   }
@@ -493,7 +500,7 @@ function comparablePath(value) {
     const lease = require(runtimeModule("kernel/worktree"));
     return lease.canonicalPath(value);
   } catch (_) {
-    const resolved = import_node_path5.default.resolve(value);
+    const resolved = import_node_path6.default.resolve(value);
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   }
 }
@@ -502,7 +509,7 @@ function agentWorktreeRoots(projectRoot) {
     const worktrees = require(runtimeModule("worktrees"));
     return worktrees.agentWorktreeRoots(projectRoot);
   } catch (_) {
-    return [import_node_path5.default.join(projectRoot, ".claude", "worktrees")];
+    return [import_node_path6.default.join(projectRoot, ".claude", "worktrees")];
   }
 }
 function endedRecently(dispatch, now) {
@@ -524,7 +531,7 @@ function boardWorktrees(projectRoot, now) {
       if (!dispatch || !worktree || dispatch.sharedTree !== false) return [];
       const lifecycle = lifecycleOf(store, ticket, dispatch, now);
       if (lifecycle === "ended" && !endedRecently(dispatch, now)) return [];
-      return [{ worktree, ref: String(ticket.ref || ""), lifecycle, onDisk: import_node_fs5.default.existsSync(worktree) }];
+      return [{ worktree, ref: String(ticket.ref || ""), lifecycle, onDisk: import_node_fs6.default.existsSync(worktree) }];
     });
   } catch (_) {
     return [];
@@ -533,7 +540,7 @@ function boardWorktrees(projectRoot, now) {
 function unclaimedWorktreeDirectories(roots) {
   return roots.flatMap((root) => {
     try {
-      return import_node_fs5.default.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith("agent-")).map((entry) => ({ worktree: import_node_path5.default.join(root, entry.name), ref: "", lifecycle: "ended", onDisk: true }));
+      return import_node_fs6.default.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith("agent-")).map((entry) => ({ worktree: import_node_path6.default.join(root, entry.name), ref: "", lifecycle: "ended", onDisk: true }));
     } catch (_) {
       return [];
     }
@@ -560,7 +567,7 @@ function boundAgentWorktree(input) {
   }
 }
 function ownWorktreeSentence(ownWorktree) {
-  return ownWorktree ? `Your own worktree is ${import_node_path5.default.basename(ownWorktree)}.` : "";
+  return ownWorktree ? `Your own worktree is ${import_node_path6.default.basename(ownWorktree)}.` : "";
 }
 function rootsSentence(roots, ownWorktree) {
   return `${ownWorktree ? "Nothing else" : "Nothing"} under ${roots.join(" or ")} is yours.`;
@@ -616,16 +623,16 @@ function diagnosticWorktreeWarning(input, now) {
 
 // src/lib/plugin-freshness.ts
 var import_node_crypto3 = __toESM(require("node:crypto"));
-var import_node_fs6 = __toESM(require("node:fs"));
-var import_node_os4 = __toESM(require("node:os"));
-var import_node_path6 = __toESM(require("node:path"));
+var import_node_fs7 = __toESM(require("node:fs"));
+var import_node_os5 = __toESM(require("node:os"));
+var import_node_path7 = __toESM(require("node:path"));
 var SIDEQUEST_PLUGIN_ID = "sidequest@eigenwise-toolshed";
 function claudeHome(options = {}) {
-  return options.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path6.default.join(import_node_os4.default.homedir(), ".claude");
+  return options.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path7.default.join(import_node_os5.default.homedir(), ".claude");
 }
 function normalizedPath(value) {
   if (typeof value !== "string" || !value.trim()) return null;
-  return import_node_path6.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return import_node_path7.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 function pathsOverlap(left, right) {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
@@ -661,7 +668,7 @@ function compareSemver(left, right) {
 function registryInstalls(projectPath, options = {}) {
   let registry;
   try {
-    registry = JSON.parse(import_node_fs6.default.readFileSync(import_node_path6.default.join(claudeHome(options), "plugins", "installed_plugins.json"), "utf8"));
+    registry = JSON.parse(import_node_fs7.default.readFileSync(import_node_path7.default.join(claudeHome(options), "plugins", "installed_plugins.json"), "utf8"));
   } catch (_) {
     return [];
   }
@@ -679,7 +686,7 @@ function registryInstalls(projectPath, options = {}) {
 function loadedPluginVersion(pluginRoot2 = process.env.CLAUDE_PLUGIN_ROOT) {
   if (!pluginRoot2) return null;
   try {
-    const manifest = JSON.parse(import_node_fs6.default.readFileSync(import_node_path6.default.join(pluginRoot2, ".claude-plugin", "plugin.json"), "utf8"));
+    const manifest = JSON.parse(import_node_fs7.default.readFileSync(import_node_path7.default.join(pluginRoot2, ".claude-plugin", "plugin.json"), "utf8"));
     return typeof manifest.version === "string" ? manifest.version : null;
   } catch (_) {
     return null;
@@ -698,7 +705,7 @@ function sidequestReloadWarning(projectPath, options = {}) {
   return `Sidequest: loaded ${loadedVersion}, installed ${installedVersion}. Run /reload-plugins or restart Claude Code before dispatching work.`;
 }
 function stateDirectory3(options = {}) {
-  return options.stateDirectory || import_node_path6.default.join(import_node_os4.default.tmpdir(), "eigenwise-toolshed", "freshness-warnings", "loaded-plugin-versions");
+  return options.stateDirectory || import_node_path7.default.join(import_node_os5.default.tmpdir(), "eigenwise-toolshed", "freshness-warnings", "loaded-plugin-versions");
 }
 function sessionId2(input) {
   const value = input.session_id ?? input.sessionId;
@@ -708,7 +715,7 @@ function loadedVersionStateFile(input, pluginId = SIDEQUEST_PLUGIN_ID, options =
   const id = sessionId2(input);
   if (!id) return null;
   const digest = import_node_crypto3.default.createHash("sha256").update(`${id}\0${pluginId}`).digest("hex");
-  return import_node_path6.default.join(stateDirectory3(options), `${digest}.json`);
+  return import_node_path7.default.join(stateDirectory3(options), `${digest}.json`);
 }
 function reportLoadedSidequestVersion(input, options = {}) {
   const pluginRoot2 = options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT;
@@ -716,8 +723,8 @@ function reportLoadedSidequestVersion(input, options = {}) {
   const stateFile3 = loadedVersionStateFile(input, SIDEQUEST_PLUGIN_ID, options);
   if (!version || !stateFile3 || !pluginRoot2) return version;
   try {
-    import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(stateFile3), { recursive: true });
-    import_node_fs6.default.writeFileSync(stateFile3, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, pluginRoot: pluginRoot2, version }));
+    import_node_fs7.default.mkdirSync(import_node_path7.default.dirname(stateFile3), { recursive: true });
+    import_node_fs7.default.writeFileSync(stateFile3, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, pluginRoot: pluginRoot2, version }));
   } catch (_) {
   }
   return version;
@@ -841,7 +848,7 @@ function upstreamDefectDestination() {
     const store = require(runtimeModule("store"));
     const project = store.listProjects({ all: true }).find((candidate) => {
       const root = String(candidate.path || "").trim();
-      return root && import_node_fs7.default.existsSync(import_node_path7.default.join(root, "plugins", "sidequest", ".claude-plugin", "plugin.json"));
+      return root && import_node_fs8.default.existsSync(import_node_path8.default.join(root, "plugins", "sidequest", ".claude-plugin", "plugin.json"));
     });
     if (project) return `Offer to file it as a ticket on the ${project.name} board on this machine (the Toolshed working copy), not via the Anthropic feedback tool.`;
   } catch (_) {

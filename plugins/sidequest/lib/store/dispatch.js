@@ -839,11 +839,16 @@ function createDispatch(dependencies) {
     const state = dispatchState(ticket);
     if (state?.sharedTree !== false) return /* @__PURE__ */ new Map();
     const worktrees = [state.worktree, state.releaseObservedCheckout?.worktree].filter(Boolean).map((worktree) => canonicalPath(worktree));
-    return new Map(worktrees.map((worktree) => [worktree, observeWorktree(slug, worktree)]));
+    return new Map(worktrees.map((worktree) => [worktree, observeWorktree(slug, worktree, state.baseCommit)]));
   }
-  function observeWorktree(slug, worktree) {
+  function observeWorktree(slug, worktree, baseCommit) {
     const facts = immutableWorktreeFacts(slug, worktree);
-    return { facts, registered: registeredProjectCheckout(facts) };
+    return {
+      facts,
+      registered: registeredProjectCheckout(facts),
+      commits: facts ? commitsSinceBaseline(facts.worktree, baseCommit, facts.revision) : [],
+      pinned: facts ? pinnedCandidateRevisions(facts.repository) : /* @__PURE__ */ new Map()
+    };
   }
   function worktreeFactsFor(slug, worktree, observed) {
     return observed ? observed.get(canonicalPath(worktree))?.facts ?? null : immutableWorktreeFacts(slug, worktree);
@@ -851,12 +856,26 @@ function createDispatch(dependencies) {
   function observedCheckoutRegistered(worktree, facts, observed) {
     return observed ? observed.get(canonicalPath(worktree))?.registered === true : registeredProjectCheckout(facts);
   }
-  function captureTerminalWorktreeRevision(slug, state, at, observed) {
+  function captureTerminalWorktreeRevision(slug, ticket, state, at, observed) {
     if (!terminalRevisionBound(slug, state)) return;
     const facts = worktreeFactsFor(slug, state.worktree, observed);
     if (!factsDescribeBoundCheckout(facts, state)) return;
     state.terminalWorktreeRevision = facts.revision;
     state.terminalWorktreeObservedAt = at;
+    const checkout = terminalCheckoutObservation(state, facts, observed);
+    recordTerminalCheckoutCommits(state, ownTerminalCheckoutCommits(slug, ticket, checkout.pinned, checkout.commits));
+  }
+  function terminalCheckoutObservation(state, facts, observed) {
+    if (observed) return observed.get(canonicalPath(state.worktree)) ?? { commits: [], pinned: /* @__PURE__ */ new Map() };
+    return { commits: commitsSinceBaseline(facts.worktree, state.baseCommit, facts.revision), pinned: pinnedCandidateRevisions(facts.repository) };
+  }
+  function ownTerminalCheckoutCommits(slug, ticket, pinned, commits) {
+    const siblingRevisions = listTickets(slug).filter((other) => isOtherTicket(other, ticket)).flatMap((other) => ticketRecordedRevisions(other, dispatchState(other), pinned));
+    return commits.filter((commit) => !recordsRevision(siblingRevisions, commit));
+  }
+  function recordTerminalCheckoutCommits(state, commits) {
+    const recorded = Array.isArray(state.sanctionedCommits) ? state.sanctionedCommits.map(String) : [];
+    state.sanctionedCommits = [.../* @__PURE__ */ new Set([...recorded, ...commits])];
   }
   function terminalRevisionBound(slug, state) {
     return Boolean(slug) && state?.sharedTree === false && Boolean(state.worktree) && Boolean(state.worktreeGitDirectory) && Boolean(state.worktreeCommonGitDirectory);
@@ -899,7 +918,7 @@ function createDispatch(dependencies) {
     const state = dispatchState(ticket);
     if (!state) return;
     const at = (/* @__PURE__ */ new Date()).toISOString();
-    captureTerminalWorktreeRevision(opts?.slug, state, at);
+    captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
     const release = opts?.releaseKind ? {
       kind: opts.releaseKind,
       reason: opts.releaseReason || null,
@@ -1272,6 +1291,12 @@ function createDispatch(dependencies) {
     if (!ownership.ownHead) return continuationFallback("retained_worktree_head_is_not_this_tickets", range.worktree, { commit: range.commit, commits: range.commits });
     return null;
   }
+  function lastReleasedVerification(ticket, commit) {
+    return ticket.verificationCaptures?.slice().reverse().find((capture) => capture.candidate.source === "git" && capture.candidate.value === commit) ?? null;
+  }
+  function releasedCheckpointEvidence(ticket, attempt, commit) {
+    return { releaseReason: attempt?.release?.reason ?? null, verification: lastReleasedVerification(ticket, commit) };
+  }
   function retainedWorktreeContinuationState(slug, ticket, state) {
     const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
     const attempt = attempts[attempts.length - 1] || null;
@@ -1368,6 +1393,7 @@ function createDispatch(dependencies) {
           clean: true,
           releasedAt: state.terminalAt,
           releaseKind: attempt?.release?.kind || (checkpointCommit ? "checkpoint" : "handback"),
+          ...releasedCheckpointEvidence(ticket, attempt, observedRevision),
           lease: leaseFacts
         }
       };
@@ -2167,7 +2193,8 @@ function createDispatch(dependencies) {
   }
   function preparedDispatchRecord(slug, t, current, plan, opts, preflight) {
     const provenance = preparationProvenanceFields(plan, opts, preflight.preparedCompatibility);
-    const workProvenance = (0, import_work_provenance.prepareWorkProvenance)(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ""), (ref) => getTicket(slug, ref));
+    const integrationCommit = opts.workProvenance ? integrationBaseCommit(slug, plan.integrationTargetState) : "";
+    const workProvenance = (0, import_work_provenance.prepareWorkProvenance)(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ""), (ref) => getTicket(slug, ref), integrationCommit);
     return {
       ...provenance,
       lifecycleAttempt: { ...provenance.lifecycleAttempt, workProvenance },
@@ -2594,8 +2621,14 @@ function createDispatch(dependencies) {
       return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
     });
   }
+  function launchedIsolatedReservation(state, sessionId) {
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt);
+  }
+  function holdsNoCheckout(state) {
+    return !state.worktree && !state.continuation?.sourceWorktree && state.worktreeBindingExchange?.reason !== "worktree_create_failed";
+  }
   function dispatchCreationCandidate(state, sessionId) {
-    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt && !state.worktree && !state.continuation?.sourceWorktree);
+    return launchedIsolatedReservation(state, sessionId) && holdsNoCheckout(state);
   }
   function unlaunchedSessionDispatch(slug, sessionId) {
     return listTickets(slug).some((candidate) => {
@@ -2792,19 +2825,21 @@ function createDispatch(dependencies) {
   function freshNativeCheckoutBinding(slug, ticketId, request) {
     const ticket = getTicket(slug, ticketId);
     const state = dispatchState(ticket);
-    if (!dispatchCreationCandidate(state, request.sessionId)) return { ok: false, reason: "already_bound" };
+    if (!dispatchCreationCandidate(state, request.sessionId)) return null;
     if (request.attempt && request.attempt !== state.preparedAt) return { ok: false, reason: "stale_attempt" };
     return retainedCompositionCheckoutRefusal(ticket, request.worktree) ?? recordNativeCheckoutBinding(slug, ticket, state, request);
   }
   function bindAvailableNativeCheckout(slug, request, tickets) {
-    const candidate = tickets.find((ticket) => dispatchCreationCandidate(dispatchState(ticket), request.sessionId));
-    if (candidate) return dependencies.withCompositionGenerationLock(
-      slug,
-      candidate.id,
-      () => freshNativeCheckoutBinding(slug, candidate.id, request)
-    );
+    for (const candidate of tickets.filter((ticket) => dispatchCreationCandidate(dispatchState(ticket), request.sessionId))) {
+      const bound = dependencies.withCompositionGenerationLock(
+        slug,
+        candidate.id,
+        () => freshNativeCheckoutBinding(slug, candidate.id, request)
+      );
+      if (bound) return bound;
+    }
     if (unlaunchedSessionDispatch(slug, request.sessionId)) return { ok: false, reason: "dispatch_launch_unrecorded" };
-    const candidates = tickets.map((candidate2) => ({ candidate: candidate2, state: dispatchState(candidate2) })).filter((candidate2) => Boolean(candidate2.state));
+    const candidates = listTickets(slug).map((candidate) => ({ candidate, state: dispatchState(candidate) })).filter((candidate) => Boolean(candidate.state));
     return { ...unavailableWorktreeBinding(slug, candidates, request.sessionId, request.worktree), ok: false };
   }
   function bindDispatchWorktreeCreation(slug, sessionId, worktree, attempt) {
@@ -3145,6 +3180,12 @@ function createDispatch(dependencies) {
   }
   function gatedClaimHolder(ticket) {
     return ticket?.claim?.by ? String(ticket.claim.by) : "<your claim id>";
+  }
+  function dispatchCallerOwners(identity) {
+    const agentId = String(identity?.agentId || "").trim();
+    const ref = String(identity?.ref || "").trim().toUpperCase();
+    if (!agentId) return [];
+    return listProjects({ all: true }).flatMap((project) => listTickets(project.slug)).filter((ticket) => dispatchState(ticket)?.agentId === agentId && (!ref || String(ticket.ref).toUpperCase() === ref)).map((ticket) => ({ ref: ticket.ref, by: String(ticket.claim?.by || ticket.submission?.by || "").trim() })).filter((owner) => owner.by);
   }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();
@@ -4240,6 +4281,7 @@ function createDispatch(dependencies) {
     dispatchIdentityDiagnosis,
     crossedWorktreeBinding,
     dispatchIsolationExpectation,
+    dispatchCallerOwners,
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,

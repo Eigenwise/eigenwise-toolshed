@@ -811,11 +811,393 @@ test('negative-control marker refusals quote malformed marker lines', () => {
     body: '[sidequest:verify-complete]',
     source: 'mcp',
   });
-  assert.equal(refusal.reason, 'negative_control_required');
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
   assert.match(refusal.message, new RegExp(markerLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(refusal.message, /number was not where it was expected/);
+  assert.match(refusal.message, /it does not begin with target=/);
   git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
   git(['commit', '-m', 'negative control malformed marker fixture']);
+});
+
+test('negative-control marker refusals bound an unbounded quoted marker line', () => {
+  const by = 'negative-control-long-marker';
+  const ticket = addNegativeControlTicket('negative control bounds a long marker line', by);
+  const longMarker = `[sidequest:negative-control] ${'x'.repeat(400)} failed=1`;
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: longMarker, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
+  assert.match(refusal.message, new RegExp(longMarker.slice(0, 200).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(refusal.message, /more characters/);
+  assert.ok(!refusal.message.includes(longMarker), 'a long marker line must not appear in full');
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control long marker fixture']);
+});
+
+test('SQ-17: a target= value keeps its semicolons, and an unparsed marker names the field it stopped at', () => {
+  const by = 'negative-control-semicolon-target';
+  const ticket = addNegativeControlTicket('negative control target keeps its semicolons', by);
+  const testName = 'a semicolon-joined target is read as one value';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `test('${testName}', () => {});\n`);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed ${testName}`,
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  const unparsed = '[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2 npm run test:files test/fixture.test.js failed=1 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: unparsed, source: 'mcp' }).ok, true);
+  const unparsedRefusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(unparsedRefusal.reason, 'negative_control_evidence_required');
+  assert.match(unparsedRefusal.message, new RegExp(unparsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(unparsedRefusal.message, /no "; assertion=" follows its target= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control semicolon target fixture']);
+});
+
+test('SQ-83: the failed= parse anchors on the first match, not a later one the recovery guidance allows in context', () => {
+  const by = 'negative-control-failed-anchor';
+  const ticket = addNegativeControlTicket('negative control anchors on the first failed=', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=x; assertion=y; npm run test:files test/x.test.ts failed=2 failure-kind=assertion; base run failed=0',
+    source: 'mcp',
+  }).ok, true);
+  const result = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.notEqual(result.reason, 'negative_control_zero_failures');
+  assert.equal(result.ok, true, result.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control failed anchor fixture']);
+});
+
+test('SQ-95: a failed= inside the assertion prose does not end the parse before the command\'s failed=<n>', () => {
+  const by = 'negative-control-failed-in-assertion';
+  const ticket = addNegativeControlTicket('negative control accepts failed= inside assertion prose', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=x; assertion=returns failed=0 on empty input; npm test failed=2 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const result = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.notEqual(result.reason, 'negative_control_evidence_required');
+  assert.notEqual(result.reason, 'negative_control_zero_failures');
+  assert.equal(result.ok, true, result.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control failed in assertion prose fixture']);
+});
+
+test('SQ-116: a quoted failed=<n> inside the assertion prose does not mask the command\'s real count', () => {
+  const by = 'negative-control-quoted-semicolon-assertion';
+  const ticket = addNegativeControlTicket('negative control reads the count from the command segment', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=fixture; assertion=returns "a; failed=2" on empty input; node --test failed=0 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const zeroRun = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(zeroRun.reason, 'negative_control_zero_failures', 'assertion count masks zero run');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=fixture; assertion=returns "a; failed=0" on empty input; node --test failed=2 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const failingRun = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(failingRun.ok, true, failingRun.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control quoted semicolon assertion fixture']);
+});
+
+test('SQ-116: a marker with no command between the assertion and failed=<n> is refused', () => {
+  const by = 'negative-control-missing-command';
+  const ticket = addNegativeControlTicket('negative control requires a command', by);
+
+  const markerLine = '[sidequest:negative-control] target=fixture; assertion=changed value; failed=2 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: markerLine, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required', 'missing command');
+  assert.match(refusal.message, /no non-empty "<command> failed=<n>" follows its assertion= value/);
+
+  const noTerminator = '[sidequest:negative-control] target=fixture; assertion=changed value node --test failed=2 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: noTerminator, source: 'mcp' }).ok, true);
+  const unterminated = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(unterminated.reason, 'negative_control_evidence_required');
+  assert.match(unterminated.message, /no ";" ends its assertion= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control missing command fixture']);
+});
+
+test('SQ-83: a malformed newest marker without a real failed count is skipped in favor of an older valid one', () => {
+  const by = 'negative-control-skip-to-older';
+  const ticket = addNegativeControlTicket('negative control skips to an older valid marker', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] see the marker above',
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control skip to older fixture']);
+});
+
+test('SQ-83: a malformed marker that still carries a real failed=<n> count is not skipped', () => {
+  const by = 'negative-control-no-skip-real-count';
+  const ticket = addNegativeControlTicket('negative control does not skip a real attempt', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const malformedWithCount = '[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2 npm run test:files test/fixture.test.js failed=1 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: malformedWithCount, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
+  assert.match(refusal.message, /no "; assertion=" follows its target= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control no skip for real count fixture']);
+});
+
+test('SQ-83: a newer valid marker is used even when an older one was malformed', () => {
+  const by = 'negative-control-skip-to-older-reverse';
+  const ticket = addNegativeControlTicket('negative control prefers a newer valid marker over an older malformed one', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] see the marker above',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control newer valid over older malformed fixture']);
+});
+
+test('SQ-17: a changed it.each table is attributed to its own test, not the preceding plain test', () => {
+  const by = 'negative-control-each-table';
+  const eachName = 'adds %s to the row';
+  const unrelatedName = 'an unrelated baseline test';
+  const baseline = `test('${unrelatedName}', () => {});\n\ntest.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control each-table baseline']);
+
+  const ticket = addNegativeControlTicket('negative control reads an each table', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(eachName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(refusal.message, new RegExp(unrelatedName));
+
+  // The runner substitutes %s with the row's actual value, so an agent reporting the
+  // resolved name ("adds a to the row") must still match the table's placeholder name.
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control-test] failed adds a to the row',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control each-table fixture']);
+});
+
+test('SQ-83: a wildcard-matched name keeps substring tolerance for trailing context like a case-count suffix', () => {
+  const by = 'negative-control-wildcard-suffix';
+  const eachName = 'adds %s to the row';
+  const baseline = `test.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard suffix baseline']);
+
+  const ticket = addNegativeControlTicket('negative control tolerates a wildcard suffix', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+
+  // node:test can append a case-count suffix the diff-detected each-table name never
+  // has; the wildcard match must keep the same substring tolerance the plain,
+  // no-placeholder path always gave, instead of demanding an exact anchored match.
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control-test] failed adds a to the row (3 cases)',
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard suffix fixture']);
+});
+
+test('SQ-83: matching a wildcard name against a 1000-char repetitive line stays linear instead of backtracking', () => {
+  const by = 'negative-control-wildcard-perf';
+  const eachName = 'adds %s a %s a %s a %s row';
+  const baseline = `test.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard perf baseline']);
+
+  const ticket = addNegativeControlTicket('negative control times a wildcard match', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+
+  // The delimiter " a " recurring throughout a 1000-char line is the shape that made
+  // the old `.+`-joined regex (4 placeholders here) back off through combinatorially
+  // many split points -- 72.7s on the board server for realistic prose that normally
+  // costs 0-1ms. It never matches "adds ... row", so this is the worst case for a
+  // backtracking engine (it must exhaust every split before giving up); a linear
+  // indexOf scan costs the same whether it matches or not.
+  const repetitiveLine = ' a '.repeat(334).slice(0, 1000);
+  const start = Date.now();
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control-test] failed ${repetitiveLine}`,
+    source: 'mcp',
+  }).ok, true);
+  const afterMarker = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  const elapsedMs = Date.now() - start;
+  assert.equal(afterMarker.reason, 'negative_control_test_required', afterMarker.message);
+  assert.ok(elapsedMs < 5000, `expected the wildcard match to stay linear, took ${elapsedMs}ms`);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control wildcard perf fixture']);
+});
+
+test('SQ-17: a hunk inserted between tests does not demand the test that follows it', () => {
+  const by = 'negative-control-inserted-hunk';
+  const alphaName = 'alpha baseline assertion';
+  const omegaName = 'omega baseline assertion';
+  const insertedName = 'inserted middle assertion';
+  const definition = 'test';
+  const baseline = `${definition}('${alphaName}', () => {});\n\n${definition}('${omegaName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control inserted-hunk baseline']);
+
+  const ticket = addNegativeControlTicket('negative control reads an inserted hunk', by);
+  fs.writeFileSync(
+    path.join(PROJECT_DIR, 'test', 'fixture.test.js'),
+    baseline.replace(`${definition}('${omegaName}`, `${definition}('${insertedName}', () => {});\n\n${definition}('${omegaName}`),
+  );
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed ${insertedName}\n[sidequest:negative-control-test] failed ${alphaName}`,
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control inserted-hunk fixture']);
 });
 
 test('negative controls account for every added named test', () => {
@@ -1718,8 +2100,58 @@ test('source provenance accepts unchanged tests from genuine released native pre
   assert.equal(ticket.lifecycleAttempt.workProvenance.execution, 'UNVERIFIED');
   assert.equal(ticket.dispatch.workProvenance.quality, 'UNVERIFIED');
   assert.equal(provenanceCompletion(ticket).ok, true);
-  assert.equal(require('../lib/store/work-provenance.js').provenanceAdmissionHold(ticket.dispatch.workProvenance).reason, 'work_provenance_unverified');
   assert.equal(store.getTicket(slug, origin.ref).submission, undefined);
+  releaseProvenance(ticket);
+});
+
+async function commitProvenanceFragment(ticket: { ref: string }) {
+  fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, '.release', 'unreleased', ticket.ref + '.md'), '---\nsidequest: minor\n---\nInherited provenance fixture.\n');
+  const committed = await provenanceBoardTool('commit', { ref: ticket.ref, by: ticket.ref + '-owner', worktree: PROJECT_DIR, message: 'Inherited provenance fragment' });
+  assert.equal(committed.ok, true, JSON.stringify(committed));
+  const capture = await nativeProvenanceVerification(ticket);
+  assert.equal(capture.capture.status, 'passed');
+  assert.equal(capture.recorded.ok, true, JSON.stringify(capture.recorded));
+  const commit = git(['rev-parse', 'HEAD']);
+  git(['update-ref', 'refs/sidequest/' + ticket.ref, commit]);
+  return commit;
+}
+
+function submitProvenance(ticket: { ref: string }, commit: string) {
+  return provenanceBoardTool('submit', { ref: ticket.ref, by: ticket.ref + '-owner', commit, worktree: PROJECT_DIR, verify: provenanceCommand,
+    body: 'Inherited provenance fragment; execution and quality stay UNVERIFIED.' });
+}
+
+test('source provenance dispatch submits its frozen record and integrates through the pinned verifier', async () => {
+  const origin = await nativeProvenanceProducer();
+  const ticket = await claimProvenance(provenanceTicket('source provenance submits and integrates'), 'inherited-read-only', [origin]);
+  const commit = await commitProvenanceFragment(ticket);
+  const submitted = await submitProvenance(ticket, commit);
+  assert.equal(submitted.ok, true, JSON.stringify(submitted.message || submitted.failures));
+  const submission = store.getTicket(slug, ticket.ref).submission;
+  assert.equal(submission.commit, commit);
+  assert.equal(submission.workProvenance.kind, 'inherited-read-only');
+  assert.equal(submission.workProvenance.execution, 'UNVERIFIED');
+  assert.equal(submission.workProvenance.quality, 'UNVERIFIED');
+  assert.equal(submission.workProvenance.sources[0].input.commit, origin.commit);
+  const integrated = store.integrateSubmission(slug, ticket.ref, { mode: 'merge' });
+  assert.equal(integrated.ok, true, JSON.stringify(integrated.message || integrated.reason));
+  assert.equal(integrated.integration.outcome, 'delivered');
+  assert.equal(integrated.integration.pinnedCommit, commit);
+  assert.equal(integrated.integration.verify.command, provenanceCommand);
+  assert.equal(integrated.integration.verify.status, 'passed');
+  assert.equal(git(['merge-base', '--is-ancestor', commit, 'main']), '');
+});
+
+test('source provenance dispatch whose frozen source drifted cannot submit', async () => {
+  const origin = await nativeProvenanceProducer();
+  const ticket = await claimProvenance(provenanceTicket('source provenance drifted source refuses submit'), 'inherited-read-only', [origin]);
+  const commit = await commitProvenanceFragment(ticket);
+  store.prepareDispatch(slug, origin.ref, { sharedTree: true, sessionId: origin.ref + '-fresh-main' });
+  const refused = await submitProvenance(ticket, commit);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'work_provenance_mismatch', JSON.stringify(refused.failures));
+  assert.equal(store.getTicket(slug, ticket.ref).submission, undefined);
   releaseProvenance(ticket);
 });
 
@@ -1752,6 +2184,58 @@ test('source provenance matches an archived released generation by its own prepa
   releaseProvenance(ticket);
 });
 
+function commitFixtureFile(file: string, body: string, message: string) {
+  fs.writeFileSync(path.join(PROJECT_DIR, file), body);
+  git(['add', file]);
+  git(['commit', '-m', message]);
+}
+
+async function producerInheritingTrialBranch(foreignAfterInheritedTip: boolean) {
+  const producer = provenanceTicket('source provenance producer fast-forwards a trial branch first');
+  claimRouted(producer, producer.ref + '-producer');
+  const trial = 'trial-' + producer.ref.toLowerCase();
+  const checkedOut = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  git(['checkout', '-b', trial]);
+  commitFixtureFile('lib/trial.js', `module.exports = '${producer.ref} one';\n`, 'Inherited trial step one');
+  commitFixtureFile('lib/trial.js', `module.exports = '${producer.ref} two';\n`, 'Inherited trial step two');
+  git(['checkout', checkedOut]);
+  git(['merge', '--ff-only', trial]);
+  const inheritedTip = git(['rev-parse', trial]);
+  if (foreignAfterInheritedTip) commitFixtureFile('lib/foreign.js', `module.exports = '${producer.ref}';\n`, 'Unsanctioned raw commit');
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), `module.exports = [2, '${producer.ref}'][0];\n`);
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[1]), "const test = require('node:test'); const assert = require('node:assert/strict'); test('owned value equals two', () => assert.equal(require('../lib/provenance'), 2));\n");
+  const committed = await provenanceBoardTool('commit', { ref: producer.ref, by: producer.ref + '-producer', worktree: PROJECT_DIR, message: 'Sanctioned work after the inherited trial branch' });
+  assert.equal(committed.ok, true, JSON.stringify(committed));
+  const candidate = git(['rev-parse', 'HEAD']);
+  assert.equal(store.releaseTicket(slug, producer.ref, producer.ref + '-producer', { status: 'todo', kind: 'handback', reason: 'Synthetic inherited preparation', source: 'mcp' }).ok, true);
+  // The shared trial branch keeps moving after the producer merged it, so ownership must not need its current tip.
+  git(['branch', '-f', trial, git(['commit-tree', inheritedTip + '^{tree}', '-p', inheritedTip, '-m', 'Trial branch advanced later'])]);
+  return { origin: { ref: producer.ref, preparedAt: store.getTicket(slug, producer.ref).dispatch.preparedAt, commit: candidate }, inheritedTip, trial };
+}
+
+test('source provenance judges only commits authored after a fast-forwarded trial branch', async () => {
+  const { origin, inheritedTip, trial } = await producerInheritingTrialBranch(false);
+  const ticket = await claimProvenance(provenanceTicket('source provenance inherits a whole trial branch'), 'inherited-read-only', [origin]);
+  const source = ticket.dispatch.workProvenance.sources[0];
+  assert.deepEqual(source.inheritedTips, [inheritedTip]);
+  const sourcePaths = source.files.map((file: { path: string }) => file.path);
+  assert.ok(sourcePaths.includes(provenanceFiles[0]) && !sourcePaths.includes('lib/trial.js'), JSON.stringify(sourcePaths));
+  git(['branch', '-f', trial, git(['commit-tree', inheritedTip + '^{tree}', '-p', inheritedTip, '-m', 'Trial branch advanced again'])]);
+  const workProvenance = require('../lib/store/work-provenance.js');
+  assert.deepEqual(workProvenance.ownedWorkPaths(PROJECT_DIR, ticket.dispatch.workProvenance, [provenanceFiles[0]],
+    (ref: string) => store.getTicket(slug, ref)), []);
+  releaseProvenance(ticket);
+});
+
+test('source provenance still refuses a foreign commit after the inherited trial branch tip', async () => {
+  const { origin } = await producerInheritingTrialBranch(true);
+  const ticket = provenanceTicket('source provenance foreign work after inherited tip');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'inherited-foreign-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true }),
+  { message: 'work provenance refused: range includes work not owned by this producer' });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
 test('source provenance never uses latest generation ownership for an earlier preparedAt', async () => {
   const origin = await nativeProvenanceProducer();
   const latestCommit = await laterProvenanceGeneration(origin.ref);
@@ -1778,14 +2262,19 @@ test('source provenance refuses a historical submitted candidate replaced by a l
   assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
 });
 
-test('source provenance names the missing fact and generation for legacy archived attempts', async () => {
+async function archivedProvenanceGeneration() {
   const origin = await nativeProvenanceProducer();
   await laterProvenanceGeneration(origin.ref);
   const producer = store.getTicket(slug, origin.ref);
   const archived = producer.dispatch.attempts.find((attempt: { preparedAt: string }) => attempt.preparedAt === origin.preparedAt);
+  return { origin, producer, archived };
+}
+
+test('source provenance names the missing fact and generation for legacy archived attempts', async () => {
+  const { origin, producer, archived } = await archivedProvenanceGeneration();
   const retained = structuredClone(archived);
   const ticket = provenanceTicket('source provenance legacy archive has no inferred facts');
-  for (const field of ['baseCommit', 'declaredFiles', 'sanctionedCommits', 'verificationRequirement', 'tokenPrefix']) {
+  for (const field of ['declaredFiles', 'verificationRequirement', 'tokenPrefix']) {
     Object.assign(archived, retained);
     delete archived[field];
     persist(producer);
@@ -1793,6 +2282,61 @@ test('source provenance names the missing fact and generation for legacy archive
       kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true }), { message: 'work provenance refused: producer generation ' + origin.preparedAt + ' missing ' + field });
     assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
   }
+});
+
+test('source provenance derives missing sanctionedCommits from the archived generation capture and says so at admission', async () => {
+  const { origin, producer, archived } = await archivedProvenanceGeneration();
+  delete archived.sanctionedCommits;
+  persist(producer);
+  const ticket = provenanceTicket('source provenance derived sanctioned commits');
+  store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'derived-origin-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true });
+  const provenance = store.getTicket(slug, ticket.ref).dispatch.workProvenance;
+  assert.deepEqual(provenance.sources[0].generation.sanctionedCommits, [origin.commit]);
+  assert.deepEqual(provenance.sources[0].derivedFacts, [{ fact: 'sanctionedCommits', derivedFrom: ['capture:' + origin.captureId] }]);
+  assert.equal(store.getTicket(slug, origin.ref).dispatch.attempts.find((attempt: { preparedAt: string }) => attempt.preparedAt === origin.preparedAt).sanctionedCommits, undefined, 'derivation never rewrites the producer generation');
+});
+
+test('source provenance refuses a missing baseCommit by name when its capture candidate is already on the integration branch', async () => {
+  const { origin, producer, archived } = await archivedProvenanceGeneration();
+  delete archived.baseCommit;
+  persist(producer);
+  const ticket = provenanceTicket('source provenance ambiguous derived base');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'ambiguous-origin-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true }),
+  { message: 'work provenance refused: producer generation ' + origin.preparedAt + ' missing baseCommit; derivation is ambiguous: capture ' + origin.captureId
+    + ' candidate ' + origin.commit + ' is already on integration commit ' + git(['rev-parse', 'HEAD']) + ' or shares no single merge base with it' });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+test('a released isolated generation records the raw-git commits its checkout made as sanctionedCommits', () => {
+  const ticket = addRouted('raw git commits in an isolated checkout');
+  const session = 'session-raw-git-sanctioned';
+  const agent = 'raw-git-sanctioned-agent';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: false, sessionId: session });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session, agentName: agent,
+  }).ok, true);
+  const worktree = worktrees.agentWorktreePath(PROJECT_DIR, agent);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, session, worktree).ok, true);
+  git(['worktree', 'add', '--detach', worktree]);
+  const gitDirectory = path.resolve(worktree, execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim());
+  require('../lib/kernel/worktree.js').createCheckoutInstanceMarker(gitDirectory);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, session, worktree, require('./_creation-generation.js').creationGeneration(slug, session, worktree)).ok, true);
+  assert.equal(store.bindDispatchAgent(session, prepared.ticket.dispatchExecutor, agent, agent, worktree).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'raw-git-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session,
+  }).ok, true);
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', 'fixture.js'), 'module.exports = "raw git";\n');
+  execFileSync('git', ['add', 'lib/fixture.js'], { cwd: worktree, windowsHide: true });
+  execFileSync('git', ['commit', '-m', 'Raw git fixture commit'], { cwd: worktree, windowsHide: true });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.sanctionedCommits, undefined, 'the board commit tool never saw this commit');
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'raw-git-executor', { status: 'todo', kind: 'handback', reason: 'Raw git fixture generation', source: 'mcp' }).ok, true);
+  const released = store.getTicket(slug, ticket.ref).dispatch;
+  assert.equal(released.terminalWorktreeRevision, commit);
+  assert.deepEqual(released.sanctionedCommits, [commit]);
 });
 
 test('source provenance refuses changed source/test bytes and changed native producer generations', async () => {

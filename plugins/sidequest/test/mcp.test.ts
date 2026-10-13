@@ -20,7 +20,7 @@ const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { spawnSync, execFileSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -52,7 +52,7 @@ const sourceRevisionCapability = require('../lib/source-revision-capability.js')
 const { runCapturedVerification, runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
 const publish = require('../lib/publish.js');
-const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
+const { createCheckoutInstanceMarker, sameCanonicalPath } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 
@@ -217,6 +217,13 @@ async function callHandler(name?: any, args?: any) {
 
 function gitAt(cwd?: any, args?: any) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+// Git for Windows lists worktrees with forward slashes and long names, while the test holds a
+// backslashed path that can carry an 8.3 short name (RUNNER~1), so a substring match never hits there.
+function worktreeRegistered(primary: string, worktree: string): boolean {
+  return gitAt(primary, ['worktree', 'list', '--porcelain']).split(/\r?\n/)
+    .some((line: string) => line.startsWith('worktree ') && sameCanonicalPath(line.slice('worktree '.length), worktree));
 }
 
 function persistTicket(project: string, ticket: any) {
@@ -421,7 +428,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
   assert.equal(contextPage.inputSchema.properties.limit.maximum, 70 * 1024);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
-  assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
+  assert.deepEqual(rework.inputSchema.required, ['ref', 'review', 'reason']);
   assert.match(rework.description, /repair unbound/);
   assert.match(rework.description, /bound needs oracle/, 'rework advertises the bound-candidate oracle route');
   assert.ok(rework.inputSchema.properties.reviewRef, 'reviewRef stays accepted for compatibility');
@@ -1187,6 +1194,63 @@ test('MCP accepts curated natural aliases and names each accepted mapping', asyn
   });
   assert.deepEqual(added.acceptedAliases, ['accepted priority "medium" as "normal"']);
   assert.equal(store.getTicket(project, added.ref).priority, 'normal');
+});
+
+test('add accepts every ticket field update accepts, built from one schema (GH-424)', async () => {
+  const properties = (name: string) => Object.keys((mcp.toolDescriptors() as any[]).find((tool) => tool.name === name).inputSchema.properties);
+  // ref, status, and by describe an existing ticket, admitComposition is a separate main-only action, and addFiles/removeFiles edit an existing scope, so they stay update-only; the rest of update must file at creation.
+  const missingOnAdd = properties('update').filter((field) => !['ref', 'status', 'by', 'admitComposition', 'addFiles', 'removeFiles'].includes(field) && !properties('add').includes(field));
+  assert.deepEqual(missingOnAdd, [], 'a field valid on update must be valid on add');
+
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-add-parity-'))).slug;
+  const added = await callTool('add', {
+    project,
+    title: 'Filed with closeout declarations',
+    unclassified: true,
+    externalDeliverable: true,
+    workingTreeDelivery: true,
+    readonly: false,
+    highStakes: true,
+    contractWaiver: true,
+    anchors: 'plugins/sidequest/src/lib/mcp-tickets.ts',
+    verifyKind: 'manual',
+    verify: 'manual: the filer confirms the added fields',
+    verifyCwd: 'plugins/sidequest',
+  });
+  assert.equal(added.ok, true);
+  const stored = store.getTicket(project, added.ref);
+  assert.equal(stored.externalDeliverable, true);
+  assert.equal(stored.workingTreeDelivery, true);
+  assert.equal(stored.highStakes, true);
+  assert.equal(stored.contractWaiver, true);
+  assert.equal(stored.executorAnchors, 'plugins/sidequest/src/lib/mcp-tickets.ts');
+  assert.equal(stored.executorVerifyCwd, 'plugins/sidequest');
+  assert.equal(stored.executorVerifyKind, 'manual');
+
+  const needsWhy = await callToolRaw('add', { project, title: 'Score without a reason', complexity: 3 });
+  assert.equal(needsWhy.isError, true);
+  assert.match(needsWhy.content[0].text, /why is required with complexity \(min 20 chars\)\. Pass why: "<why this score fits>", or drop complexity and pass category\./);
+});
+
+test('link accepts dependsOn as the depends-on relation, as an argument or as the verb (GH-424)', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-link-depends-on-'))).slug;
+  const dependent = store.createTicket(project, { title: 'Dependent', source: 'test' });
+  const prerequisite = store.createTicket(project, { title: 'Prerequisite', source: 'test' });
+  const verbForm = store.createTicket(project, { title: 'Verb form dependent', source: 'test' });
+
+  const linked = await callTool('link', { project, from: dependent.ref, dependsOn: prerequisite.ref });
+  assert.equal(linked.ok, true);
+  assert.equal(linked.type, 'blocked-by');
+  assert.equal(linked.to, prerequisite.ref);
+  assert.deepEqual(linked.acceptedAliases, ['accepted dependsOn as verb "depends-on" + to']);
+  assert.ok(store.openBlockers(project, store.getTicket(project, dependent.ref)).includes(prerequisite.ref));
+
+  const asVerb = await callTool('link', { project, from: verbForm.ref, verb: 'dependsOn', to: prerequisite.ref });
+  assert.equal(asVerb.type, 'blocked-by');
+
+  const conflicting = await callToolRaw('link', { project, from: dependent.ref, dependsOn: prerequisite.ref, verb: 'blocks' });
+  assert.equal(conflicting.isError, true);
+  assert.match(conflicting.content[0].text, /dependsOn names the target of a depends-on link/);
 });
 
 test('MCP suggests a unique close argument and preserves unrelated unknown-argument errors', async () => {
@@ -2443,6 +2507,82 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   assert.equal(fs.existsSync(worktree), false);
 });
 
+// GH-439: only integrate reclaimed a tree at close, so every other close left a tree full of build
+// output for a session sweep that a backlog of older trees could starve. Every close reclaims the
+// ticket's own tree now, except while the closer is the executor still running inside it.
+function closeCleanupFixture(title: string, by: string) {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  fs.appendFileSync(path.join(primary, '.git', 'info', 'exclude'), 'node_modules/\n.next/\ncoverage/\n*.tsbuildinfo\n');
+  const ticket = store.createTicket(project, {
+    title, files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise close-time cleanup of a tree that holds build output',
+  });
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  fs.mkdirSync(path.join(worktree, 'node_modules', 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(worktree, '.next', 'cache'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.next', 'cache', 'chunk.js'), 'compiled\n');
+  fs.mkdirSync(path.join(worktree, 'coverage'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'coverage', 'lcov.info'), 'TN:\n');
+  fs.writeFileSync(path.join(worktree, 'tsconfig.tsbuildinfo'), '{}\n');
+  return { primary, project, ticket, worktree };
+}
+
+test('MCP release leaves the live executor its tree, and groomClose reclaims the tree with its build output', async (context: any) => {
+  const by = 'close-cleanup-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('reclaim a groomed tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+  assert.equal(fs.existsSync(worktree), true, 'the releasing executor still runs inside its tree');
+
+  const closed = await callTool('groomClose', { project, ref: ticket.ref, reason: 'The work is no longer needed.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), false, 'groomClose reclaimed the closed tree in the same call');
+  assert.equal(worktreeRegistered(primary, worktree), false, 'and left it unregistered');
+});
+
+test('MCP remove reclaims a released ticket tree that holds only build output', async (context: any) => {
+  const by = 'remove-cleanup-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('reclaim a removed tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+
+  const removed = await callTool('remove', { project, ref: ticket.ref });
+  assert.equal(removed.ok, true, removed.message || removed.reason);
+  assert.equal(store.getTicket(project, ticket.ref), null);
+  assert.equal(fs.existsSync(worktree), false, 'remove reclaimed the tree of the ticket it deleted');
+});
+
+// GH-439 review, round four: the close-time sweep ran outside the lock the session sweeps hold, so it
+// could rename a tree that a session sweep in another process was already moving into quarantine.
+test('MCP groomClose leaves the tree to a session sweep that holds the sweep lock', async (context: any) => {
+  const by = 'close-lock-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('leave a locked sweep its tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  const sessionSweep = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true });
+  const lockFile = path.join(SIDEQUEST_HOME, 'worktree-sweep.lock');
+  context.after(() => {
+    sessionSweep.kill();
+    fs.rmSync(lockFile, { force: true });
+  });
+  fs.writeFileSync(lockFile, String(sessionSweep.pid));
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+
+  const closed = await callTool('groomClose', { project, ref: ticket.ref, reason: 'The work is no longer needed.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(path.join(worktree, '.next', 'cache', 'chunk.js')), true, 'the close left the tree to the sweep holding the lock');
+  assert.equal(worktreeRegistered(primary, worktree), true, 'and left its registration alone');
+  assert.equal(fs.readFileSync(lockFile, 'utf8'), String(sessionSweep.pid), 'and did not take the lock from that sweep');
+});
+
 test('MCP integrate accepts its worker lock across runtime sessions and refuses another worker', async (context: any) => {
   const primary = createGitWorktree();
   const project = store.ensureProject(primary).slug;
@@ -2580,6 +2720,26 @@ test('MCP groomClose abandons an unconsumed prepared dispatch without waiting fo
   assert.match(refused.message, /Do not force-take it/);
   assert.match(refused.message, /plain grooming/i);
   assert.match(refused.message, /without --integration/i);
+});
+
+// SQ-160. The PreToolUse hook refuses a subagent that omits `by` on these tools (hooks.test.ts), so a call that reaches
+// the server without `by` is the main thread, and the server defaults it to the session id.
+test('MCP groomClose and supersede_submission default an omitted by to the main session id (SQ-160)', async () => {
+  assert.deepEqual([...mcp.CONTROL_PLANE_DEFAULT_BY].sort(), ['groomClose', 'rework', 'supersede_submission']);
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'main thread groomClose default', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm the main thread keeps the by default after the subagent refusal',
+  });
+  const closed = await callToolAsSession('sq160-main-session', 'groomClose', { project, ref: ticket.ref, reason: 'Obsolete.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).completion.by, 'sq160-main-session', 'the closure is attributed to the session id');
+
+  const superseded = await callToolRawAsSession('sq160-main-session', 'supersede_submission', {
+    project, ref: ticket.ref, supersededBy: ticket.ref, reason: 'Repaired elsewhere.',
+  });
+  assert.doesNotMatch(superseded.content[0].text, /"by" is required/, 'by was defaulted, so the call reached the store');
 });
 
 test('MCP delivery closure points live claims at the owning release command', async () => {
@@ -3356,13 +3516,13 @@ test('MCP submit reports every independently fixable completion refusal together
   assert.equal(refused.reason, 'negative_control_required');
   assert.deepEqual(refused.failures.map((failure: any) => failure.code), [
     'negative_control_required',
-    'executor_verify_mismatch',
+    'verification_capture_required',
     'missing_release_fragment',
   ]);
   const refusalMessages = refused.failures.map((failure: any) => failure.message).join('\n');
   assert.match(refusalMessages, /Write the fragment, then commit it, then submit again\./);
   assert.match(refusalMessages, /needs a claim-holder negative control/);
-  assert.match(refusalMessages, /must match the declared executor verify command/);
+  assert.match(refusalMessages, /No completed passed verification capture exists/);
 });
 
 test('MCP add reports every verify-command defect together', async () => {

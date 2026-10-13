@@ -1295,65 +1295,76 @@ function execProjection(exec?: any) {
   return exec ? { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, apiModel: exec.apiModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch } : null;
 }
 
-function applyDerivedRouting(t?: any, opts?: any) {
-  if (!t) return t;
-  opts = opts || {};
-  const project = opts.project || t.project;
-  let requestedCategory = ticketCategory(t);
-  const warnings = Array.isArray(t.warnings) ? t.warnings.slice() : [];
-  let legacy = false;
-  if (requestedCategory == null && t.complexity != null) {
-    requestedCategory = legacyCategoryForComplexity(t.complexity);
-    legacy = !!requestedCategory;
-    if (legacy) warnings.push(`Legacy complexity ${coerceComplexity(t.complexity)} mapped to ${requestedCategory}; update the ticket to persist a category.`);
-  }
-  if (requestedCategory != null) {
-    const requestedId = String(requestedCategory).trim().toLowerCase();
-    let category = getCategory(requestedId, { project });
-    let fallback = false;
-    if (!category || !category.enabled) {
-      fallback = true;
-      warnings.push(`Category "${requestedId}" is unknown or disabled; falling back to "general".`);
-      category = getCategory('general', { project });
-    }
-    if (category) {
-      const resolved = resolveTicketRoute(t, category);
-      if (!legacy) t.categoryId = requestedId;
-      t.category = Object.assign({}, category, { projectedFromGeneral: fallback });
-      t.model = resolved.model;
-      t.effort = resolved.effort;
-      t.exec = execProjection(resolved.exec);
-      warnings.push(...resolved.warnings);
-    }
-  } else if (t.route != null) {
+function requestedRoutingCategory(t: any, warnings: string[]) {
+  const requestedCategory = ticketCategory(t);
+  if (requestedCategory != null || t.complexity == null) return { requestedCategory, legacy: false };
+  const legacyCategory = legacyCategoryForComplexity(t.complexity);
+  if (legacyCategory) warnings.push(`Legacy complexity ${coerceComplexity(t.complexity)} mapped to ${legacyCategory}; update the ticket to persist a category.`);
+  return { requestedCategory: legacyCategory, legacy: Boolean(legacyCategory) };
+}
+
+function enabledCategoryOrGeneral(requestedId: string, project: any, warnings: string[]) {
+  const category = getCategory(requestedId, { project });
+  if (category && category.enabled) return { category, fallback: false };
+  warnings.push(`Category "${requestedId}" is unknown or disabled; falling back to "general".`);
+  return { category: getCategory('general', { project }), fallback: true };
+}
+
+function applyResolvedRoute(t: any, resolved: any, warnings: string[]) {
+  t.model = resolved.model;
+  t.effort = resolved.effort;
+  t.exec = execProjection(resolved.exec);
+  warnings.push(...resolved.warnings);
+}
+
+function applyCategoryRouting(t: any, requestedCategory: any, legacy: boolean, project: any, warnings: string[]) {
+  const requestedId = String(requestedCategory).trim().toLowerCase();
+  const { category, fallback } = enabledCategoryOrGeneral(requestedId, project, warnings);
+  if (!category) return;
+  const resolved = resolveTicketRoute(t, category);
+  if (!legacy) t.categoryId = requestedId;
+  t.category = Object.assign({}, category, { projectedFromGeneral: fallback });
+  applyResolvedRoute(t, resolved, warnings);
+}
+
+function applyPolicyRouting(t: any, project: any, warnings: string[]) {
+  const { requestedCategory, legacy } = requestedRoutingCategory(t, warnings);
+  if (requestedCategory != null) return applyCategoryRouting(t, requestedCategory, legacy, project, warnings);
+  if (t.route != null) {
     const resolved = resolveTicketRoute(t);
     t.category = null;
-    t.model = resolved.model;
-    t.effort = resolved.effort;
-    t.exec = execProjection(resolved.exec);
-    warnings.push(...resolved.warnings);
-  } else {
-    t.category = null;
-    delete t.model;
-    delete t.effort;
-    delete t.exec;
+    return applyResolvedRoute(t, resolved, warnings);
   }
+  t.category = null;
+  delete t.model;
+  delete t.effort;
+  delete t.exec;
+}
+
+// The briefing and the claim both read this projection, so a prepared attempt keeps the route it was briefed
+// through a provider readiness drop; only a new dispatch may take the category fallback (SQ-3559).
+function applyActiveDispatchRoute(t: any, warnings: string[]) {
   const dispatchRoute = activeDispatchRoute(t);
-  if (dispatchRoute) {
-    const dispatchExec = resolveExec(dispatchRoute.model, dispatchRoute.effort);
-    if (dispatchExec) {
-      t.model = dispatchExec.runsModel;
-      t.effort = dispatchRoute.effort;
-      t.exec = execProjection(dispatchExec);
-      const state = dispatchState(t);
-      if (state && state.recovery) {
-        warnings.push(`This dispatch is temporarily using ${t.model} at ${t.effort} after ${state.recovery.failedModel} quota exhaustion; category policy is unchanged.`);
-      }
-      if (state && state.policyChangedAt) {
-        warnings.push(`This active dispatch was prepared before routing policy changed at ${state.policyChangedAt}; its prepared route remains in force for this attempt.`);
-      }
-    }
+  if (!dispatchRoute) return;
+  const dispatchExec = resolveExec(dispatchRoute.model, dispatchRoute.effort);
+  t.model = dispatchExec ? dispatchExec.runsModel : dispatchRoute.model;
+  t.effort = dispatchRoute.effort;
+  t.exec = execProjection(dispatchExec);
+  const state = dispatchState(t);
+  if (state?.recovery) {
+    warnings.push(`This dispatch is temporarily using ${t.model} at ${t.effort} after ${state.recovery.failedModel} quota exhaustion; category policy is unchanged.`);
   }
+  if (state?.policyChangedAt) {
+    warnings.push(`This active dispatch was prepared before routing policy changed at ${state.policyChangedAt}; its prepared route remains in force for this attempt.`);
+  }
+}
+
+function applyDerivedRouting(t?: any, opts?: any) {
+  if (!t) return t;
+  const project = opts?.project || t.project;
+  const warnings = Array.isArray(t.warnings) ? t.warnings.slice() : [];
+  applyPolicyRouting(t, project, warnings);
+  applyActiveDispatchRoute(t, warnings);
   delete t.profile;
   if (warnings.length) t.warnings = warnings;
   else delete t.warnings;
