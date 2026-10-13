@@ -34,10 +34,10 @@ function runtimeModule(name) {
 
 // src/hooks/shared/worktree-sweep.ts
 var import_node_child_process2 = require("node:child_process");
-var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_fs4 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
-var import_node_os2 = __toESM(require("node:os"));
-var import_node_path3 = __toESM(require("node:path"));
+var import_node_os3 = __toESM(require("node:os"));
+var import_node_path4 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -124,11 +124,104 @@ function writeSweepProgress(cwd, progress) {
   } catch (_) {
   }
 }
+function clearSweepProgress(cwd) {
+  try {
+    import_node_fs2.default.rmSync(progressFile(cwd), { force: true });
+  } catch (_) {
+  }
+}
 function writeReport(cwd, notices) {
   try {
     import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
     import_node_fs2.default.writeFileSync(reportFile(cwd), JSON.stringify({ notices, finishedAt: (/* @__PURE__ */ new Date()).toISOString() }));
   } catch (_) {
+  }
+}
+function drainReport(cwd) {
+  const file = reportFile(cwd);
+  let raw;
+  try {
+    raw = import_node_fs2.default.readFileSync(file, "utf8");
+  } catch (_) {
+    return null;
+  }
+  import_node_fs2.default.rmSync(file, { force: true });
+  clearSweepProgress(cwd);
+  try {
+    const parsed = JSON.parse(raw);
+    const notices = parsed?.notices;
+    return Array.isArray(notices) ? notices.map((notice) => String(notice)).filter(Boolean) : [];
+  } catch (_) {
+    return [];
+  }
+}
+function appendReport(cwd, notices) {
+  if (!notices.length) return;
+  writeReport(cwd, [...drainReport(cwd) || [], ...notices]);
+}
+
+// src/lib/worktree-sweep-lock.ts
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path3 = __toESM(require("node:path"));
+function sweepLockFile() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
+  return import_node_path3.default.join(home, "worktree-sweep.lock");
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+function lockHolderAlive(file) {
+  let holder = 0;
+  try {
+    holder = Number(import_node_fs3.default.readFileSync(file, "utf8"));
+  } catch (_) {
+  }
+  return Number.isInteger(holder) && holder > 0 && processAlive(holder);
+}
+function createSweepLock(file) {
+  try {
+    import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(file), { recursive: true });
+    import_node_fs3.default.writeFileSync(file, String(process.pid), { flag: "wx" });
+    return "acquired";
+  } catch (error) {
+    return error?.code === "EEXIST" ? "held" : "unwritable";
+  }
+}
+function removeStaleSweepLock(file) {
+  try {
+    if (!lockHolderAlive(file)) import_node_fs3.default.rmSync(file, { force: true });
+  } catch (_) {
+  }
+}
+function releaseSweepLock(file) {
+  try {
+    if (import_node_fs3.default.readFileSync(file, "utf8") === String(process.pid)) import_node_fs3.default.rmSync(file, { force: true });
+  } catch (_) {
+  }
+}
+function acquireSweepLock(file) {
+  let outcome = createSweepLock(file);
+  if (outcome === "held") {
+    removeStaleSweepLock(file);
+    outcome = createSweepLock(file);
+  }
+  if (outcome === "held") return null;
+  return outcome === "acquired" ? () => releaseSweepLock(file) : () => {
+  };
+}
+async function withWorktreeSweepLock(sweep) {
+  const release = acquireSweepLock(sweepLockFile());
+  if (!release) return [];
+  try {
+    return await sweep();
+  } finally {
+    release();
   }
 }
 
@@ -174,7 +267,7 @@ function referencesWorktree(command, worktreePath) {
 }
 function worktreeRemovalFailureNotice(failure, options = {}) {
   const notice = `could not remove ${failure.path || "a git entry"}: ${failure.message}`;
-  if ((options.platform ?? process.platform) !== "win32" || !failure.path || !(options.existsSync || import_node_fs3.default.existsSync)(failure.path)) return notice;
+  if ((options.platform ?? process.platform) !== "win32" || !failure.path || !(options.existsSync || import_node_fs4.default.existsSync)(failure.path)) return notice;
   const processes = (options.listProcesses || windowsProcesses)().filter((entry) => referencesWorktree(entry.command, failure.path));
   if (!processes.length) return notice;
   const details = processes.map((entry) => {
@@ -185,20 +278,20 @@ function worktreeRemovalFailureNotice(failure, options = {}) {
   return `${notice}. Processes still using it: ${details.join("; ")}. End those PIDs and re-run the sweep.`;
 }
 function stateFile() {
-  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
-  return import_node_path3.default.join(home, "worktree-sweep-sessions.json");
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path4.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
+  return import_node_path4.default.join(home, "worktree-sweep-sessions.json");
 }
 function readState() {
   try {
-    return JSON.parse(import_node_fs3.default.readFileSync(stateFile(), "utf8"));
+    return JSON.parse(import_node_fs4.default.readFileSync(stateFile(), "utf8"));
   } catch (_) {
     return {};
   }
 }
 function writeState(state) {
   try {
-    import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(stateFile()), { recursive: true });
-    import_node_fs3.default.writeFileSync(stateFile(), JSON.stringify(state), "utf8");
+    import_node_fs4.default.mkdirSync(import_node_path4.default.dirname(stateFile()), { recursive: true });
+    import_node_fs4.default.writeFileSync(stateFile(), JSON.stringify(state), "utf8");
   } catch (_) {
   }
 }
@@ -209,15 +302,15 @@ function projectCommand(project) {
   return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
 }
 function sessionWorktreePath(start) {
-  const resolved = import_node_path3.default.resolve(start);
+  const resolved = import_node_path4.default.resolve(start);
   let candidate = resolved;
   for (; ; ) {
     try {
-      if (import_node_fs3.default.existsSync(import_node_path3.default.join(candidate, ".git"))) return candidate;
+      if (import_node_fs4.default.existsSync(import_node_path4.default.join(candidate, ".git"))) return candidate;
     } catch (_) {
       return resolved;
     }
-    const parent = import_node_path3.default.dirname(candidate);
+    const parent = import_node_path4.default.dirname(candidate);
     if (parent === candidate) return resolved;
     candidate = parent;
   }
@@ -230,6 +323,14 @@ function currentProject(data, store) {
     project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
     sessionPath: sessionWorktreePath(start)
   };
+}
+function unregisterSweepSession(data) {
+  const id = sessionId(data);
+  if (!id) return;
+  const state = readState();
+  if (state.sessions) delete state.sessions[id];
+  if (state.reportedOrphans) delete state.reportedOrphans[id];
+  writeState(state);
 }
 function liveSessionPaths() {
   return Object.values(readState().sessions || {});
@@ -301,7 +402,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
   for (const project of projects) {
     const isCurrentProject = project.slug === current.slug;
     try {
-      await (0, import_promises.stat)(import_node_path3.default.join(project.path, ".git"));
+      await (0, import_promises.stat)(import_node_path4.default.join(project.path, ".git"));
     } catch (_) {
       continue;
     }
@@ -389,16 +490,26 @@ function migrateLegacyExecAgentNotices() {
 async function sessionStartMaintenance(data) {
   const notices = migrateLegacyExecAgentNotices();
   try {
-    notices.push(...await sweepWorktrees(data, true));
+    notices.push(...await withWorktreeSweepLock(() => sweepWorktrees(data, true)));
   } catch (error) {
     notices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return notices;
 }
+async function sessionEndSweep(data) {
+  try {
+    appendReport(String(data.cwd), await withWorktreeSweepLock(() => sweepWorktrees(data, false)));
+  } catch (error) {
+    appendReport(String(data.cwd), [`sidequest: session-end worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`]);
+  } finally {
+    unregisterSweepSession(data);
+  }
+}
 async function main() {
   const cwd = argument("cwd") || process.cwd();
-  const notices = await sessionStartMaintenance({ cwd, session_id: argument("session") });
-  writeReport(cwd, notices);
+  const data = { cwd, session_id: argument("session") };
+  if (argument("mode") === "session-end") return sessionEndSweep(data);
+  writeReport(cwd, await sessionStartMaintenance(data));
 }
 main().catch((error) => {
   writeReport(argument("cwd") || process.cwd(), [

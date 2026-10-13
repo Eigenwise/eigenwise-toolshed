@@ -230,14 +230,14 @@ cause with evidence (`file:line`), the fix, verification.
 Only the main thread can set MCP `dispatch.workProvenance` before preparation. Its `kind` is
 `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only`
 or `fixture-only`. Each source names a native producer ref, its exact `preparedAt` (current dispatch
-or an archived attempt) and an immutable owned `commit`, optionally a `captureId`; a generation missing
-retained facts, or a submitted one whose current submission names another candidate, is refused by
-name. The board freezes base, scope, byte identities and capture identity. A released native
-preparation never becomes a submitted source.
+or an archived attempt) and an immutable owned `commit`, optionally a `captureId`. Missing
+`baseCommit`/`sanctionedCommits` derive from its captures; ambiguity, other gaps or a
+submission naming another candidate refuse by name. The board freezes base, scope, byte
+and capture identity. The source stays unaccepted on its producer.
 
 Unchanged inherited work and a declared GREEN behavior-preserving refactor do not need invented
 new reds. New owned behavior keeps its own control requirements. Source/test byte drift, changed
 producer generations, incompatible captures, worker self-grants and late declarations refuse.
 The declaration is factual provenance only: execution, quality and admission remain UNVERIFIED.
-It cannot rebind an old receipt or exempt held authored code. Record factual verification or a
-checkpoint, preserve the immutable commit/range, then release preparation. Submission stays held.
+It cannot rebind an old receipt or exempt held authored code. While its sources match, the
+dispatch submits normally with the frozen record; integration runs the pinned verifier.

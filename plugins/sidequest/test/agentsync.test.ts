@@ -170,14 +170,62 @@ test('the pending rework section names no actor and claims a preserved ref only 
   assert.match(sourceRevision, /Rejected candidate: rev-77$/m);
 });
 
-test('executor briefings tell the agent how to report an unavailable Board MCP server', () => {
+test('first dispatch keeps task sections and points at executor lifecycle rules', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-CLI-FALLBACK', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
   }, 'cli-fallback-token');
-  assert.match(briefing, /Board MCP is the executor lifecycle authority/);
-  assert.match(briefing, /stop and report it to the user instead of retrying/);
-  assert.match(briefing, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
+  assert.match(briefing, /Lifecycle reference: .*_exec-template\.md/);
+  assert.match(briefing, /Verification reference: .*verify-discipline.*SKILL\.md/);
+  assert.doesNotMatch(briefing, /## Resume/);
+  assert.ok(briefing.indexOf('## Dispatch, claim') < briefing.indexOf('## This ticket'));
+  assert.match(briefing, /## Story execution contract/);
+  assert.match(briefing, /Declared files:/);
   assert.doesNotMatch(briefing, /reload or reconnect Sidequest|version-pinned CLI fallback/);
+});
+
+test('resume packet leads with the retained candidate and recorded verification facts', () => {
+  const { execFileSync } = require('node:child_process');
+  const kernel = require('../lib/kernel/worktree.js');
+  const repository = tmpDir();
+  const retained = path.join(repository, 'retained');
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: repository });
+  execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'checkpoint'], { cwd: repository });
+  execFileSync('git', ['worktree', 'add', '--detach', retained, 'HEAD'], { cwd: repository, stdio: 'pipe' });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: retained, encoding: 'utf8' }).trim();
+  const gitDirectory = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: retained, encoding: 'utf8' }).trim();
+  const commonGitDirectory = path.join(repository, '.git');
+  const checkoutInstance = kernel.createCheckoutInstanceMarker(gitDirectory);
+  const lease = {
+    repository, gitDirectory, commonGitDirectory, observedWorktree: retained, observedRevision: commit,
+    boundWorktree: retained, boundRevision: commit, boundGitDirectory: gitDirectory,
+    boundCommonGitDirectory: commonGitDirectory, boundCheckoutInstance: checkoutInstance,
+    identity: { status: 'bound', agentId: 'resume-fixture' }, liveness: { status: 'terminal' }, phase: 'terminal', provisioning: 'host',
+  };
+  const continuation = {
+    mode: 'retained_worktree_resume', sourceWorktree: retained, commit, lease,
+    releaseReason: 'Verification remains pending.', verification: { status: 'failed_suite', logPath: path.join(repository, 'verify.log') },
+  };
+  try {
+    const briefing = agentsync.renderTicketBriefing({
+      ref: 'SQ-RESUME', title: 'Resume fixture', description: 'Keep this description unchanged.', category: {},
+      executorVerify: 'node --version', dispatch: { continuation, verificationRequirement: { kind: 'command', command: 'node --version', evidenceContract: 'node --version' } },
+    }, 'resume-token');
+    assert.ok(briefing.indexOf('## Resume') >= 0);
+    assert.ok(briefing.indexOf('## Resume') < briefing.indexOf('## Dispatch, claim'));
+    assert.ok(briefing.includes('Checkpoint commit: ' + commit));
+    assert.ok(briefing.includes('retained worktree ' + retained));
+    assert.match(briefing, /Last verification result: failed_suite/);
+    assert.ok(briefing.includes('Verification log: ' + continuation.verification.logPath));
+    assert.match(briefing, /Handback reason: Verification remains pending\./);
+    assert.match(briefing, /first run the pinned verifier/);
+    assert.match(briefing, /Do not re-read the full thread/);
+    assert.match(briefing, /Description:\nKeep this description unchanged\./);
+    assert.match(briefing, /Pinned verifier: command\. Command: node --version/);
+    assert.equal(briefing.split('## Resume').length, 2);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', retained], { cwd: repository });
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test('executor briefings preserve orchestrator-owned improvement decisions', () => {
@@ -224,11 +272,14 @@ test('executor briefings surface Sidequest defects instead of project workaround
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-UPSTREAM-DEFECT', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
   }, 'upstream-defect-token');
-  assert.match(briefing, /refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error/);
-  assert.match(briefing, /report it to the user with the reproducing evidence and treat it as an upstream defect/);
-  assert.match(briefing, /put that evidence in a ticket comment so the orchestrator sees it/);
-  assert.match(briefing, /Do not encode a workaround in project rules, hooks, or memory/);
-  assert.match(briefing, /marked temporary and name the defect it awaits/);
+  assert.match(briefing, /Lifecycle reference: .*upstream-defect reporting/);
+  const template = fs.readFileSync(path.join(__dirname, '..', 'scripts', '_exec-template.md'), 'utf8');
+  assert.match(template, /Board transport/);
+  assert.match(template, /technical_blocker/);
+  assert.match(template, /Upstream defects/);
+  assert.match(template, /Do not encode a workaround in project rules, hooks, or memory/);
+  const references = briefing.match(/(?:Lifecycle|Verification) reference: .*/g).join('\n');
+  assert.ok(Buffer.byteLength(references) < 800, 'reference pointers replace over 1,200 bytes of repeated lifecycle prose');
 });
 
 test('a bound review briefing sends a confirmed defect to the oracle, never to a rejection route', () => {
@@ -338,6 +389,38 @@ test('dispatch uncertainty warns when a greenfield verify path does not exist', 
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug).join('\n');
   assert.match(warnings, /recorded verify references paths absent from this repo: test\/future\.test\.ts/);
   assert.match(agentsync.renderTicketBriefing(ticket, 'greenfield-token', slug, root), /greenfield work/);
+});
+
+// GH-171: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a pinned verify string
+// used to abort under zsh with "no matches found" before the pinned command ever ran, and the
+// executor could not tell that apart from a real test failure. The wrapper fix restores
+// literal-passthrough glob semantics under zsh; this is the warning half, surfaced in the same
+// "Flagged uncertainty" section of the briefing that already carries dispatch-time warnings.
+test('dispatch uncertainty warns about an unquoted [param] path in a recorded verify command', () => {
+  const root = tmpDir();
+  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
+  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
+  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
+  fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+  assert.equal(git(root, ['add', '.']).status, 0);
+  assert.equal(git(root, ['commit', '-m', 'fixture']).status, 0);
+
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(root, 'unquoted glob verify').slug;
+  const unquoted = store.createTicket(slug, {
+    title: 'Fix pick row',
+    executorVerify: 'node -e "0" src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts',
+  });
+
+  const warnings = store.dispatchUncertaintyWarnings(unquoted, slug).join('\n');
+  assert.match(warnings, /unquoted path with shell glob characters.*\[fulfillmentId\]/);
+  assert.match(agentsync.renderTicketBriefing(unquoted, 'unquoted-glob-token', slug, root), /quote it/i);
+
+  const quoted = store.createTicket(slug, {
+    title: 'Fix pick row, quoted',
+    executorVerify: 'node -e "0" "src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts"',
+  });
+  assert.doesNotMatch(store.dispatchUncertaintyWarnings(quoted, slug).join('\n'), /unquoted path with shell glob characters/);
 });
 
 
@@ -1219,7 +1302,10 @@ test('briefings synchronize stale worktrees to their recorded integration target
     },
   }, 'sync-token', undefined, root);
 
-  assert.ok(briefing.includes(`git merge-base --is-ancestor ${commit} HEAD`));
+  assert.ok(briefing.includes(`sync-check ${commit}\``), 'the sync check is the dedicated command, not raw git');
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+  assert.match(briefing, /no `; echo \$\?` is needed/);
+  assert.match(briefing, /If it reports FAILED not-ancestor, run `git fetch/);
   assert.ok(briefing.includes(`git fetch "${root}" "main"`));
   assert.ok(briefing.includes(`git reset --hard ${commit}`));
   assert.doesNotMatch(briefing, /\[sidequest:worktree-sync\]/);
@@ -1249,11 +1335,74 @@ test('a dirty-worktree continuation proves the retained candidate before it trus
   }, 'recovery-base-token', undefined, root);
 
   assert.match(briefing, /Base ancestry alone never proves the retained candidate is here/);
-  assert.ok(briefing.includes(`\`git rev-parse HEAD\` must be ${retained}`));
-  assert.match(briefing, /must still list the retained changes with no unmerged \(`UU`/);
+  assert.ok(briefing.includes(`sync-check ${base} --head ${retained} --retained\``));
+  assert.ok(briefing.includes(`It requires HEAD to be ${retained} and \`git status --porcelain\` to still list the retained changes with no unmerged entries, and only then tests base ancestry`));
   assert.match(briefing, /stop and report that this checkout is not the retained candidate/);
-  assert.match(briefing, /Only then check `git merge-base --is-ancestor/);
-  assert.ok(!briefing.includes(`--is-ancestor ${base} HEAD\` and change nothing if it passes`));
+  assert.match(briefing, /Change nothing if it reports `ok`/);
+  assert.match(briefing, /If it reports `FAILED not-ancestor`, preserve before moving/);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+});
+
+test('a live-claim continuation checks the source worktree and its retained commit through one command', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const sourceWorktree = path.join(root, 'live source');
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-422', title: 'Live resume', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: { mode: 'live_claim_resume', sourceWorktree, commit: retained },
+    },
+  }, 'live-resume-token', undefined, root);
+
+  assert.ok(briefing.includes(`sync-check ${base} --worktree "${sourceWorktree}" --head ${retained}\``));
+  assert.match(briefing, /If it reports FAILED, stop and report it\. Do not reset, rebase, or discard retained work/);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+  assert.ok(!briefing.includes(`git -C ${sourceWorktree} merge-base`));
+});
+
+test('an explicit-base-move continuation proves the retained candidate through the same command', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const checkpointBase = 'd'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-423', title: 'Explicit move', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: {
+        mode: 'dirty_worktree_resume', commit: retained, baseCommit: checkpointBase, retainReason: 'the dispatch declined the retained base',
+      },
+    },
+  }, 'explicit-move-token', undefined, root);
+
+  assert.ok(briefing.includes(`sync-check ${base} --head ${retained} --retained\``));
+  assert.match(briefing, /`ok` and `FAILED not-ancestor` both prove the candidate/);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+});
+
+test('a retained-checkpoint continuation runs the dedicated sync check before it rebases', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const checkpointBase = 'd'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-424', title: 'Checkpoint resume', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: { mode: 'retained_worktree_resume', commit: 'c'.repeat(40), baseCommit: checkpointBase },
+    },
+  }, 'checkpoint-token', undefined, root);
+
+  assert.ok(briefing.includes(`sync-check ${base}\``));
+  assert.match(briefing, /If it reports FAILED not-ancestor, run `git fetch .*` then `git rebase --onto /);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
 });
 
 test('small-ticket lifecycle retires three optional board round trips', () => {
@@ -1278,7 +1427,7 @@ test('small-ticket lifecycle retires three optional board round trips', () => {
   ].filter(Boolean);
 
   assert.equal(retiredRoundTrips.length, 0, 'stale-worktree, foreground verify-start, and duplicate closeout comments stay retired');
-  assert.match(briefing, /git merge-base --is-ancestor/);
+  assert.match(briefing, /sync-check [b]{40}`/);
   assert.match(briefing, /git reset --hard/);
   assert.match(briefing, /in the FOREGROUND with an explicit generous timeout of up to 600000 ms/);
   assert.match(briefing, /A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely/);

@@ -3,8 +3,8 @@
 // cannot make Claude discard the briefing with the hook's entire stdout.
 import type { HookInput } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
-import { sweepWorktrees } from './shared/worktree-sweep.js';
-import { writeReport } from './shared/sweep-handoff.js';
+import { sweepWorktrees, unregisterSweepSession, withWorktreeSweepLock } from './shared/worktree-sweep.js';
+import { appendReport, writeReport } from './shared/sweep-handoff.js';
 
 interface Store {
   sweepStaleClaims: (options: { source: string }) => unknown;
@@ -55,17 +55,30 @@ function migrateLegacyExecAgentNotices(): string[] {
 async function sessionStartMaintenance(data: HookInput): Promise<string[]> {
   const notices = migrateLegacyExecAgentNotices();
   try {
-    notices.push(...await sweepWorktrees(data, true));
+    notices.push(...await withWorktreeSweepLock(() => sweepWorktrees(data, true)));
   } catch (error: unknown) {
     notices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return notices;
 }
 
+// SessionEnd already reconciled claims and agents before it detached this worker, so only the
+// current project's sweep is left, and its notices wait for the next session start.
+async function sessionEndSweep(data: HookInput): Promise<void> {
+  try {
+    appendReport(String(data.cwd), await withWorktreeSweepLock(() => sweepWorktrees(data, false)));
+  } catch (error: unknown) {
+    appendReport(String(data.cwd), [`sidequest: session-end worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`]);
+  } finally {
+    unregisterSweepSession(data);
+  }
+}
+
 async function main(): Promise<void> {
   const cwd = argument('cwd') || process.cwd();
-  const notices = await sessionStartMaintenance({ cwd, session_id: argument('session') });
-  writeReport(cwd, notices);
+  const data = { cwd, session_id: argument('session') };
+  if (argument('mode') === 'session-end') return sessionEndSweep(data);
+  writeReport(cwd, await sessionStartMaintenance(data));
 }
 
 main().catch((error: unknown) => {

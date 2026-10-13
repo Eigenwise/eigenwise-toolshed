@@ -355,7 +355,7 @@ function enclosingCheckout(start) {
 }
 
 // src/hooks/shared/read-only-shell.ts
-var SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|("(?:[^"\\]|\\.)*"|'[^']*'|[^\s|;&<>"']+)/g;
+var SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*'|[^\s|;&<>"']+)/g;
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
 var MUTATING_GIT = /* @__PURE__ */ new Set([
@@ -392,7 +392,8 @@ function inPlaceEditTargets(words) {
 }
 function contentCmdletTargets(words) {
   const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
-  return pathFlag > 0 ? words.slice(pathFlag + 1, pathFlag + 2) : operands(words).slice(0, 1);
+  if (pathFlag > 0) return words.slice(pathFlag + 1, pathFlag + 2);
+  return words.slice(1).filter((word, index) => !word.startsWith("-") && !/^-(value|encoding|itemtype|width|name)$/i.test(words[index])).slice(0, 1);
 }
 var WRITE_TARGET_READERS = new Map([
   ...[
@@ -424,8 +425,14 @@ var WRITE_TARGET_READERS = new Map([
   ["perl", inPlaceEditTargets],
   ["git", gitWriteTargets]
 ]);
+function commandName(words) {
+  return import_node_path4.default.basename(words[0] || "").toLowerCase().replace(/\.exe$/, "");
+}
+function isGitMutation(words) {
+  return commandName(words) === "git" && gitWriteTargets(words).length > 0;
+}
 function commandWriteTargets(words) {
-  const name = import_node_path4.default.basename(words[0] || "").toLowerCase().replace(/\.exe$/, "");
+  const name = commandName(words);
   const reader = WRITE_TARGET_READERS.get(name);
   return reader ? reader(words) : [];
 }
@@ -495,8 +502,11 @@ function firstCheckoutWrite(command, cwd) {
   return null;
 }
 function readOnlyShellRefusal(command, cwd) {
+  if (shellSegments(command).some((segment) => isGitMutation(segment.words))) {
+    return "sidequest: read-only executor, refusing a git mutation. Comment the needed change and release the ticket.";
+  }
   const blocked = firstCheckoutWrite(command, cwd);
-  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. Writes under the ticket's verification directory (~/.claude/sidequest/projects/<slug>/verification/<ref>/) are permitted whatever the file says; move the fixture there. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
+  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Use scratch files outside the checkout, under ${import_node_os2.default.tmpdir()}, or the ticket's verification directory. For repository edits, comment the needed change and release the ticket.` : null;
 }
 
 // src/lib/board-mcp-liveness.ts

@@ -27,6 +27,8 @@ Coverage is native V8 precise block coverage. The existing suite runner preloads
 
 `--coverage <dir>` reuses a capture instead of running the suites, `--all` prints unchanged functions too. Without `--base` the merge base with `develop` (or `main`) is used.
 
+The plugin's separate `crap` LCOV command keeps explicit CLI `--lcov` as an override. Fresh isolated `coverageCommand` output wins over config `lcov`; that configured path is a fallback, defaulting to `coverage/lcov.info`. Without a command, existing output needs authentic capture-time source hashes. A command must rewrite an existing explicit or fallback file it selects. Missing or invalid selected output stays UNVERIFIED, never a stale fallback pass. This does not change V8 capture selection in the repository runner.
+
 ## Rows that are UNVERIFIED
 
 Every UNVERIFIED changed row fails the gate like a FAIL does and says why:

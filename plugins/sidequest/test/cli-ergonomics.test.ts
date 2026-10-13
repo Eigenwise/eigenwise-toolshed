@@ -182,6 +182,21 @@ test('worktree sweep sends live classification progress to stderr for JSON outpu
   }
 });
 
+test('worktrees refuses an unknown action, a bare invocation, and a negative age', () => {
+  const env = isolatedEnv();
+  const unknown = run(['worktrees', 'bogus'], env);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /worktrees: use `sidequest worktrees status` or `sidequest worktrees sweep`/);
+
+  const bare = run(['worktrees'], env);
+  assert.equal(bare.status, 1);
+  assert.match(bare.stderr, /worktrees: use `sidequest worktrees status`/);
+
+  const negative = run(['worktrees', 'sweep', '--min-age-hours', '-1'], env);
+  assert.equal(negative.status, 1);
+  assert.match(negative.stderr, /worktrees sweep: --min-age-hours must be a non-negative number\./);
+});
+
 test('groom-close records a delivered commit through the shared store transition', () => {
   const env = isolatedEnv();
   const project = String(env.CLAUDE_PROJECT_DIR);

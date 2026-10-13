@@ -702,6 +702,7 @@ const {
   dispatchIdentityDiagnosis,
   crossedWorktreeBinding,
   dispatchIsolationExpectation,
+  dispatchCallerOwners,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
@@ -927,6 +928,29 @@ function capturedTestName(match) {
   if (!name || name.includes("${")) return null;
   return name.replace(/\\(['"`\\])/g, "$1");
 }
+function eachTableTestName(lines, startIndex) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+    const name = capturedTestName(line.match(/[)`]\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/));
+    if (name) return name;
+    if (index > startIndex && /(?<![.\w$])(?:test|it|specify)\s*\(/.test(line)) return null;
+  }
+  return null;
+}
+function testDefinitionName(lines, index) {
+  const line = lines[index];
+  const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+  return capturedTestName(match) ?? (/(?<![.\w$])(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+}
+function testDefinitions(source) {
+  const lines = source.split(/\r?\n/);
+  const definitions = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = testDefinitionName(lines, index);
+    if (name) definitions.push({ line: index + 1, name });
+  }
+  return definitions;
+}
 function changedTestNames(delta, changedPaths) {
   if (!delta?.workspace) return [];
   const names = /* @__PURE__ */ new Set();
@@ -948,11 +972,7 @@ function changedTestNames(delta, changedPaths) {
     } catch (_) {
       continue;
     }
-    const definitions = source.split(/\r?\n/).map((line, index) => {
-      const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-      const name = capturedTestName(match);
-      return name ? { line: index + 1, name } : null;
-    }).filter(Boolean);
+    const definitions = testDefinitions(source);
     try {
       execFileSync("git", ["cat-file", "-e", `${delta.workspace.base}:${file}`], {
         cwd: delta.workspace.root,
@@ -964,21 +984,26 @@ function changedTestNames(delta, changedPaths) {
       continue;
     }
     let newLine = 0;
-    let changedInHunk = false;
+    let addedInHunk = false;
+    let removedInHunk = false;
     const addNearestDefinition = (line) => {
       const definition = definitions.filter((entry) => entry.line <= line).at(-1);
       if (definition) names.add(definition.name);
     };
+    const attributeRemovals = () => {
+      if (removedInHunk && !addedInHunk) addNearestDefinition(newLine);
+    };
     for (const line of diff.split(/\r?\n/)) {
       const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       if (hunk) {
-        if (changedInHunk) addNearestDefinition(newLine);
+        attributeRemovals();
         newLine = Number(hunk[1]);
-        changedInHunk = false;
+        addedInHunk = false;
+        removedInHunk = false;
         continue;
       }
       if (line.startsWith("+") && !line.startsWith("+++")) {
-        changedInHunk = true;
+        addedInHunk = true;
         const addedDefinition = line.match(/(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
         const addedName = capturedTestName(addedDefinition);
         if (addedName) names.add(addedName);
@@ -987,33 +1012,69 @@ function changedTestNames(delta, changedPaths) {
         continue;
       }
       if (line.startsWith("-") && !line.startsWith("---")) {
-        changedInHunk = true;
+        removedInHunk = true;
         continue;
       }
       if (line.startsWith(" ")) newLine += 1;
     }
-    if (changedInHunk) addNearestDefinition(newLine);
+    attributeRemovals();
   }
   return Array.from(names);
 }
 function normalizedNegativeControlTestName(name) {
   return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
+function negativeControlTestNameMatches(normalizedExpectedName, reportedName) {
+  const segments = normalizedExpectedName.split(/%s|%d|\$\w+/);
+  if (segments.length === 1) {
+    return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
+  }
+  let searchFrom = 0;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const foundAt = reportedName.indexOf(segments[i], searchFrom);
+    if (foundAt < 0) return false;
+    searchFrom = foundAt + segments[i].length + 1;
+  }
+  return reportedName.indexOf(segments[segments.length - 1], searchFrom) >= 0;
+}
 function negativeControlTestReport(comments, expectedTestNames = []) {
   const markerLines = comments.flatMap((comment) => String(comment?.body || "").split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\[sidequest:negative-control-test\]\s+/i.test(line)));
   const reportedNames = markerLines.map((line) => line.match(/^\[sidequest:negative-control-test\]\s+(?:failed|unaffected)\s+(.+)$/i)?.[1] || "").map(normalizedNegativeControlTestName).filter(Boolean);
   const unreported = expectedTestNames.filter((expectedName) => {
     const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
-    return !reportedNames.some((reportedName) => reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName));
+    return !reportedNames.some((reportedName) => negativeControlTestNameMatches(normalizedExpectedName, reportedName));
   });
   return { markerLines, unreported };
+}
+const NEGATIVE_CONTROL_MARKER_TAG = "[sidequest:negative-control]";
+function assertionTerminatorAt(assertionText) {
+  return assertionText.replace(/"[^"]*"|`[^`]*`/g, (span) => " ".repeat(span.length)).indexOf(";");
+}
+function parseNegativeControlMarker(markerLine) {
+  const afterTag = markerLine.slice(NEGATIVE_CONTROL_MARKER_TAG.length).replace(/^\s+/, "");
+  if (!afterTag.startsWith("target=")) return { ok: false, detail: "it does not begin with target=" };
+  const targetText = afterTag.slice("target=".length);
+  const assertionAt = targetText.search(/;\s*assertion=/);
+  if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
+  const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, "");
+  const assertionEnd = assertionTerminatorAt(assertionText);
+  if (assertionEnd < 0) return { ok: false, detail: 'no ";" ends its assertion= value' };
+  const tail = assertionText.slice(assertionEnd + 1).match(/^\s*(?!failed=)(.+?)\s+failed=(\d+)/);
+  if (!tail) return { ok: false, detail: 'no non-empty "<command> failed=<n>" follows its assertion= value' };
+  return {
+    ok: true,
+    target: targetText.slice(0, assertionAt).trim(),
+    assertion: assertionText.slice(0, assertionEnd).trim(),
+    command: String(tail[1]),
+    failed: Number(tail[2])
+  };
 }
 function negativeControlResult(ticket, expectedTestNames = []) {
   const claimHolder = String(ticket?.claim?.by || "").trim();
   if (!claimHolder) return { kind: "missing" };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = "";
-  let malformedMarkerLine = "";
+  let skippedMalformed = null;
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || "").trim();
     const markerLine = body.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith("[sidequest:negative-control]"));
@@ -1025,32 +1086,43 @@ function negativeControlResult(ticket, expectedTestNames = []) {
     const waived = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/);
     const waiverReason = waived?.[1]?.trim();
     if (waiverReason) return waiverReason.length >= 20 ? { kind: "waived" } : { kind: "short_waiver" };
-    const failed = markerLine.match(/^\[sidequest:negative-control\]\s+target=([^;]+);\s*assertion=([^;]+);\s*(.+?)\s+failed=(\d+)/);
-    if (failed) {
-      if (!failed[1]?.trim() || !failed[2]?.trim()) return { kind: "missing_target_or_assertion" };
-      if (Number(failed[4]) === 0) return { kind: "zero_failures" };
+    const parsed = parseNegativeControlMarker(markerLine);
+    if (parsed.ok) {
+      if (!parsed.target || !parsed.assertion) {
+        const blank = !parsed.target ? "target" : "assertion";
+        return { kind: "missing_target_or_assertion", markerLine, detail: `its ${blank}= value is blank` };
+      }
+      if (parsed.failed === 0) return { kind: "zero_failures" };
       const declaredFailureKind = negativeControlDeclaredFailureKind(markerLine);
       if (!declaredFailureKind) return { kind: "undeclared_failure_kind" };
       if (declaredFailureKind !== "assertion") return { kind: `${declaredFailureKind}_error` };
       const testReport = negativeControlTestReport(comments.filter((comment2) => comment2.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: "unreported_tests", tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: "failed" };
     }
-    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) return { kind: "missing_target_or_assertion" };
-    if (!malformedMarkerLine) malformedMarkerLine = markerLine;
+    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
+      return { kind: "missing_target_or_assertion", markerLine, detail: parsed.detail };
+    }
+    if (!skippedMalformed) skippedMalformed = { markerLine, detail: parsed.detail };
   }
-  if (malformedMarkerLine) return { kind: "malformed_marker", markerLine: malformedMarkerLine };
+  if (skippedMalformed) return { kind: "missing_target_or_assertion", markerLine: skippedMalformed.markerLine, detail: skippedMalformed.detail };
   return otherControlAuthor ? { kind: "wrong_author", by: otherControlAuthor } : { kind: "missing" };
+}
+function boundedMarkerLineQuote(markerLine, maxChars = 200) {
+  if (markerLine.length <= maxChars) return markerLine;
+  return `${markerLine.slice(0, maxChars)} [… ${markerLine.length - maxChars} more characters]`;
+}
+function foundMarkerLineClause(result) {
+  return result.markerLine ? ' (found negative-control marker line "' + boundedMarkerLineQuote(result.markerLine) + '", but ' + result.detail + ")" : "";
 }
 function negativeControlRefusal(ticket, result) {
   const messages = {
     import_error: "the recorded negative control failed with an ImportError",
     collection_error: "the recorded negative control failed with a collection error",
     undeclared_failure_kind: "the negative control must declare failure-kind=assertion, failure-kind=import, or failure-kind=collection",
-    missing_target_or_assertion: "the negative control must name the broken target and the assertion that failed",
+    missing_target_or_assertion: "the negative control must name the broken target and the assertion that failed" + foundMarkerLineClause(result),
     zero_failures: "failed=0 means tests passed against the pre-change code and do not test the change",
     unreported_tests: "the negative control did not report these added or modified tests: " + result.tests?.join(", "),
     short_waiver: "a negative-control waiver needs a reason of at least 20 characters",
-    malformed_marker: 'found negative-control marker line "' + result.markerLine + '", but the number was not where it was expected',
     wrong_author: 'a negative control was recorded by "' + result.by + '", but the current claim holder is "' + ticket.claim?.by + '"',
     missing: "new behavior needs a claim-holder negative control"
   };
@@ -1131,9 +1203,6 @@ function completionTreeCheck(slug, ticket, opts) {
     workProvenance: facts.provenance,
     negativeControl: control.negativeControl
   };
-}
-function submissionCompletionTreeCheck(slug, ticket, opts) {
-  return (0, import_work_provenance.provenanceAdmissionHold)(ticket.dispatch?.workProvenance) || completionTreeCheck(slug, ticket, opts);
 }
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
@@ -1426,7 +1495,7 @@ const {
   boundedExcerptForSubmission: (...args) => boundedExcerpt(...args),
   claimReclaimable,
   commitScope,
-  completionTreeCheck: submissionCompletionTreeCheck,
+  completionTreeCheck,
   coerceStatus,
   createComment,
   crypto,
@@ -2721,7 +2790,7 @@ function releaseReasonText(opts) {
   return String(opts.releaseReason || "").trim() || null;
 }
 function terminateReleasedDispatch(request, closeout, terminalOutcome, release, now) {
-  captureTerminalWorktreeRevision(request.slug, closeout.dispatch, now, closeout.releaseWorktreeFacts);
+  captureTerminalWorktreeRevision(request.slug, closeout.t, closeout.dispatch, now, closeout.releaseWorktreeFacts);
   setDispatchTerminal(closeout.t, terminalOutcome, request.opts.source || "cli", {
     failureShape: request.opts.failureShape || release?.kind || "unknown",
     releaseKind: release?.kind,
@@ -3837,6 +3906,7 @@ module.exports = {
   dispatchIdentityDiagnosis,
   crossedWorktreeBinding,
   dispatchIsolationExpectation,
+  dispatchCallerOwners,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,

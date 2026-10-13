@@ -3203,7 +3203,7 @@ test('a released checkpoint dispatched into the shared tree records why its reta
 });
 
 test('released handbacks carry registered native worktrees into continuation dispatches', () => {
-  const ticket = createFixture('continuation checkpoint fixture');
+  const ticket = store.createTicket(slug, { title: 'continuation checkpoint fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], executorVerify: 'node --version', source: 'test' });
   const sessionId = `continuation-${Date.now()}`;
   const agentId = `continuation-${Date.now()}`;
   const branch = `worktree-agent-${agentId}`;
@@ -3235,6 +3235,11 @@ test('released handbacks carry registered native worktrees into continuation dis
     const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
     // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
     assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'continuation-worker', commit: checkpoint }).ok, true);
+    const capture = store.recordVerificationCapture(slug, ticket.ref, {
+      command: 'node --version', status: 'failed_suite', candidate: { source: 'git', value: checkpoint },
+      completedAt: new Date().toISOString(), cleanWorktree: true, worktree, logPath: path.join(SIDEQUEST_HOME, 'resume-verification.log'),
+    });
+    assert.equal(capture.ok, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
       status: 'todo',
       source: 'test',
@@ -3258,6 +3263,8 @@ test('released handbacks carry registered native worktrees into continuation dis
       clean: true,
       releasedAt,
       releaseKind: 'handback',
+      releaseReason: 'Continue verification in another executor.',
+      verification: capture.capture,
     }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
     assert.equal(lease.dispatchBaseline, prepared.ticket.dispatch.baseCommit);
     assert.equal(lease.observedRevision, checkpoint);
@@ -3265,6 +3272,15 @@ test('released handbacks carry registered native worktrees into continuation dis
     assert.equal(lease.boundGitDirectory, releasedDispatch.worktreeGitDirectory);
     assert.equal(lease.boundCommonGitDirectory, releasedDispatch.worktreeCommonGitDirectory);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.match(briefing, /## Resume/);
+    assert.ok(briefing.indexOf('## Resume') < briefing.indexOf('## Dispatch, claim'));
+    assert.ok(briefing.includes(`Checkpoint commit: ${checkpoint}`));
+    assert.match(briefing, /Handback reason: Continue verification in another executor\./);
+    assert.match(briefing, /Last verification result: failed_suite/);
+    assert.ok(briefing.includes(`Verification log: ${capture.capture.logPath}`));
+    assert.ok(briefing.includes(`Description:\n${continued.ticket.description || '(No additional description was recorded.)'}`));
+    assert.match(briefing, /first run the pinned verifier/);
+    assert.match(briefing, /Do not re-read the full thread/);
     const spawn = agentsync.agentSpawn(
       continued.ticket.dispatch.launchName,
       agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
@@ -3301,7 +3317,12 @@ test('released handbacks carry registered native worktrees into continuation dis
       executor: continuationExecutor,
     }).ok, true);
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
+    assert.equal(store.recordVerificationCapture(slug, ticket.ref, {
+      command: 'node --version', status: 'passed', candidate: { source: 'git', value: checkpoint },
+      completedAt: new Date().toISOString(), cleanWorktree: true, worktree,
+    }).ok, true);
     assert.equal(store.submitTicket(slug, ticket.ref, 'continuation-second-worker', {
+      verify: 'node --version',
       commit: checkpoint,
       worktree,
       source: 'test',

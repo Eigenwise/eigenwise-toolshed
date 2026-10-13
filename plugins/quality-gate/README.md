@@ -2,6 +2,10 @@
 
 Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. It uses TypeScript 7 from the scored project first, then the plugin's installed dependency. Install the plugin's dependencies with `npm install` in this directory if neither has the supported parser API.
 
+`--source <path>` narrows configured or default sources for one run without changing config. Repeat it for multiple files or directories, relative to the measured project root, for example `crap --project <root> --source src/changed.py --source src/other.py --cc-only`. Config exclusions still apply; selectors cannot widen configured sources.
+
+Invalid UTF-8, Python syntax errors and lone surrogates produce an informational UNVERIFIED row for that file. Other selected files are still measured.
+
 ## Project CRAP gate
 
 ```text
@@ -71,7 +75,7 @@ Use locally installed `coverage.py` (for example `pipx install coverage`) to gen
 
 ## Same-byte coverage
 
-`--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there, leaving config `lcov` unset. An explicit LCOV path wins; otherwise isolated output wins over `coverage/lcov.info`. Existing fallback or explicit output must be rewritten during the command.
+`--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
 
 For pre-existing LCOV, supply a sibling `<lcov>.sources.json` containing SHA-256 hashes captured alongside that coverage, keyed by project-relative source path:
 

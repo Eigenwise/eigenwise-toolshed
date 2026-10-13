@@ -54,6 +54,8 @@ const {
   requiredReleaseReason,
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
+  cleanupClosedTicketWorktree: cleanupDeliveredWorktree,
+  closeExecutorAndReclaimTree,
   withoutCategories,
   CATEGORY_TAXONOMY_WARNING,
   state
@@ -118,21 +120,6 @@ function deliveredAck(slug, result, integration, changed = {}) {
     message,
     ...changed
   });
-}
-async function cleanupDeliveredWorktree(slug, projectPath, ticket, claimWasLive = false) {
-  try {
-    const dispatch = ticket?.dispatch;
-    if (!dispatch?.worktree || dispatch.sharedTree !== false || dispatch.continuation || store.boardConfig(slug)?.worktreeIsolation === false) return;
-    const tickets = store.worktreeGcTickets().map((candidate) => candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate);
-    await worktrees.sweep(projectPath, tickets, {
-      execute: true,
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
-      minAgeMs: 0,
-      ticketRef: ticket.ref
-    });
-  } catch (_) {
-  }
 }
 function objectProperties(value) {
   return value && typeof value === "object" ? Object.fromEntries(Object.entries(value)) : {};
@@ -639,7 +626,7 @@ const tools = [
       },
       required: ["ref", "by", "body"]
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "done");
       const by = requireBy(args, "done");
       const body = requiredFinalReport(args, "done");
@@ -667,7 +654,7 @@ const tools = [
           res.message = `${res.message} ${noOp.detail}`;
         }
       }
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     }
   },
@@ -751,7 +738,7 @@ const tools = [
         resolvedPaths: args.resolvedPaths,
         verificationSupersession
       });
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket, !args.integration);
       if (res.ok && args.integration) {
         try {
           const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
@@ -780,7 +767,7 @@ const tools = [
   },
   {
     name: "release",
-    description: "Release a held claim, or surrender this worker’s token-validated unbound dispatch with kind technical_blocker. Use kind oracle with an oracle ask to park it as awaiting-oracle for a human verdict, then exit. The oracle handoff stays visible while the ticket remains awaiting-oracle.",
+    description: "Release a held claim, or surrender this worker’s token-validated unbound dispatch with kind technical_blocker. Technical blockers accept failed-command evidence, typed mcpRefusal (tool, reason code, message), or hookRefusal (same-session session and captured text); bare prose is refused. Use kind oracle with an oracle ask to park it as awaiting-oracle for a human verdict, then exit. The oracle handoff stays visible while the ticket remains awaiting-oracle.",
     inputSchema: {
       type: "object",
       properties: {
@@ -789,7 +776,9 @@ const tools = [
         by: { type: "string" },
         reason: { type: "string" },
         kind: { type: "string", enum: ["technical_blocker", "contradiction", "oracle", "handback"] },
-        command: { type: "string", description: "Required for blocker/contradiction." },
+        command: { type: "string", description: "Required for command blocker evidence or contradiction." },
+        mcpRefusal: { type: "object", properties: { tool: { type: "string" }, reason: { type: "string" }, message: { type: "string" } }, required: ["tool", "reason", "message"] },
+        hookRefusal: { type: "object", properties: { session: { type: "string" }, text: { type: "string" } }, required: ["session", "text"] },
         exitCode: { type: "integer" },
         outputTail: { type: "string", description: "Required blocker/contradiction output." },
         oracle: { type: "string" },
@@ -800,10 +789,10 @@ const tools = [
       },
       required: ["ref", "by"]
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "release");
       const by = requireBy(args, "release");
-      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }), { requireClassification: true });
+      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind, sessionId: sessionOf(args) }), { requireClassification: true });
       if (!evidence.ok) return mutationAck(slug, { ok: false, reason: evidence.reason, message: evidence.message });
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
@@ -819,7 +808,7 @@ const tools = [
         source: "mcp",
         sessionId: sessionOf(args)
       });
-      if (res.ok) closeDispatchExecutor(ticket);
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     }
   },
@@ -978,12 +967,12 @@ const tools = [
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
-        by: { type: "string" },
+        by: { type: "string", description: "The candidate owner. Omitted, the main thread defaults to its session id and a subagent to the owner label its own dispatch recorded (refused when none or ambiguous). The owner check still judges the default." },
         review: { type: "string" },
         reviewRef: { type: "string", description: "Accepted for compatibility and ignored; it grants no authority over a bound candidate." },
         reason: { type: "string" }
       },
-      required: ["ref", "by", "review", "reason"]
+      required: ["ref", "review", "reason"]
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "rework");
@@ -998,7 +987,7 @@ const tools = [
   },
   {
     name: "submit",
-    description: 'Submit a verified Git range or immutable source revision for integration and release the claim. A declared command verifier requires the completed verify-capture identity produced by the dispatched wrapper, bound to this ticket, exact command, and submitted candidate. Retyping the command or prose is not execution evidence; rerun the wrapper after the final commit when the capture is missing or stale. Manual and attestation verifiers retain their existing evidence contracts. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. At registration, Sidequest persists the project adapter: non-Git projects use filesystem-snapshot revisions, whose source must be "filesystem-snapshot" and whose value must match the current project snapshot. The server resolves existence and baseline-membership facts from that persisted adapter; callers cannot supply them. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. To bounce an unbound candidate back for repair, use rework; a review-bound candidate cannot be rejected by any route.',
+    description: 'Submit a verified Git range or immutable source revision for integration and release the claim. A declared command verifier requires the completed verify-capture identity produced by the dispatched wrapper, bound to this ticket, exact command, and submitted candidate. Submit resolves the dispatch-pinned command automatically and records verifierSource: pinned, even when verify is omitted or differs. Retyping the command or prose is not execution evidence; rerun the wrapper after the final commit when the capture is missing or stale. Manual and attestation verifiers retain their existing evidence contracts. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. At registration, Sidequest persists the project adapter: non-Git projects use filesystem-snapshot revisions, whose source must be "filesystem-snapshot" and whose value must match the current project snapshot. The server resolves existence and baseline-membership facts from that persisted adapter; callers cannot supply them. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. To bounce an unbound candidate back for repair, use rework; a review-bound candidate cannot be rejected by any route.',
     inputSchema: {
       type: "object",
       properties: {
@@ -1027,7 +1016,7 @@ const tools = [
           }
         },
         base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from an ordinary submission range; equal to commit only for a verified ordinary no-op. An admitted composition must keep its original BASE and submit the full BASE..C range." },
-        verify: { type: "string" },
+        verify: { type: "string", description: "Optional for pinned command verifiers, which Sidequest resolves automatically. Required evidence for manual and attestation contracts." },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },
         body: { type: "string", description: "Final report: paths, verification, and skips." },
