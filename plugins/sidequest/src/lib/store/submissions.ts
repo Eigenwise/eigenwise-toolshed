@@ -1874,6 +1874,17 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     });
     if (revisionPreflight.refusal) return revisionPreflight.refusal;
     const revisionProof: any = revisionPreflight.revisionProof;
+    // The working-tree proof reads bytes no commit holds, so only the target branch's own
+    // checkout can stand for them; a detached HEAD at the tip would record a delivery the
+    // branch never contains.
+    if (workingTreeDelivery && !revisionProof && currentBranch !== target.branch) {
+      return {
+        ok: false,
+        reason: 'working_tree_requires_target_branch',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: a working-tree content proof needs ${target.branch} itself checked out, but ${requestedWorktree ? `the worktree given (${repo})` : 'this checkout'} is on ${currentBranch || 'detached HEAD'}. Check out ${target.branch}, or commit the content and deliver a ${target.branch}-reachable commit (or name a deliveryRevision).`,
+      };
+    }
     // apply squashes the whole range into the working tree, so the commit of that
     // tree carries no patch identity from any candidate commit. What it can prove is
     // the thing the delivery actually is: the same bytes as the reviewed candidate on

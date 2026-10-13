@@ -4404,6 +4404,83 @@ test('SQ-58: recordDeliveredSubmission still refuses branch_not_checked_out when
   }
 });
 
+test('SQ-183: a non-reachable working-tree proof is refused from a detached worktree at the target tip and accepted on the target branch itself', () => {
+  const originalConfig = store.boardConfig(slug);
+  let scratchWorktree: string | null = null;
+  try {
+    cleanBranch();
+    const targetBranch = git(['branch', '--show-current']);
+    const file = 'lib/detached-dirty-delivery.js';
+    const ticket = addTicket('detached dirty worktree proof', { files: [file] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, file), 'candidate bytes\n');
+    git(['add', file]);
+    git(['commit', '-m', 'detached dirty delivery candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    const base = git(['rev-parse', `${candidate}^`]);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'detached-dirty-source', {
+      direct: true,
+      reason: 'The detached dirty delivery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'detached-dirty-source', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base,
+      upstream: 'origin/main',
+      upstreamCommit: base,
+      commits: [candidate],
+      changedPaths: [file],
+    });
+    submitted.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'detached-dirty-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submitted);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+    git(['reset', '--mixed', 'origin/main']);
+    const targetTip = git(['rev-parse', 'HEAD']);
+    assert.notStrictEqual(git(['merge-base', candidate, targetTip]), candidate, 'the candidate is not reachable from the target branch');
+
+    scratchWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-183-detached-'));
+    fs.rmdirSync(scratchWorktree);
+    git(['worktree', 'add', '--detach', scratchWorktree, targetTip]);
+    fs.mkdirSync(path.join(scratchWorktree, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(scratchWorktree, file), 'candidate bytes\n');
+
+    const refused = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      worktree: scratchWorktree,
+      reason: 'Uncommitted candidate bytes in a detached checkout of the target tip.',
+    });
+    assert.strictEqual(refused.ok, false, 'a detached HEAD cannot stand for bytes the target branch never contains');
+    assert.strictEqual(refused.reason, 'working_tree_requires_target_branch');
+    assert.ok(refused.message.includes(`needs ${targetBranch} itself checked out`), 'refusal names the branch to check out');
+    assert.ok(refused.message.includes(`commit the content and deliver a ${targetBranch}-reachable commit`), 'refusal names the committed-delivery alternative');
+    assert.strictEqual(store.getTicket(slug, ticket.ref).status, 'doing');
+
+    const accepted = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      reason: 'The same candidate bytes in the checkout of the target branch itself.',
+    });
+    assert.strictEqual(accepted.ok, true, accepted.message);
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.integration.mode, 'recorded-working-tree');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    if (scratchWorktree) {
+      try { git(['worktree', 'remove', '--force', scratchWorktree]); } catch (_) { /* best-effort cleanup */ }
+    }
+  }
+});
+
 test('SQ-58: recordDeliveredSubmission refuses an explicit worktree that is not part of this repository', () => {
   const originalConfig = store.boardConfig(slug);
   let foreignDir: string | null = null;

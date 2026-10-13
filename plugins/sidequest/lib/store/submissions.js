@@ -1531,6 +1531,14 @@ ${verify.outputTail}` : null
       });
       if (revisionPreflight.refusal) return revisionPreflight.refusal;
       const revisionProof = revisionPreflight.revisionProof;
+      if (workingTreeDelivery && !revisionProof && currentBranch !== target.branch) {
+        return {
+          ok: false,
+          reason: "working_tree_requires_target_branch",
+          ticket,
+          message: `${ticket.ref} reconciliation refused: a working-tree content proof needs ${target.branch} itself checked out, but ${requestedWorktree ? `the worktree given (${repo})` : "this checkout"} is on ${currentBranch || "detached HEAD"}. Check out ${target.branch}, or commit the content and deliver a ${target.branch}-reachable commit (or name a deliveryRevision).`
+        };
+      }
       const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
       const content = completingApplyDelivery ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit) : revisionProof ? revisionProof.content : workingTreeDelivery && !reachable ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit) : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
       if (!content.ok) {
