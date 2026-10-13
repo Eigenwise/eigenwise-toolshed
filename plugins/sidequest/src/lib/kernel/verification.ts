@@ -2,7 +2,7 @@
 
 import type { Diagnostic } from './index.js';
 
-export const VERIFICATION_KINDS = ['suite', 'command', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'] as const;
+export const VERIFICATION_KINDS = ['suite', 'command', 'typecheck', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'] as const;
 export type VerificationKind = (typeof VERIFICATION_KINDS)[number];
 
 export const VERIFICATION_STATUSES = ['passed', 'failed_suite', 'toolchain_missing', 'could_not_run', 'timeout', 'manual', 'attestation', 'skipped', 'failed_check', 'deferred'] as const;
@@ -117,25 +117,34 @@ export function validationDiagnostic(code: string, message: string): Diagnostic 
   return Object.freeze({ code, message, actionable: true });
 }
 
-export function verificationRequirement(input: RequirementInput): VerificationRequirement {
-  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
-  const evidence = nonEmpty(input.evidence);
-  const command = nonEmpty(input.command || (kind === 'command' ? evidence : ''));
+function suiteVerificationRequirement(input: RequirementInput, command: string, evidence: string): VerificationRequirement {
   const suite = suiteFrom(input);
+  if (suite) return Object.freeze({ kind: 'suite', suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
+  return Object.freeze({ kind: 'suite', ...(command ? { command } : {}), evidenceContract: evidence || 'named suite output' });
+}
+
+function executableVerificationRequirement(input: RequirementInput, kind: VerificationKind, evidence: string): VerificationRequirement {
+  const command = nonEmpty([input.command, ['command', 'typecheck'].includes(kind) ? evidence : ''].find(Boolean));
+  if ([kind === 'suite', [!command, Boolean(suiteFrom(input))].every(Boolean)].some(Boolean)) return suiteVerificationRequirement(input, command, evidence);
+  return Object.freeze({ kind, command: command || undefined, evidenceContract: command || 'command output' });
+}
+
+function evidenceVerificationRequirement(input: RequirementInput, kind: VerificationKind, evidence: string): VerificationRequirement {
   if (kind === 'attestation') {
     const artifact = nonEmpty(input.artifact);
     return Object.freeze({ kind, artifact, evidenceContract: `attestation evidence for ${artifact}` });
   }
-  if (kind === 'review') return Object.freeze({ kind, evidenceContract: evidence || 'independent review findings' });
-  if (kind === 'manual') return Object.freeze({ kind, evidenceContract: evidence.replace(/^manual:\s*/i, '') || 'manual verification evidence' });
-  if (kind === 'suite' || (!command && suite)) {
-    if (!suite) return Object.freeze({ kind: 'suite', ...(command ? { command } : {}), evidenceContract: evidence || 'named suite output' });
-    return Object.freeze({ kind: 'suite', suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
-  }
-  if (['document', 'link', 'schema', 'custom'].includes(kind)) {
-    return Object.freeze({ kind, evidenceContract: evidence || `${kind} verification evidence` });
-  }
-  return Object.freeze({ kind: 'command', command: command || undefined, evidenceContract: command || 'command output' });
+  const defaults: Partial<Record<VerificationKind, string>> = { review: 'independent review findings', manual: 'manual verification evidence' };
+  return Object.freeze({ kind, evidenceContract: evidence || defaults[kind] || `${kind} verification evidence` });
+}
+
+export function verificationRequirement(input: RequirementInput): VerificationRequirement {
+  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
+  const evidence = nonEmpty(input.evidence);
+  const evidenceOnly = ['attestation', 'review', 'manual'].includes(kind);
+  const executable = [['command', 'suite', 'typecheck'].includes(kind), [!evidenceOnly, !nonEmpty(input.command), Boolean(suiteFrom(input))].every(Boolean)].some(Boolean);
+  if (executable) return executableVerificationRequirement(input, kind, evidence);
+  return evidenceVerificationRequirement(input, kind, evidence.replace(/^manual:\s*/i, kind === 'manual' ? '' : '$&'));
 }
 
 export function verificationWaiverDiagnostic(waiver: VerificationWaiver): Diagnostic {

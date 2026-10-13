@@ -7,7 +7,7 @@ const os = require('node:os') as typeof import('node:os');
 const path = require('node:path') as typeof import('node:path');
 const { createHash, randomUUID } = require('node:crypto') as typeof import('node:crypto');
 const { execFileSync } = require('./git-process.js') as typeof import('./git-process.js');
-const { runProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
+const { runOwnedProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
 const { canonicalPath } = require('./kernel/worktree.js') as { canonicalPath(value: string): string };
 const { crossedWorktreeRefusalMessage } = require('./refusal-guidance.js') as typeof import('./refusal-guidance.js');
 
@@ -65,7 +65,7 @@ function captureRequirement(command: string) {
 }
 
 async function runVerifyCapture(command: string, cwd = process.cwd(), timeoutMilliseconds?: number, environment?: NodeJS.ProcessEnv): Promise<VerifyCapture> {
-  const result = runProcessVerification(captureRequirement(command), {
+  const result = await runOwnedProcessVerification(captureRequirement(command), {
     cwd,
     ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }),
     ...(environment === undefined ? {} : { environment }),

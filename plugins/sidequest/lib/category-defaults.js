@@ -43,7 +43,7 @@ const DEFAULT_CATEGORIES = [
     id: "debugging",
     name: "Debugging",
     description: 'Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. Selecting and eliminating competing hypotheses requires high-capability reasoning. Use behavior-verification when the intended behavior is already known and only verification is needed. "Why is this slow" belongs here; "does approach X make it faster" is spike-investigation.',
-    route: { model: "opus", effort: "high" },
+    route: { model: "opus", effort: "medium" },
     fallback: null,
     contract: "Reproduce first; use a hypothesis loop and prove the fix.",
     artifactRoots: [],
@@ -84,7 +84,7 @@ const DEFAULT_CATEGORIES = [
     id: "coding.hard",
     name: "Hard coding",
     description: "A code change whose approach itself is genuinely unknown or contested and has hard-to-reverse consequences: competing designs, unclear root cause, or no obvious correct path. Blast radius, cross-consumer or cross-surface risk, and work that feels scary to get wrong do not make a ticket hard. If you can already state the fix approach, it is coding.normal no matter the stakes. Does not belong here: a high-risk migration with an established rollout is coding.normal. This tier is deliberately RARE and expensive; choose it only when the approach is unclear or contested and consequences are high. On the fence between coding.normal and coding.hard? It's coding.normal.",
-    route: { model: "opus", effort: "xhigh" },
+    route: { model: "opus", effort: "medium" },
     fallback: null,
     contract: "Plan against the existing system, keep scope explicit, and verify end to end.",
     artifactRoots: [],
@@ -116,8 +116,8 @@ const DEFAULT_CATEGORIES = [
     id: "review-audit",
     name: "Review or audit",
     description: "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. Adversarially checking interactions and tracing concrete impact requires high code-review capability. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review when the ticket calls for it.",
-    route: { model: "sonnet", effort: "high" },
-    fallback: { model: "sonnet", effort: "high" },
+    route: { model: "sonnet", effort: "medium" },
+    fallback: { model: "sonnet", effort: "medium" },
     contract: "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
     artifactRoots: [],
     readonly: true,
@@ -127,7 +127,7 @@ const DEFAULT_CATEGORIES = [
     id: "spike-investigation",
     name: "Spike or investigation",
     description: "Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. Comparing viable approaches under material uncertainty requires high technical reasoning. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system; use source-lookup or evidence-research for external-source questions.",
-    route: { model: "opus", effort: "high" },
+    route: { model: "opus", effort: "medium" },
     fallback: null,
     contract: "Timebox exploration; record what was tested, ruled out, and recommended. For design-direction work: state constraints, compare viable options, recommend one, and name tradeoffs.",
     artifactRoots: [],
@@ -359,7 +359,7 @@ const GATEWAY_ROUTE_BY_PROFILE_CATEGORY = {
     "codebase-exploration": { model: "codex-gpt-5-6-luna", effort: "high" },
     "implementation-explanation": { model: "codex-gpt-5-6-luna", effort: "high" },
     general: { model: "codex-gpt-5-6-luna", effort: "high" },
-    "review-audit": { model: "codex-gpt-5-6-terra", effort: "high" },
+    "review-audit": { model: "codex-gpt-5-6-terra", effort: "medium" },
     "coding.normal": { model: "codex-gpt-5-6-terra", effort: "high" },
     "coding.easy": { model: "codex-gpt-5-6-terra", effort: "medium" },
     "behavior-verification": { model: "codex-gpt-5-6-luna", effort: "high" },
@@ -368,10 +368,10 @@ const GATEWAY_ROUTE_BY_PROFILE_CATEGORY = {
 };
 const GATEWAY_FALLBACK_BY_PROFILE_CATEGORY = {
   coding: {
-    debugging: { model: "codex-gpt-5-6-terra", effort: "high" },
+    debugging: { model: "codex-gpt-5-6-terra", effort: "medium" },
     experiment: { model: "codex-gpt-6-1-sol", effort: "high" },
-    "coding.hard": { model: "codex-gpt-6-1-sol", effort: "xhigh" },
-    "spike-investigation": { model: "codex-gpt-6-1-sol", effort: "high" },
+    "coding.hard": { model: "codex-gpt-6-1-sol", effort: "medium" },
+    "spike-investigation": { model: "codex-gpt-6-1-sol", effort: "medium" },
     "visual-evaluation": { model: "codex-gpt-5-6-terra", effort: "medium" }
   }
 };

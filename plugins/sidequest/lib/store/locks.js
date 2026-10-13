@@ -1,6 +1,16 @@
 "use strict";
+const LOCK_HELD_ELSEWHERE = /* @__PURE__ */ Symbol("lock held elsewhere");
+function readLockHolder(fs, lockPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8").trim());
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
 function createLocks(dependencies) {
-  const { fs, path, ticketsDir, transaction } = dependencies;
+  const { fs, path, ticketsDir, transaction, refuseUnderGuardedWrite = () => {
+  } } = dependencies;
   function ticketLockPath(slug, id) {
     return path.join(ticketsDir(slug), "." + path.basename(String(id)) + ".lock");
   }
@@ -16,15 +26,10 @@ function createLocks(dependencies) {
     return `${process.pid}-${Date.now()}-${process.hrtime.bigint()}-${Math.random().toString(36).slice(2)}`;
   }
   function readLockOwner(lockPath) {
-    try {
-      const content = fs.readFileSync(lockPath, "utf8").trim();
-      const parsed = JSON.parse(content);
-      const pid = Number(parsed?.pid);
-      const token = typeof parsed?.token === "string" ? parsed.token : null;
-      return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
-    } catch (_) {
-      return null;
-    }
+    const parsed = readLockHolder(fs, lockPath);
+    const pid = Number(parsed?.pid);
+    const token = typeof parsed?.token === "string" ? parsed.token : null;
+    return Number.isInteger(pid) && pid > 0 ? { pid, token } : null;
   }
   function lockOwnerIsAlive(owner) {
     if (!owner || !Number.isInteger(owner.pid) || owner.pid < 1) return null;
@@ -54,38 +59,49 @@ function createLocks(dependencies) {
     return ownerTokenValue(ownerToken) != null && owner?.token === ownerTokenValue(ownerToken);
   }
   function acquireLock(lockPath, options = {}) {
+    refuseUnderGuardedWrite(`waiting on lock file ${path.basename(String(lockPath))}`);
     const STALE_LOCK_MS = 3e4;
     const RETRY_MS = 10;
     const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      try {
-        const fd = fs.openSync(lockPath, "wx");
-        try {
-          fs.writeSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
-        } catch (_) {
-          fs.closeSync(fd);
-          try {
-            fs.unlinkSync(lockPath);
-          } catch (_2) {
-          }
-          return false;
-        }
-        fs.closeSync(fd);
-        return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
-      } catch (error) {
-        if (!error || error.code !== "EEXIST") return false;
-        if (lockCanBeReclaimed(lockPath)) {
-          try {
-            fs.unlinkSync(lockPath);
-          } catch (_) {
-          }
-          continue;
-        }
-        busyWait(RETRY_MS);
-      }
+      const created = createLockFile(lockPath, ownerToken, options.holder);
+      if (created !== LOCK_HELD_ELSEWHERE) return created;
+      if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
     }
     return false;
+  }
+  function createLockFile(lockPath, ownerToken, holder) {
+    let fd;
+    try {
+      fd = fs.openSync(lockPath, "wx");
+    } catch (error) {
+      return error?.code === "EEXIST" ? LOCK_HELD_ELSEWHERE : false;
+    }
+    if (!writeLockOwner(lockPath, fd, ownerToken, holder)) return false;
+    return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
+  }
+  function writeLockOwner(lockPath, fd, ownerToken, holder) {
+    try {
+      fs.writeSync(fd, JSON.stringify({ ...holder, pid: process.pid, token: ownerToken }));
+    } catch (_) {
+      fs.closeSync(fd);
+      try {
+        fs.unlinkSync(lockPath);
+      } catch (_2) {
+      }
+      return false;
+    }
+    fs.closeSync(fd);
+    return true;
+  }
+  function removeReclaimableLock(lockPath) {
+    if (!lockCanBeReclaimed(lockPath)) return false;
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (_) {
+    }
+    return true;
   }
   function refreshLock(lockPath, ownerToken) {
     if (!lockOwnerMatches(lockPath, ownerToken)) return { ok: false, reason: "lock_owner_lost" };
@@ -111,15 +127,27 @@ function createLocks(dependencies) {
     }
     return { ok: false, reason: "lock_owner_lost" };
   }
-  function withTicketLock(slug, id, fn) {
-    const lock = ticketLockPath(slug, id);
-    const ownerToken = acquireLock(lock);
-    if (!ownerToken) return { ok: false, reason: "busy" };
+  function orderedTicketLockPaths(keys) {
+    return [...new Set(keys.map((key) => ticketLockPath(key.slug, key.id)))].sort();
+  }
+  function withTicketFileLocks(keys, fn) {
+    const held = [];
     try {
-      return transaction(fn);
+      for (const lockPath of orderedTicketLockPaths(keys)) {
+        const owner = acquireLock(lockPath);
+        if (!owner) return { ok: false, reason: "busy" };
+        held.push({ lockPath, owner });
+      }
+      return fn();
     } finally {
-      releaseLock(lock, ownerToken);
+      for (const { lockPath, owner } of held.reverse()) releaseLock(lockPath, owner);
     }
+  }
+  function withTicketLocks(keys, fn) {
+    return withTicketFileLocks(keys, () => transaction(fn));
+  }
+  function withTicketLock(slug, id, fn) {
+    return withTicketLocks([{ slug, id }], fn);
   }
   return {
     acquireLock,
@@ -128,7 +156,9 @@ function createLocks(dependencies) {
     releaseLock,
     testClaimLockDelayMs,
     ticketLockPath,
-    withTicketLock
+    withTicketFileLocks,
+    withTicketLock,
+    withTicketLocks
   };
 }
-module.exports = { createLocks };
+module.exports = { createLocks, readLockHolder };

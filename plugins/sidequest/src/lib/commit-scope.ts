@@ -29,6 +29,15 @@ function gitResult(cwd: string, args: readonly string[]): GitResult {
   }
 }
 
+export function trackedBuildOutputSource(repository: string, file: string, sources: unknown): string | null {
+  const output = normalizeScope(file);
+  const match = /^(plugins\/[^/]+)\/((?:lib|bin)\/.+|hooks\/[^/]+)\.js$/.exec(output);
+  if (!match) return null;
+  const source = `${match[1]}/src/${match[2]}.ts`;
+  if (!isInScope(source, sources)) return null;
+  return indexedPaths(repository).includes(output) ? source : null;
+}
+
 function patchIds(cwd: string, args: readonly string[]): GitResult {
   try {
     const patches = git(cwd, args);

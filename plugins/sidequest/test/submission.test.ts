@@ -6914,9 +6914,13 @@ test('SQ-3424: a deferred candidate whose delivery verification fails is not del
     assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.verificationResult.status, 'deferred');
     const delivery = integrateOnCurrentTestBranch(fixture.ticket.ref);
     assert.strictEqual(delivery.ok, false);
-    assert.match(String(delivery.reason), /^verification_failed_suite/);
+    assert.strictEqual(delivery.reason, 'environment_lane_reworked');
     assert.strictEqual(delivery.verify.status, 'failed_suite');
-    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.wave.delivery, undefined);
+    const returned = store.getTicket(slug, fixture.ticket.ref);
+    assert.strictEqual(returned.status, 'todo');
+    assert.strictEqual(returned.submission, null);
+    assert.strictEqual(returned.rejectedSubmissions[0].commit, fixture.commit);
+    assert.strictEqual(returned.rejectedSubmissions[0].integration.reason, 'verification_failed_suite_post_merge');
   } finally {
     fixture.cleanup();
     restore();

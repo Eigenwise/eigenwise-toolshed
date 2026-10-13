@@ -2,6 +2,7 @@
 
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
+const { readLockHolder } = require('./locks.js');
 const { isFullSuiteCommand, runFullSuiteVerification } = require('../verify-capture.js');
 const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
@@ -12,6 +13,7 @@ const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
 const worktrees = require('../worktrees.js');
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require('./composition-admission.js');
+const { stillSpawnsInsideItsWrite } = require('../db');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
 import type { CompositionTicket } from './composition-admission.js';
@@ -84,6 +86,7 @@ type WaveTicket = {
 
 type WaveDeliveryOptions = {
   integrationBranch?: string;
+  verifyLogPath?: string;
   target?: {
     branch?: string;
     upstream?: string;
@@ -100,6 +103,14 @@ type WaveDeliveryOptions = {
 type ExactWaveAdmission =
   | { ok: true; tickets: WaveTicket[]; wave: WaveState; participantRefs: string[] }
   | { ok: false; reason: string; message?: string; tickets?: WaveTicket[] };
+
+type AssembledWave = Extract<ExactWaveAdmission, { ok: true }>;
+
+type PinnedWaveCandidate = { ticket: WaveTicket; submission: WaveSubmission; gitRef: string; pinnedCommit: string; changedPaths: string[] };
+
+type PreparedGitWave = { mode: string; candidates: PinnedWaveCandidate[]; dirt: { blocking: string[]; ignoredDirtyPaths: string[] } };
+
+type SourceRevision = NonNullable<ReturnType<typeof sourceRevisionMetadata>>;
 
 function sourceRevisionMetadata(revision?: any) {
   if (!revision || typeof revision !== 'object') return null;
@@ -819,7 +830,7 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
     cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
     timeoutMilliseconds,
-    logPath: integrationVerifyLogPath(slug, ticket),
+    logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
     environment,
   });
@@ -1238,13 +1249,24 @@ function deliveryLockPath(repo: string) {
   return path.resolve(repo, integrationGit(repo, ['rev-parse', '--git-common-dir']), 'sidequest-delivery.lock');
 }
 
-function deliveryInProgress(ticket: any) {
+// The delivery lock names what is running (SQ-3425): a second integrate learns who holds the checkout
+// and where its log is, instead of a bare "another submission".
+function deliveryLockHolder(slug: any, ticket: any, refs: string) {
   return {
-    ok: false,
-    reason: 'delivery_in_progress',
-    ticket,
-    message: `Integration is already delivering another submission into this checkout. Retry ${ticket.ref} after that delivery finishes.`,
+    ticket: refs,
+    pinnedCommit: String(ticket.submission?.commit || ''),
+    command: pinnedVerificationRequirement(ticket).command || null,
+    logPath: integrationVerifyLogPath(slug, ticket),
+    startedAt: new Date().toISOString(),
   };
+}
+
+function deliveryInProgress(ticket: any, lock: string) {
+  const holder = readLockHolder(fs, lock);
+  const named = holder?.ticket && holder.startedAt
+    ? `Integration is already delivering ${holder.ticket} (${holder.pinnedCommit}) into this checkout since ${holder.startedAt}; log ${holder.logPath}. Retry ${ticket.ref} after it finishes.`
+    : `Integration is already delivering another submission into this checkout. Retry ${ticket.ref} after that delivery finishes.`;
+  return { ok: false, reason: 'delivery_in_progress', ticket, holder, message: named };
 }
 
 // A sibling that submitted while the post-merge suite ran recorded the delivery as its expected upstream. The
@@ -1290,6 +1312,72 @@ function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo:
       message: `${verificationMessage} Rollback failed: ${integrationGitError(error)}`,
     });
   }
+}
+
+// SQ-3426: a candidate on the environment lane never ran its verifier before submit, so the first lane
+// failure is the first anyone saw of it. The rolled-back run goes back to the ticket once, through the
+// ordinary rework record (source 'environment-lane'; its copied integration carries the pinned commit,
+// the rolled-back head and the log). A second lane failure parks for a decision, and a reviewed
+// candidate always parks: nothing here outranks a bound review.
+const LANE_BOUNCED_FAILURES = /^(?:verification_[a-z_]+_post_merge|merge_failed)$/;
+
+function laneFailureTicket(slug: any, failure: any) {
+  if (!LANE_BOUNCED_FAILURES.test(String(failure.reason))) return null;
+  const ticket = failure.ticket;
+  const onLane = pinnedVerificationRequirement(ticket).environment === 'shared';
+  return onLane && !candidateReviewRelation(slug, ticket) ? ticket : null;
+}
+
+function laneRejection(ticket: any) {
+  return rejectionHistory(ticket).find((entry: any) => entry.source === 'environment-lane') || null;
+}
+
+function laneLogPath(integration: any) {
+  return integration?.verify?.logPath || 'no log (the merge conflicted before the verifier ran)';
+}
+
+function laneFailureEvidence(failure: any) {
+  if (failure.verify) return { comment: verificationFailureComment(failure.verify), reason: failure.message };
+  const integration = failure.ticket.submission.integration;
+  const conflict = `Merge --no-ff of ${integration.pinnedCommit} onto ${integration.targetBranch} at ${failure.before} conflicted in ${failure.conflictedPaths.join(', ') || 'unreported paths'}.`;
+  return { comment: conflict, reason: `${conflict} Rebase the candidate onto the current ${integration.targetBranch}, resolve the conflict in the candidate, and resubmit.` };
+}
+
+function parkSecondLaneFailure(slug: any, failure: any, prior: any) {
+  const ticket = failure.ticket;
+  const message = `${ticket.ref} failed its environment lane run twice, so it stays parked for a decision instead of a second automatic rework. First failure, candidate ${prior.commit}: ${laneLogPath(prior.integration)}. Second failure, candidate ${ticket.submission.commit}: ${laneLogPath(ticket.submission.integration)}.`;
+  updateSubmissionIntegration(slug, ticket.id, { reason: 'environment_lane_second_failure', message });
+  return { ...failure, ticket: getTicket(slug, ticket.id), reason: 'environment_lane_second_failure', message };
+}
+
+function reworkLaneFailure(slug: any, failure: any) {
+  const ticket = failure.ticket;
+  const evidence = laneFailureEvidence(failure);
+  addComment(slug, ticket.id, { by: 'orchestrator', source: 'integration', body: evidence.comment });
+  // The same listed write the store's rework export runs as: it still preserves the quarantine ref inside
+  // its ticket transaction (SQ-3499 follow-up), and this call is that write with the lane's evidence.
+  const rework = stillSpawnsInsideItsWrite('reworkSubmission', () => reworkSubmission(slug, ticket.id, {
+    by: ticket.submission.by,
+    review: evidence.comment.slice(0, REJECTION_REVIEW_MAX),
+    reason: evidence.reason.slice(0, REJECTION_REASON_MAX),
+    source: 'environment-lane',
+  }));
+  if (!rework.ok) return { ...failure, rework, message: `${failure.message} Rework refused: ${rework.message || rework.reason}.` };
+  return {
+    ...failure,
+    ticket: rework.ticket,
+    reason: 'environment_lane_reworked',
+    rework: rework.rejected,
+    message: `${evidence.reason} ${ticket.ref} returned to todo for rework with this evidence in its briefing; dispatch it again. The candidate is preserved at ${rework.rejected.quarantineRef}.`,
+  };
+}
+
+function bounceFailedLaneRun(slug: any, failure: any) {
+  const ticket = laneFailureTicket(slug, failure);
+  if (!ticket) return failure;
+  const prior = laneRejection(ticket);
+  if (prior) return parkSecondLaneFailure(slug, failure, prior);
+  return reworkLaneFailure(slug, failure);
 }
 
 function submissionUsesGit(ticket?: any) {
@@ -2163,11 +2251,11 @@ function integrateGitSubmission(slug: string, idOrRef: string, opts: { integrati
 }
 
 function integrateUnderDeliveryLease(slug: string, idOrRef: string, opts: { integrationBranch?: string }, ticket: CompositionTicket, lock: string) {
-  const lockLease = acquireLock(lock, { wait: false });
-  if (!lockLease) return deliveryInProgress(ticket);
+  const holder = deliveryLockHolder(slug, ticket, String(ticket.ref));
+  const lockLease = acquireLock(lock, { wait: false, holder });
+  if (!lockLease) return deliveryInProgress(ticket, lock);
   try {
-    lockLease.refresh();
-    return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, opts));
+    return deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath })));
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
@@ -2240,167 +2328,227 @@ function deliverSubmissionWave(slug?: string, refs?: string | readonly string[],
   return compositionWaveRefusal(slug, refs) ?? integrateSubmissionWave(slug, refs, opts);
 }
 
-function integrateSubmissionWave(slug?: string, refs?: string | readonly string[], opts?: WaveDeliveryOptions) {
-  opts = opts || {};
+function integrateSubmissionWave(slug?: string, refs?: string | readonly string[], opts: WaveDeliveryOptions = {}) {
   const assembled = exactAssembledWave(slug, refs);
   if (!assembled.ok) return assembled;
   const firstTicket = assembled.tickets[0];
   if (!firstTicket) return { ok: false, reason: 'wave_participants_required', message: 'Delivery requires one or more assembled participant refs.' };
   if (assembled.tickets.length === 1) return integrateSubmission(slug, firstTicket.ref, opts);
-  if (assembled.tickets.some((ticket) => !submissionUsesGit(ticket))) {
-    if (assembled.tickets.some(submissionUsesGit)) {
-      return { ok: false, reason: 'wave_project_kind_mismatch', tickets: assembled.tickets, message: 'A wave cannot deliver Git and non-Git candidates through one adapter.' };
-    }
-    const revision = sourceRevisionMetadata(opts.deliveryRevision);
-    if (!revision) {
-      return { ok: false, reason: 'wave_delivery_revision_required', tickets: assembled.tickets, message: `Wave ${assembled.wave.id} delivery requires the immutable resulting source revision.` };
-    }
-    const verification = opts.deliveryVerification;
-    if (!verificationAccepted(verification)) {
-      return { ok: false, reason: 'wave_delivery_verification_required', tickets: assembled.tickets, message: `Wave ${assembled.wave.id} delivery requires accepted immutable verification evidence for ${revision.source}:${revision.value}.` };
-    }
-    const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, revision, verification);
-    if (!delivered.ok) return delivered;
-    const deliveredAt = new Date().toISOString();
-    const integrations = assembled.tickets.map((ticket) => updateSubmissionIntegration(slug, ticket.id, {
-      mode: 'source-revision',
-      outcome: 'verified',
-      sourceRevision: revision,
-      deliveredAt,
-      verifiedAt: deliveredAt,
-      deliveredFiles: ticket.submission.changedPaths || [],
-      verify: verification,
-    }));
-    const failedIntegration = integrations.find((integration) => !integration.ok);
-    if (failedIntegration) return failedIntegration;
-    return {
-      ok: true,
-      tickets: integrations.map((integration) => integration.ticket),
-      wave: delivered.delivery,
-      integration: { mode: 'source-revision', sourceRevision: revision, verify: verification, participants: assembled.participantRefs },
-    };
+  return deliverAssembledWave(slug, assembled, opts);
+}
+
+function deliverAssembledWave(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions) {
+  const gitParticipants = assembled.tickets.filter((ticket) => submissionUsesGit(ticket)).length;
+  if (gitParticipants === assembled.tickets.length) return deliverGitWave(slug, assembled, opts);
+  if (gitParticipants) {
+    return { ok: false, reason: 'wave_project_kind_mismatch', tickets: assembled.tickets, message: 'A wave cannot deliver Git and non-Git candidates through one adapter.' };
   }
-  const project = readMeta(slug);
-  const repo = project?.path;
-  let target: any;
+  return deliverSourceRevisionWave(slug, assembled, opts);
+}
+
+function deliverSourceRevisionWave(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions) {
+  const revision = sourceRevisionMetadata(opts.deliveryRevision);
+  if (!revision) {
+    return { ok: false, reason: 'wave_delivery_revision_required', tickets: assembled.tickets, message: `Wave ${assembled.wave.id} delivery requires the immutable resulting source revision.` };
+  }
+  const verification = opts.deliveryVerification;
+  if (!verificationAccepted(verification)) {
+    return { ok: false, reason: 'wave_delivery_verification_required', tickets: assembled.tickets, message: `Wave ${assembled.wave.id} delivery requires accepted immutable verification evidence for ${revision.source}:${revision.value}.` };
+  }
+  const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, revision, verification);
+  if (!delivered.ok) return delivered;
+  return recordSourceRevisionIntegrations(slug, assembled, delivered.delivery, revision, verification);
+}
+
+function recordSourceRevisionIntegrations(slug: string | undefined, assembled: AssembledWave, delivery: unknown, revision: SourceRevision, verification: VerificationResult | undefined) {
+  const deliveredAt = new Date().toISOString();
+  const integrations = assembled.tickets.map((ticket) => updateSubmissionIntegration(slug, ticket.id, {
+    mode: 'source-revision',
+    outcome: 'verified',
+    sourceRevision: revision,
+    deliveredAt,
+    verifiedAt: deliveredAt,
+    deliveredFiles: ticket.submission.changedPaths || [],
+    verify: verification,
+  }));
+  const failedIntegration = integrations.find((integration) => !integration.ok);
+  if (failedIntegration) return failedIntegration;
+  return {
+    ok: true,
+    tickets: integrations.map((integration) => integration.ticket),
+    wave: delivery,
+    integration: { mode: 'source-revision', sourceRevision: revision, verify: verification, participants: assembled.participantRefs },
+  };
+}
+
+function deliverGitWave(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions) {
+  const resolved = waveIntegrationTarget(slug, assembled.tickets, opts.integrationBranch);
+  if (!resolved.ok) return resolved;
+  const repo = readMeta(slug)?.path;
+  if (!repo || !resolved.target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
+  return deliverGitWaveUnderLease(slug, assembled, opts, repo, resolved.target);
+}
+
+function waveIntegrationTarget(slug: string | undefined, tickets: WaveTicket[], integrationBranch: string | undefined) {
   try {
-    const resolvedTargets = ticketIntegrationTargets(slug, assembled.tickets);
-    if (!resolvedTargets.ok) return Object.assign({ tickets: assembled.tickets }, resolvedTargets);
-    target = deliveryIntegrationTarget(slug, resolvedTargets.target, opts?.integrationBranch);
+    const resolvedTargets = ticketIntegrationTargets(slug, tickets);
+    if (!resolvedTargets.ok) return Object.assign({ tickets }, resolvedTargets);
+    return { ok: true as const, target: deliveryIntegrationTarget(slug, resolvedTargets.target, integrationBranch) };
   } catch (error: any) {
-    return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets, message: integrationGitError(error) };
+    return { ok: false as const, reason: 'integration_target_unavailable', tickets, message: integrationGitError(error) };
   }
-  if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
+}
+
+function deliverGitWaveUnderLease(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions, repo: string, target: any) {
   let lock: string;
   try {
     lock = deliveryLockPath(repo);
   } catch (error: any) {
     return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets, message: integrationGitError(error) };
   }
-  const lockLease = acquireLock(lock, { wait: false });
-  if (!lockLease) return deliveryInProgress(assembled.tickets[0]);
+  const holder = deliveryLockHolder(slug, assembled.tickets[0], assembled.participantRefs.join(','));
+  const lockLease = acquireLock(lock, { wait: false, holder });
+  if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
   try {
-    lockLease.refresh();
-    const mode = normalizeDeliveryMode(opts.mode);
-    const currentBranch = integrationGit(repo, ['branch', '--show-current']);
-    if (currentBranch !== target.branch) {
-      return { ok: false, reason: 'branch_not_checked_out', tickets: assembled.tickets, message: branchNotCheckedOutMessage(target.branch, currentBranch, 'wave delivery') };
-    }
-    const candidates: any[] = [];
-    for (const ticket of assembled.tickets) {
-      const submission = ticket.submission;
-      const gitRef = String(submission.gitRef || submissionGitRef(ticket));
-      const pinnedCommit = integrationGit(repo, ['rev-parse', '--verify', `${gitRef}^{commit}`]).toLowerCase();
-      if (pinnedCommit !== String(submission.commit).toLowerCase()) {
-        return { ok: false, reason: 'pinned_ref_mismatch', ticket, tickets: assembled.tickets, message: `${gitRef} points to ${pinnedCommit}, not submitted ${submission.commit}.` };
-      }
-      candidates.push({ ticket, submission, gitRef, pinnedCommit, changedPaths: changedIntegrationPaths(repo, submission) });
-    }
-    const dirt = integrationTargetDirt(repo, candidates.map((candidate) => candidate.submission));
-    if (dirt.blocking.length) {
-      return {
-        ok: false,
-        reason: 'integration_target_dirty',
-        tickets: assembled.tickets,
-        checkoutState: dirt.blocking,
-        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
-        message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths),
-      };
-    }
-    const before = integrationGit(repo, ['rev-parse', 'HEAD']);
-    try {
-      for (const candidate of candidates) {
-        if (candidate.submission.noOp) continue;
-        if (mode === 'merge') {
-          integrationGit(repo, ['merge', '--no-ff', '--no-edit', candidate.pinnedCommit]);
-          continue;
-        }
-        const commits = Array.isArray(candidate.submission.commits) && candidate.submission.commits.length ? candidate.submission.commits : [candidate.submission.commit];
-        for (const commit of commits) integrationGit(repo, ['cherry-pick', ...(mode === 'apply' ? ['--no-commit'] : []), commit]);
-      }
-    } catch (error: any) {
-      const conflictedPaths = unmergedIntegrationPaths(repo);
-      const message = integrationConflictMessage(error, conflictedPaths);
-      try {
-        restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
-      } catch (rollbackError: any) {
-        return { ok: false, reason: 'wave_delivery_rollback_failed', tickets: assembled.tickets, before, conflictedPaths, message: `${message} Rollback failed: ${integrationGitError(rollbackError)}` };
-      }
-      return { ok: false, reason: 'wave_delivery_failed', tickets: assembled.tickets, before, conflictedPaths, message };
-    }
-    const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
-    const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
-    if (!verificationAccepted(verification)) {
-      try {
-        restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
-      } catch (rollbackError: any) {
-        return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
-      }
-      restoreRolledBackExpectedUpstreams(slug, repo, before, resultingHead);
-      return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} delivery verification returned ${verification.status}.` };
-    }
-    const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, { source: 'git', value: resultingHead, observedAt: new Date().toISOString() }, verification);
-    if (!delivered.ok) return delivered;
-    const deliveredAt = new Date().toISOString();
-    const integrations = candidates.map((candidate) => updateSubmissionIntegration(slug, candidate.ticket.id, {
-      mode,
-      targetBranch: target.branch,
-      targetUpstream: target.upstream,
-      pinnedRef: candidate.gitRef,
-      pinnedCommit: candidate.pinnedCommit,
-      changedPaths: candidate.changedPaths,
-      outcome: 'verified',
-      deliveredAt,
-      verifiedAt: deliveredAt,
-      resultingHead,
-      deliveredFiles: candidate.changedPaths,
-      dirtyFiles: mode === 'apply' ? candidate.changedPaths : [],
-      ignoredDirtyPaths: dirt.ignoredDirtyPaths,
-      verify: verification,
-    }));
-    const failedIntegration = integrations.find((integration) => !integration.ok);
-    if (failedIntegration) return failedIntegration;
-    return {
-      ok: true,
-      tickets: integrations.map((integration) => integration.ticket),
-      wave: delivered.delivery,
-      integration: {
-        mode,
-        targetBranch: target.branch,
-        targetUpstream: target.upstream,
-        resultingHead,
-        pinnedCommits: candidates.map((candidate) => candidate.pinnedCommit),
-        participants: assembled.participantRefs,
-        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
-        verify: verification,
-      },
-    };
+    return deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, repo, target);
   } catch (error: any) {
     return { ok: false, reason: 'wave_delivery_error', tickets: assembled.tickets, message: integrationGitError(error) };
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
   }
+}
+
+function deliverLockedGitWave(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions, repo: string, target: any) {
+  const prepared = preparedGitWave(repo, target, assembled.tickets, normalizeDeliveryMode(opts.mode));
+  if (!prepared.ok) return prepared;
+  const before = integrationGit(repo, ['rev-parse', 'HEAD']);
+  const mergeFailure = mergeWaveCandidates(repo, prepared, before, assembled.tickets);
+  if (mergeFailure) return mergeFailure;
+  const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
+  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
+  if (!verificationAccepted(verification)) return rollBackUnverifiedWave(slug, assembled, repo, { before, resultingHead }, prepared.dirt, verification);
+  return recordGitWaveDelivery(slug, assembled, target, prepared, resultingHead, verification);
+}
+
+function preparedGitWave(repo: string, target: any, tickets: WaveTicket[], mode: string) {
+  const currentBranch = integrationGit(repo, ['branch', '--show-current']);
+  if (currentBranch !== target.branch) {
+    return { ok: false as const, reason: 'branch_not_checked_out', tickets, message: branchNotCheckedOutMessage(target.branch, currentBranch, 'wave delivery') };
+  }
+  const pinned = pinnedWaveCandidates(repo, tickets);
+  return pinned.ok ? cleanWaveCheckout(repo, tickets, mode, pinned.candidates) : pinned;
+}
+
+function pinnedWaveCandidates(repo: string, tickets: WaveTicket[]) {
+  const candidates: PinnedWaveCandidate[] = [];
+  for (const ticket of tickets) {
+    const submission = ticket.submission;
+    const gitRef = String(submission.gitRef || submissionGitRef(ticket));
+    const pinnedCommit = integrationGit(repo, ['rev-parse', '--verify', `${gitRef}^{commit}`]).toLowerCase();
+    if (pinnedCommit !== String(submission.commit).toLowerCase()) {
+      return { ok: false as const, reason: 'pinned_ref_mismatch', ticket, tickets, message: `${gitRef} points to ${pinnedCommit}, not submitted ${submission.commit}.` };
+    }
+    candidates.push({ ticket, submission, gitRef, pinnedCommit, changedPaths: changedIntegrationPaths(repo, submission) });
+  }
+  return { ok: true as const, candidates };
+}
+
+function cleanWaveCheckout(repo: string, tickets: WaveTicket[], mode: string, candidates: PinnedWaveCandidate[]) {
+  const dirt = integrationTargetDirt(repo, candidates.map((candidate) => candidate.submission));
+  if (dirt.blocking.length) {
+    return {
+      ok: false as const,
+      reason: 'integration_target_dirty',
+      tickets,
+      checkoutState: dirt.blocking,
+      ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+      message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths),
+    };
+  }
+  return { ok: true as const, mode, candidates, dirt };
+}
+
+function mergeWaveCandidates(repo: string, prepared: PreparedGitWave, before: string, tickets: WaveTicket[]) {
+  try {
+    for (const candidate of prepared.candidates) applyWaveCandidate(repo, candidate, prepared.mode);
+    return null;
+  } catch (error: any) {
+    return rollBackFailedWaveMerge(repo, before, prepared.dirt, tickets, error);
+  }
+}
+
+function applyWaveCandidate(repo: string, candidate: PinnedWaveCandidate, mode: string) {
+  if (candidate.submission.noOp) return;
+  if (mode === 'merge') integrationGit(repo, ['merge', '--no-ff', '--no-edit', candidate.pinnedCommit]);
+  else replayWaveCandidate(repo, candidate.submission, mode);
+}
+
+function replayWaveCandidate(repo: string, submission: WaveSubmission, mode: string) {
+  const cherryPick = mode === 'apply' ? ['cherry-pick', '--no-commit'] : ['cherry-pick'];
+  for (const commit of submittedCommits(submission)) integrationGit(repo, [...cherryPick, commit]);
+}
+
+function rollBackFailedWaveMerge(repo: string, before: string, dirt: PreparedGitWave['dirt'], tickets: WaveTicket[], error: unknown) {
+  const conflictedPaths = unmergedIntegrationPaths(repo);
+  const message = integrationConflictMessage(error, conflictedPaths);
+  try {
+    restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
+  } catch (rollbackError: any) {
+    return { ok: false, reason: 'wave_delivery_rollback_failed', tickets, before, conflictedPaths, message: `${message} Rollback failed: ${integrationGitError(rollbackError)}` };
+  }
+  return { ok: false, reason: 'wave_delivery_failed', tickets, before, conflictedPaths, message };
+}
+
+function rollBackUnverifiedWave(slug: string | undefined, assembled: AssembledWave, repo: string, heads: { before: string; resultingHead: string }, dirt: PreparedGitWave['dirt'], verification: VerificationResult) {
+  const { before, resultingHead } = heads;
+  try {
+    restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
+  } catch (rollbackError: any) {
+    return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
+  }
+  restoreRolledBackExpectedUpstreams(slug, repo, before, resultingHead);
+  return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} delivery verification returned ${verification.status}.` };
+}
+
+function recordGitWaveDelivery(slug: string | undefined, assembled: AssembledWave, target: any, prepared: PreparedGitWave, resultingHead: string, verification: VerificationResult) {
+  const { mode, candidates, dirt } = prepared;
+  const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, { source: 'git', value: resultingHead, observedAt: new Date().toISOString() }, verification);
+  if (!delivered.ok) return delivered;
+  const deliveredAt = new Date().toISOString();
+  const integrations = candidates.map((candidate) => updateSubmissionIntegration(slug, candidate.ticket.id, {
+    mode,
+    targetBranch: target.branch,
+    targetUpstream: target.upstream,
+    pinnedRef: candidate.gitRef,
+    pinnedCommit: candidate.pinnedCommit,
+    changedPaths: candidate.changedPaths,
+    outcome: 'verified',
+    deliveredAt,
+    verifiedAt: deliveredAt,
+    resultingHead,
+    deliveredFiles: candidate.changedPaths,
+    dirtyFiles: mode === 'apply' ? candidate.changedPaths : [],
+    ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+    verify: verification,
+  }));
+  const failedIntegration = integrations.find((integration) => !integration.ok);
+  if (failedIntegration) return failedIntegration;
+  return {
+    ok: true,
+    tickets: integrations.map((integration) => integration.ticket),
+    wave: delivered.delivery,
+    integration: {
+      mode,
+      targetBranch: target.branch,
+      targetUpstream: target.upstream,
+      resultingHead,
+      pinnedCommits: candidates.map((candidate) => candidate.pinnedCommit),
+      participants: assembled.participantRefs,
+      ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+      verify: verification,
+    },
+  };
 }
 
 function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {

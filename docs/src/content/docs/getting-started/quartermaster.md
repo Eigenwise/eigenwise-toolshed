@@ -74,6 +74,11 @@ its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` i
 on one checkout do not read each other's coverage. A coverage command that exits 0 without writing
 fresh coverage exits 2 instead of scoring stale results.
 
+The gate is something you run, locally or in CI. Quartermaster never installs a hook that blocks a
+turn until a receipt exists, and if resupply finds one in your settings it recommends removing it and
+names the file. The gate scores what the session changed since the merge base, so files that came in
+through a merge, rebase, or pull are never demanded.
+
 It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
@@ -171,7 +176,7 @@ It grants no automatic idle work, permission changes, or paid/publishing/deletio
 
 ## How the loop closes
 
-A SessionEnd hook tallies each session locally in one streamed pass. The due check also counts current-project transcript file metadata, without opening content, so active or uncleanly ended sessions refill the window. Once enough unreviewed session activity or friction accumulates, the SessionStart nudge records that an offer is due and a Stop hook holds one real pause open for Claude to offer a focused optimization round. It blocks once per session, ignores its own continuation, and uses a separate 24-hour cross-session offer cooldown. After an accepted resupply, the same 24-hour cooldown can reopen on twice the usual evidence after a four-hour floor. Declining preserves the evidence window, while each consecutive decline doubles the offer backoff until an accepted resupply resets it. Applied recommendations record their targets, and later checks compare the signal before and after. Recommendations still need separate approval unless standing permission covers their exact class.
+A SessionEnd hook tallies each session locally in one streamed pass. The due check also counts current-project transcript file metadata, without opening content, so active or uncleanly ended sessions refill the window. Once enough unreviewed session activity or friction accumulates, the SessionStart nudge records that an offer is due and a Stop hook shows the user a non-blocking offer of a focused optimization round after the reply. It never forces an extra turn, offers once per session, ignores Stop-hook continuations, and uses a separate 24-hour cross-session offer cooldown. After an accepted resupply, the same 24-hour cooldown can reopen on twice the usual evidence after a four-hour floor. Declining preserves the evidence window, while each consecutive decline doubles the offer backoff until an accepted resupply resets it. Applied recommendations record their targets, and later checks compare the signal before and after. Recommendations still need separate approval unless standing permission covers their exact class.
 
 ## What it stores
 

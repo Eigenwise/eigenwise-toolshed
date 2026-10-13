@@ -1,6 +1,6 @@
 'use strict';
 
-function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
+function createProjects({ assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
   // A directory can be spelled several ways on Windows — an 8.3 alias, a junction —
   // and each spelling hashes to its own slug. Callers hold whichever spelling they
   // were handed, so lookups compare canonically rather than by the stored spelling.
@@ -158,18 +158,10 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     return cloneCached(meta);
   }
 
-  function metaLockPath(slug?: any) {
-    return path.join(projectDir(slug), '.meta.lock');
-  }
-
-  function withMetaLock(slug?: any, fn?: any) {
-    const lock = metaLockPath(slug);
-    const locked = acquireLock(lock);
-    try {
-      return transaction(fn);
-    } finally {
-      if (locked) releaseLock(lock, locked);
-    }
+  // BEGIN IMMEDIATE already serializes every project-row read-modify-write. The .meta.lock file this used to take
+  // was waited on inside callers' open transactions, holding every board's writers (SQ-3499).
+  function withMetaLock(_slug?: any, fn?: any) {
+    return transaction(fn);
   }
 
   function nextSeq(slug?: any) {
@@ -421,7 +413,7 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
 
-  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, takeSourceRevisionAdapterSwitch, unarchiveProject, withMetaLock };
+  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, takeSourceRevisionAdapterSwitch, unarchiveProject, withMetaLock };
 }
 
 module.exports = { createProjects };

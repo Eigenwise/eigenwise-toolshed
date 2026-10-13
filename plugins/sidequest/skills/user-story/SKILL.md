@@ -1,15 +1,9 @@
 ---
 name: user-story
 description: >-
-  Drive a feature from a rough request to shipped, integrated work through the Sidequest board, at a
-  depth you choose to match the work: recon, competing architecture proposals judged and merged into
-  one contract, a story holding the complete backlog, one or many parallel executor waves, and a
-  review pass sized to the risk. Use this by default for anything beyond a small task, including
-  requests to build, add, implement, redesign, or extend a feature, a subsystem, or any multi-part
-  change, even when they never mention Sidequest, tickets, or a board. Use it in place of a generic
-  feature-development flow: those flows have the expensive orchestrator explore, design, and implement
-  inline, which is the exact loop this board replaces. Skip it for a one-line fix to files the user
-  named, and for operational asks like running the app or answering from context.
+  Plan and dispatch work with 3+ independently checkable pieces and a stated reason for a story or
+  wave. Bounded fixes default to one owner; small fixes in a few known files may run inline without
+  tickets. Read-only investigations may use native Explore or general-purpose agents without tickets.
 ---
 
 # user-story
@@ -42,6 +36,8 @@ Sizing is a call you make and state in a line, not a question you ask the user. 
   them, is the single strongest reason to run a design panel.
 - **Blast radius**: does existing behavior change for people already using this?
 - **Stakes**: data loss, auth, money, the release path itself.
+
+A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave needs 3+ independently checkable pieces and a stated reason. A review panel needs a named risk for each lens.
 
 Three sizes, and what each dial does at each:
 
@@ -86,7 +82,7 @@ deterministic fixes keep one owner and a focused check; no mandatory planning pa
   that cannot use the pinned seam, a required compatibility break, or an oracle that cannot observe the
   claimed outcome.
 
-Exact small work keeps its lightweight path: state the outcome and oracle and dispatch one ticket. A
+Exact small work keeps one owner: state the outcome and oracle, then work inline when bounded to a few known files. A
 pinned contract does not earn proposal theater. Write one authored contract for settled work; use two
 or three bounded proposals only when the approach is genuinely contested.
 
@@ -115,8 +111,8 @@ Drop out of this flow when it does not fit, and say so plainly:
 
 - Operational asks (run the build, start the dev server, open the dashboard, answer from what is
   already on screen): just do them.
-- A trivial edit to one or two files the user named, with no investigation: edit inline.
-- A single bug with a known cause: that is one ticket, not a user-story flow.
+- A small bounded fix in a few known files: edit inline and run a focused check.
+- A single bug with a known cause: keep one owner, inline when it fits the bounded path.
 
 ## 2. Unknowns first, then recon, bounded
 
@@ -215,20 +211,11 @@ Present the chosen approach and its main trade-off in a few lines. Ask for appro
 choice is expensive to reverse: a schema or migration, a public API, a user-visible default, a new
 dependency. Otherwise state what you picked and proceed.
 
-Cannot pin a multi-item contract at all? File concurrent read-only investigation tickets, **one
-investigation ticket per independent item**, then pin a separate fix wave from their compressed findings.
-A shared runtime serializes writes and live reproduction, never read-only investigation; one combined
-ticket is only for exactly one item or a provably single defect. Claiming a one-item contract is
-unpinnable needs either a completed planning ticket that names the interface that resisted, or no
-written contract surface in the request. "Feels coupled" is a reason to file planning first.
+Read-only native agents can resolve unclear call flows without tickets. Keep one owner once the bounded fix is clear. Use investigation tickets when routed execution or durable board tracking is useful.
 
 ## 5. Story plus the whole backlog
 
-One ticket and one executor covers small coherent work, exactly one item, or items provably one defect.
-This never means the orchestrator implements it.
-
-Everything larger gets a story, the contract pinned on it, and **every ticket for every planned wave
-filed under it before the first dispatch**: category from the live taxonomy, file scope, anchors,
+One owner covers a bounded fix. Inline work is allowed for small fixes in a few known files. A story or wave requires 3+ independently checkable pieces and a stated reason. For that admitted wave, pin the contract and every planned ticket under the story before the first dispatch: category from the live taxonomy, file scope, anchors,
 exact scoped verify, and `depends-on` links. Never hand-pick a model or effort.
 
 Filing the whole thing up front is what makes the plan steerable. The user sees the entire feature on

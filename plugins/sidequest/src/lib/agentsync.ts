@@ -1,4 +1,6 @@
 'use strict';
+
+import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
 /**
  * sidequest - runtime exec agent sync (SQ-158)
  *
@@ -499,7 +501,7 @@ function ticketCloseout(ticket?: any) {
       ? 'Run the pinned verify-capture wrapper so it records the final working-tree candidate. done.verify cannot replace that capture.'
       : `Pass explicit --verify evidence for the pinned ${requirement.kind || 'custom'} requirement; blank or invalid evidence refuses and retains the claim.`;
     const doneVerify = requirement.command ? '' : ' --verify "<typed evidence>"';
-    return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Sidequest excludes a sibling only when its shared-tree dispatch records the same nonempty preparing session, its live claim overlaps yours, and its scope is disjoint. Before classifying dirty paths, it validates every eligible completed sibling's recorded candidate against its recorded paths and current content. A mismatch refuses closeout. Preserve the shared-tree work and hand it back to the existing parent for verification or grooming; never revert it, expand scope to absorb it, or commit it. Do not commit or submit. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
+    return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Closeout attributes only your declared paths and your own release fragment. Outside-scope dirty paths are recorded on completion and returned as ignoredDirtyPaths, never a scope refusal. Eligible completed sibling candidate drift is recorded and returned as a warning naming the sibling, without refusing your closeout. Preserve other work and report drift to the existing parent for verification or grooming; never revert, absorb, or commit it. Your own committed paths, empty deliverable, or failed candidate verification still refuse. Do not commit or submit. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
   }
   if (ticket?.dispatch?.readonly === true) {
     return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
@@ -886,6 +888,57 @@ function configuredQualityGateBody(projectPath?: string, slug?: string) {
   return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}`;
 }
 
+function legacyVerificationText(value?: string | null): string {
+  return String(value || '').trim();
+}
+
+function legacyExecutorVerificationRequirement(kind?: VerificationKind, command?: string, artifact?: string): VerificationRequirement {
+  const recordedVerifier = legacyVerificationText(command);
+  const hasLegacyRequirement = Boolean(recordedVerifier || legacyVerificationText(artifact));
+  return verificationRequirement({
+    kind: hasLegacyRequirement ? kind : 'custom',
+    evidence: recordedVerifier || 'No exact verifier was recorded.',
+    command: recordedVerifier,
+    artifact,
+  });
+}
+
+function executorVerificationRequirement(dispatchRequirement: VerificationRequirement | undefined, lifecycleRequirement: VerificationRequirement | undefined, kind?: VerificationKind, command?: string, artifact?: string): { requirement: VerificationRequirement; prefix: string } {
+  const pinned = dispatchRequirement || lifecycleRequirement || null;
+  return {
+    requirement: pinned || legacyExecutorVerificationRequirement(kind, command, artifact),
+    prefix: pinned ? 'Pinned verifier' : 'Legacy verifier',
+  };
+}
+
+function executorVerifierDescription(requirement: VerificationRequirement, prefix: string, legacyArtifact?: string): string {
+  const artifact = requirement.artifact || legacyArtifact;
+  if (requirement.kind === 'attestation') return attestationVerifierDescription(prefix, artifact);
+  if (requirement.kind === 'manual') return `${prefix}: manual. Record evidence matching: ${requirement.evidenceContract}.`;
+  return requirement.command
+    ? `${prefix}: ${requirement.kind}. Command: ${requirement.command}`
+    : `${prefix}: ${requirement.kind}. Evidence contract: ${requirement.evidenceContract}`;
+}
+
+function attestationVerifierDescription(prefix: string, artifact?: string): string {
+  return `${prefix}: attestation. Record actual evidence for ${artifact || 'the declared artifact'}.`;
+}
+
+function highStakesVerificationGuidance(highStakes?: boolean): string {
+  return highStakes
+    ? [
+      'High-stakes verification:',
+      'Check the changed surface\'s consumers and suites relevant to the stated risk. Require a review-audit only when the safety-sensitive contract names an untested seam that needs independent scrutiny.',
+    ].join('\n')
+    : '';
+}
+
+function executorVerificationDirectoryGuidance(directory?: string): string {
+  return directory
+    ? `verifyCwd: the wrapper runs it from ${directory}, relative to the checkout root; the integrate gate does the same.`
+    : '';
+}
+
 function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?: any, executor?: any, closeout?: any, worktreeIdentity?: any, readOnlyScratchSpace?: any, worktreeSync?: any) {
   const claimCall = [
     'mcp__plugin_sidequest_board__claim({',
@@ -897,54 +950,33 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     `  tokenFile: ${JSON.stringify(tokenFile)}`,
     '})',
   ].join('\n');
-  const pinnedRequirement = ticket.dispatch?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement || null;
-  const recordedVerifier = String(ticket.executorVerify || '').trim();
-  const hasLegacyRequirement = Boolean(recordedVerifier || String(ticket.executorAttestationArtifact || '').trim());
-  const requirement = pinnedRequirement || verificationRequirement({
-    kind: hasLegacyRequirement ? ticket.executorVerifyKind : 'custom',
-    evidence: recordedVerifier || 'No exact verifier was recorded.',
-    command: recordedVerifier,
-    artifact: ticket.executorAttestationArtifact,
-  });
-  const verifierPrefix = pinnedRequirement ? 'Pinned verifier' : 'Legacy verifier';
-  const verifierKind = requirement.kind;
-  const verifierArtifact = requirement.artifact || ticket.executorAttestationArtifact;
-  const verifierEvidence = requirement.evidenceContract;
-  const verify = verifierKind === 'attestation'
-    ? `${verifierPrefix}: attestation. Record actual evidence for ${verifierArtifact || 'the declared artifact'}.`
-    : verifierKind === 'manual'
-      ? `${verifierPrefix}: manual. Record evidence matching: ${verifierEvidence}.`
-      : requirement.command
-        ? `${verifierPrefix}: ${verifierKind}. Command: ${requirement.command}`
-        : `${verifierPrefix}: ${verifierKind}. Evidence contract: ${verifierEvidence}`;
-  const verifierCommand = requirement.command || '';
+  const { requirement, prefix } = executorVerificationRequirement(ticket.dispatch?.verificationRequirement, ticket.lifecycleAttempt?.verificationRequirement, ticket.executorVerifyKind, ticket.executorVerify, ticket.executorAttestationArtifact);
+  const verify = executorVerifierDescription(requirement, prefix, ticket.executorAttestationArtifact);
+  const verifierCommand = requirement.command;
   const evidenceGuidance = ticketEvidenceGuidance(ticket);
-  const highStakes = ticket?.highStakes
-    ? [
-      'High-stakes verification:',
-      'Check the changed surface\'s consumers and suites relevant to the stated risk. Require a review-audit only when the safety-sensitive contract names an untested seam that needs independent scrutiny.',
-    ]
-    : [];
+  const highStakes = highStakesVerificationGuidance(ticket?.highStakes);
   const boundReview = boundReviewGuidance(ticket);
   return [
     '## Dispatch, claim, worktree, lifecycle, and verification safety',
     'Claim first with this exact call. Do not pass direct or replace the prepared executor:',
     ['```javascript', claimCall, '```'].join('\n'),
-    ...(worktreeIdentity ? [worktreeIdentity] : []),
-    ...(readOnlyScratchSpace ? [readOnlyScratchSpace] : []),
-    ...(worktreeSync ? [worktreeSync] : []),
-    ...(ticketIsolationContract(ticket, project) || []),
+    worktreeIdentity,
+    readOnlyScratchSpace,
+    worktreeSync,
+    ticketIsolationContract(ticket, project)?.join('\n\n'),
     verify,
-    ...(ticket.executorVerifyCwd ? [`verifyCwd: the wrapper runs it from ${ticket.executorVerifyCwd}, relative to the checkout root; the integrate gate does the same.`] : []),
-    verifierCommand
+    executorVerificationDirectoryGuidance(ticket.executorVerifyCwd),
+    requirement.environment === 'shared'
+      ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log."
+      : verifierCommand
       ? 'Run it through ' + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
       : 'Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.',
-    evidenceGuidance || '',
+    evidenceGuidance,
     'Execution survival: Budget tool calls and preserve progress early. If the budget nears exhaustion before completing the ticket contract, use the existing Continuation checkpoint path: make a scoped checkpoint commit, write a `Continuation checkpoint` comment with the exact remaining work and verification status, release the ticket to `todo`, and end for a fresh continuation dispatch. Do not submit incomplete ticket work as ready. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.',
     'If Sidequest itself misbehaves, such as a refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error, report it to the user with the reproducing evidence and treat it as an upstream defect. Executors also put that evidence in a ticket comment so the orchestrator sees it. Do not encode a workaround in project rules, hooks, or memory; any unavoidable stopgap must be marked temporary and name the defect it awaits.',
-    ...(highStakes.length ? [highStakes.join('\n')] : []),
-    boundReview || '',
-    closeout || '',
+    highStakes,
+    boundReview,
+    closeout,
     'Stay within declared scope. This briefing includes the complete task, scope, comments, and contract. Do not use context_page for briefing sections.',
   ].filter(Boolean).join('\n\n');
 }

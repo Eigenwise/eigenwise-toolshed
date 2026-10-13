@@ -1,6 +1,7 @@
 'use strict';
 
 import type { WorktreeLease } from './worktree.js';
+import type { WorkProvenance } from '../store/work-provenance';
 import type { VerificationRequirement, VerificationResult } from './verification.js';
 
 export { canonicalPath, createWorktreeLease, isCanonicalRegisteredWorktree, sameCanonicalPath, worktreeCleanupDecision, worktreeCreateDecision, worktreeResumeDecision, worktreeWriteDecision } from './worktree.js';
@@ -17,7 +18,7 @@ export type Diagnostic = Readonly<{ code: string; message: string; actionable: b
 export type PreparedCompatibility = Readonly<{ pluginInstall: string; identity: string }>;
 export type AttemptState = 'prepared' | 'launched' | 'bound' | 'claimed' | 'working' | 'verified' | 'submitted' | 'assembled' | 'integrated' | 'closed' | 'released' | 'invalidated';
 export type AttemptEvent = 'launch' | 'bind' | 'bind_claim_token' | 'claim' | 'claim_direct' | 'start_work' | 'verify' | 'submit' | 'assemble' | 'integrate' | 'close' | 'release' | 'invalidate' | 'refresh';
-export type Attempt = Readonly<{ state: AttemptState; execution: 'dispatched' | 'direct'; baseline: Baseline; authority: Authority; verification?: VerificationResult; verificationRequirement?: VerificationRequirement; worktree?: WorktreeLease; preparedCompatibility?: PreparedCompatibility }>;
+export type Attempt = Readonly<{ state: AttemptState; execution: 'dispatched' | 'direct'; baseline: Baseline; authority: Authority; verification?: VerificationResult; verificationRequirement?: VerificationRequirement; workProvenance?: WorkProvenance; worktree?: WorktreeLease; preparedCompatibility?: PreparedCompatibility }>;
 
 type AttemptTransitions = { readonly [State in AttemptState]: Readonly<Partial<Record<AttemptEvent, AttemptState>>> };
 export const ATTEMPT_TRANSITIONS: AttemptTransitions = {

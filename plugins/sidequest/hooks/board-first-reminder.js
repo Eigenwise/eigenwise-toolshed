@@ -217,8 +217,8 @@ var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notifica
 var CHANGE_VERB = /\b(?:add|build|implement|fix|refactor|change|update|create|write|remove|delete|rename|move|migrate|rewrite|port|wire|improve|investigate|audit|debug|make)\b/i;
 var GREETING_LENGTH = 60;
 var INLINE_WORK_WINDOW_KEYS = ["boardInteraction", "readActions", "substantiveActions", "soloChoiceSurfaced", "investigationChoiceSurfaced"];
-var ROUTED_BOARD_REMINDER = "sidequest: gather enough read-only evidence, using Explore only for a quick sweep (it inherits the session model; deep or fan-out investigation is a codebase-exploration spike), then file precise tickets with add and dispatch them without offering. Only a one-or-two-file edit at a known location stays inline.";
-var NEW_BOARD_HINT = "sidequest: no board here yet. For multi-file or multi-step work, the first add creates this repo's board and dispatch is ready through the default profile; file the ticket and dispatch it without offering.";
+var ROUTED_BOARD_REMINDER = "sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations may use native agents without tickets.";
+var NEW_BOARD_HINT = "sidequest: no board here yet. I can offer one-owner dispatch; the first add creates the board. Small bounded fixes and read-only investigations may stay ticket-free.";
 function projectRoot(input, store) {
   return store.nearestRepoRoot(stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd());
 }

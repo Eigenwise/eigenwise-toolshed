@@ -1749,6 +1749,33 @@ test('integrate returns actionable post-merge verification failures', async () =
   }
 });
 
+test('SQ-3425: MCP integrate refuses an environment-bound submission and names the CLI lane', async () => {
+  const repo = committedRepo('sq-mcp-integrate-environment-lane-');
+  const project = store.ensureProject(repo).slug;
+  store.setBoardConfig(project, { integrationVerifyTimeoutMs: 180000 });
+  const ticket = store.createTicket(project, {
+    title: 'environment-bound delivery',
+    files: ['lib/lane.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for the environment lane refusal',
+    labels: ['direct-ok'],
+  });
+  const bound = store.getTicket(project, ticket.ref);
+  const requirement = { kind: 'command', command: 'npm run gate', evidenceContract: 'npm run gate', environment: 'shared' };
+  bound.dispatch = { verificationRequirement: requirement, lifecycleAttempt: { execution: 'dispatched', verificationRequirement: requirement } };
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: bound.id, project, ref: bound.ref, status: bound.status,
+    archived: 0, ord: bound.order, claim_by: null, data: bound,
+  });
+
+  const result = await callHandler('integrate', { project, ref: ticket.ref, by: 'payload-tester' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'environment_lane_requires_cli');
+  assert.equal(result.message, `integrate: ${ticket.ref}'s verifier is environment-bound and can run up to 180000 ms; inside the board server that stalls every executor's board calls. Run CLI integrate for ${ticket.ref} (\`sidequest integrate ${ticket.ref} --project ${JSON.stringify(repo)} --json\`) with Bash run_in_background and act on its completion notification. Container teardown stays in the project's verify command.`);
+});
+
 test('integrate compacts successful verification output', async () => {
   const repo = committedRepo('sq-mcp-integrate-verify-success-');
   gitAt(repo, ['config', 'user.name', 'Sidequest Test']);
@@ -3298,7 +3325,7 @@ test('MCP submit reports every independently fixable completion refusal together
   ]);
   const refusalMessages = refused.failures.map((failure: any) => failure.message).join('\n');
   assert.match(refusalMessages, /Write the fragment, then commit it, then submit again\./);
-  assert.match(refusalMessages, /has not recorded a negative control/);
+  assert.match(refusalMessages, /needs a claim-holder negative control/);
   assert.match(refusalMessages, /must match the declared executor verify command/);
 });
 
@@ -4709,7 +4736,7 @@ test('SQ-2961: CLI and MCP groom-close answer recovery evidence with one retirem
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'retireOnly', 'sharedTree', 'worktree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'retireOnly', 'sharedTree', 'workProvenance', 'worktree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
@@ -5000,6 +5027,60 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
   pulse = await callTool('pulse', { ref: friendly.ref, full: true });
   assert.equal(pulse.dispatch.state, 'bound');
   assert.equal(pulse.dispatch.agentId, 'native-mcp-session-agent');
+});
+
+// Claude Code rewrites sessions/<its pid>.json whenever /clear or /resume switches the session, while the
+// board server it spawned keeps the startup id in its environment (GH-467).
+async function withHostSessionRecord<T>(record: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+  const sessionsDirectory = path.join(String(process.env.SIDEQUEST_CLAUDE_HOME), 'sessions');
+  const recordFile = path.join(sessionsDirectory, `${process.ppid}.json`);
+  fs.mkdirSync(sessionsDirectory, { recursive: true });
+  fs.writeFileSync(recordFile, JSON.stringify(record));
+  try {
+    return await run();
+  } finally {
+    fs.rmSync(recordFile, { force: true });
+  }
+}
+
+test('GH-467: MCP dispatch after /clear records the session the host switched to, and the executor binds', async () => {
+  const slug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-cleared-session', name: 'MCP cleared session', route: { model: 'sonnet', effort: 'high' } });
+  const ticket = await callTool('add', { title: 'dispatch after clear', description: DISPATCH_DESCRIPTION, category: 'mcp-cleared-session' });
+  const startupSession = `gh467-startup-${process.pid}`;
+  const clearedSession = `gh467-cleared-${process.pid}`;
+
+  const dispatched = await withHostSessionRecord({ pid: process.ppid, sessionId: clearedSession }, () =>
+    callToolAsSession(startupSession, 'dispatch', { allowUnscoped: true, ref: ticket.ref, full: true }));
+
+  const state = store.getTicket(slug, ticket.ref).dispatch;
+  assert.equal(state.sessionId, clearedSession, 'dispatch records the current session, not the server startup environment');
+  assert.equal(state.preparedBy.sessionId, clearedSession);
+  const launched = runForceBypass({ session_id: clearedSession, cwd: PROJ, tool_name: 'Agent', tool_input: dispatched.spawn });
+  const agentName = launched.hookSpecificOutput.updatedInput.name;
+  assert.equal(store.bindDispatchAgent(clearedSession, dispatched.agent, 'gh467-cleared-agent', agentName).ok, true);
+});
+
+test('GH-467: the host session record only replaces the startup id when it is this server\'s parent and names a session', async () => {
+  const slug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-cleared-session', name: 'MCP cleared session', route: { model: 'sonnet', effort: 'high' } });
+  const startupSession = `gh467-resume-${process.pid}`;
+  const cases = [
+    { name: 'resumed session keeps its id', record: { pid: process.ppid, sessionId: startupSession }, expected: startupSession },
+    { name: 'another process record is ignored', record: { pid: process.ppid + 1, sessionId: 'gh467-foreign' }, expected: startupSession },
+    { name: 'a record without a session id is ignored', record: { pid: process.ppid, sessionId: '' }, expected: startupSession },
+  ];
+  const failures: string[] = [];
+  for (const { name, record, expected } of cases) {
+    try {
+      const ticket = await callTool('add', { title: `host record: ${name}`, description: DISPATCH_DESCRIPTION, category: 'mcp-cleared-session' });
+      await withHostSessionRecord(record, () => callToolAsSession(startupSession, 'dispatch', { allowUnscoped: true, ref: ticket.ref }));
+      assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, expected);
+    } catch (error) {
+      failures.push(`${name}: ${(error as Error).message}`);
+    }
+  }
+  assert.deepEqual(failures, []);
 });
 
 test('MCP dispatch refuses a caller session label without runtime identity', async () => {
@@ -6651,79 +6732,30 @@ async function recordExternalDeliverableCapture(fixture: any) {
   }
 }
 
-test('SQ-2391: done refuses an ordinary writable clean scope even after its pinned verifier passes, then closes after the orchestrator declares the external deliverable', async () => {
-  const verifyCommand = 'node -p "process.cwd()"';
-  const fixture = isolatedDispatch('sq-mcp-external-deliverable-', 'a2391ordinary', ['src/engine.js'], verifyCommand);
-  const capture = await recordExternalDeliverableCapture(fixture);
-
-  const refused = await callTool('done', {
-    project: fixture.project,
-    ref: fixture.ref,
-    by: fixture.by,
-    model: 'opus',
-    effort: 'high',
-    body: 'The repository scope is clean and the external deliverable is complete.',
-  });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.reason, 'submission_required');
-  assert.match(refused.message, /externalDeliverable:true/, 'the refusal names the ticket declaration');
-  assert.match(refused.message, /orchestrator can set.*through update/i, 'the refusal names the mid-claim recovery');
-  assert.match(refused.message, /otherwise supply explicit done --verify evidence/);
-  const externalRefusal = store.externalDeliverableCloseout(fixture.project, store.getTicket(fixture.project, fixture.ref));
-  assert.match(externalRefusal.message, /commandless requirement needs explicit done --verify evidence/);
-  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
-
-  const updated = await callToolAsSession('sq2391-different-main-session', 'update', {
-    project: fixture.project,
-    ref: fixture.ref,
-    by: 'mcp-external-deliverable-orchestrator',
-    externalDeliverable: true,
-  });
-  assert.equal(updated.ok, true);
-  const declared = store.getTicket(fixture.project, fixture.ref);
-  assert.equal(declared.externalDeliverable, true, 'the ticket records the external-deliverable declaration');
-  assert.equal(declared.claim?.by, fixture.by, 'the same executor keeps its live claim after the update');
-
+test('SQ-3636: done closes an ordinary writable clean scope with a report and no external-deliverable declaration', async () => {
+  const fixture = isolatedDispatch('sq-mcp-external-deliverable-', 'a2391ordinary', ['src/engine.js']);
   const closed = await callTool('done', {
     project: fixture.project,
     ref: fixture.ref,
     by: fixture.by,
     model: 'opus',
     effort: 'high',
-    body: 'The declared external deliverable is complete and the repository scope is clean.',
+    body: 'The investigation is complete and the repository scope is clean.',
   });
   assert.equal(closed.ok, true, 'done was refused: ' + closed.message);
   const done = store.getTicket(fixture.project, fixture.ref);
   assert.equal(done.status, 'done');
-  assert.equal(done.completion.purpose, 'external-deliverable');
-  assert.equal(done.completion.externalDeliverable.declared, true);
-  assert.equal(done.completion.externalDeliverable.candidate.value, capture.candidate.value);
-  assert.equal(done.completion.externalDeliverable.capture.id, capture.id);
-  assert.equal(done.completion.externalDeliverable.verification.command, verifyCommand);
+  assert.notEqual(done.externalDeliverable, true);
+  assert.equal(done.completion.externalDeliverable, undefined);
+  assert.ok(done.completion.commentId, 'done stores the completion report');
 });
 
-// SQ-2968. A no-source-command ticket (e.g. research with a manual verifier)
-// never had a command to capture, so externalDeliverableCloseout must accept
-// the executor's typed --verify evidence instead — it just dropped it on the
-// floor and always refused "required manual verification evidence is missing".
-test('SQ-2968: done passes manual verify evidence through external-deliverable closeout for a no-source ticket', async () => {
+test('SQ-3636: done accepts manual verify evidence with a clean no-source report', async () => {
   const fixture = isolatedDispatch('sq-2968-manual-', 'a2968manual', ['research-notes.md'], undefined, {
     executorVerifyKind: 'manual',
     executorVerify: 'manual: record where the research findings were written up and who confirmed them',
     externalDeliverable: true,
   });
-
-  const missingEvidence = await callTool('done', {
-    project: fixture.project,
-    ref: fixture.ref,
-    by: fixture.by,
-    model: 'opus',
-    effort: 'high',
-    body: 'The research is complete and the repository scope is clean; no source to submit.',
-  });
-  assert.equal(missingEvidence.ok, false);
-  assert.match(missingEvidence.message, /required manual verification evidence is missing/);
-  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 
   const closed = await callTool('done', {
     project: fixture.project,
@@ -6737,10 +6769,8 @@ test('SQ-2968: done passes manual verify evidence through external-deliverable c
   assert.equal(closed.ok, true, 'done was refused: ' + closed.message);
   const done = store.getTicket(fixture.project, fixture.ref);
   assert.equal(done.status, 'done');
-  assert.equal(done.completion.purpose, 'external-deliverable');
-  assert.equal(done.completion.externalDeliverable.declared, true);
-  assert.equal(done.completion.externalDeliverable.verification.kind, 'manual');
-  assert.equal(done.completion.externalDeliverable.verification.evidence, 'manual: findings recorded in the shared research doc, confirmed by a teammate');
+  assert.equal(done.completion.externalDeliverable, undefined);
+  assert.ok(done.completion.commentId, 'done stores the completion report');
 });
 
 test('SQ-2968: manual-verifier external-deliverable closeout still refuses a dirty declared scope, verify evidence or not', async () => {
@@ -6765,11 +6795,11 @@ test('SQ-2968: manual-verifier external-deliverable closeout still refuses a dir
   assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 });
 
-test('SQ-2968: a pinned command verifier still refuses a missing capture; verify text cannot replace it', async () => {
+test('SQ-3636: a clean no-commit report closes without a pinned command capture', async () => {
   const verifyCommand = 'node -p "process.cwd()"';
   const fixture = isolatedDispatch('sq-2968-command-', 'a2968command', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
 
-  const refused = await callTool('done', {
+  const closed = await callTool('done', {
     project: fixture.project,
     ref: fixture.ref,
     by: fixture.by,
@@ -6778,19 +6808,21 @@ test('SQ-2968: a pinned command verifier still refuses a missing capture; verify
     body: 'The declared external deliverable is complete and the repository scope is clean.',
     verify: 'manual: I ran it locally and it passed',
   });
-  assert.equal(refused.ok, false);
-  assert.match(refused.message, /No completed passed verification capture exists/);
-  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+  assert.equal(closed.ok, true, closed.message);
+  const done = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(done.status, 'done');
+  assert.equal(done.verificationCaptures?.length || 0, 0);
+  assert.equal(done.completion.externalDeliverable, undefined);
 });
 
-test('SQ-2968: a review-pinned ticket stays unsupported for external-deliverable closeout even with verify evidence', async () => {
+test('SQ-3636: a clean no-source report closes without recording an independent review', async () => {
   const fixture = isolatedDispatch('sq-2968-review-', 'a2968review', ['research-notes.md'], undefined, {
     executorVerifyKind: 'review',
     executorVerify: 'independent review is required before this research closes',
     externalDeliverable: true,
   });
 
-  const refused = await callTool('done', {
+  const closed = await callTool('done', {
     project: fixture.project,
     ref: fixture.ref,
     by: fixture.by,
@@ -6799,12 +6831,14 @@ test('SQ-2968: a review-pinned ticket stays unsupported for external-deliverable
     body: 'The research is complete.',
     verify: 'manual: I reviewed my own work',
   });
-  assert.equal(refused.ok, false);
-  assert.match(refused.message, /cannot accept review verification/);
-  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+  assert.equal(closed.ok, true, closed.message);
+  const done = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(done.status, 'done');
+  assert.equal(done.completion.externalDeliverable, undefined);
+  assert.equal(done.oracleReview, undefined);
 });
 
-test('SQ-2968: the CLI done path accepts the same manual verify evidence as MCP', () => {
+test('SQ-3636: the CLI done path accepts a clean no-source report without manual verify evidence', () => {
   const fixture = isolatedDispatch('sq-2968-cli-', 'a2968cli', ['research-notes.md'], undefined, {
     executorVerifyKind: 'manual',
     executorVerify: 'manual: record where the research findings were written up',
@@ -6813,23 +6847,15 @@ test('SQ-2968: the CLI done path accepts the same manual verify evidence as MCP'
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
   const env = { ...process.env, SIDEQUEST_HOME };
 
-  const missingEvidence = spawnSync(process.execPath, [
-    cli, 'done', fixture.ref, '--project', fixture.project, '--by', fixture.by,
-    '--body', 'The research is complete; no source to submit.', '--json',
-  ], { encoding: 'utf8', windowsHide: true, env });
-  assert.equal(missingEvidence.status, 1);
-  assert.match(JSON.parse(missingEvidence.stdout).message, /required manual verification evidence is missing/);
-  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
-
   const closed = spawnSync(process.execPath, [
     cli, 'done', fixture.ref, '--project', fixture.project, '--by', fixture.by,
-    '--body', 'The research is complete; no source to submit.',
-    '--verify', 'manual: findings recorded in the shared research doc, confirmed by a teammate', '--json',
+    '--body', 'The research is complete; no source to submit.', '--json',
   ], { encoding: 'utf8', windowsHide: true, env });
   assert.equal(closed.status, 0, closed.stderr);
   const closedTicket = JSON.parse(closed.stdout).ticket;
   assert.equal(closedTicket.status, 'done');
-  assert.equal(closedTicket.completion.externalDeliverable.verification.kind, 'manual');
+  assert.equal(closedTicket.completion.externalDeliverable, undefined);
+  assert.ok(closedTicket.completion.commentId, 'done stores the completion report');
 });
 
 test('SQ-2397: MCP handler grant is explicit while CLI source, by, and session stay non-authoritative', async () => {
@@ -6939,6 +6965,13 @@ function redispatchExternalDeliverableFixture(fixture: any, agentId: string) {
     sessionId,
     agentName: agentId,
   }).ok, true);
+  const worktree = `${fixture.repo}-agent-${agentId}`;
+  assert.equal(store.bindDispatchWorktreeCreation(fixture.project, sessionId, worktree).ok, true);
+  gitAt(fixture.repo, ['worktree', 'add', '-q', '-b', `agent-${agentId}`, worktree, 'HEAD']);
+  createCheckoutInstanceMarker(gitAt(worktree, ['rev-parse', '--git-dir']));
+  const completed = store.completeDispatchWorktreeCreation(fixture.project, sessionId, worktree, creationGeneration(fixture.project, sessionId, worktree));
+  assert.equal(completed.ok, true, JSON.stringify(completed));
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId, worktree).ok, true);
   assert.equal(store.claimTicket(fixture.project, fixture.ref, 'by-' + agentId, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -6951,7 +6984,7 @@ function redispatchExternalDeliverableFixture(fixture: any, agentId: string) {
   };
 }
 
-test('SQ-2391: done refuses a declared external deliverable when only a previous dispatch captured the pinned verifier', async () => {
+test('SQ-3636: done closes a clean redispatch without reusing its previous verification capture', async () => {
   const verifyCommand = 'node -p "process.cwd()"';
   const first = isolatedDispatch('sq-mcp-external-deliverable-prior-', 'a2391first', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
   const capture = await recordExternalDeliverableCapture(first);
@@ -6959,7 +6992,7 @@ test('SQ-2391: done refuses a declared external deliverable when only a previous
   const second = redispatchExternalDeliverableFixture({ ...first, dispatchNonce: firstDispatchNonce }, 'a2391second');
   assert.equal(store.getTicket(second.project, second.ref).verificationCaptures[0].dispatchNonce, firstDispatchNonce, 'the retained capture belongs to the first dispatch');
 
-  const refused = await callTool('done', {
+  const closed = await callTool('done', {
     project: second.project,
     ref: second.ref,
     by: second.by,
@@ -6967,14 +7000,15 @@ test('SQ-2391: done refuses a declared external deliverable when only a previous
     effort: 'high',
     body: 'The external deliverable is unchanged after redispatch.',
   });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.reason, 'submission_required');
-  assert.match(refused.message, /dispatch attempt/, 'the refusal requires this attempt to capture the verifier');
-  assert.equal(store.getTicket(second.project, second.ref).status, 'doing');
-  assert.ok(capture.id);
+  assert.equal(closed.ok, true, closed.message);
+  const done = store.getTicket(second.project, second.ref);
+  assert.equal(done.status, 'done');
+  assert.equal(done.completion.externalDeliverable, undefined);
+  assert.equal(done.verificationCaptures[0].id, capture.id);
+  assert.equal(done.verificationCaptures.length, 1, 'the report does not invent a current capture');
 });
 
-test('SQ-2391: CLI done records an explicitly declared clean external-deliverable completion', async () => {
+test('SQ-3636: CLI done records a clean report even when an external deliverable and capture exist', async () => {
   const verifyCommand = 'node -p "process.cwd()"';
   const fixture = isolatedDispatch('sq-cli-external-deliverable-', 'a2391cli', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
   const capture = await recordExternalDeliverableCapture(fixture);
@@ -6987,9 +7021,10 @@ test('SQ-2391: CLI done records an explicitly declared clean external-deliverabl
   assert.equal(result.status, 0, result.stdout + '\\n' + result.stderr);
   const closed = JSON.parse(result.stdout);
   assert.equal(closed.ok, true);
-  assert.equal(closed.ticket.completion.purpose, 'external-deliverable');
-  assert.equal(closed.ticket.completion.externalDeliverable.declared, true);
-  assert.equal(closed.ticket.completion.externalDeliverable.capture.id, capture.id);
+  assert.equal(closed.ticket.status, 'done');
+  assert.equal(closed.ticket.completion.externalDeliverable, undefined);
+  assert.equal(closed.ticket.verificationCaptures[0].id, capture.id);
+  assert.ok(closed.ticket.completion.commentId, 'done stores the completion report');
 });
 
 test('SQ-1339: submit records and integrates an explicit no-op range', async () => {
@@ -7516,4 +7551,49 @@ test('add and update carry verifyCwd to the ticket and refuse one outside the pr
   await callTool('update', { project, ref: added.ref, verifyCwd: '' });
   assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, '');
   await assert.rejects(callTool('update', { project, ref: added.ref, verifyCwd: '../outside' }), /verifyCwd must be a directory relative to the project root/);
+});
+
+test('SQ-3477: a two-participant source-revision wave needs the resulting revision and accepted evidence, then records both', async (context: any) => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-revision-wave-'));
+  const project = store.ensureProject(projectPath).slug;
+  context.after(store.registerSourceRevisionCapability(project, () => ({ candidateExists: true, containsCandidate: true })));
+  const refs: string[] = [];
+  for (const revision of [{ source: 'wiki', value: 'wiki-50', surface: 'wiki/a.md' }, { source: 'wiki', value: 'wiki-51', surface: 'wiki/b.md' }]) {
+    const ticket = store.createTicket(project, {
+      title: `publish ${revision.value}`,
+      files: [revision.surface],
+      complexity: 2,
+      complexityWhy: 'publish one pinned immutable source revision',
+      executorVerifyKind: 'attestation',
+      executorAttestationArtifact: revision.value,
+      labels: ['direct-ok'],
+    });
+    const by = `mcp-${revision.value}-worker`;
+    claimDispatchedTicket(project, ticket, by, true);
+    const submitted = await callTool('submit', {
+      project,
+      ref: ticket.ref,
+      by,
+      sourceRevision: { source: revision.source, value: revision.value, observedAt: '2026-08-14T00:00:00.000Z' },
+      changedSurfaces: [revision.surface],
+      projectCapabilities: { process: false, worktree: false, review: true },
+      verify: `attestation: ${revision.value} | review-accepted | reviewer approved the immutable revision`,
+      body: `Reviewed ${revision.value}.`,
+    });
+    assert.equal(submitted.ok, true, JSON.stringify(submitted));
+    refs.push(ticket.ref);
+  }
+  const verification = store.getTicket(project, refs[0]).submission.verificationResult;
+  const assembled = await callTool('integrate', { project, ref: refs.join(','), by: 'mcp-source-publisher', wave: { verification } });
+  assert.equal(assembled.ok, true, JSON.stringify(assembled));
+
+  const deliveryRevision = { source: 'wiki', value: 'wiki-52', observedAt: '2026-08-15T00:00:00.000Z' };
+  assert.equal(store.integrateSubmissionWave(project, refs, {}).reason, 'wave_delivery_revision_required');
+  assert.equal(store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: { ...verification, status: 'failed_suite' } }).reason, 'wave_delivery_verification_required');
+  const delivered = store.integrateSubmissionWave(project, refs, { deliveryRevision, deliveryVerification: verification });
+
+  assert.equal(delivered.ok, true, JSON.stringify(delivered));
+  assert.equal(delivered.integration.mode, 'source-revision');
+  assert.deepEqual(delivered.integration.participants, refs);
+  for (const ref of refs) assert.equal(store.getTicket(project, ref).submission.integration.sourceRevision.value, 'wiki-52');
 });

@@ -33,7 +33,7 @@ __export(verification_exports, {
   verificationWaiverDiagnostic: () => verificationWaiverDiagnostic
 });
 module.exports = __toCommonJS(verification_exports);
-const VERIFICATION_KINDS = ["suite", "command", "document", "link", "schema", "manual", "attestation", "review", "custom"];
+const VERIFICATION_KINDS = ["suite", "command", "typecheck", "document", "link", "schema", "manual", "attestation", "review", "custom"];
 const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check", "deferred"];
 const VERIFICATION_ENVIRONMENTS = ["isolated", "shared"];
 function nonEmpty(value) {
@@ -59,25 +59,31 @@ function suiteCommand(suite) {
 function validationDiagnostic(code, message) {
   return Object.freeze({ code, message, actionable: true });
 }
-function verificationRequirement(input) {
-  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
-  const evidence = nonEmpty(input.evidence);
-  const command = nonEmpty(input.command || (kind === "command" ? evidence : ""));
+function suiteVerificationRequirement(input, command, evidence) {
   const suite = suiteFrom(input);
+  if (suite) return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
+  return Object.freeze({ kind: "suite", ...command ? { command } : {}, evidenceContract: evidence || "named suite output" });
+}
+function executableVerificationRequirement(input, kind, evidence) {
+  const command = nonEmpty([input.command, ["command", "typecheck"].includes(kind) ? evidence : ""].find(Boolean));
+  if ([kind === "suite", [!command, Boolean(suiteFrom(input))].every(Boolean)].some(Boolean)) return suiteVerificationRequirement(input, command, evidence);
+  return Object.freeze({ kind, command: command || void 0, evidenceContract: command || "command output" });
+}
+function evidenceVerificationRequirement(input, kind, evidence) {
   if (kind === "attestation") {
     const artifact = nonEmpty(input.artifact);
     return Object.freeze({ kind, artifact, evidenceContract: `attestation evidence for ${artifact}` });
   }
-  if (kind === "review") return Object.freeze({ kind, evidenceContract: evidence || "independent review findings" });
-  if (kind === "manual") return Object.freeze({ kind, evidenceContract: evidence.replace(/^manual:\s*/i, "") || "manual verification evidence" });
-  if (kind === "suite" || !command && suite) {
-    if (!suite) return Object.freeze({ kind: "suite", ...command ? { command } : {}, evidenceContract: evidence || "named suite output" });
-    return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
-  }
-  if (["document", "link", "schema", "custom"].includes(kind)) {
-    return Object.freeze({ kind, evidenceContract: evidence || `${kind} verification evidence` });
-  }
-  return Object.freeze({ kind: "command", command: command || void 0, evidenceContract: command || "command output" });
+  const defaults = { review: "independent review findings", manual: "manual verification evidence" };
+  return Object.freeze({ kind, evidenceContract: evidence || defaults[kind] || `${kind} verification evidence` });
+}
+function verificationRequirement(input) {
+  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
+  const evidence = nonEmpty(input.evidence);
+  const evidenceOnly = ["attestation", "review", "manual"].includes(kind);
+  const executable = [["command", "suite", "typecheck"].includes(kind), [!evidenceOnly, !nonEmpty(input.command), Boolean(suiteFrom(input))].every(Boolean)].some(Boolean);
+  if (executable) return executableVerificationRequirement(input, kind, evidence);
+  return evidenceVerificationRequirement(input, kind, evidence.replace(/^manual:\s*/i, kind === "manual" ? "" : "$&"));
 }
 function verificationWaiverDiagnostic(waiver) {
   return validationDiagnostic("verification_waived", `Verification gate ${waiver.affectedGate} waived by ${waiver.authority}: ${waiver.reason}`);

@@ -113,7 +113,7 @@ export function describePhaseFailure(phase, result, phaseTimeoutMilliseconds, co
 }
 
 // Pipes bound retained output but lose node:test's TTY reporter selection.
-// POSIX owns the inherited group; Windows direct-leaf exit does not prove descendant cleanup.
+// POSIX owns the inherited group; Windows owns a Job Object holding every descendant.
 const interactiveReporterArguments = process.stdout.isTTY ? ['--test-reporter=spec'] : [];
 
 async function runTests(phase, files, environment) {

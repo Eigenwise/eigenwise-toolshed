@@ -14,8 +14,8 @@ function readStdin() {
   }
 }
 
-function offerReason(status) {
-  return `quartermaster: ${status.unanalyzedSessions} sessions and ${status.frictionEvents} friction events since the last resupply. Finish your reply, then offer a focused optimization round for the user's development system, setup, tooling, or workflow. If they say yes or gave standing permission, run /quartermaster:resupply. If they decline, run node "${'${CLAUDE_PLUGIN_ROOT}'}/bin/quartermaster.js" decline-resupply --project "${'${CLAUDE_PROJECT_DIR}'}" to back off this offer without clearing the evidence window.`;
+function offerMessage(status) {
+  return `quartermaster: ${status.unanalyzedSessions} sessions and ${status.frictionEvents} friction events since the last resupply. Want a focused resupply round for your development system, setup, tooling, or workflow? Run /quartermaster:resupply when ready. To decline, run node "${'${CLAUDE_PLUGIN_ROOT}'}/bin/quartermaster.js" decline-resupply --project "${'${CLAUDE_PROJECT_DIR}'}" to back off this offer without clearing the evidence window.`;
 }
 
 function main() {
@@ -27,7 +27,7 @@ function main() {
   if (!status.shouldOffer || status.offeredSessionIds.includes(data.session_id)) return;
 
   markOffered(projectDir, data.session_id);
-  process.stdout.write(JSON.stringify({ decision: 'block', reason: offerReason(status) }));
+  process.stdout.write(JSON.stringify({ systemMessage: offerMessage(status) }));
 }
 
 try {

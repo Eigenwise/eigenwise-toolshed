@@ -353,6 +353,33 @@ const COMPACT_OUTCOMES = new Set(['completed', 'aborted', 'incomplete', 'empty_s
 const COMPACT_ERROR_CODES = new Set([...COMPACT_FATAL_ERROR_TYPES, 'websocket_missing_terminal', 'upstream_http_error', 'unknown_error']);
 const COMPACT_USAGE_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens'];
 
+function sentryInputTokens(usage) {
+  return ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
+    .reduce((total, field) => total + (Number.isFinite(usage?.[field]) ? usage[field] : 0), 0);
+}
+
+function sentryUsageRearms(usage, compactTrigger, ordinaryTurnCompleted) {
+  const lowWatermark = compactTrigger - Math.min(CODEX_COMPACT_HEADROOM, compactTrigger * 0.25);
+  return usage < lowWatermark || (ordinaryTurnCompleted && usage > compactTrigger);
+}
+
+function observeGrokSseFrame(frame, transformer, inference, usageCapture, sessionId, model, recordSentryUsage) {
+  const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trim();
+  if (!data || data === '[DONE]') return;
+  try {
+    const event = JSON.parse(data);
+    transformer.event(event);
+    inference.terminal ||= event.type === 'response.completed';
+    inference.sawError ||= ['error', 'response.failed', 'response.incomplete'].includes(event.type);
+    if (event?.response?.usage) {
+      const usage = grokBackend.anthropicUsage(event.response.usage);
+      inference.sentryUsage = usage;
+      usageCapture?.observeEvent({ type: 'message_delta', usage });
+      recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+    }
+  } catch {}
+}
+
 function systemPromptText(system) {
   if (typeof system === 'string') return system;
   if (!Array.isArray(system)) return '';
@@ -1197,17 +1224,14 @@ function runWorker() {
     return state;
   }
 
-  function recordSentryUsage(sessionId, event, model) {
-    if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
-    if (!sentryPolicyFor(model)) return;
-    const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
-      .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
-    if (usage <= 0) return;
+  function recordSentryUsage(sessionId, event, model, ordinaryTurnCompleted = false) {
+    if (event.type !== 'message_delta') return;
     const state = sentrySession(sessionId, model);
+    if (!state || !sentryPolicyFor(model)) return;
+    const usage = sentryInputTokens(event.usage);
+    if (usage <= 0) return;
     state.usage = usage;
-    const compactTrigger = sentryModel(model).compactTrigger;
-    const lowWatermark = compactTrigger - Math.min(CODEX_COMPACT_HEADROOM, compactTrigger * 0.25);
-    if (usage < lowWatermark) state.fired = false;
+    state.fired &&= !sentryUsageRearms(usage, sentryModel(model).compactTrigger, ordinaryTurnCompleted);
   }
 
   function contextOverflowBody(message, overflow) {
@@ -1227,9 +1251,10 @@ function runWorker() {
   }
 
   function fireContextSentry(res, sessionId, model) {
+    const { requestChunks, routeTelemetry } = routeContexts.get(res.req);
+    if (isCompactionRequest(JSON.parse(Buffer.concat(requestChunks).toString()))) return false;
     const crossing = crossedContextSentry(sessionId, model);
     if (!crossing) return false;
-    const { requestChunks, routeTelemetry } = routeContexts.get(res.req);
     const backendName = resolveGatewayModelPolicy(model)?.backend === 'grok' ? 'Grok' : 'Codex';
     const overflow = contextOverflowDetails(Buffer.concat(requestChunks), 'gateway_sentry', crossing.usage, 'previous_turn_usage', crossing.compactTrigger);
     routeTelemetry.setOverflow(overflow);
@@ -1802,6 +1827,7 @@ function runWorker() {
           const inference = attempt || newCompactAttempt();
           const observeEvent = (event) => {
             noteCompactEvent(inference, event);
+            inference.sentryUsage = event.usage ?? inference.sentryUsage;
             if (filterPlanTools || (SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
             usageCapture?.observeEvent(event);
           };
@@ -1827,6 +1853,8 @@ function runWorker() {
           if (!attempt) {
             upRes.on('end', () => {
               filter.end();
+              if (deliverableAttempt(inference)) recordSentryUsage(sessionId,
+                { type: 'message_delta', usage: inference.sentryUsage }, contextModel, !isCompactionRequest(JSON.parse(body)));
               closeFinishedTurn(inference, clientRes);
               routeTelemetry?.finish(upRes.statusCode, deliverableAttempt(inference) ? null : 'upstream_error');
               clientRes.end();
@@ -1904,6 +1932,12 @@ function runWorker() {
           const upstreamBody = Buffer.concat(chunks);
           usageCapture?.observeJson(upstreamBody);
           const completed = completedCodexJson(upstreamBody);
+          if (completed) {
+            const response = JSON.parse(upstreamBody);
+            const ordinaryTurnCompleted = ['end_turn', 'stop_sequence', 'tool_use'].includes(response.stop_reason)
+              && !isCompactionRequest(JSON.parse(body));
+            recordSentryUsage(sessionId, { type: 'message_delta', usage: response.usage }, contextModel, ordinaryTurnCompleted);
+          }
           const filtered = rewriteCodexJson(upstreamBody, advertisedModel, filterPlanTools);
           routeTelemetry?.finish(upRes.statusCode, completed ? null : 'upstream_error');
           resHeaders['content-length'] = filtered.length;
@@ -1987,6 +2021,7 @@ function runWorker() {
       clientRes.end(body);
       return;
     }
+    const inference = newCompactAttempt();
     const upstreamPayload = grokBackend.translateRequest(payload, model);
     const body = JSON.stringify(upstreamPayload);
     const target = new URL(GROK_ENDPOINT);
@@ -2042,21 +2077,17 @@ function runWorker() {
             if (!match) break;
             const frame = pending.slice(0, match.index);
             pending = pending.slice(match.index + match[0].length);
-            const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trim();
-            if (!data || data === '[DONE]') continue;
-            try {
-              const event = JSON.parse(data);
-              transformer.event(event);
-              if (event?.response?.usage) {
-                const usage = grokBackend.anthropicUsage(event.response.usage);
-                usageCapture?.observeEvent({ type: 'message_delta', usage });
-                recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
-              }
-            } catch {}
+            observeGrokSseFrame(frame, transformer, inference, usageCapture, sessionId, model, recordSentryUsage);
           }
         };
         upstream.on('data', consume);
-        upstream.on('end', () => { pending += decoder.end(); transformer.end(); clientRes.end(); });
+        upstream.on('end', () => {
+          pending += decoder.end();
+          transformer.end();
+          if (deliverableAttempt(inference)) recordSentryUsage(sessionId,
+            { type: 'message_delta', usage: inference.sentryUsage }, model, !isCompactionRequest(payload));
+          clientRes.end();
+        });
         upstream.on('error', () => clientRes.destroy());
         return;
       }
@@ -2066,7 +2097,8 @@ function runWorker() {
         let response;
         try { response = JSON.parse(Buffer.concat(chunks).toString()); } catch { response = null; }
         const usage = response?.usage && grokBackend.anthropicUsage(response.usage);
-        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model,
+          response.status === 'completed' && !isCompactionRequest(payload));
         const translated = grokBackend.translateResponse(response, advertisedModel);
         const translatedBody = Buffer.from(JSON.stringify(translated));
         usageCapture?.observeJson(translatedBody);

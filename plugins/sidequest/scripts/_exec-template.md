@@ -105,8 +105,7 @@ verifier only when the actual runner supports it for the same checked bytes. For
 stays UNVERIFIED. Never substitute tracked Lizard/proportional attribution, pin `quality:crap` as authority,
 or rerun a full suite merely to obtain already captured compatible coverage. Keep tooling and reports
 local and uncommitted; leave untouched legacy
-functions outside scope. When none is configured, run the pinned verifier, state once "no quality gate is
-configured for this project; Quartermaster setup can add one", and continue. Absence alone never holds,
+functions outside scope. When none is configured, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. Absence alone never holds,
 parks or marks work UNVERIFIED. User rules injected by the host still apply. Freeze each run's inputs and validate source/coverage and executed/source-map
 byte identity before long runs. Supported focused real coverage may be separate from the final gate.
 No source edits during an immutable capture, fabricated passing receipts or weakened checks.
@@ -134,7 +133,7 @@ Protocol for each ticket:
    regression for a nontrivial behavior change. The orchestrator owns one combined final full gate after integration;
    do not run or schedule a broad suite unless the ticket's contract specifically requires it.
    Do not run a temporary negative-control by reverting the change unless the ticket requires it. When required, post
-   `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection>`:
+   `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`:
    both names must cover the changed behavior, not an unrelated test. Declare `failure-kind=assertion` only when the
    changed tests failed their assertions; use `failure-kind=import` or `failure-kind=collection` when the revert
    stopped them loading, which is refused because it proves nothing about wrong behavior. High-stakes tickets keep
@@ -145,8 +144,8 @@ Protocol for each ticket:
 5. **Capture verification and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing
    marker, call `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
    It commits only the declared scope and returns the hash. Pin it locally with
-   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate once for final capture; a changed candidate needs fresh verification,
-   then post `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits. Put the status first and the evidence after the colon. A bare
+   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate once for final capture unless the briefing marks it environment-bound; a changed candidate needs fresh verification. An environment-bound verifier is deferred at submit and runs in the shared checkout at delivery against the merged tree. For an environment-bound verifier, run focused checks that need no environment, commit, and submit without running the pinned verifier here.
+   After a verifier run, post `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits. Put the status first and the evidence after the colon. A bare
    `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope. A passing
    check is evidence only when you state the changed behavior it exercised and how you know: name the assertion in the test that ran and was not skipped; for acquisition, install, download, or cache work, state that the state directory started empty. Do not claim broader coverage ran when it did not. Keep the useful result count and a
    short relevant excerpt for the closing evidence. Post `[sidequest:verify-start] <command>` before verification

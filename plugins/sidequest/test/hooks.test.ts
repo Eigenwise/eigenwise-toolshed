@@ -125,8 +125,7 @@ function ensurePinnedPluginRoot() {
 ensurePinnedPluginRoot();
 
 const RETIRED_SCOUT = `sidequest-${'scout'}`;
-const GENERIC_AGENT_DENY_REASON = 'sidequest: implementation-agent is a generic Agent, not a Sidequest ticket executor. ' +
-  'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.';
+const GENERIC_AGENT_DENY_REASON = 'sidequest: implementation-agent requests write or ticket work without a prepared dispatch. Use a native read-only agent for lookups, or dispatch the ticket and spawn its returned executor for writes.';
 
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
@@ -821,47 +820,19 @@ test('pre-tool hook: native Explore and approved harness utilities pass through 
   }
 });
 
-test('pre-tool hook: main-session Explore on a routed board nudges twice then denies fan-out', () => {
+test('pre-tool hook: main-session Explore allows read-only fan-out without board interaction', () => {
   const session_id = `explore-fanout-${Date.now()}`;
-  const spawn = (round: number) => runHookOutput(FORCE_BYPASS, {
-    session_id, cwd: BOARD_PATH, tool_name: 'Agent',
-    tool_input: { subagent_type: 'Explore', prompt: `Sweep the hooks directory, angle ${round}.` },
-  });
-  for (const round of [1, 2]) {
-    const out = spawn(round);
-    assert.equal(out.hookSpecificOutput.permissionDecision, undefined, `spawn ${round}`);
-    assert.match(out.hookSpecificOutput.additionalContext, /quick evidence sweeps/);
-    assert.match(out.hookSpecificOutput.additionalContext, /inherits the session model/);
-    assert.match(out.hookSpecificOutput.additionalContext, /codebase-exploration/);
-  }
-  const denied = spawn(3);
-  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Explore spawn 3 this session with no board interaction/);
-  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /codebase-exploration/);
-  assert.match(spawn(4).hookSpecificOutput.permissionDecisionReason, /no board interaction/, 'a denied spawn does not consume a pass');
-});
-
-test('pre-tool hook: board interaction lifts the Explore fan-out cap', () => {
-  const session_id = `explore-board-${Date.now()}`;
-  runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
-  });
-  for (let round = 1; round <= 4; round += 1) {
-    const out = runHookOutput(FORCE_BYPASS, {
+  for (const round of [1, 2, 3, 4]) {
+    assert.equal(runHookOutput(FORCE_BYPASS, {
       session_id, cwd: BOARD_PATH, tool_name: 'Agent',
-      tool_input: { subagent_type: 'Explore', prompt: `Sweep the docs tree, angle ${round}.` },
-    });
-    if (round <= 2) {
-      assert.match(out.hookSpecificOutput.additionalContext, /quick evidence sweeps/, `spawn ${round}`);
-    } else {
-      assert.equal(out, null, `spawn ${round} passes silently after board interaction`);
-    }
+      tool_input: { subagent_type: 'Explore', prompt: `Sweep the hooks directory, angle ${round}.` },
+    }), null);
   }
 });
 
-test('pre-tool hook: denied generic work cannot relaunch as Explore', () => {
+test('pre-tool hook: denied write work cannot relaunch as Explore', () => {
   const session_id = `explore-reroute-${Date.now()}`;
-  const prompt = 'Deep dive: map every hook injection surface and report the guidance gaps.';
+  const prompt = 'Edit every hook injection surface and commit the guidance fixes.';
   const denied = runHookOutput(FORCE_BYPASS, {
     session_id, cwd: BOARD_PATH, tool_name: 'Agent',
     tool_input: { subagent_type: 'general-purpose', description: 'Hook surface deep dive', prompt },
@@ -873,8 +844,8 @@ test('pre-tool hook: denied generic work cannot relaunch as Explore', () => {
     tool_input: { subagent_type: 'Explore', description: 'Hook surface deep dive', prompt: 'Different text entirely.' },
   });
   assert.equal(sameDescription.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(sameDescription.hookSpecificOutput.permissionDecisionReason, /the work, not the agent type/);
-  assert.match(sameDescription.hookSpecificOutput.permissionDecisionReason, /rerouting denied work through Explore is a violation/);
+  assert.match(sameDescription.hookSpecificOutput.permissionDecisionReason, /resumes denied write work/);
+  assert.match(sameDescription.hookSpecificOutput.permissionDecisionReason, /dispatch the write ticket/);
 
   const samePrompt = runHookOutput(FORCE_BYPASS, {
     session_id, cwd: BOARD_PATH, tool_name: 'Agent',
@@ -885,10 +856,29 @@ test('pre-tool hook: denied generic work cannot relaunch as Explore', () => {
   const helper = runHookOutput(FORCE_BYPASS, {
     session_id, cwd: BOARD_PATH, agent_id: 'exec-helper', agent_type: 'sidequest-exec-dispatch',
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'Explore', model: 'haiku', prompt },
+    tool_input: { subagent_type: 'Explore', model: 'haiku', prompt: 'Read a separate source file.' },
   });
   assert.equal(helper.hookSpecificOutput.permissionDecision, undefined, 'executor Explore helpers bypass the fan-out guard');
   assert.equal(helper.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
+test('pre-tool hook: legacy denied lookup records pass but legacy denied writes stay blocked', () => {
+  const session_id = `legacy-denied-${Date.now()}`;
+  const stateFile = path.join(SIDEQUEST_HOME, 'tmp', 'state', `explore-fanout-${encodeURIComponent(session_id)}.json`);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({ deniedWork: [
+    { description: 'lookup calls', promptPrefix: 'find callers' },
+    { description: 'repair calls', promptPrefix: 'edit callers' },
+  ] }));
+  assert.equal(runHookOutput(FORCE_BYPASS, { session_id, tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', description: 'Lookup calls', prompt: 'Find callers.' },
+  }), null);
+  for (const subagent_type of ['Explore', 'general-purpose', 'custom-reader']) {
+    const denied = runHookOutput(FORCE_BYPASS, { session_id, tool_name: 'Agent',
+      tool_input: { subagent_type, description: 'Repair calls', prompt: 'Find callers.' },
+    });
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /resumes denied write work/);
+  }
 });
 
 test('pre-tool hook: the Explore guard stays out of unrouted and unidentified sessions', () => {
@@ -930,7 +920,7 @@ test('pre-tool hook: a bounded read-only diagnostic probe may self-test dispatch
 
 test('pre-tool hook: arbitrary implementation agents are denied and directed to ticketed routes', () => {
   for (const [subagent_type, prompt] of [
-    ['web-researcher', 'Research the latest routing guidance.'],
+    ['web-researcher', 'Install the latest routing tools.'],
     ['implementation-agent', 'Implement the new flow.'],
   ]) {
     const out = runHookOutput(FORCE_BYPASS, {
@@ -939,18 +929,9 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
     });
     const reason = out.hookSpecificOutput.permissionDecisionReason;
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
-    assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
-    assert.match(reason, /Read, Glob, Grep, or WebFetch inline, not WebSearch/);
-    assert.match(reason, /A usable route needs a fresh Board MCP dispatch and its exact returned executor/);
-    assert.match(reason, /Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch/);
-    assert.match(reason, /Do not use a raw Agent or Sidequest CLI fallback/);
-    assert.match(reason, /quick investigation, needs a ticket: file a spike/);
-    assert.match(reason, /codebase-exploration/);
-    assert.match(reason, /route it, dispatch it, then spawn the returned executor/);
-    assert.match(reason, /blocked work still gates any dependent action/);
-    assert.match(reason, /do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed/);
-    assert.match(reason, /rerouting around this block is a violation/);
-    assert.doesNotMatch(reason, /sidequest-diagnostic-probe only|WebSearch is executor-only/);
+    assert.match(reason, /requests write or ticket work without a prepared dispatch/);
+    assert.match(reason, /Use a native read-only agent for lookups/);
+    assert.match(reason, /dispatch the ticket and spawn its returned executor for writes/);
   }
   const mismatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -1213,8 +1194,7 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
     tool_name: 'Agent',
     tool_input: { subagent_type: 'general-purpose', prompt: 'Quick lookup.' },
   });
-  assert.equal(mainThread.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(mainThread.hookSpecificOutput.permissionDecisionReason, /generic Agent, not a Sidequest ticket executor/);
+  assert.equal(mainThread, null);
 });
 
 test('pre-tool hook: a generated per-ticket executor definition owns its ticket by name', () => {
@@ -1744,8 +1724,8 @@ test('pre-tool hook: a marked arbitrary agent is still denied', () => {
   });
   const reason = marked.hookSpecificOutput.permissionDecisionReason;
   assert.equal(marked.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
-  assert.match(reason, /file a spike/);
+  assert.match(reason, /requests write or ticket work without a prepared dispatch/);
+  assert.match(reason, /native read-only agent/);
   assert.match(reason, /returned executor/);
 });
 
@@ -1861,94 +1841,27 @@ test('pre-tool repeated-command hook warns for PowerShell commands', () => {
   assert.match(runHook(REPEATED_COMMAND_WARN, payload), /polling burns ~14s and ~60k tokens per call/);
 });
 
-test('pre-tool inline-work hook makes board dispatch the default for solo work', () => {
-  const session_id = `inline-solo-${Date.now()}`;
-  const output = runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
-  });
-  assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
-  assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage, 'the nudge must reach the model, not only the terminal');
-  assert.match(output.systemMessage, /^sidequest: 0 reads \/ 1 commands with no board call\./);
-  assert.match(output.systemMessage, /standing authorization: file the ticket\(s\) with add and dispatch now; do not offer\./);
-  assert.match(output.systemMessage, /Only a one-or-two-file edit at a known location stays inline\.$/);
-  assert.doesNotMatch(output.systemMessage, /offer dispatch|name why inline/i);
-  assert.ok(Buffer.byteLength(output.systemMessage, 'utf8') <= 768, 'the PreToolUse nudge must fit its context budget');
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
-  }), null);
-});
-
-test('pre-tool inline-work hook nudges prolonged investigations with live counts', () => {
-  const session_id = `inline-investigation-${Date.now()}`;
-  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
-  for (let readActions = 1; readActions < 8; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  const firstInvestigationNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(firstInvestigationNudge.systemMessage, /^sidequest: 8 reads \/ 0 commands with no board call\./);
-  assert.ok(Buffer.byteLength(firstInvestigationNudge.systemMessage, 'utf8') <= 768, 'the PreToolUse investigation nudge must fit its context budget');
-  for (let readActions = 9; readActions < 24; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  const escalation = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(escalation.systemMessage, /^sidequest: 24 reads \/ 0 commands with no board call\. You have continued after an earlier reminder\./);
-  assert.ok(Buffer.byteLength(escalation.systemMessage, 'utf8') <= 768, 'the repeated PreToolUse nudge must fit its context budget');
-});
-
-test('pre-tool inline-work hook escalates substantive work at widening intervals', () => {
-  const session_id = `inline-escalation-${Date.now()}`;
+test('pre-tool inline-work hook gives one advisory after 25 substantive actions', () => {
+  const session_id = `inline-advisory-threshold-${Date.now()}`;
   const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /1 commands with no board call/);
-  for (let substantiveActions = 2; substantiveActions < 4; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 4 commands with no board call/);
-  for (let substantiveActions = 5; substantiveActions < 12; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 12 commands with no board call/);
-  for (let substantiveActions = 13; substantiveActions < 36; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands with no board call/);
+  for (let action = 1; action < 25; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const output = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage);
+  assert.match(output.systemMessage, /25 substantive actions/);
+  assert.match(output.systemMessage, /Small fixes at known locations may stay inline/);
+  assert.ok(Buffer.byteLength(output.systemMessage, 'utf8') <= 768);
+  for (let action = 0; action < 30; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  runHookOutput(INLINE_WORK_NUDGE, { ...payload, tool_name: 'mcp__plugin_sidequest_board__list' });
+  runHookOutput(BOARD_FIRST_REMINDER, { session_id, cwd: BOARD_PATH, prompt: 'hi' });
+  for (let action = 0; action < 25; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
 });
 
-test('pre-tool inline-work hook nudges the second native Agent spawn at widening intervals', () => {
-  const session_id = `inline-native-agent-${Date.now()}`;
-  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore' } };
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  const secondNativeAgentNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.ok(secondNativeAgentNudge, 'the second native Agent spawn must nudge');
-  assert.match(secondNativeAgentNudge.systemMessage, /^sidequest: 2 native subagents this session;/);
-  assert.match(secondNativeAgentNudge.systemMessage, /native Explore\/general-purpose inherits the session model/);
-  assert.match(secondNativeAgentNudge.systemMessage, /codebase-exploration, research, spike-investigation/);
-  assert.ok(Buffer.byteLength(secondNativeAgentNudge.systemMessage, 'utf8') <= 768, 'the native Agent nudge must fit its context budget');
-  for (let nativeAgentSpawns = 3; nativeAgentSpawns < 6; nativeAgentSpawns += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /^sidequest: 6 native subagents this session;/);
-});
-
-test('pre-tool inline-work hook treats Sidequest executor spawns as board interaction', () => {
-  const session_id = `inline-sidequest-agent-${Date.now()}`;
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'sidequest-exec-readonly-medium' },
-  }), null);
-  for (let readActions = 0; readActions < 8; readActions += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
-    }), null);
+test('pre-tool inline-work hook stays quiet for reads and native investigation agents', () => {
+  const session_id = `inline-readonly-${Date.now()}`;
+  for (const tool_name of ['Read', 'Grep', 'Glob', 'Agent']) {
+    const payload = { session_id, cwd: BOARD_PATH, tool_name, tool_input: { subagent_type: 'Explore' } };
+    for (let action = 0; action < 26; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
   }
-  for (let substantiveActions = 0; substantiveActions < 4; substantiveActions += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
-    }), null);
-  }
-  const nativePayload = { session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore' } };
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, nativePayload), null);
-  const nativeAgentNudge = runHookOutput(INLINE_WORK_NUDGE, nativePayload);
-  assert.ok(nativeAgentNudge, 'native spawns after a Sidequest executor spawn must still nudge');
-  assert.match(nativeAgentNudge.systemMessage, /^sidequest: 2 native subagents this session;/);
-});
-
-test('pre-tool inline-work hook nudges native Agent spawns after board interaction', () => {
-  const session_id = `inline-native-after-board-${Date.now()}`;
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
-  }), null);
-  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: {} };
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  const nativeAgentNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.ok(nativeAgentNudge, 'native Agent spawns must nudge even after a board interaction');
-  assert.match(nativeAgentNudge.systemMessage, /^sidequest: 2 native subagents this session;/);
 });
 
 test('pre-tool inline-work hook keeps bounded transcript lookups inline-safe', () => {
@@ -2031,9 +1944,7 @@ test('usable-route admission keeps unavailable boards inline without a raw Agent
       tool_name: 'Agent',
       tool_input: { subagent_type: 'general-purpose', prompt: 'Inspect this repository.' },
     });
-    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Continue bounded inline work with direct tools/);
-    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /do not create a fake Sidequest or raw Agent lifecycle fallback/);
+    assert.equal(denied, null, 'read-only native work does not depend on an available ticket route');
   } finally {
     store.removeProjectCategory(slug, 'general');
     for (const category of categories) {
@@ -2056,13 +1967,15 @@ test('pre-tool inline-work nudge counts PowerShell edits and skips test and buil
   const shell = (tool_name: string, command: string) => runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name, tool_input: { command } });
   for (const [tool, command] of <Array<[string, string]>>[
     ['Bash', 'npm test'],
+    ['PowerShell', 'npm --prefix plugins/demo run build:check'],
     ['Bash', 'cd plugins/demo && npm run build:check'],
     ['Bash', 'node --import tsx --test test/hooks.test.ts'],
     ['Bash', 'node -e "console.log(1)"'],
     ['PowerShell', 'npm test'],
     ['PowerShell', 'Get-ChildItem src'],
   ]) assert.equal(shell(tool, command), null, `${tool}: ${command} must not count as an edit`);
-  assert.match(shell('PowerShell', 'Set-Content notes.txt hello').systemMessage, /^sidequest: 1 reads \/ 1 commands with no board call\./);
+  for (let action = 1; action < 25; action += 1) assert.equal(shell('PowerShell', 'Set-Content notes.txt hello'), null);
+  assert.match(shell('PowerShell', 'Set-Content notes.txt hello').systemMessage, /25 substantive actions/);
 });
 
 test('a new user prompt reopens the inline-work nudge after a board call, and keeps the Explore cap lifted', () => {
@@ -2071,7 +1984,8 @@ test('a new user prompt reopens the inline-work nudge after a board call, and ke
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__list', tool_input: {} }), null);
   for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null, 'a board call silences the nudge for the rest of that prompt');
   runHookOutput(BOARD_FIRST_REMINDER, { session_id, cwd: BOARD_PATH, prompt: 'hi' });
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).systemMessage, /^sidequest: 0 reads \/ 1 commands with no board call\./);
+  for (let action = 1; action < 25; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).systemMessage, /25 substantive actions/);
   for (let round = 1; round <= 3; round += 1) {
     const spawn = runHookOutput(FORCE_BYPASS, {
       session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: `Sweep the docs tree, angle ${round}.` },
@@ -2085,7 +1999,7 @@ test('user-prompt reminder waits for a work request instead of a greeting', () =
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'hi' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'what is the status?' }), null);
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Refactor the claim flow.' });
-  assert.match(reminder.hookSpecificOutput.additionalContext, /file precise tickets with add and dispatch them without offering\. Only a one-or-two-file edit at a known location stays inline\.$/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /offer one-owner dispatch/);
   assert.doesNotMatch(reminder.hookSpecificOutput.additionalContext, /informed inline judgment/);
 });
 
@@ -2100,7 +2014,7 @@ test('user-prompt reminder tells a boardless git repo root that the first add cr
 
   const hint = runHookOutput(BOARD_FIRST_REMINDER, { session_id: `boardless-repo-${Date.now()}`, cwd: repo, prompt });
   assert.equal(hint.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-  assert.match(hint.hookSpecificOutput.additionalContext, /^sidequest: no board here yet\. .*the first add creates this repo's board and dispatch is ready through the default profile/);
+  assert.match(hint.hookSpecificOutput.additionalContext, /^sidequest: no board here yet\. .*offer one-owner dispatch; the first add creates the board/);
   assert.equal(store.findProject(repo).ok, false, 'the hint must not create the board');
   // The suite's throwaway SIDEQUEST_HOME lives under temp, which makes the store accept temp fixtures;
   // pointing the hook's temp dir at the scratch folder restores the rule a real session sees.
@@ -2114,8 +2028,8 @@ test('user-prompt reminder fires once for the first human prompt', () => {
   const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
   assert.equal(reminder.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-  assert.match(reminder.hookSpecificOutput.additionalContext, /using Explore only for a quick sweep/);
-  assert.match(reminder.hookSpecificOutput.additionalContext, /codebase-exploration spike/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /offer one-owner dispatch/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /read-only investigations may use native agents without tickets/);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
 });
 
@@ -2149,7 +2063,7 @@ test('user-prompt reminder ignores automation without consuming the session flag
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<agent-message>Worker needs input.</agent-message>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command>Command output.</local-command>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command-caveat>Command output.</local-command-caveat>' }), null);
-  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /file precise tickets with add and dispatch them without offering/);
+  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /offer one-owner dispatch/);
 });
 
 test('user-prompt reminder ignores subagent identity variants and routing-disabled boards', () => {
@@ -2420,7 +2334,7 @@ test('hooks.json routes every live-claim mutation tool to force-exec-bypass for 
   const toolNames = [...rules.slice(0, rules.indexOf('\n};')).matchAll(/^  (mcp__[\w]+):/gm)].map((match) => match[1]);
   assert.deepEqual(
     [...toolNames].sort(),
-    ['mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
+    ['mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
     'the rule table changed: route the new tool in hooks.json and list it here',
   );
   for (const toolName of toolNames) {
@@ -2472,7 +2386,7 @@ test('hook manifest routes force-exec-bypass for every live-claim mutation rule 
   const command = 'node hooks/force-exec-bypass.js';
   for (const toolName of toolNames) {
     assert.ok(routesForceExecBypass(preToolUse, toolName), `${toolName} has an authority rule but no force-exec-bypass.js route`);
-    for (const matcher of ['*', toolNames.join('|'), 'mcp__plugin_sidequest_board__(?:update|scopeRequest|remove|verdict)']) {
+    for (const matcher of ['*', toolNames.join('|'), 'mcp__plugin_sidequest_board__(?:dispatch|update|scopeRequest|remove|verdict)']) {
       assert.ok(routesForceExecBypass([{ matcher, hooks: [{ command }] }], toolName), `${matcher} must route ${toolName}`);
     }
     assert.equal(routesForceExecBypass([{ matcher: `${toolName}_other`, hooks: [{ command }] }], toolName), false, 'a different tool must not route');
@@ -3653,18 +3567,13 @@ test('session-start: tells orchestrators when to fan out independent work', () =
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
   const orchestration = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
   const userStory = fs.readFileSync(path.join(pluginRoot, 'skills', 'user-story', 'SKILL.md'), 'utf8');
-  assert.match(skill, /independent audits, migrations, and reviews/i);
-  assert.match(skill, /Dispatch concurrently despite isolated-worktree overlap/i);
-  assert.match(skill, /sequential\/shared-design work together/i);
-  assert.match(skill, /size shards by items and verify cost/i);
-
   for (const surface of [skill, orchestration, userStory]) {
-    assert.match(surface, /one\s+investigation\s+ticket\s+per\s+independent\s+item/i);
+    assert.match(surface, /one owner/i);
+    assert.match(surface, /3\+ independently checkable pieces and a stated reason/i);
+    assert.match(surface, /named risk for each lens/i);
+    assert.match(surface, /inline without (?:a ticket|tickets)/i);
+    assert.doesNotMatch(surface, /NEVER means you implement\s+inline|one\s+investigation\s+ticket\s+per\s+independent\s+item/i);
   }
-  for (const surface of [skill, orchestration]) {
-    assert.match(surface, /SOLO-FIT picks\s+one-executor vs wave; it NEVER means you implement\s+inline/);
-  }
-  assert.match(userStory, /This never means the orchestrator implements it/);
 
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `fanout-${source || 'startup'}`, source });

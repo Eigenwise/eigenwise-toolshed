@@ -5222,3 +5222,53 @@ test('GH-361: no prepared dispatch spawn, before or after the launch hook, carri
 
 
 export {};
+
+
+test('shared-tree investigation dispatch grants no whole-tree write scope', () => {
+  for (const category of ['research', 'dispatch.lifecycle']) {
+    const ticket = store.createTicket(slug, {
+      title: 'Read the repository only', category,
+      description: 'Investigate the call flow. No repository writes.', source: 'test',
+    });
+    const sessionId = `readonly-shared-${ticket.id}`;
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId, runtimeCwd: PROJECT });
+    assert.equal(prepared.ticket.dispatch.readonly, true);
+    assert.equal(prepared.ticket.dispatch.sharedTree, true);
+    assert.notEqual(prepared.ticket.dispatch.unscopedOverride?.writeScope, 'write scope: unscoped (whole tree)');
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'readonly-cleanup', { force: true, status: 'todo', source: 'test' }).ok, true);
+  }
+  const ticket = store.createTicket(slug, { title: 'Write repository files', category: 'dispatch.lifecycle', source: 'test' });
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, runtimeCwd: PROJECT }), /no declared file scope for write work/);
+});
+
+test('write-capable executor done accepts a report only with no commits or dirty declared paths', () => {
+  for (const change of ['none', 'dirty', 'committed', 'empty-commit']) {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-report-closeout-'));
+    execFileSync('git', ['clone', '--quiet', PROJECT, repository]);
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
+    execFileSync('git', ['config', 'user.name', 'Report Closeout Test'], { cwd: repository });
+    const projectSlug = store.ensureProject(repository).slug;
+    const ticket = store.createTicket(projectSlug, { title: 'Investigate a scoped write task', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test' });
+    const sessionId = `report-closeout-${ticket.id}`;
+    const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId, sharedTree: true, runtimeCwd: repository });
+    const executor = prepared.ticket.dispatchExecutor;
+    const agentName = `report-worker-${ticket.id}`;
+    assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentName, agentName).ok, true);
+    const by = `report-owner-${ticket.id}`;
+    assert.equal(store.claimTicket(projectSlug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+    if (change === 'dirty' || change === 'committed') fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 2;\n');
+    if (change === 'committed') execFileSync('git', ['commit', '--quiet', '-am', 'change tracked file'], { cwd: repository });
+    if (change === 'empty-commit') execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'empty commit'], { cwd: repository });
+    const body = 'Investigation finished, no repository change was needed.';
+    const result = store.completeTicket(projectSlug, ticket.ref, by, { sessionId, body });
+    assert.equal(result.ok, change === 'none', `done result for ${change}: ${result.reason}`);
+    if (change === 'none') {
+      assert.equal(store.getTicket(projectSlug, ticket.ref).status, 'done');
+      assert.ok(store.getTicket(projectSlug, ticket.ref).comments.some((comment: { body: string }) => comment.body === body));
+      assert.equal(store.getTicket(projectSlug, ticket.ref).submission, undefined);
+    } else {
+      assert.equal(store.releaseTicket(projectSlug, ticket.ref, by, { sessionId, status: 'todo', source: 'test' }).ok, true);
+    }
+  }
+});

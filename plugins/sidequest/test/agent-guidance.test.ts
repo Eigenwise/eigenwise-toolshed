@@ -75,13 +75,13 @@ test('published guidance excludes retired instructions', () => {
 });
 
 test('SQ-2731: the negative-control grammar an executor is told matches the guard recovery guidance', () => {
-  const grammar = /failed=<n> failure-kind=<assertion\|import\|collection>/;
+  const grammar = /failed=<n> failure-kind=assertion/;
   assert.match(executorTemplate, grammar);
   assert.match(negativeControlRecoveryGuidance(), grammar);
   assert.doesNotMatch(executorTemplate, /an ImportError or collection error only proves a symbol vanished/);
 });
 
-test('sidequest listing description leads with the board default and leaves inline exceptions to the body', () => {
+test('sidequest listing description allows bounded inline fixes alongside delegated work', () => {
   const frontmatter = skill.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   assert.ok(frontmatter, 'skill frontmatter must be present');
   const frontmatterLines = frontmatter[1].split(/\r?\n/);
@@ -95,10 +95,10 @@ test('sidequest listing description leads with the board default and leaves inli
   const description = descriptionLines.join(' ');
   assert.ok(description.length > 0, 'skill description must not be empty');
   assert.ok(description.length <= 1536, `skill description is ${description.length} characters`);
-  assert.match(description, /^Default for multi-file or multi-step work, even where there is no board yet/);
+  assert.match(description, /^Use for delegated work and board lifecycle; small bounded fixes may stay inline without a ticket/);
   assert.match(description, /\bUse for\b/);
-  assert.doesNotMatch(description, /\bStay inline for\b/, 'inline guidance lives in the skill body, not the listing');
-  assert.match(skill, /Answer direct questions; do operational requests and stated one-line edits to 1–2 named files inline/);
+  assert.match(skill, /Answer direct questions and operational requests inline/);
+  assert.match(skill, /Small bounded fixes in a few known files may stay inline without tickets/);
 });
 
 test('external tracker guidance keeps authored GitHub communication self-contained', () => {
@@ -126,6 +126,9 @@ test('operating guidance uses live taxonomy and consistent recon boundaries', ()
     assert.doesNotMatch(source, /`docs-writing`|`security-audit`/);
   }
   for (const source of [skill, userStory, orchestration]) {
+    assert.match(source, /Read-only investigations may use native Explore or general-purpose agents without tickets/);
+  }
+  for (const source of [userStory, orchestration]) {
     assert.match(source, /bounded recon.*named anchors/i);
     assert.match(source, /unfamiliar[\s\S]{0,80}deep investigation/i);
   }
@@ -443,7 +446,9 @@ test('all twelve executors discover optional gates without a shipped quality man
     assert.equal(fs.readFileSync(path.join(ROOT, 'agents', filename), 'utf8'), source, filename);
     assert.match(source, /configured quality gate when the briefing names one/);
     assert.match(source, /unmeasured bodies stay unmeasured, no averages/);
-    assert.match(source, /no quality gate is\s+configured for this project; Quartermaster setup can add one/);
+    assert.match(source, /run the repository's documented quality command/);
+    assert.match(source, /complexity\/coverage UNVERIFIED: <exact reason from the tool>/);
+    assert.doesNotMatch(source, /Quartermaster setup can add one/);
     assert.match(source, /Absence alone never holds,\s+parks or marks work UNVERIFIED/);
     assert.doesNotMatch(source, /strictly below (?:CRAP )?\d|must score CRAP|coverage (?:of |>=? )?\d+%/);
   }
@@ -458,6 +463,44 @@ test('orchestrators hold missing measurement only for a configured gate', () => 
     assert.match(source, /only when a gate is configured/);
     assert.match(source, /gate absence alone never holds, parks or marks work UNVERIFIED/);
   }
+});
+
+
+test('environment-bound capture guidance stays identical in the template and every generated executor', () => {
+  const clause = "Run the ticket's exact verifier on that clean committed candidate once for final capture unless the briefing marks it environment-bound";
+  assert.ok(executorTemplate.includes(clause));
+  const executors: Map<string, string> = agentsync.bundledExecutorSources();
+  assert.ok(executors.size > 0);
+  for (const [filename, source] of executors) {
+    if (filename.startsWith('sidequest-exec-')) assert.ok(source.includes(clause), filename);
+    assert.strictEqual(fs.readFileSync(path.join(ROOT, 'agents', filename), 'utf8'), source, filename);
+  }
+});
+
+test('environment-lane references agree on the delivery gate, background CLI and one-bounce boundary', () => {
+  for (const source of [publishing, orchestration, invocationContracts]) {
+    assert.match(source, /delivery gate/);
+    assert.match(source, /run_in_background/);
+    assert.match(source, /environment_lane_requires_cli/);
+    assert.match(source, /merge` or `replay/);
+    assert.match(source, /apply` leaves the target dirty/);
+    assert.match(source, /environment_lane_second_failure/);
+    assert.match(source, /[Rr]eview-bound/);
+    assert.match(source, /groomClose/);
+    assert.match(source, /deliveryCommit/);
+  }
+});
+
+test('Docker/browser setup keeps the shared environment explicit and per-worktree provisioning opt-in', () => {
+  const gettingStarted = fs.readFileSync(path.join(ROOT, '..', '..', 'docs', 'src', 'content', 'docs', 'getting-started', 'sidequest.md'), 'utf8');
+  assert.match(gettingStarted, /worktreeIsolation: true/);
+  assert.match(gettingStarted, /verifyEnvironment: shared/);
+  assert.match(gettingStarted, /delivery: merge/);
+  assert.match(gettingStarted, /integrationBranch` equal to the branch checked out/);
+  assert.match(gettingStarted, /integrationVerifyTimeoutMs` at least as long as the measured gate duration/);
+  assert.match(gettingStarted, /pinned gate must include any app rebuild.restart/);
+  assert.match(gettingStarted, /per-worktree environment is a separate project opt-in through `worktreeSetup/);
+  assert.match(gettingStarted, /verifyEnvironment: isolated/);
 });
 
 export {};

@@ -442,13 +442,9 @@ test('a shared-tree write dispatch refuses an empty verification completion unle
   assert.equal(noOp.ok, true);
   assert.equal(store.getTicket(slug, ticket.ref).claim.verification, undefined);
 
-  const doneRefused = store.completeTicket(slug, ticket.ref, 'tree-check-executor', { body: 'No repository change.' });
-  assert.equal(doneRefused.ok, false);
-  assert.equal(doneRefused.reason, 'submission_required');
-  assert.equal(store.completeTicket(slug, ticket.ref, 'tree-check-executor', {
-    body: 'No repository change.',
-    cleanDeclaredScope: true,
-  }).ok, true);
+  const completed = store.completeTicket(slug, ticket.ref, 'tree-check-executor', { body: 'No repository change.' });
+  assert.equal(completed.ok, true);
+  assert.equal(completed.ticket.status, 'done');
 });
 
 test('verification completions accept statuses, evidence, and the legacy bare marker', () => {
@@ -570,7 +566,7 @@ test('a mixed source and test diff needs a claim-holder negative control before 
   });
   assert.equal(missing.ok, false);
   assert.equal(missing.reason, 'negative_control_required');
-  assert.match(missing.message, /Revert the non-test changes, run the changed tests/);
+  assert.match(missing.message, /Revert the changed source while keeping changed tests importable/);
 
   const submission = store.submitTicket(slug, ticket.ref, by, { commit: COMMIT });
   assert.equal(submission.ok, false);
@@ -645,7 +641,7 @@ test('a mixed source and test diff needs a claim-holder negative control before 
   });
   assert.equal(importError.reason, 'negative_control_import_error');
   assert.match(importError.message, /recorded negative control failed with an ImportError/);
-  assert.match(importError.message, /only an assertion failure proves they catch wrong behavior/);
+  assert.match(importError.message, /import or collection failures never prove assertion failure/);
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
@@ -1635,4 +1631,290 @@ test('activity at the same instant as the stop resumes the dispatch and pulse do
   assert.equal(pulse.died, null);
   assert.notEqual(pulse.liveness, 'dead');
   assert.equal(store.claimReleaseVerdict(resumed), null);
+});
+
+
+const provenanceFiles = ['lib/provenance.js', 'test/provenance.test.js'];
+const provenanceCommand = 'node --test test/provenance.test.js';
+
+function provenanceTicket(title: string) {
+  return store.createTicket(slug, { title, category: 'coding.normal', files: provenanceFiles,
+    description: 'Where: native provenance fixture. Contract: preserve source ownership and explicit unverified holds. Verify: exercise native completion.',
+    executorVerify: provenanceCommand, executorVerifyKind: 'command', source: 'mcp' });
+}
+
+async function provenanceBoardTool(name: string, argumentsList: Record<string, unknown>) {
+  const previousDirectory = process.cwd();
+  process.chdir(PROJECT_DIR);
+  try {
+    const mcp = require('../lib/mcp.js');
+    const response = await mcp.handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { project: PROJECT_DIR, ...argumentsList } } });
+    assert.equal(response.result.isError, undefined, response.result.content[0].text);
+    return JSON.parse(response.result.content[0].text);
+  } finally {
+    process.chdir(previousDirectory);
+  }
+}
+
+async function claimProvenance(ticket: { ref: string }, kind: string, sources: readonly Record<string, unknown>[] = []) {
+  const sessionId = ticket.ref + '-provenance-main';
+  const previousSession = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = sessionId;
+  try {
+    await provenanceBoardTool('dispatch', { ref: ticket.ref, sharedTree: true, workProvenance: { kind, sources } });
+  } finally {
+    if (previousSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousSession;
+  }
+  const prepared = store.getTicket(slug, ticket.ref);
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { token: prepared.dispatchNonce, executor: prepared.dispatchExecutor,
+    sessionId, agentName: prepared.dispatch.launchName, source: 'test' }).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, ticket.ref + '-owner', { token: prepared.dispatchNonce,
+    executor: prepared.dispatchExecutor, sessionId, source: 'mcp' }).ok, true);
+  return store.getTicket(slug, ticket.ref);
+}
+
+async function nativeProvenanceVerification(ticket: { ref: string }) {
+  const previousContext = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  try {
+    return await require('../lib/verify-capture.js').runCapturedVerification(provenanceCommand, { project: PROJECT_DIR, ticket: ticket.ref }, PROJECT_DIR);
+  } finally {
+    if (previousContext !== undefined) process.env.NODE_TEST_CONTEXT = previousContext;
+  }
+}
+
+async function nativeProvenanceProducer() {
+  const producer = provenanceTicket('source provenance native released preparation');
+  claimRouted(producer, producer.ref + '-producer');
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), `module.exports = [2, '${producer.ref}'][0];\n`);
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[1]), "const test = require('node:test'); const assert = require('node:assert/strict'); test('owned value equals two', () => assert.equal(require('../lib/provenance'), 2));\n");
+  const committed = await provenanceBoardTool('commit', { ref: producer.ref, by: producer.ref + '-producer', worktree: PROJECT_DIR, message: 'Native provenance fixture' });
+  assert.equal(committed.ok, true, JSON.stringify(committed));
+  const candidate = git(['rev-parse', 'HEAD']);
+  const capture = await nativeProvenanceVerification(producer);
+  assert.equal(capture.capture.status, 'passed');
+  const verifierOutput = fs.readFileSync(capture.capture.logPath, 'utf8');
+  assert.match(verifierOutput, /owned value equals two/);
+  assert.match(verifierOutput, /# pass 1/);
+  assert.equal(capture.recorded.ok, true, JSON.stringify(capture.recorded));
+  assert.equal(store.releaseTicket(slug, producer.ref, producer.ref + '-producer', { status: 'todo', kind: 'handback', reason: 'Synthetic unmeasured preparation', source: 'mcp' }).ok, true);
+  const released = store.getTicket(slug, producer.ref);
+  return { ref: producer.ref, preparedAt: released.dispatch.preparedAt, commit: candidate, captureId: capture.recorded.capture.id };
+}
+
+function provenanceCompletion(ticket: { ref: string }) {
+  return store.addComment(slug, ticket.ref, { by: ticket.ref + '-owner', body: '[sidequest:verify-complete] passed: owned value equals two passed; provenance execution and quality remain UNVERIFIED.', source: 'mcp' });
+}
+
+function releaseProvenance(ticket: { ref: string }) {
+  assert.equal(store.releaseTicket(slug, ticket.ref, ticket.ref + '-owner', { status: 'todo', kind: 'handback', reason: 'Fixture provenance remains unverified', source: 'mcp' }).ok, true);
+}
+
+test('source provenance accepts unchanged tests from genuine released native preparation without inventing a red', async () => {
+  const origin = await nativeProvenanceProducer();
+  const ticket = await claimProvenance(provenanceTicket('source provenance unchanged inherited tests'), 'inherited-read-only', [origin]);
+  assert.equal(ticket.dispatch.workProvenance.sources[0].status, 'preparation-unaccepted');
+  assert.equal(ticket.lifecycleAttempt.workProvenance.execution, 'UNVERIFIED');
+  assert.equal(ticket.dispatch.workProvenance.quality, 'UNVERIFIED');
+  assert.equal(provenanceCompletion(ticket).ok, true);
+  assert.equal(require('../lib/store/work-provenance.js').provenanceAdmissionHold(ticket.dispatch.workProvenance).reason, 'work_provenance_unverified');
+  assert.equal(store.getTicket(slug, origin.ref).submission, undefined);
+  releaseProvenance(ticket);
+});
+
+async function laterProvenanceGeneration(ref: string) {
+  const producer = store.getTicket(slug, ref);
+  const holder = ref + '-later-producer';
+  claimRouted(producer, holder);
+  fs.appendFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), 'module.exports = 2;\n');
+  const committed = await provenanceBoardTool('commit', { ref, by: holder, worktree: PROJECT_DIR, message: 'Later native provenance fixture' });
+  assert.equal(committed.ok, true, JSON.stringify(committed));
+  const commit = git(['rev-parse', 'HEAD']);
+  assert.equal(store.releaseTicket(slug, ref, holder, { status: 'todo', kind: 'handback', reason: 'Later fixture generation', source: 'mcp' }).ok, true);
+  return commit;
+}
+
+test('source provenance matches an archived released generation by its own preparedAt and capture', async () => {
+  const origin = await nativeProvenanceProducer();
+  await laterProvenanceGeneration(origin.ref);
+  const producer = store.getTicket(slug, origin.ref);
+  assert.notEqual(producer.dispatch.preparedAt, origin.preparedAt);
+  const archived = producer.dispatch.attempts.find((attempt: { preparedAt: string }) => attempt.preparedAt === origin.preparedAt);
+  assert.equal(archived.baseCommit.length, 40);
+  assert.deepEqual(archived.declaredFiles, [...provenanceFiles, '.release/unreleased/' + origin.ref + '.md']);
+  assert.deepEqual(archived.sanctionedCommits, [origin.commit]);
+  assert.equal(archived.verificationRequirement.command, provenanceCommand);
+  const ticket = await claimProvenance(provenanceTicket('source provenance retained archived generation'), 'inherited-read-only', [origin]);
+  assert.equal(ticket.dispatch.workProvenance.sources[0].generation.preparedAt, origin.preparedAt);
+  assert.deepEqual(ticket.dispatch.workProvenance.sources[0].generation.sanctionedCommits, [origin.commit]);
+  assert.equal(ticket.dispatch.workProvenance.sources[0].capture.id, origin.captureId);
+  releaseProvenance(ticket);
+});
+
+test('source provenance never uses latest generation ownership for an earlier preparedAt', async () => {
+  const origin = await nativeProvenanceProducer();
+  const latestCommit = await laterProvenanceGeneration(origin.ref);
+  const ticket = provenanceTicket('source provenance latest ownership cannot stand in');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'historical-origin-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [{ ref: origin.ref, preparedAt: origin.preparedAt, commit: latestCommit }] } }, { allowWorkProvenance: true }), /commit lacks native producer ownership/);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+test('source provenance refuses a historical submitted candidate replaced by a later submission', async () => {
+  const origin = await nativeProvenanceProducer();
+  const latestCommit = await laterProvenanceGeneration(origin.ref);
+  const producer = store.getTicket(slug, origin.ref);
+  const archived = producer.dispatch.attempts.find((attempt: { preparedAt: string }) => attempt.preparedAt === origin.preparedAt);
+  archived.outcome = 'submitted';
+  archived.commit = origin.commit;
+  producer.submission = { commit: latestCommit, base: producer.dispatch.baseCommit,
+    commits: [latestCommit], admittedScope: provenanceFiles };
+  persist(producer);
+  const ticket = provenanceTicket('source provenance historical submitted ownership mismatch');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'historical-submission-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true }),
+  { message: 'work provenance refused: historical submitted generation ' + origin.preparedAt + ' candidate ' + origin.commit + ' differs from current submission ' + latestCommit });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+test('source provenance names the missing fact and generation for legacy archived attempts', async () => {
+  const origin = await nativeProvenanceProducer();
+  await laterProvenanceGeneration(origin.ref);
+  const producer = store.getTicket(slug, origin.ref);
+  const archived = producer.dispatch.attempts.find((attempt: { preparedAt: string }) => attempt.preparedAt === origin.preparedAt);
+  const retained = structuredClone(archived);
+  const ticket = provenanceTicket('source provenance legacy archive has no inferred facts');
+  for (const field of ['baseCommit', 'declaredFiles', 'sanctionedCommits', 'verificationRequirement', 'tokenPrefix']) {
+    Object.assign(archived, retained);
+    delete archived[field];
+    persist(producer);
+    assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'legacy-origin-main', workProvenance: {
+      kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true }), { message: 'work provenance refused: producer generation ' + origin.preparedAt + ' missing ' + field });
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+  }
+});
+
+test('source provenance refuses changed source/test bytes and changed native producer generations', async () => {
+  const origin = await nativeProvenanceProducer();
+  const ticket = await claimProvenance(provenanceTicket('source provenance exact byte and generation binding'), 'inherited-read-only', [origin]);
+  const location = path.join(PROJECT_DIR, provenanceFiles[0]);
+  const exact = fs.readFileSync(location);
+  fs.writeFileSync(location, 'module.exports = 1;\n');
+  const defective = require('node:child_process').spawnSync(process.execPath, ['--test', provenanceFiles[1]], { cwd: PROJECT_DIR, encoding: 'utf8', timeout: 10_000, env: { ...process.env, NODE_TEST_CONTEXT: undefined } });
+  assert.equal(defective.status, 1);
+  assert.match(defective.stdout, /ERR_ASSERTION/);
+  assert.match(defective.stdout, /owned value equals two/);
+  assert.equal(provenanceCompletion(ticket).reason, 'work_provenance_mismatch');
+  fs.writeFileSync(location, exact);
+  assert.deepEqual(fs.readFileSync(location), exact);
+  assert.equal(provenanceCompletion(ticket).ok, true);
+  store.prepareDispatch(slug, origin.ref, { sharedTree: true, sessionId: origin.ref + '-fresh-main' });
+  assert.equal(provenanceCompletion(ticket).reason, 'work_provenance_mismatch');
+  releaseProvenance(ticket);
+});
+
+test('source provenance distinguishes GREEN behavior-preserving refactors from new behavior requiring an owned red', async () => {
+  const refactor = await claimProvenance(provenanceTicket('source provenance declared GREEN refactor'), 'behavior-preserving-refactor');
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), 'module.exports = 1 + 1;\n');
+  fs.appendFileSync(path.join(PROJECT_DIR, provenanceFiles[1]), 'test("refactored value stays two", () => assert.equal(require("../lib/provenance"), 2));\n');
+  execFileSync(process.execPath, ['--test', provenanceFiles[1]], { cwd: PROJECT_DIR, stdio: 'pipe', timeout: 10_000, env: { ...process.env, NODE_TEST_CONTEXT: undefined } });
+  const completed = provenanceCompletion(refactor);
+  assert.equal(completed.ok, true);
+  assert.match(completed.comment.body, /negativeControl: not_required\(behavior-preserving-refactor\)/);
+  releaseProvenance(refactor);
+  git(['add', ...provenanceFiles]);
+  git(['commit', '-m', 'Green refactor fixture']);
+  const behavior = await claimProvenance(provenanceTicket('source provenance new behavior retains red requirement'), 'new-behavior');
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), 'module.exports = 3;\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[1]), "const test = require('node:test'); const assert = require('node:assert/strict'); test('owned value equals three', () => assert.equal(require('../lib/provenance'), 3));\n");
+  assert.equal(provenanceCompletion(behavior).reason, 'negative_control_required');
+  const exact = fs.readFileSync(path.join(PROJECT_DIR, provenanceFiles[0]));
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), 'module.exports = 2;\n');
+  const defective = require('node:child_process').spawnSync(process.execPath, ['--test', provenanceFiles[1]], { cwd: PROJECT_DIR, encoding: 'utf8', timeout: 10_000, env: { ...process.env, NODE_TEST_CONTEXT: undefined } });
+  assert.equal(defective.status, 1);
+  assert.match(defective.stdout, /ERR_ASSERTION/);
+  assert.match(defective.stdout, /owned value equals three/);
+  fs.writeFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), exact);
+  assert.deepEqual(fs.readFileSync(path.join(PROJECT_DIR, provenanceFiles[0])), exact);
+  assert.equal(store.addComment(slug, behavior.ref, { by: behavior.ref + '-owner', body: '[sidequest:negative-control] target=lib/provenance.js; assertion=owned value equals three; node --test test/provenance.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed owned value equals three', source: 'mcp' }).ok, true);
+  assert.equal(provenanceCompletion(behavior).ok, true);
+  releaseProvenance(behavior);
+  git(['add', ...provenanceFiles]);
+  git(['commit', '-m', 'New behavior control fixture']);
+});
+
+test('source provenance refuses actor self-grants and retroactive declaration without modifying the generation', async () => {
+  const ticket = provenanceTicket('source provenance authority cannot be supplied by an actor');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'worker-main-label', allowWorkProvenance: true,
+    workProvenance: { kind: 'inherited-read-only', sources: [] } }), /main-thread MCP grant/);
+  const claimed = await claimProvenance(ticket, 'inherited-read-only');
+  const before = JSON.stringify(store.getTicket(slug, ticket.ref).dispatch);
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sessionId: 'real-main', workProvenance: { kind: 'behavior-preserving-refactor', sources: [] } }, { allowWorkProvenance: true }), /late declaration/);
+  assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref).dispatch), before);
+  releaseProvenance(claimed);
+});
+
+test('source provenance refuses forged producer generation and unrelated immutable capture identity', async () => {
+  const origin = await nativeProvenanceProducer();
+  const ticket = provenanceTicket('source provenance rejects incompatible producer evidence');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'source-origin-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [{ ...origin, preparedAt: 'forged-generation' }] } }, { allowWorkProvenance: true }), /producer generation mismatch/);
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'source-origin-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [{ ...origin, captureId: 'unrelated-control' }] } }, { allowWorkProvenance: true }), /capture identity is unavailable/);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+
+test('annotation-only work executes the author-pinned typecheck oracle without a control', async () => {
+  const files = ['lib/annotation.js', 'test/annotation.test.js'];
+  const command = JSON.stringify(process.execPath) + ' ' + JSON.stringify(path.join(path.dirname(require.resolve('typescript/package.json')), 'bin', 'tsc')) + ' --allowJs --checkJs --noEmit --skipLibCheck lib/annotation.js';
+  const ticket = store.createTicket(slug, { title: 'annotation oracle uses the typechecker', category: 'coding.normal', files,
+    description: 'Where: annotation fixture. Contract: typecheck annotations without a behavior control. Verify: the real TypeScript compiler checks the annotated source.',
+    executorVerify: command, executorVerifyKind: 'typecheck', source: 'mcp' });
+  const claimed = await claimProvenance(ticket, 'type-annotation-only');
+  fs.writeFileSync(path.join(PROJECT_DIR, files[0]), '/** @type {number} */\nconst value = 2;\nmodule.exports = value;\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, files[1]), "const test = require('node:test'); const assert = require('node:assert/strict'); test('annotation preserves value two', () => assert.equal(require('../lib/annotation'), 2));\n");
+  git(['add', ...files]);
+  git(['commit', '-m', 'annotation typecheck fixture']);
+  const captured = await require('../lib/verify-capture.js').runCapturedVerification(command, { project: PROJECT_DIR, ticket: claimed.ref }, PROJECT_DIR);
+  assert.equal(captured.capture.status, 'passed');
+  assert.equal(captured.recorded.ok, true);
+  assert.equal(store.pinnedVerificationRequirement(store.getTicket(slug, claimed.ref)).kind, 'typecheck');
+  const completed = provenanceCompletion(claimed);
+  assert.equal(completed.ok, true);
+  assert.match(completed.comment.body, /negativeControl: not_required\(type-annotation-only\)/);
+  releaseProvenance(claimed);
+});
+
+test('docs and fixture-only frozen work record their completion exemptions', async () => {
+  for (const kind of ['docs', 'fixture-only']) {
+    const ticket = await claimProvenance(provenanceTicket('nonbehavior oracle ' + kind), kind);
+    fs.appendFileSync(path.join(PROJECT_DIR, provenanceFiles[0]), '\n');
+    fs.appendFileSync(path.join(PROJECT_DIR, provenanceFiles[1]), '\n');
+    const completed = provenanceCompletion(ticket);
+    assert.equal(completed.ok, true);
+    assert.ok(completed.comment.body.includes('negativeControl: not_required(' + kind + ')'));
+    releaseProvenance(ticket);
+    git(['add', ...provenanceFiles]);
+    git(['commit', '-m', 'nonbehavior completion fixture ' + kind]);
+  }
+});
+
+
+test('author-chosen oracles preserve executable and evidence-only requirements', () => {
+  const { verificationRequirement } = require('../lib/kernel/verification.js');
+  for (const kind of ['command', 'typecheck']) {
+    assert.deepEqual(verificationRequirement({ kind, evidence: 'node --version' }), {
+      kind, command: 'node --version', evidenceContract: 'node --version',
+    });
+  }
+  for (const kind of ['document', 'schema', 'link', 'custom', 'review']) {
+    assert.deepEqual(verificationRequirement({ kind, evidence: 'checked artifact' }), { kind, evidenceContract: 'checked artifact' });
+  }
+  assert.deepEqual(verificationRequirement({ kind: 'manual', evidence: 'manual: inspected artifact' }), { kind: 'manual', evidenceContract: 'inspected artifact' });
+  assert.deepEqual(verificationRequirement({ kind: 'attestation', artifact: 'proof.json' }), { kind: 'attestation', artifact: 'proof.json', evidenceContract: 'attestation evidence for proof.json' });
+  assert.deepEqual(verificationRequirement({ kind: 'suite', command: 'node --test' }), { kind: 'suite', command: 'node --test', evidenceContract: 'named suite output' });
+  const suite = { name: 'fixture', cwd: '.', command: 'node --test' };
+  assert.deepEqual(verificationRequirement({ kind: 'command', suite }), { kind: 'suite', suite: { ...suite, setup: null }, command: 'cd . && node --test', evidenceContract: 'suite fixture output' });
 });

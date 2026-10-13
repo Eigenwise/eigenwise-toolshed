@@ -10,7 +10,7 @@ const { runOwnedPhase } = require('./owned-process-tree.js');
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectories = ['agents', 'bin', 'lib', 'hooks'];
 // The deadline bounds this build phase. POSIX owns its inherited process group;
-// Windows direct-leaf exit alone cannot prove the esbuild service child was cleaned up.
+// Windows owns a Job Object, so the esbuild service child ends with the phase too.
 const buildPhaseTimeoutMilliseconds = 300_000;
 
 function outputHashes() {

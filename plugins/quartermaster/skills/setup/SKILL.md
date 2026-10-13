@@ -155,6 +155,8 @@ handing off implementation. Draw from three sources, in this order:
     exact gate command and its cost (the analyzer, LCOV setup, and coverage execution). Only write
     the config and live rule after approval. The gate owns the threshold; keep numbers out of
     executor and orchestrator instructions.
+    The gate is an on-demand command, never a per-turn blocking hook; see "What the gate is not" in
+    [references/crap-gate.md](references/crap-gate.md).
 
 Before putting a named plugin or external recommendation in the plan, keep the local catalog first and
 use it as the source for installed state. Research only candidates that would lead to an install or

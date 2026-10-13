@@ -34,10 +34,10 @@ const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 const FORCE_EXEC_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 
-function initRepo(prefix: string) {
+function initRepo(prefix: string, parent: string = os.tmpdir()) {
   // native realpath expands 8.3 short names (CI's RUNNERA~1 temp dir) the way git's
   // show-toplevel does, so refusal text can be compared against the fixture path.
-  const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(parent, prefix)));
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
   git(['init', '-b', 'main']);
   git(['config', 'user.name', 'Sidequest Test']);
@@ -2474,7 +2474,12 @@ test('an unrelated executor subagent does not inherit a session fallback claim',
 });
 
 test('a destructive git command is refused while the shared checkout carries uncommitted work', () => {
-  const repo = initRepo('sq-destructive-repo-');
+  // Match CI's nested temp paths on every platform; the sq- prefix lets _temp-cleanup collect the parent.
+  const temporaryParent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sidequest-full-suite-')));
+  const repositoryPrefix = 'sq-destructive-repo-'.padEnd(94 - temporaryParent.length, '-');
+  const repo = initRepo(repositoryPrefix, temporaryParent);
+  assert.ok(repo.length >= 94, 'exercises at least the Windows CI shared-checkout path length');
+  store.ensureProject(repo);
   const clean = runHook(GUARD_DESTRUCTIVE, {
     cwd: repo,
     tool_name: 'Bash',
@@ -2491,8 +2496,11 @@ test('a destructive git command is refused while the shared checkout carries unc
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.ok(reason.includes('executor-work.txt'), 'lists what would be destroyed');
-  assert.ok(reason.includes('git stash push'), 'names the recoverable alternative');
-  assert.ok(reason.includes('sidequest recover-shared'), 'names the exact recovery action');
+  assert.ok(reason.includes('git stash push -u -m "sidequest recovery"'), 'preserves the complete named-stash command');
+  assert.ok(reason.includes(`sidequest recover-shared --project "${worktrees.canonicalPath(repo)}" --stash <stash@{n}> --yes`), 'preserves the complete recovery command and project path');
+  assert.ok(reason.endsWith('That exact recovery action verifies the stash before it runs `git reset --hard && git clean -fd`.'), 'preserves the final stash-verification warning');
+  assert.ok(!reason.includes('content omitted'), `fits the PreToolUse budget untruncated at a ${repo.length}-character repo path`);
+  assert.ok(Buffer.byteLength(reason, 'utf8') <= 768, 'stays within the PreToolUse byte budget');
 
   const narrow = runHook(GUARD_DESTRUCTIVE, {
     cwd: repo,

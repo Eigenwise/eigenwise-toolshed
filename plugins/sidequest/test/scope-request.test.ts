@@ -98,3 +98,56 @@ test('scopeRequest names only the refused paths when one addition is approved an
   assert.equal(result.state, 'refused');
   assert.equal(result.message, `Scope expansion refused: ${outside}.`);
 });
+
+function trackBuildFiles(fixture: ReturnType<typeof createClaimedDispatch>, files: string[]) {
+  const repository = fixture.store.readMeta(fixture.project).path;
+  for (const file of files) {
+    fs.mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+    fs.writeFileSync(path.join(repository, file), '');
+  }
+  execFileSync('git', ['add', '--', ...files], { cwd: repository, windowsHide: true });
+}
+
+test('scopeRequest grants tracked outputs of declared and already granted sources', () => {
+  const sources = ['plugins/sidequest/src/lib/store/tickets.ts', 'plugins/sidequest/src/hooks/worktree-create.ts', 'plugins/sidequest/src/bin/sidequest.ts'];
+  const outputs = sources.map((source) => source.replace('/src/', '/').replace(/\.ts$/, '.js'));
+  const fixture = createClaimedDispatch(sources.slice(0, 2));
+  trackBuildFiles(fixture, [...sources, ...outputs]);
+  const sourceGrant = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', [sources[2]]);
+  assert.equal(sourceGrant.state, 'granted');
+
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', outputs);
+  assert.equal(result.state, 'granted');
+  assert.deepEqual(result.approved, outputs);
+  assert.deepEqual(result.refused, []);
+  for (const source of sources) {
+    assert.ok(result.comment.body.includes('build output of ' + source));
+  }
+  assert.ok(fixture.store.getTicket(fixture.project, fixture.ticket.ref).files.includes(outputs[2]));
+});
+
+test('scopeRequest refuses outputs without a granted source and untracked or nested hook outputs', () => {
+  const fixture = createClaimedDispatch(['plugins/sidequest/src/lib/store/tickets.ts', 'plugins/sidequest/src/hooks/shared/paths.ts']);
+  const requested = ['plugins/sidequest/lib/other.js', 'plugins/sidequest/lib/store/tickets.js', 'plugins/sidequest/hooks/shared/paths.js'] as const;
+  trackBuildFiles(fixture, [requested[0], requested[2]]);
+
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', requested);
+  assert.equal(result.state, 'refused');
+  assert.deepEqual(result.approved, []);
+  assert.deepEqual(result.refused, requested);
+  assert.doesNotMatch(result.comment.body, /build output of/);
+});
+
+test('scopeRequest refuses a foreign fragment and names its board ticket owner', () => {
+  const fixture = createClaimedDispatch();
+  const owner = fixture.store.createTicket(fixture.project, { title: 'Own the other release note', category: 'debugging', files: ['README.md'] });
+  const fragment = '.release/unreleased/' + owner.ref + '.md';
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', [fragment]);
+
+  assert.equal(result.state, 'refused');
+  assert.deepEqual(result.approved, []);
+  assert.deepEqual(result.refused, [fragment]);
+  assert.ok(result.message.includes('is owned by ' + owner.ref + ' (' + owner.title + ')'));
+  assert.ok(result.comment.body.includes('is owned by ' + owner.ref));
+  assert.equal(fixture.store.getTicket(fixture.project, fixture.ticket.ref).files.includes(fragment), false);
+});

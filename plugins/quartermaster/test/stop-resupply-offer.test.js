@@ -92,16 +92,16 @@ test('Stop offer stays silent below the resupply thresholds', () => {
   assert.equal(runHook(projectDir, stateDir), '');
 });
 
-test('Stop offer blocks once with the resupply skill and decline escape hatch', () => {
+test('Stop offer advises the user with the resupply skill and decline command', () => {
   const { projectDir, stateDir } = overdueProject();
   recordOverdueTallies(projectDir, stateDir);
 
   const output = JSON.parse(runHook(projectDir, stateDir));
-  assert.equal(output.decision, 'block');
-  assert.match(output.reason, /\/quartermaster:resupply/);
-  assert.match(output.reason, /decline-resupply/);
-  assert.match(output.reason, /without clearing the evidence window/);
-  assert.match(output.reason, /4 sessions/);
+  assert.equal(output.decision, undefined);
+  assert.match(output.systemMessage, /\/quartermaster:resupply/);
+  assert.match(output.systemMessage, /decline-resupply/);
+  assert.match(output.systemMessage, /without clearing the evidence window/);
+  assert.match(output.systemMessage, /4 sessions/);
   assert.ok(Buffer.byteLength(JSON.stringify(output)) <= 512, 'Stop guidance stays inside the hook output budget');
 });
 
@@ -115,8 +115,8 @@ test('Stop offer uses active transcript metadata without starting resupply', () 
   assert.notEqual(rawOutput, '', 'four active transcripts refill the due window without SessionEnd tallies');
   const output = JSON.parse(rawOutput);
   const state = readProjectState(projectDir, { CLAUDE_CONFIG_DIR: configDir, QUARTERMASTER_STATE_DIR: stateDir });
-  assert.equal(output.decision, 'block');
-  assert.match(output.reason, /If they say yes or gave standing permission/, 'the reason asks for permission before resupply');
+  assert.equal(output.decision, undefined);
+  assert.match(output.systemMessage, /Want a focused resupply round/, 'the message offers resupply without starting it');
   assert.equal(state.lastResupplyAt, null, 'the offer does not start a resupply');
   assert.equal(fs.existsSync(path.join(stateDir, 'decisions.jsonl')), false, 'the offer does not create a decision ledger');
   assert.deepEqual(fs.readdirSync(projectDir), [], 'the offer does not write project settings');
@@ -144,7 +144,7 @@ test('Stop offer runs once per session', () => {
   const { projectDir, stateDir } = overdueProject();
   recordOverdueTallies(projectDir, stateDir);
 
-  assert.equal(JSON.parse(runHook(projectDir, stateDir)).decision, 'block');
+  assert.match(JSON.parse(runHook(projectDir, stateDir)).systemMessage, /Want a focused resupply round/);
   assert.equal(runHook(projectDir, stateDir), '');
 });
 
@@ -152,7 +152,7 @@ test('Stop offer observes its cross-session cooldown', () => {
   const { projectDir, stateDir } = overdueProject();
   recordOverdueTallies(projectDir, stateDir);
 
-  assert.equal(JSON.parse(runHook(projectDir, stateDir)).decision, 'block');
+  assert.match(JSON.parse(runHook(projectDir, stateDir)).systemMessage, /Want a focused resupply round/);
   assert.equal(runHook(projectDir, stateDir, { session_id: 'next-stop-session' }), '');
 });
 
@@ -162,15 +162,27 @@ test('a SessionStart nudge does not suppress its first Stop offer', () => {
   recordOverdueTallies(projectDir, stateDir);
   markNudged(projectDir, environment);
 
-  assert.equal(JSON.parse(runHook(projectDir, stateDir)).decision, 'block');
+  assert.match(JSON.parse(runHook(projectDir, stateDir)).systemMessage, /Want a focused resupply round/);
 });
 
 test('declining a resupply round suppresses the next Stop offer', () => {
   const { projectDir, stateDir } = overdueProject();
   recordOverdueTallies(projectDir, stateDir);
 
-  assert.equal(JSON.parse(runHook(projectDir, stateDir)).decision, 'block');
+  assert.match(JSON.parse(runHook(projectDir, stateDir)).systemMessage, /Want a focused resupply round/);
   const result = runDecline(projectDir, stateDir);
   assert.ok(result.lastDeclinedAt);
   assert.equal(runHook(projectDir, stateDir, { session_id: 'after-decline' }), '');
+});
+
+test('Stop offer never returns a blocking or continuation decision', () => {
+  const { projectDir, stateDir } = overdueProject();
+  recordOverdueTallies(projectDir, stateDir);
+
+  const output = JSON.parse(runHook(projectDir, stateDir));
+  assert.deepEqual(Object.keys(output), ['systemMessage']);
+  assert.equal(output.systemMessage.includes('Finish your reply'), false);
+  assert.equal(runHook(projectDir, stateDir), '');
+  assert.equal(runHook(projectDir, stateDir, { stop_hook_active: true }), '');
+  assert.equal(runHook(projectDir, stateDir, { session_id: '' }), '');
 });

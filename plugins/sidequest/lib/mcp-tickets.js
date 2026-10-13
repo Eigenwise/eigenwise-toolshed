@@ -82,7 +82,7 @@ const VERIFY_CWD_PROP = { type: "string", description: "Directory the verify com
 const VERIFY_ORACLE_PROP = {
   type: "string",
   maxLength: store.EXECUTOR_VERIFY_MAX,
-  description: "Pin the required verifier in the prepared attempt. command and suite use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry."
+  description: "Pin the required verifier in the prepared attempt. command, suite and typecheck use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry."
 };
 function liveVerificationAmendment(ticket) {
   const amendment = Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments.at(-1) : null;
@@ -138,7 +138,7 @@ const tools = [
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
         verifyCwd: VERIFY_CWD_PROP,
-        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
+        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
         storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
@@ -242,7 +242,7 @@ const tools = [
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
         verifyCwd: VERIFY_CWD_PROP,
-        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
+        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
         storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },

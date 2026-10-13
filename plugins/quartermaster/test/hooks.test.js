@@ -5,6 +5,8 @@ const test = require('node:test');
 
 const { hooks } = require('../hooks/hooks.json');
 
+require('./stop-resupply-offer.test.js');
+
 test('keeps startup-only and startup-or-resume hooks separate with their existing timeouts', () => {
   assert.deepEqual(hooks, {
     SessionStart: [

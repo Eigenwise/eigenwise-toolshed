@@ -9,6 +9,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, changedPathContext, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, noAnalyzerMetric, parserTransport, readCoverage, remapRecords, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
 const { crapScore } = crapCore;
+const corePreload = new URL('../../plugins/quality-gate/lib/core.mjs', import.meta.url).href;
+const tsxPreload = new URL('../../plugins/sidequest/node_modules/tsx/dist/loader.mjs', import.meta.url).href;
+
+async function captureFixture(sourcePath, coverageDirectory, argumentsList = []) {
+  await fs.mkdir(coverageDirectory, { recursive: true });
+  assert.deepEqual(await fs.readdir(coverageDirectory), []);
+  const { NODE_TEST_CONTEXT, NODE_V8_COVERAGE, ...environment } = process.env;
+  const execution = spawnSync(process.execPath, ['--import', corePreload, ...argumentsList, sourcePath], { encoding: 'utf8', timeout: 30000, env: { ...environment, QUALITY_GATE_V8_CAPTURE: coverageDirectory } });
+  assert.equal(execution.status, 0, execution.stderr);
+}
 
 function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed', relativePath = 'plugins/example/lib/subject.js' }) {
   return {
@@ -25,7 +35,7 @@ function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed
 }
 
 function baselineOf(entries) {
-  return async () => entries.map(([identity, fingerprint]) => ({ identity, parent: '<root>', fingerprint }));
+  return async () => entries.map(([identity, fingerprint, complexity = 1]) => ({ identity, parent: '<root>', fingerprint, complexity }));
 }
 
 test('collects stable identities and source fingerprints', async () => {
@@ -93,7 +103,7 @@ test('keeps changed unverified functions in the result set', async () => {
     'base-sha',
     baselineOf([]),
   );
-  assert.deepEqual(changedMetrics, [unverified]);
+  assert.deepEqual(changedMetrics, [{ ...unverified, classification: 'new' }]);
   assert.deepEqual(await compareAgainstBase([unverified], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([])), []);
 });
 
@@ -103,32 +113,32 @@ test('treats a file that is new since the base as entirely changed', async () =>
     throw new Error(`fatal: path '${relativePath}' exists on disk, but not in '${base}'`);
   };
   const changedMetrics = await changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', newFileAtBase);
-  assert.deepEqual(changedMetrics, [fresh]);
+  assert.deepEqual(changedMetrics, [{ ...fresh, classification: 'new' }]);
   const otherFailure = async () => { throw new Error('fatal: not a git repository'); };
   await assert.rejects(changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', otherFailure), /not a git repository/);
 });
 
-test('accepts a changed function whose score falls below six', async () => {
-  const lowered = metric({ complexity: 3, coverage: 1, fingerprint: 'lowered' });
+test('accepts a changed function whose complexity rose but whose score stays below six', async () => {
+  const raised = metric({ complexity: 3, coverage: 1, fingerprint: 'raised' });
   const failures = await compareAgainstBase(
-    [lowered],
+    [raised],
     ['plugins/example/lib/subject.js'],
     'base-sha',
-    baselineOf([[lowered.identity, 'higher']]),
+    baselineOf([[raised.identity, 'prior', 2]]),
   );
   assert.deepEqual(failures, []);
 });
 
-test('fails a changed over-ceiling function without a delta ratchet', async () => {
+test('fails a physically changed over-ceiling function at equal or lowered complexity too', async () => {
   const changed = metric({ complexity: 7, coverage: 0.5, fingerprint: 'changed' });
-  const failures = await compareAgainstBase(
-    [changed],
-    ['plugins/example/lib/subject.js'],
-    'base-sha',
-    baselineOf([[changed.identity, 'prior']]),
-  );
-  assert.equal(failures.length, 1);
-  assert.match(failures[0], /subject cc=7 coverage=50\.00%/);
+  const raised = await compareAgainstBase([changed], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([[changed.identity, 'prior', 6]]));
+  assert.equal(raised.length, 1);
+  assert.match(raised[0], /subject cc=7 coverage=50\.00%/);
+  for (const baseComplexity of [7, 9]) {
+    const [legacy] = await changedMetricsAgainstBase([changed], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([[changed.identity, 'prior', baseComplexity]]));
+    assert.equal(legacy.classification, 'legacy-unchanged');
+    assert.equal((await compareAgainstBase([changed], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([[changed.identity, 'prior', baseComplexity]]))).length, 1);
+  }
 });
 
 test('scores JavaScript and TypeScript wherever it lives, skipping generated Sidequest build output and other languages', () => {
@@ -180,11 +190,12 @@ test('measures both siblings where Lizard loses brace tracking: a template liter
 test('scores a source function from its AST complexity and mapped coverage', async () => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-source-metrics-'));
   const sourcePath = path.join(temporaryDirectory, 'fixture.js');
-  const sourceText = 'function subject(value) { return value ? 1 : 0; }';
+  const sourceText = 'function subject(value) { return value ? 1 : 0; }\nsubject(0); subject(1);';
   await fs.writeFile(sourcePath, sourceText);
   try {
-    const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [{ functionName: 'subject', ranges: [{ startOffset: 0, endOffset: sourceText.length, count: 1 }] }]]]);
-    const [metricResult] = await sourceMetrics(sourcePath, coverageScripts);
+    const coverageDirectory = path.join(temporaryDirectory, 'coverage');
+    await captureFixture(sourcePath, coverageDirectory);
+    const [metricResult] = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
     assert.equal(metricResult.name, 'subject');
     assert.equal(metricResult.unverified, undefined);
     assert.deepEqual([metricResult.complexity, metricResult.coverage, metricResult.crap], [2, 1, 2]);
@@ -316,13 +327,18 @@ test('scores an inline callback covered in one process and idle in another as co
   const sourcePath = path.join(temporaryDirectory, 'fixture.js');
   const callback = '(value) => value > 1 ? value : 0';
   const outer = `function outer(values) {\n  return values.map(${callback});\n}`;
-  const sourceText = `${outer}\n`;
+  const sourceText = `${outer}\nouter(JSON.parse(process.env.VALUES));\n`;
   await fs.writeFile(sourcePath, sourceText);
   try {
-    const idleProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 0)];
-    const busyProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 3)];
-    const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [...idleProcess, ...busyProcess]]]);
-    const metrics = await sourceMetrics(sourcePath, coverageScripts);
+    const coverageDirectory = path.join(temporaryDirectory, 'coverage');
+    await fs.mkdir(coverageDirectory);
+    assert.deepEqual(await fs.readdir(coverageDirectory), []);
+    const { NODE_TEST_CONTEXT, NODE_V8_COVERAGE, ...environment } = process.env;
+    for (const values of ['[]', '[0, 2]']) {
+      const execution = spawnSync(process.execPath, ['--import', corePreload, sourcePath], { encoding: 'utf8', timeout: 30000, env: { ...environment, VALUES: values, QUALITY_GATE_V8_CAPTURE: coverageDirectory } });
+      assert.equal(execution.status, 0, execution.stderr);
+    }
+    const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
     const closure = metrics.find((entry) => entry.name === '<anonymous>');
     assert.equal(closure.coverage, 1);
     assert.equal(closure.crap, 2);
@@ -339,12 +355,12 @@ async function coverageOutput(relativePath, text, records = []) {
   return { relativePath, descriptors: await collectFunctions(text, relativePath), records };
 }
 
-test('pairs a TypeScript inline callback with its twin in the built output', async () => {
+test('raw built callback names cannot establish TypeScript source ownership', async () => {
   const source = await coverageOutput('src/lib/subject.ts', typedSource);
   const unrelatedBundle = await coverageOutput('hooks/other.js', 'function elsewhere() { return [1].map((item) => item); }\n');
   const built = await coverageOutput('lib/subject.js', builtText, [v8Record('', builtText, builtCallback, 2)]);
   const closure = source.descriptors.find((descriptor) => descriptor.name === '<anonymous>');
-  assert.deepEqual(functionCoverage(closure, [source, unrelatedBundle, built]), { coverage: 1 });
+  assert.match(functionCoverage(closure, [source, unrelatedBundle, built]).unverified, /capture binding/);
 });
 
 test('leaves a TypeScript inline callback unverified when the built output does not line up', async () => {
@@ -352,7 +368,7 @@ test('leaves a TypeScript inline callback unverified when the built output does 
   const reshapedText = `export function outer(values) {\n  const extra = () => 0;\n  return values.map(${builtCallback});\n}\n`;
   const built = await coverageOutput('lib/subject.js', reshapedText, [v8Record('', reshapedText, builtCallback, 2)]);
   const closure = source.descriptors.find((descriptor) => descriptor.name === '<anonymous>');
-  assert.match(functionCoverage(closure, [source, built]).unverified, /lib\/subject\.js do not line up with the source/);
+  assert.match(functionCoverage(closure, [source, built]).unverified, /capture binding/);
 });
 
 test('reads a built output with its functions, and skips one that was never built', async () => {
@@ -360,11 +376,11 @@ test('reads a built output with its functions, and skips one that was never buil
   const outputPath = path.join(temporaryDirectory, 'subject.js');
   await fs.writeFile(outputPath, builtText);
   try {
-    const records = [v8Record('', builtText, builtCallback, 2)];
-    const coverageScripts = new Map([[path.resolve(outputPath).replaceAll('\\', '/').toLowerCase(), records]]);
+    const captures = [{ unverified: 'missing capture binding' }];
+    const coverageScripts = new Map([[path.resolve(outputPath).replaceAll('\\', '/').toLowerCase(), captures]]);
     const output = await builtOutput(outputPath, coverageScripts, true);
     assert.deepEqual(output.descriptors.map((descriptor) => descriptor.name), ['outer', '<anonymous>']);
-    assert.equal(output.records, records);
+    assert.equal(output.captures[0].unverified, captures[0].unverified);
     assert.deepEqual((await builtOutput(outputPath, new Map(), false)).descriptors, []);
     assert.equal(await builtOutput(path.join(temporaryDirectory, 'missing.js'), coverageScripts, true), null);
   } finally {
@@ -434,7 +450,7 @@ test('a file no suite loaded is unverified with the child-process capture hint i
   try {
     const [metricResult] = await sourceMetrics(sourcePath, new Map());
     assert.match(metricResult.unverified, /^no suite loaded this file, so it has no coverage record/);
-    assert.match(metricResult.unverified, /NODE_V8_COVERAGE/);
+    assert.match(metricResult.unverified, /QUALITY_GATE_V8_CAPTURE/);
     assert.equal(metricResult.crap, undefined);
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
@@ -447,7 +463,7 @@ test('remaps V8 ranges through a source map and drops a record whose function ra
     { functionName: 'kept', ranges: [{ startOffset: 10, endOffset: 50, count: 1 }, { startOffset: 20, endOffset: 120, count: 0 }] },
     { functionName: 'lost', ranges: [{ startOffset: 100, endOffset: 150, count: 1 }] },
   ];
-  assert.deepEqual(remapRecords(records, toOriginal), [{ functionName: 'kept', ranges: [{ startOffset: 0, endOffset: 40, count: 1 }] }]);
+  assert.deepEqual(remapRecords(records, toOriginal), []);
 });
 
 const typedTestFile = [
@@ -465,26 +481,21 @@ const typedTestFile = [
   '',
 ].join('\n');
 
-test('a tsx-loaded TypeScript test file gets its callback and helper scored from source-mapped coverage', async () => {
-  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-fixture-'));
+test('tsx callbacks and helpers remain unverified without compiler source content', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-tsx-fixture-'));
   const coverageDirectory = path.join(fixtureRoot, 'coverage');
   const sourcePath = path.join(fixtureRoot, 'typed.test.ts');
   await fs.writeFile(sourcePath, typedTestFile);
   try {
-    const { NODE_TEST_CONTEXT, ...environment } = process.env;
-    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'typed.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
-    assert.equal(result.status, 0, result.stderr);
+    await captureFixture(sourcePath, coverageDirectory, ['--import', tsxPreload, '--test']);
     const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
-    const rows = Object.fromEntries(metrics.map((entry) => [entry.name, [entry.line, entry.complexity, entry.coverage, entry.unverified]]));
-    assert.deepEqual(rows, { add: [4, 2, 1, undefined], '<anonymous>': [8, 1, 1, undefined] });
+    assert.deepEqual(metrics.map(entry => [entry.name, entry.complexity]), [['add', 2], ['<anonymous>', 1]]);
+    assert.ok(metrics.every(entry => entry.coverage === undefined && /matching source map/.test(entry.unverified)));
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });
 
-// Each nested body below must run for the test to pass. V8 names the assigned hook "" and the
-// constructor after its class, esbuild drops a lone parameter's parentheses, and tsx's __name
-// wrapper leaves the property arrow no segment of its own, so their ranges start past the AST's.
 const nestedCallbackTestFile = [
   "import assert from 'node:assert/strict';",
   "import test from 'node:test';",
@@ -510,26 +521,16 @@ const nestedCallbackTestFile = [
   '',
 ].join('\n');
 
-test('a tsx-loaded test file scores the nested callbacks that had to run with their executed coverage', async () => {
-  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-nested-'));
+test('tsx nested callbacks remain unverified without compiler source content', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-tsx-nested-'));
   const coverageDirectory = path.join(fixtureRoot, 'coverage');
   const sourcePath = path.join(fixtureRoot, 'nested.test.ts');
   await fs.writeFile(sourcePath, nestedCallbackTestFile);
   try {
-    const { NODE_TEST_CONTEXT, ...environment } = process.env;
-    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'nested.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
-    assert.equal(result.status, 0, result.stderr);
+    await captureFixture(sourcePath, coverageDirectory, ['--import', tsxPreload, '--test']);
     const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
-    const rows = metrics.map((entry) => `${entry.line} ${entry.name} ${entry.coverage}`);
-    assert.deepEqual(rows, [
-      '7 constructor 1',
-      '12 <anonymous> 1',
-      '13 hook 1',
-      '17 <anonymous> 1',
-      '17 <anonymous> 1',
-      '18 <anonymous> 1',
-      '19 size 1',
-    ]);
+    assert.deepEqual(metrics.map(entry => entry.name), ['constructor', '<anonymous>', 'hook', '<anonymous>', '<anonymous>', '<anonymous>', 'size']);
+    assert.ok(metrics.every(entry => entry.coverage === undefined && /matching source map/.test(entry.unverified)));
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -566,22 +567,23 @@ test('runs production CLI phases and its failing report outcome', async () => {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-production-cli-'));
   try {
     const result = await withCapturedProcessOutput(() => run({ base: 'HEAD', coverageDirectory, all: false }));
-    // Uncommitted edits to this gate's own files are changed paths now, scored against the empty capture above.
-    assert.ok(result.changedMetrics.every((entry) => entry.relativePath.startsWith('scripts/quality/') && entry.unverified.startsWith('no suite loaded this file')), JSON.stringify(result.changedMetrics));
+    assert.ok(result.changedMetrics.every((entry) => /^(no suite loaded this file|this gate has no analyzer for)/.test(entry.unverified)), JSON.stringify(result.changedMetrics));
 
-    const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: 'scripts/quality/crap.mjs' });
+    const freshPath = 'scripts/quality/fresh-subject.mjs';
+    const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: freshPath });
     const anotherFailingMetric = { ...failingMetric, identity: '<root>/FunctionDeclaration:anotherSubject#0', line: 2, name: 'anotherSubject' };
     await withCapturedProcessOutput(async () => {
       const reported = await reportMetrics({
-        allChangedPaths: ['scripts/quality/crap.mjs'],
+        allChangedPaths: [freshPath],
         base: 'HEAD',
         baseWasExplicit: true,
-        changedEntries: [{ path: 'scripts/quality/crap.mjs' }],
-        changedPaths: ['scripts/quality/crap.mjs'],
+        changedEntries: [{ path: freshPath }],
+        changedPaths: [freshPath],
         metrics: [anotherFailingMetric, failingMetric],
         options: { all: true },
         suiteSummary: 'none',
       });
+      assert.deepEqual(reported.changedMetrics.map((entry) => entry.classification), ['new', 'new']);
       assert.equal(reported.failures.length, 2);
       assert.equal(process.exitCode, 1);
     });
@@ -601,6 +603,7 @@ async function createCliFixture() {
   await Promise.all(['src', 'scripts', 'test'].map((directory) => fs.mkdir(path.join(pluginRoot, directory), { recursive: true })));
   await fs.mkdir(path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib'), { recursive: true });
   await fs.mkdir(qualityFixtureDirectory, { recursive: true });
+  await fs.cp(path.join(process.cwd(), 'plugins', 'quality-gate'), path.join(fixtureRoot, 'plugins', 'quality-gate'), { recursive: true, filter: (sourcePath) => !sourcePath.includes('node_modules') });
   await Promise.all([
     fs.copyFile(path.join(qualityDirectory, 'crap.mjs'), path.join(qualityFixtureDirectory, 'crap.mjs')),
     fs.copyFile(path.join(qualityDirectory, 'crap-core.cjs'), path.join(qualityFixtureDirectory, 'crap-core.cjs')),
@@ -636,7 +639,7 @@ test('the CLI scores a changed plugin script, test callback and src function wit
       fs.rm(path.join(pluginRoot, 'src', 'retired.js')),
     ]);
     const result = runCliFixture(fixtureRoot, base);
-    const rows = result.stdout.split('\n').filter((line) => /^(PASS|FAIL|UNVERIFIED) /.test(line));
+    const rows = result.stdout.split('\n').filter((line) => /^(PASS|FAIL|LEGACY|UNVERIFIED) /.test(line));
     assert.deepEqual(rows.map((row) => row.split(' ').slice(0, 3).join(' ')), [
       'PASS plugins/sidequest/scripts/helper.js:1 helper',
       'PASS plugins/sidequest/src/subject.js:1 subject',
@@ -646,28 +649,44 @@ test('the CLI scores a changed plugin script, test callback and src function wit
     assert.match(rows[0], /cc=2 coverage=100\.00% CRAP=2\.0000/);
     assert.match(rows[2], /cc=1 coverage=100\.00% CRAP=1\.0000/);
     assert.match(rows[3], /this gate has no analyzer for \.cs sources; measurement is unverified\./);
+    assert.deepEqual(result.stdout.split('\n').filter((line) => /^(NEW|MODIFIED-RAISED|LEGACY-UNCHANGED|UNCLASSIFIED):/.test(line)).map((line) => line.split(':')[0]), ['MODIFIED-RAISED', 'LEGACY-UNCHANGED', 'UNCLASSIFIED']);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /coverage suites: sidequest/);
+    assert.match(result.stderr, /coverage suites: sidequest\): 0 new, 1 modified-raised, 2 legacy-unchanged; every new or physically modified owned body must score strictly below 6/);
     assert.doesNotMatch(result.stdout + result.stderr, /retired/);
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });
 
-test('the CLI captures a fixture suite and reports passing and failing changed functions', async () => {
+test('the CLI captures every changed body and never exempts a legacy caller', async () => {
   const { fixtureRoot, base } = await createCliFixture();
+  const subjectPath = path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js');
   try {
-    await fs.writeFile(path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js'), passSubject);
+    await fs.writeFile(subjectPath, passSubject);
     const passing = runCliFixture(fixtureRoot, base);
-    assert.equal(passing.status, 0);
-    assert.match(passing.stdout, /PASS plugins\/sidequest\/src\/subject\.js:1 subject/);
-    assert.match(passing.stdout, /coverage suites: sidequest/);
+    assert.equal(passing.status, 0, passing.stderr);
+    assert.match(passing.stdout, /LEGACY-UNCHANGED: physically modified with equal or lower complexity, must score below 6 \(1\)\nPASS plugins\/sidequest\/src\/subject\.js:1 subject cc=1/);
+    assert.match(passing.stdout, /coverage suites: sidequest\): 0 new, 0 modified-raised, 1 legacy-unchanged; every new or physically modified owned body must score strictly below 6/);
 
-    await fs.writeFile(path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js'), failingSubject);
+    await fs.writeFile(subjectPath, failingSubject);
     const failing = runCliFixture(fixtureRoot, base);
     assert.equal(failing.status, 1);
-    assert.match(failing.stdout, /FAIL plugins\/sidequest\/src\/subject\.js:1 subject/);
-    assert.match(failing.stderr, /CRAP gate failed against/);
+    assert.match(failing.stdout, /MODIFIED-RAISED: complexity rose since base[^\n]*\(1\)\nFAIL plugins\/sidequest\/src\/subject\.js:1 subject cc=6/);
+    assert.match(failing.stderr, /CRAP gate failed against [^\n]*: 0 new, 1 modified-raised, 0 legacy-unchanged; every new or physically modified owned body/);
+
+    const legacyBase = commitFixture(fixtureRoot, 'legacy at cc=6');
+    await fs.writeFile(subjectPath, failingSubject.replace('return 0;', 'return -1;'));
+    const passThrough = runCliFixture(fixtureRoot, legacyBase);
+    assert.equal(passThrough.status, 1, passThrough.stderr);
+    assert.match(passThrough.stdout, /FAIL plugins\/sidequest\/src\/subject\.js:1 subject cc=6 coverage=[\d.]+% CRAP=\d/);
+    assert.match(passThrough.stderr, /1 legacy-unchanged/);
+
+    await fs.writeFile(subjectPath, failingSubject.replace('return 0;', 'return fallback(value);\n}\nfunction fallback(value) {\n  return value > 5 ? -1 : 0;'));
+    const helper = runCliFixture(fixtureRoot, legacyBase);
+    assert.equal(helper.status, 1, helper.stderr);
+    assert.match(helper.stdout, /NEW: not at base, must score below 6 \(1\)\nPASS plugins\/sidequest\/src\/subject\.js:9 fallback cc=2/);
+    assert.match(helper.stdout, /FAIL plugins\/sidequest\/src\/subject\.js:1 subject cc=6/);
+    assert.match(helper.stderr, /: 1 new, 0 modified-raised, 1 legacy-unchanged;/);
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -694,6 +713,7 @@ function collectUnderReadOnlyPermission(transport) {
   const script = "const { collectFunctions } = await import(process.env.CRAP_OWNER_URL); process.stdout.write(JSON.stringify(await collectFunctions(process.env.CRAP_FIXTURE, 'fixture.js')));";
   const environment = { ...process.env, CRAP_OWNER_URL: pathToFileURL(path.join(qualityDirectory, 'crap.mjs')).href, CRAP_FIXTURE: transportFixture, CRAP_PARSER_TRANSPORT: transport };
   delete environment.NODE_V8_COVERAGE;
+  delete environment.QUALITY_GATE_V8_CAPTURE;
   return spawnSync(process.execPath, ['--permission', '--allow-fs-read=*', '--allow-child-process', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60000, env: environment });
 }
 
@@ -728,8 +748,6 @@ test('under node --permission the sync transport is refused at the named pipe an
   assert.equal(permitted.stdout, JSON.stringify(await collectFunctions(transportFixture, 'fixture.js')));
 });
 
-// SQ-3465: tsx maps an async arrow's start past `async (`, so the record has to land inside the
-// arrow's own span, never the enclosing callback's, which would take the child's coverage.
 const asyncArrowTestFile = [
   "import assert from 'node:assert/strict';",
   "import test from 'node:test';",
@@ -767,25 +785,16 @@ const asyncArrowTestFile = [
   '',
 ].join('\n');
 
-test('a tsx-loaded test file scores an executed async arrow, assigned or a property, with its own coverage', async () => {
-  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-tsx-async-'));
+test('tsx assigned and property async arrows remain unverified without compiler source content', async () => {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-tsx-async-'));
   const coverageDirectory = path.join(fixtureRoot, 'coverage');
   const sourcePath = path.join(fixtureRoot, 'async.test.ts');
   await fs.writeFile(sourcePath, asyncArrowTestFile);
   try {
-    const { NODE_TEST_CONTEXT, ...environment } = process.env;
-    const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', 'async.test.ts'], { cwd: fixtureRoot, encoding: 'utf8', env: { ...environment, NODE_V8_COVERAGE: coverageDirectory } });
-    assert.equal(result.status, 0, result.stderr);
+    await captureFixture(sourcePath, coverageDirectory, ['--import', tsxPreload, '--test']);
     const metrics = await sourceMetrics(sourcePath, await readCoverage(coverageDirectory));
-    const rows = metrics.map((entry) => `${entry.line} ${entry.name} ${entry.coverage}`);
-    assert.deepEqual(rows, [
-      '4 fixture 1',
-      '8 cleanup 1',
-      '15 <anonymous> 1',
-      '17 cleanup 1',
-      '21 syncCleanup 1',
-      '24 idle 0',
-    ]);
+    assert.deepEqual(metrics.map(entry => entry.name), ['fixture', 'cleanup', '<anonymous>', 'cleanup', 'syncCleanup', 'idle']);
+    assert.ok(metrics.every(entry => entry.coverage === undefined && /matching source map/.test(entry.unverified)));
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }

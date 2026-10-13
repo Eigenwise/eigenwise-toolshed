@@ -1333,6 +1333,9 @@ test('working-tree briefings split capture and typed-evidence closeout', () => {
   }, 'working-tree-command-token');
   assert.match(command, /Run the pinned verify-capture wrapper/);
   assert.match(command, /done\.verify cannot replace that capture/);
+  assert.match(command, /returned as ignoredDirtyPaths, never a scope refusal/);
+  assert.match(command, /warning naming the sibling, without refusing your closeout/);
+  assert.match(command, /Your own committed paths, empty deliverable, or failed candidate verification still refuse/);
   assert.doesNotMatch(command, /done --verify "<typed evidence>"/);
 
   const document = agentsync.renderTicketBriefing({
@@ -1718,5 +1721,51 @@ test('executor briefings render complete deterministic sections', () => {
   assert.match(revised, /Story execution contract \(revision 10\)/);
   assert.notEqual(first, revised, 'a revised snapshot must produce a revised briefing');
 });
+
+
+for (const kind of ['command', 'suite']) {
+  test(`environment-bound ${kind} briefings defer the pinned verifier until delivery`, () => {
+    const briefing = agentsync.renderTicketBriefing({
+      ref: 'SQ-ENVIRONMENT', model: 'sonnet', effort: 'medium', category: {},
+      executorVerify: 'npm run environment-gate', executorVerifyKind: kind,
+      dispatch: { sharedTree: false, verificationRequirement: {
+        kind, command: 'npm run environment-gate', evidenceContract: 'environment gate', environment: 'shared',
+      } },
+    }, 'environment-token');
+    assert.ok(briefing.includes("Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log."));
+    assert.match(briefing, /Command: npm run environment-gate/);
+    assert.doesNotMatch(briefing, /^Run it through /m);
+    assert.doesNotMatch(briefing, /verify-capture\.js/);
+  });
+}
+
+test('isolated pinned requirements retain capture guidance despite ambient shared-environment config', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-ISOLATED', model: 'sonnet', effort: 'medium', category: {},
+    verifyEnvironment: 'shared',
+    dispatch: { sharedTree: false, verificationRequirement: {
+      kind: 'command', command: 'npm run isolated-check', evidenceContract: 'isolated check',
+    } },
+  }, 'isolated-token');
+  assert.match(briefing, /^Run it through node .*verify-capture\.js/m);
+  assert.doesNotMatch(briefing, /Pinned verifier is environment-bound/);
+});
+
+
+for (const { label, artifact, legacyArtifact, expectedArtifact } of [
+  { label: 'pinned', artifact: 'pinned receipt', legacyArtifact: 'legacy receipt', expectedArtifact: 'pinned receipt' },
+  { label: 'legacy fallback', artifact: undefined, legacyArtifact: 'legacy receipt', expectedArtifact: 'legacy receipt' },
+  { label: 'default', artifact: undefined, legacyArtifact: undefined, expectedArtifact: 'the declared artifact' },
+]) {
+  test(`attestation briefing preserves the ${label} artifact description`, () => {
+    const briefing = agentsync.renderTicketBriefing({
+      ref: 'SQ-ATTESTATION', model: 'sonnet', effort: 'medium', category: {},
+      executorAttestationArtifact: legacyArtifact,
+      dispatch: { verificationRequirement: { kind: 'attestation', evidenceContract: 'observed evidence', artifact } },
+    }, 'attestation-token');
+    assert.ok(briefing.includes(`Pinned verifier: attestation. Record actual evidence for ${expectedArtifact}.`));
+    assert.doesNotMatch(briefing, /^Run it through /m);
+  });
+}
 
 export {};

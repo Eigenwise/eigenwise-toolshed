@@ -26,8 +26,7 @@ merge commit as an automatic refusal.
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
 Use the project's configured quality gate, if any. Hold integration for missing quality measurement
-only when a gate is configured. Without one, run the pinned verifier, state once "no quality gate is
-configured for this project; Quartermaster setup can add one", and continue. User rules injected by
+only when a gate is configured. Without one, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. User rules injected by
 the host still apply; gate absence alone never holds, parks or marks work UNVERIFIED.
 
 ## When to run it (event-driven, never polled)
@@ -49,13 +48,15 @@ The orchestrator is the integrator. A submitted range stays pinned at `refs/side
 its exact assembled wave has delivered. A singleton can be assembled and gated during `integrate`; for
 a group, first run `sidequest assemble-wave <SQ-n> [SQ-n...] --verify "<gate evidence>"`, then pass
 that exact same participant set to `sidequest integrate`. When the participants pin a command, the gate
-runs it itself (`--verify` is only read for other verifier kinds): in a temporary detached checkout of
+runs it itself (`--verify` is only read for other verifier kinds), unless its requirement pins
+`environment: shared`: that assembled gate records `gate_deferred`, with no checkout or verifier run.
+An isolated requirement runs in a temporary detached checkout of
 the wave baseline with every candidate merged, cwd at its root, `CLAUDE_PLUGIN_*` stripped from the
 environment, and `verification.verifiedTree` naming the tree it checked. Candidates that do not merge
 cleanly refuse with `assembled_wave_compose_failed` and reject nobody. The engine refuses delivery when the group
-has no passing assembled-wave gate, includes a participant from another wave, omits a participant, or
-tries to deliver one participant from a multi-ticket wave. It records delivery only after one passing
-wave delivers its exact Git participant set and the resulting revision passes its delivery verification.
+has neither a passing assembled-wave gate nor an environment-bound `gate_deferred`, includes a participant from another wave, omits a participant, or
+tries to deliver one participant from a multi-ticket wave. It records delivery only after the gated
+wave (including an environment-bound deferred wave) delivers its exact Git participant set and the resulting revision passes its delivery verification.
 `integrate <ref> --by <who> --mode <merge|replay|apply>` performs that delivery and closes every
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
@@ -112,7 +113,7 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   attestation there can only be a mistake, so it is refused rather than dropped. The record keeps `contentEvidence`
   `delivery_revision_contains_candidate`, or `:operator_resolved` when anything was attested, plus a
   `contentProof` listing the identical, reverse-applied, deleted, and operator-resolved paths.
-- When a working-tree delivery cannot record its initial dirty baseline, it still dispatches without an inherited-path exemption, so every dirty path is attributed to the executor at closeout.
+- Working-tree closeout attributes only declared paths and the ticket's own release fragment, even when the initial dirty baseline is unavailable. Outside-scope dirt is recorded on completion and returned as `ignoredDirtyPaths`; completed sibling drift is returned and recorded as a warning naming the sibling. Neither refuses this ticket. Own committed paths, an empty deliverable, and failed own-candidate verification still refuse. Preserve other work without reverting, absorbing, or committing it.
 
 ### Overlapping candidates with different pinned verifiers
 
@@ -364,13 +365,35 @@ the ticket.
     failed, retain the refs or executor worktrees needed for recovery, record the failure on the done
     ticket, and still release the publish lock.
 
+## Environment-bound delivery
+
+The environment lane is integrate's delivery gate. An isolated dispatch pinned to
+`environment: shared` runs focused checks without the environment, commits and submits. Submit records
+`deferred`; executor capture and assembled-wave verification do not run that command. The orchestrator
+runs CLI `integrate <ref> --project <path> --json` through Bash `run_in_background` and acts on its
+completion notification while continuing independent work. MCP refuses `environment_lane_requires_cli`
+because running the environment gate inside the board server stalls executor board calls.
+
+The lane merges the pinned candidate onto the current shared-checkout tip and verifies that merged tree
+under the delivery lock. Delivery must be `merge` or `replay`: `apply` leaves the target dirty, so
+the next item refuses `integration_target_dirty`. `delivery_in_progress` names the holder, commit,
+start time and log; retry after its run finishes. Multi-ref CLI integrate can batch candidates in one
+all-or-nothing gate. `groomClose` with `deliveryCommit` also runs delivery verification in the registered
+checkout, so that closure is a lane run.
+
+A post-merge verify failure or `--no-ff` merge conflict rolls back and bounces an unbound candidate
+through rework once. The next briefing carries Pending rework with the command, log, failures and tail
+(or conflict evidence). Only the orchestrator dispatches again; nothing spawns automatically. A second
+lane failure stays parked with `environment_lane_second_failure` naming both logs. Review-bound
+candidates never auto-rework.
+
 ## Integration failures fail closed
 
 A submission that conflicts or fails post-integration reverify before local delivery closure is never
 force-merged and never silently dropped. A full gate, review, version, or push failure after local delivery
 is recorded against the already-done ticket; it must not be described as remotely reachable:
 
-- Before local delivery closure, leave its submission parked (do NOT `done`, do NOT clear it reflexively).
+- Before local delivery closure, an environment-bound unbound candidate follows the one-bounce rule above. Otherwise leave its submission parked (do NOT `done`, do NOT clear it reflexively).
 - File a narrowly scoped integration ticket for a local delivery conflict or verification failure: the
   conflicting ref, the exact failure output, the submitted commit + durable ref, and what the integrator
   may touch. Link it `blocks` the original.

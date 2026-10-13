@@ -11,6 +11,18 @@ crap = cc^2 * (1 - coverage)^3 + cc
 scores roughly its complexity squared. The classic CRAP ceiling is 30. Quartermaster starts at 6,
 which keeps every function either small or tested.
 
+## What the gate is not
+
+The gate is an on-demand command, and optionally a CI step. Quartermaster never writes a
+UserPromptSubmit, Stop, or PreToolUse hook that blocks a turn on a quality receipt, and a proposal
+never includes one. Mandatory recurring audits and pre-edit quality blocking are outside Quartermaster's
+role. A project found with such a hook gets a one-line removal recommendation in the resupply report,
+naming the exact settings path (for example `.claude/settings.local.json`). The standard stays a
+written rule the agent follows, not a hook that stops every turn.
+
+Scoring compares the session's own changes against the merge base. Files that arrived through a
+merge, rebase, or pull are other people's work and are never demanded.
+
 ## Threshold policy
 
 This gate is opt-in. Approval creates the project config and live rule; a project without them
@@ -20,7 +32,10 @@ executors and orchestrators discover it rather than copying a number into their 
 The threshold is fixed at 6, and 6 fails. The gate compares against the configured base revision and
 checks only functions the change added or modified. Untouched legacy functions, including functions in
 a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
-its prior score was lower.
+its prior score was lower. Block only on new complexity the change introduced: a function that is new
+since the base, or whose cyclomatic complexity rose, must score below 6; a legacy function the change
+only passed through (complexity equal or lower than at the base) is reported with its number as
+informational and is never a refactor demand.
 
 In a JavaScript-family file (`.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`), a function is changed or
 new only when a changed line falls inside its span. That span is the one the gate measured after the
@@ -246,6 +261,6 @@ description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
 Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
-Use the gate's threshold and report per-function rows honestly; unmeasured bodies stay unmeasured, no averages. Untouched legacy functions are out of scope.
+Use the gate's threshold and report per-function rows honestly; unmeasured bodies stay unmeasured, no averages. Untouched legacy functions are out of scope. Block only on new complexity the change introduced; a touched legacy function whose complexity did not rise is reported with its number as informational, never as a failure.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

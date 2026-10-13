@@ -7,7 +7,7 @@ description: >-
   proposes one item at a time for approval. Use whenever the user asks what would make this easier
   or faster, what they are missing, why something keeps being hard, or what could have gone better;
   when they want to improve their Claude Code setup, tooling, or workflow; whenever the
-  quartermaster nudge fires at SessionStart or a Stop-time offer blocks a real pause, after proactively asking and receiving the user's approval or when the
+  quartermaster nudge fires at SessionStart or a non-blocking Stop-time offer appears at a real pause, after proactively asking and receiving the user's approval or when the
   user has explicitly given standing permission for these rounds; proactively offer the round at a
   natural pause after a long or expensive stretch of work; or when they are starting a goal they have
   no way to verify. Running the pass requires current or standing user approval. Every recommendation
@@ -173,6 +173,9 @@ The proposal names `lizard` as the prerequisite and its install choices, `uv too
 prerequisite or coverage input needs attention for an approved gate. A project without a gate
 runs its tests and continues; missing configuration never blocks the resupply round.
 
+The proposal never includes a UserPromptSubmit, Stop, or PreToolUse hook that blocks a turn on a
+receipt. The gate is on-demand or CI; see "What the gate is not" in the CRAP reference.
+
 #### 4b. What is being done by hand that the workspace should own?
 
 Repeated command sequences, hand-rolled scripts written more than once, the same multi-step chore
@@ -262,6 +265,11 @@ host-reported policy block, not proven permission-rule provenance: ordinary tran
 distinguish a permission rule from a PreToolUse hook policy block. Do not allowlist a pattern or
 weaken a hook from that label alone. `user-rejected` still means the user does not want the action,
 so it is a rule about not doing it.
+
+A Stop or UserPromptSubmit hook in `hooks` that demands a quality or CRAP receipt before a turn can
+end is a friction finding, routed to removal: recommend deleting it in one line with the exact
+settings path. Never propose or maintain one, and never offer to repair it. The standard stays a
+written rule.
 
 ### 5. Route
 

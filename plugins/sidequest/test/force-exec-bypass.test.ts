@@ -47,3 +47,54 @@ test('composition admission host hook denies subagent probes and grants, even wi
   }
   assert.equal(preToolUseDecision('', 'composition-main-session', grant).includes('"permissionDecision":"deny"'), false);
 });
+
+
+test('work provenance host hook rejects a worker declaration under the main session and permits the main thread', () => {
+  const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
+  const declaration = { ref: 'SQ-1', workProvenance: { kind: 'inherited-read-only', sources: [] } };
+  const worker = spawnSync(process.execPath, [hook], { input: JSON.stringify({ hook_event_name: 'PreToolUse', agent_id: 'synthetic-worker',
+    session_id: 'synthetic-main', tool_name: 'mcp__plugin_sidequest_board__dispatch', tool_input: declaration }),
+    encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  assert.equal(worker.status, 0, worker.stderr);
+  assert.match(worker.stdout, /subagents cannot declare work provenance/);
+  const main = spawnSync(process.execPath, [hook], { input: JSON.stringify({ hook_event_name: 'PreToolUse', agent_id: '',
+    session_id: 'synthetic-main', tool_name: 'mcp__plugin_sidequest_board__dispatch', tool_input: declaration }),
+    encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  assert.equal(main.status, 0, main.stderr);
+  assert.equal(main.stdout.includes('"permissionDecision":"deny"'), false);
+});
+
+function nativeAgentDecision(toolInput: Record<string, unknown>): string {
+  const result = spawnSync(process.execPath, [path.join(__dirname, '../hooks/force-exec-bypass.js')], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: toolInput }),
+    encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+test('native read-only agents need no ticket or board dispatch', () => {
+  for (const subagent_type of ['general-purpose', 'Explore', 'Plan', 'claude-code-guide', 'fork', 'custom-reader']) {
+    assert.equal(nativeAgentDecision({ subagent_type, description: 'Locate call sites', prompt: 'Find callers and report source paths.' }), '', subagent_type);
+  }
+  assert.equal(nativeAgentDecision({ subagent_type: 'general-purpose', prompt: 'Read the file. Do not edit it.' }), '');
+  assert.equal(nativeAgentDecision({ subagent_type: 'general-purpose', prompt: 'Find the commit that changed the hook and report its hash.' }), '');
+});
+
+test('native ticket refs and route markers require dispatch even for Explore', () => {
+  for (const subagent_type of ['general-purpose', 'Explore', 'Plan']) {
+    for (const prompt of ['Inspect SQ-3643.', '[sidequest-route model=sonnet effort=medium ticket=SQ-1] Read files.']) {
+      assert.match(nativeAgentDecision({ subagent_type, prompt }), /requests write or ticket work without a prepared dispatch/);
+    }
+    assert.match(nativeAgentDecision({ subagent_type, description: 'Inspect SQ-1', prompt: 'Read files.' }), /permissionDecision.*deny/);
+  }
+});
+
+test('native write intent and undispatched Sidequest executor remain refused', () => {
+  for (const prompt of ['Edit the source.', 'Commit the patch.', 'Push the branch.', 'Install dependencies.']) {
+    assert.match(nativeAgentDecision({ subagent_type: 'general-purpose', prompt }), /permissionDecision.*deny/);
+  }
+  assert.match(nativeAgentDecision({ subagent_type: 'custom-reader', description: 'Edit source', prompt: 'Read files.' }), /permissionDecision.*deny/);
+  assert.match(nativeAgentDecision({ subagent_type: 'sidequest:sidequest-exec-dispatch', prompt: 'Read files.' }), /exact prepared FIRST action briefing command/);
+});

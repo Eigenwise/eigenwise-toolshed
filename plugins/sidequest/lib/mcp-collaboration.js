@@ -1,4 +1,5 @@
 "use strict";
+var import_work_provenance = require("./store/work-provenance");
 const {
   path,
   fs,
@@ -268,7 +269,7 @@ const tools = [
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
-        sharedTree: { type: "boolean", description: "Use the declared shared checkout only when the spawning runtime is already rooted there. Executors with a live claim cannot use this to dispatch child work." },
+        sharedTree: { type: "boolean", description: "Use the declared shared checkout only when the spawning runtime is already rooted there. Read-only tickets and unscoped investigations declaring no repository writes need no write-scope ruling; whole-tree write scope is never granted here. Executors with a live claim cannot use this to dispatch child work." },
         reducedAgentSchema: { type: "boolean", description: 'Omit name/mode; hook needs agent_id and permission_mode "auto" or "bypassPermissions".' },
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Give a write ticket with no declared files the whole tree as its write scope (isolated worktree only)." },
@@ -277,6 +278,21 @@ const tools = [
         retireOnly: { type: "boolean", description: "Stop after recovery-evidence retirement rather than prepare a replacement. It accepts the same eligible unclaimed attempt shapes as recovery-evidence retirement." },
         claimHolder: { type: "string", description: "The exact by identity holding the live claim being recovered." },
         worktree: { type: "string", description: "The resumed executor's linked worktree path for live-claim recovery." },
+        workProvenance: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "sources"],
+          description: "Main-thread-only declaration frozen before execution. Factual provenance, never execution evidence. Execution, quality and admission stay UNVERIFIED. Sources must name genuine terminal native producer generations and immutable owned commits. No historical receipt rebinding or composition adoption.",
+          properties: {
+            kind: { enum: import_work_provenance.WORK_KINDS },
+            sources: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["ref", "preparedAt", "commit"], properties: {
+              ref: { type: "string", minLength: 1 },
+              preparedAt: { type: "string", minLength: 1 },
+              commit: { type: "string", pattern: "^[a-f0-9]{40}$" },
+              captureId: { type: "string", minLength: 1 }
+            } } }
+          }
+        },
         full: { type: "boolean", description: "Include token, executor, warnings, and recovery details." }
       },
       required: ["ref"]
@@ -310,8 +326,9 @@ const tools = [
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.
         source: "mcp",
-        transport: "mcp"
-      });
+        transport: "mcp",
+        workProvenance: args.workProvenance
+      }, { allowWorkProvenance: true });
       if (!prepared.ok) throw new Error(`dispatch: ${prepared.message || prepared.reason || "live-claim recovery failed"}`);
       if (prepared.retired) return mutationAck(slug, prepared, { retired: true });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
