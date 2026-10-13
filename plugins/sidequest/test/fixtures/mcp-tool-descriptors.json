@@ -306,7 +306,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyCwd": {
           "type": "string"
@@ -497,7 +497,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyCwd": {
           "type": "string"
