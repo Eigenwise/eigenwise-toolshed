@@ -8,6 +8,127 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.595.0 (2026-10-12)
+
+### model-gateway 0.54.2 → 0.54.3
+
+#### Fixes
+
+- Re-arm context sentry after failed compaction (SQ-3567)
+  Re-arm the shared context sentry after completed ordinary high-usage turns, preserve compaction bypass and headroom, and keep incomplete requests from restarting the refusal attempt.
+- Keep Codex JSON compaction and incomplete turns latched (SQ-3573)
+
+### quality-gate 0.1.0 → 0.2.0
+
+#### Features
+
+- Quality Gate adds a project CRAP command with AST-backed JS and TS scoring (SQ-3510)
+  `quality-gate crap` reads project config, measures the named tree (including linked worktrees), joins same-byte LCOV coverage to runtime AST functions and writes hash-bound receipts. New and raised-complexity functions must score strictly below 6; legacy rows stay informational, scores are compared before rounding and empty scopes say why there is nothing to score. PHP/Vue keep lizard with unbound rows informational-unverified. Python is informational-unverified pending its separate real-source adapter. The old Quartermaster config is a fallback with a migration notice; Quartermaster itself is unchanged.
+- Quality Gate scores Python from a versioned source adapter (SQ-3532)
+  Python CRAP rows now come from the shipped `python-ast-1` stdlib adapter, with qualified oracle reasons, independent nested methods and callbacks, and same-byte LCOV proof. Qualified oracles drop only the assert-statement surcharge; predicate and message decisions still count. Missing proof remains unverified, and the existing strict below-6 base ratchet applies.
+
+#### Fixes
+
+- The CRAP gate enforces only new complexity and reports touched legacy functions as informational (SQ-3523)
+  The quality-gate core classifies every changed function against the base: `new` (no partner at the base), `modified-raised` (its cyclomatic complexity rose) or `legacy-unchanged` (equal or lower). Only `new` and `modified-raised` rows must score below 6 or count as unverified; a `legacy-unchanged` row is printed as `LEGACY` with its number and never fails or touches the exit code, so a pass-through edit inside a big legacy function is no longer a refactor demand. The repository gate (`scripts/quality/crap.mjs`) prints the three classes as separate sections with their counts in the summary line, and gap pairing now prefers an equal name before falling back to order, so a helper inserted above an edited function does not take its partner. The Quartermaster `crap-gate` reference and the Sidequest `verify-discipline` skill tell executors to block only on new complexity the change introduced.
+- Bind V8 coverage to exact executed function bodies (SQ-3537) [`2d096f9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2d096f9d86b68fa80f716c820f46d2ccc1a81a18)
+  Capture precise coverage and executed bytes in one inspector session. Export getters and duplicate names cannot cover unrelated bodies; unsupported or stale compiler correspondence stays UNVERIFIED.
+- Refuse incomplete executable-line coverage (SQ-3539)
+- Score every physically modified owned body (SQ-3540)
+  The strict CRAP gate now checks every new or physically modified owned body, including comments, formatting and equal or lowered complexity. Untouched legacy bodies and independently edited nested bodies keep separate scope. Python preserves physical source boundaries, and PHP/Vue report overlapping Lizard ownership as unverified.
+- Support an explicit native Python oracle policy (SQ-3541)
+  Quality Gate can explicitly select python-radon-6.0.1-oracle-1 while preserving python-ast-1 defaults. Ordinary bodies follow pinned native decisions; qualified oracles retain predicate/message decisions without the assert surcharge. Exact reason-bearing oracle allowlists are supported without class-wide or inherited exemptions. Consumer adoption and permissions remain separate.
+- Preserve independent Python child ownership (SQ-3552)
+  Python physical fingerprints now exclude independent child spans in source order. Child-only edits inside lambda-decorated nested classes and dictionaries leave their enclosing function unchanged.
+- Measure explicitly new external JavaScript helpers (SQ-3557)
+  Quality Gate accepts repeatable `measure --new-external-file` declarations for supported JavaScript files outside the project. Declared external bodies are enforced as new without a Git baseline; repository files still require `--base`. Exact native source coverage and strict path validation remain required.
+- Isolate nested Python class decisions (SQ-3558)
+  Keep nested class assertions and decisions out of enclosing bodies under the native Python policy. Preserve default behavior and independent methods and lambdas. CLI help now describes exact helper selection and keeps unselected helpers ordinary.
+- Bind native compiler block ends through their closing token (SQ-3563)
+  Compiled TypeScript coverage blocks that end on re-indented whitespace before a closing brace used to stay UNVERIFIED. The block end now binds through the compiler-mapped closing token when that token's own byte matches the source. Boundaries without an exact byte match still stay UNVERIFIED.
+- Bind native typed-return functions through exact declaration starts (SQ-3575)
+  Native TypeScript return annotations can erase the body-opening map segment. Runtime ownership now accepts an exact declaration start plus the existing exact end and unique-twin checks, while preserving body-start support for erased modifiers. Missing anchors and later unmapped coverage boundaries stay UNVERIFIED.
+- Quality Gate guidance narrows the isolated Bash capture limit (SQ-3599)
+  The capture instructions now name only the inspected case: in Claude Code 2.1.295, a direct worktree-isolated Bash startup assignment NODE_OPTIONS=--import=<url> followed by a Node-family command is refused by the host guard. Stop after that actual refusal and leave the measurement UNVERIFIED. Supported capture keeps the canonical lib/core.mjs file URL in NODE_OPTIONS plus QUALITY_GATE_V8_CAPTURE. Prose and help text only.
+- Measure native CommonJS typed returns exactly (SQ-3610)
+  Quality Gate now binds native TypeScript CommonJS exported typed-return declarations through exact compiler and AST declaration starts. Nested bodies keep independent coverage, and missing, shifted or ambiguous ownership stays UNVERIFIED.
+- Bind native logical and finally boundaries exactly (SQ-3613)
+  Quality Gate now measures native TypeScript multiline logical operators and finally keywords through unique owned AST syntax and exact compiler-mapped operand or block anchors. Missing, shifted, ambiguous, wrong-owner or mismatched-source boundaries stay UNVERIFIED. Owned UTF-16 coverage denominators stay unchanged.
+- Quality Gate coverage test resolves esbuild from its own package (SQ-3654)
+  The coverage test declares esbuild as a Quality Gate devDependency and resolves it from the plugin itself, so the plugin suite passes from its own lockfile install instead of borrowing Sidequest's node_modules.
+- Quality Gate crap test resolves its fixture root through realpath (SQ-3657)
+  The crap CLI test resolves its temporary fixture root through the native realpath, so a runner whose temp directory is an 8.3 short name compares the same path the gate reports.
+
+### quartermaster 0.12.0 → 0.12.1
+
+#### Fixes
+
+- The CRAP gate enforces only new complexity and reports touched legacy functions as informational (SQ-3523)
+  The quality-gate core classifies every changed function against the base: `new` (no partner at the base), `modified-raised` (its cyclomatic complexity rose) or `legacy-unchanged` (equal or lower). Only `new` and `modified-raised` rows must score below 6 or count as unverified; a `legacy-unchanged` row is printed as `LEGACY` with its number and never fails or touches the exit code, so a pass-through edit inside a big legacy function is no longer a refactor demand. The repository gate (`scripts/quality/crap.mjs`) prints the three classes as separate sections with their counts in the summary line, and gap pairing now prefers an equal name before falling back to order, so a helper inserted above an edited function does not take its partner. The Quartermaster `crap-gate` reference and the Sidequest `verify-discipline` skill tell executors to block only on new complexity the change introduced.
+- Quartermaster never installs per-turn blocking quality hooks (SQ-3635)
+  The CRAP gate reference, setup, and resupply skills now say plainly that the gate is an on-demand command or CI step, and that Quartermaster never writes UserPromptSubmit, Stop, or PreToolUse hooks that block a turn on a receipt. Resupply routes an existing receipt-demanding hook to a removal recommendation, and scoring never demands files that arrived through a merge, rebase, or pull.
+- Resupply offers no longer force another turn (SQ-3642)
+  Quartermaster's Stop hook now shows a non-blocking resupply offer to the user after the reply instead of making Claude continue. Once-per-session offers, cooldowns and decline bookkeeping stay unchanged.
+
+### sidequest 5.9.0 → 5.10.0
+
+#### Features
+
+- A failed environment-lane run bounces the ticket back to todo once with its log (SQ-3426)
+  When a candidate whose pinned verifier is environment-bound (`verifyEnvironment: shared`) fails its post-merge verify, or its `--no-ff` merge conflicts, CLI `integrate` rolls the delivery back and sends the ticket to `todo` through the existing rework path: the result reason is `environment_lane_reworked`, the ticket gets an integration comment with the command, log path, failures and output tail, and the rework record (source `environment-lane`) carries the exact pinned commit, the rolled-back merged head and the log so the next dispatch briefing shows the failure under "Pending rework". Only the orchestrator dispatches; nothing is spawned. A second lane failure of the same ticket stays parked with `environment_lane_second_failure` naming both logs, and a candidate bound to a review is parked with today's failure reason, never auto-reworked. Default-board failures are unchanged.
+- Explain deferred environment verification in executor guidance and setup docs (SQ-3427)
+  Environment-bound executor briefings skip the pinned verifier until delivery. Generated agents, orchestration and publishing references now describe deferred submit evidence, background CLI integration, delivery modes and the one-bounce rule. The getting-started guide includes shared Docker/browser setup and per-worktree environment opt-in.
+- Dispatch freezes a trusted work kind and source origin so inherited and refactor work completes without inventing a red (SQ-3630)
+  The main thread can now freeze a work kind (new behavior, behavior-preserving refactor, inherited or read-only) and the producer generations a dispatch inherits. Completion validates the executor's owned delta against those frozen facts: inherited tests and declared refactors no longer need a fresh red, new owned behavior still does, and forged producer authority, late declarations and changed source or test bytes refuse. Measured coverage stays reported as unverified where the host cannot capture it.
+- Allow small fixes and read-only investigations without board ceremony (SQ-3636)
+  Bounded fixes default to one owner and may stay inline. Read-only investigation dispatch keeps write scope restricted, and clean no-commit executors can close with a report. The inline-work reminder is one advisory after 25 substantive actions, with reads and verification excluded.
+- Allow native read-only agents without a ticket (SQ-3643)
+  Native read-only investigations can run without ticket ceremony. Ticket work, write-intent agents, and resumed denied writes still require dispatch.
+- Require negative controls for new behavior and pin annotation oracles (SQ-3644)
+  Dispatch can freeze docs, annotation-only and fixture-only work alongside refactors and inherited work. Successful completion records why no negative control was required. New behavior keeps its assertion-failure marker requirement. Authors can pin a typecheck command as the annotation oracle.
+
+#### Fixes
+
+- Git guards no longer treat an executor's own evidence clone as the shared checkout (SQ-3518)
+  The destructive-git guard classified any repository with a `.git` directory as the shared checkout, so a reviewer's `git clone --no-checkout` under its ticket's verification directory (where every tracked file reads as deleted) had its `git restore --worktree -- .` refused as 896 doomed changes (SQ-3436). The guard now protects only project roots registered on the board; a clone the executor made itself, under the verification directory or anywhere else, is admitted. A dirty repository the board never registered is admitted too.
+
+  The isolated-executor git guard now also refuses mutating git commands aimed at another executor's agent worktree, not only the registered root, and both refusals say what counts as the shared checkout and that an evidence clone does not.
+- The CRAP gate enforces only new complexity and reports touched legacy functions as informational (SQ-3523)
+  The quality-gate core classifies every changed function against the base: `new` (no partner at the base), `modified-raised` (its cyclomatic complexity rose) or `legacy-unchanged` (equal or lower). Only `new` and `modified-raised` rows must score below 6 or count as unverified; a `legacy-unchanged` row is printed as `LEGACY` with its number and never fails or touches the exit code, so a pass-through edit inside a big legacy function is no longer a refactor demand. The repository gate (`scripts/quality/crap.mjs`) prints the three classes as separate sections with their counts in the summary line, and gap pairing now prefers an equal name before falling back to order, so a helper inserted above an edited function does not take its partner. The Quartermaster `crap-gate` reference and the Sidequest `verify-discipline` skill tell executors to block only on new complexity the change introduced.
+- The destructive-git refusal keeps its recovery command under a long shared-checkout path (SQ-3534)
+  The refusal the destructive-git guard writes for a dirty shared checkout is projected into the 768-byte PreToolUse budget and truncated from the end, where the `sidequest recover-shared` command sits. It printed the repository path twice, so on the Windows CI runner's 94-character temp path the recovery step disappeared (PR #510). The path now appears once, inside the recovery command, and the test builds its fixture at that path length.
+- Verify guidance explains the advisory checkpoint for GREEN or held preparation (SQ-3629)
+  The verify-discipline skill and the getting-started page now say when to use the existing advisory `checkpoint` for factual GREEN or held preparation, and that it is not a final receipt, admission or delivery. Success completion stays gated by `[sidequest:verify-complete]`.
+- Attribute shared-tree closeout only to owned paths (SQ-3637)
+  Working-tree closeout records outside-scope dirt as ignoredDirtyPaths and reports completed sibling drift as a warning. Own committed paths, empty deliverables, and failed own-candidate verification still refuse. Executor briefings and closeout references describe the same ownership rules.
+- Use medium effort for routine routing defaults (SQ-3638)
+  Set coding.hard, debugging, spike-investigation, and review-audit starter routes and fallbacks to medium effort without changing models or board-local overrides.
+- Grant tracked build outputs with source scope and name release fragment owners (SQ-3646)
+- Executor definitions stop recommending Quartermaster to add a quality gate (SQ-3648)
+  Executor definitions no longer tell executors to say "Quartermaster setup can add one" when no quality gate is configured. They now run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies, and when it cannot produce a measurement they report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue.
+- Resolve work provenance from the exact archived producer generation (SQ-3649)
+  Work provenance can select a released historical producer generation by its exact preparedAt. New archived attempts retain their native base, declared scope, owned commits and verification requirement. Legacy attempts missing required facts refuse by generation and fact name, without borrowing evidence from a later dispatch.
+- Reference docs stop recommending Quartermaster to add a quality gate (SQ-3652)
+  The sidequest orchestration and publishing references and the verify-discipline skill no longer tell executors to recommend Quartermaster setup when a project has no quality gate. They now match the executor template: run the repository's documented quality command, and report UNVERIFIED with the tool's exact reason when it cannot measure.
+- Hook manifest test covers the dispatch work-provenance rule (SQ-3653)
+  The hook manifest test now expects the live-claim mutation matcher to route dispatch as well as update, remove and verdict, matching the work-provenance rule that dispatch gained.
+- The executor-spawn hook's main dispatcher is split into small decision functions (SQ-3656)
+  Internal refactor of the `force-exec-bypass` PreToolUse hook: its 167-line `main` (cyclomatic complexity 75) is now a short sequence over named phases for the pre-Agent guards, executor admission, spawn correction and model stamping, each under complexity 6. Every refusal, update and check order is unchanged.
+- claim-liveness no-op completion assertion follows the SQ-3636 closeout contract (SQ-3658)
+  The claim-liveness suite now expects a dispatched executor with no commit and a clean declared scope to close with done carrying its report, matching the closeout contract SQ-3636 shipped.
+- Sync MCP compatibility tests to work provenance and clean reports (SQ-3660)
+  Sync dispatch and compatibility assertions to the frozen work-provenance schema and clean no-commit report closeout. Register the redispatch fixture checkout before testing it. Raise the tools/list ceiling by 550 bytes per session for the provenance schema, preserving the 2500-byte headroom requirement.
+- Lifecycle, guidance and category tests follow the landed contracts (SQ-3661)
+  Sync the lifecycle and guidance assertions to bounded inline work and clean no-commit closeout, keep actual repository changes on the submission path, and regenerate the category snapshot from the seeded defaults. The failed environment-lane delivery test now checks the documented return to todo and preserved rejected candidate.
+- Executor guidance and the invocation contracts reference follow the narrowed negative-control grammar and the typecheck oracle (SQ-3662)
+  The executor template, the bundled agent definitions and the agent-guidance suite now state the negative-control marker with `failure-kind=assertion`, matching the recovery guidance SQ-3644 narrowed, and the invocation contracts reference explains the `typecheck` verification kind.
+- MCP suites and payload ceiling follow the typecheck oracle and completion refusal wording (SQ-3664)
+  The tools/list ceiling rises by 44 bytes for the typecheck verification kind, keeping the 2.5KB reserve; the descriptor golden and the completion refusal assertion follow the wording SQ-3644 shipped.
+- Negative-control thread suite and SKILL.md byte budget follow the landed wave (SQ-3665)
+  The sidequest skill lists all six work-provenance kinds and states the native read-only agent allowance more tightly, staying inside its session-load budget, and the negative-control thread suite expects the per-test marker grammar the refusal now gives.
+- The sidequest skill keeps its pinned steering sentences while staying inside its byte budget (SQ-3666)
+  The claim-liveness steering bullet is restored byte-exact; the skill recovers the bytes from unpinned guideline prose and stays inside its session-load budget.
+
 ## v3.594.0 (2026-10-08)
 
 ### Repository

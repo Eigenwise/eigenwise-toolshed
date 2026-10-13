@@ -182,6 +182,21 @@ test('worktree sweep sends live classification progress to stderr for JSON outpu
   }
 });
 
+test('worktrees refuses an unknown action, a bare invocation, and a negative age', () => {
+  const env = isolatedEnv();
+  const unknown = run(['worktrees', 'bogus'], env);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /worktrees: use `sidequest worktrees status` or `sidequest worktrees sweep`/);
+
+  const bare = run(['worktrees'], env);
+  assert.equal(bare.status, 1);
+  assert.match(bare.stderr, /worktrees: use `sidequest worktrees status`/);
+
+  const negative = run(['worktrees', 'sweep', '--min-age-hours', '-1'], env);
+  assert.equal(negative.status, 1);
+  assert.match(negative.stderr, /worktrees sweep: --min-age-hours must be a non-negative number\./);
+});
+
 test('groom-close records a delivered commit through the shared store transition', () => {
   const env = isolatedEnv();
   const project = String(env.CLAUDE_PROJECT_DIR);
@@ -216,6 +231,24 @@ test('CLI records readonly false on add and update', () => {
   const updated = run(['update', 'SQ-1', '--readonly', 'false', '--json'], env);
   assert.equal(updated.status, 0, updated.stderr);
   assert.equal(JSON.parse(updated.stdout).ticket.readonlyOverride, false);
+});
+
+test('CLI --add-file appends to declared files, and mixing it with --file refuses', () => {
+  const env = isolatedEnv();
+  const added = run(['add', '--title', 'scope append ticket', '--unclassified', '--file', 'src/a.js', '--json'], env);
+  assert.equal(added.status, 0, added.stderr);
+
+  const updated = run(['update', 'SQ-1', '--add-file', 'src/b.js', '--json'], env);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.deepEqual(JSON.parse(updated.stdout).ticket.files, ['src/a.js', 'src/b.js']);
+
+  const removed = run(['update', 'SQ-1', '--remove-file', 'src/a.js', '--json'], env);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.deepEqual(JSON.parse(removed.stdout).ticket.files, ['src/b.js']);
+
+  const mixed = run(['update', 'SQ-1', '--file', 'src/c.js', '--add-file', 'src/d.js'], env);
+  assert.equal(mixed.status, 1);
+  assert.match(mixed.stderr, /cannot be combined/);
 });
 
 test('CLI never grants live-claim closeout updates from by, source, or session identity', () => {

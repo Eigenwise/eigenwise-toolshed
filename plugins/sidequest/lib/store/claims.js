@@ -43,6 +43,18 @@ function createClaims(dependencies) {
     if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return Number(value);
     return Number.NaN;
   }
+  function mcpRefusalEvidence(refusal) {
+    const tool = releaseText(refusal?.tool);
+    const reason = releaseText(refusal?.reason);
+    const message = releaseText(refusal?.message);
+    return requiredReleaseTextPresent(tool, reason, message) ? { command: tool, outputTail: message, mcpRefusal: { tool, reason, message } } : null;
+  }
+  function hookRefusalEvidence(refusal, sessionId) {
+    const session = releaseText(refusal?.session);
+    const text = releaseText(refusal?.text);
+    if (!requiredReleaseTextPresent(session, text) || session !== releaseText(sessionId)) return null;
+    return { command: "hook refusal", outputTail: text, hookRefusal: { session, text } };
+  }
   function releaseInput(args) {
     const rawExitCode = args?.exitCode;
     return {
@@ -52,6 +64,7 @@ function createClaims(dependencies) {
       command: releaseText(args?.command),
       outputTail: releaseText(args?.outputTail),
       rawExitCode,
+      refusal: mcpRefusalEvidence(args?.mcpRefusal) || hookRefusalEvidence(args?.hookRefusal, args?.sessionId),
       exitCode: releaseExitCode(rawExitCode)
     };
   }
@@ -72,11 +85,11 @@ function createClaims(dependencies) {
     return input.rawExitCode == null || Number.isInteger(input.exitCode);
   }
   function technicalBlockerEvidence(input) {
-    const complete = requiredReleaseTextPresent(input.reason, input.command, input.outputTail) && nonZeroIntegerExitCode(input.exitCode);
+    const complete = input.refusal || requiredReleaseTextPresent(input.command, input.outputTail) && nonZeroIntegerExitCode(input.exitCode);
     if (!complete) {
-      return releaseFailure("technical_blocker_evidence_required", "release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields.");
+      return releaseFailure("technical_blocker_evidence_required", "release: technical_blocker requires a reason plus command, non-zero integer exitCode, and outputTail; or mcpRefusal with tool, reason code, and message; or hookRefusal with same-session session and captured text. Bare prose is insufficient.");
     }
-    return { ok: true, releaseKind: input.releaseKind, evidence: { kind: input.releaseKind, command: input.command, exitCode: input.exitCode, outputTail: input.outputTail } };
+    return { ok: true, releaseKind: input.releaseKind, evidence: { kind: input.releaseKind, ...input.refusal || { command: input.command, exitCode: input.exitCode, outputTail: input.outputTail } } };
   }
   function contradictionEvidence(input) {
     const complete = requiredReleaseTextPresent(input.reason, input.command, input.outputTail) && suppliedExitCodeIsInteger(input);

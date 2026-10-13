@@ -79,7 +79,7 @@ const tools = [
       properties: {
         ref: { type: "string", description: "Pending submission to close." },
         project: PROJECT_PROP,
-        by: { type: "string", description: "Control-plane identity recording the closure." },
+        by: { type: "string", description: "Control-plane identity recording the closure. Omitted, the main thread defaults to its session id; a subagent call without by is refused." },
         supersededBy: { type: "string", description: "Later ticket ref with an integrated repair delivery." },
         reason: { type: "string", description: "Concise delivery evidence retained on the closed submission." },
         reviewedReplacements: {
@@ -96,7 +96,7 @@ const tools = [
           }
         }
       },
-      required: ["ref", "by", "supersededBy", "reason"]
+      required: ["ref", "supersededBy", "reason"]
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "supersede_submission");
@@ -282,7 +282,7 @@ const tools = [
           type: "object",
           additionalProperties: false,
           required: ["kind", "sources"],
-          description: "Main-thread-only declaration frozen before execution. Factual provenance, never execution evidence. Execution, quality and admission stay UNVERIFIED. Sources must name genuine terminal native producer generations and immutable owned commits. No historical receipt rebinding or composition adoption.",
+          description: "Main-thread-only, frozen before execution. Factual provenance; execution, quality and admission stay UNVERIFIED. Sources name terminal native producer generations and owned commits. While they match, the dispatch submits normally and integration runs the pinned verifier. No receipt rebinding.",
           properties: {
             kind: { enum: import_work_provenance.WORK_KINDS },
             sources: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["ref", "preparedAt", "commit"], properties: {

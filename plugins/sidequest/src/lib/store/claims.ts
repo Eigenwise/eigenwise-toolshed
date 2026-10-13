@@ -44,8 +44,12 @@ function createClaims(dependencies: any) {
   ]);
   const NEGATIVE_CONTROL_COMMENT = '[sidequest:negative-control] ';
   const RELEASE_KINDS = new Set(['technical_blocker', 'contradiction', 'oracle', 'handback']);
-  type ReleaseEvidence = { command: string; exitCode?: number; kind: string; outputTail: string };
-  type ReleaseInput = { reason: string; oracle: string; releaseKind: string; command: string; outputTail: string; rawExitCode: unknown; exitCode: number };
+  type McpRefusal = { tool: string; reason: string; message: string };
+  type HookRefusal = { session: string; text: string };
+  type ReleaseArguments = { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown; mcpRefusal?: Partial<McpRefusal>; hookRefusal?: Partial<HookRefusal>; sessionId?: unknown };
+  type RefusalEvidence = { command: string; outputTail: string; mcpRefusal?: McpRefusal; hookRefusal?: HookRefusal };
+  type ReleaseEvidence = RefusalEvidence & { exitCode?: number; kind: string };
+  type ReleaseInput = { reason: string; oracle: string; releaseKind: string; command: string; outputTail: string; rawExitCode: unknown; exitCode: number; refusal: RefusalEvidence | null };
   type ReleaseResult = { ok: true; evidence: ReleaseEvidence | null; releaseKind: string | null } | { ok: false; message: string; reason: string };
 
   function releaseFailure(reason: string, message: string): ReleaseResult {
@@ -62,7 +66,23 @@ function createClaims(dependencies: any) {
     return Number.NaN;
   }
 
-  function releaseInput(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }): ReleaseInput {
+  function mcpRefusalEvidence(refusal?: Partial<McpRefusal>): RefusalEvidence | null {
+    const tool = releaseText(refusal?.tool);
+    const reason = releaseText(refusal?.reason);
+    const message = releaseText(refusal?.message);
+    return requiredReleaseTextPresent(tool, reason, message)
+      ? { command: tool, outputTail: message, mcpRefusal: { tool, reason, message } }
+      : null;
+  }
+
+  function hookRefusalEvidence(refusal: Partial<HookRefusal> | undefined, sessionId: unknown): RefusalEvidence | null {
+    const session = releaseText(refusal?.session);
+    const text = releaseText(refusal?.text);
+    if (!requiredReleaseTextPresent(session, text) || session !== releaseText(sessionId)) return null;
+    return { command: 'hook refusal', outputTail: text, hookRefusal: { session, text } };
+  }
+
+  function releaseInput(args?: ReleaseArguments): ReleaseInput {
     const rawExitCode = args?.exitCode;
     return {
       reason: releaseText(args?.reason),
@@ -71,6 +91,7 @@ function createClaims(dependencies: any) {
       command: releaseText(args?.command),
       outputTail: releaseText(args?.outputTail),
       rawExitCode,
+      refusal: mcpRefusalEvidence(args?.mcpRefusal) || hookRefusalEvidence(args?.hookRefusal, args?.sessionId),
       exitCode: releaseExitCode(rawExitCode),
     };
   }
@@ -96,11 +117,11 @@ function createClaims(dependencies: any) {
   }
 
   function technicalBlockerEvidence(input: ReleaseInput): ReleaseResult {
-    const complete = requiredReleaseTextPresent(input.reason, input.command, input.outputTail) && nonZeroIntegerExitCode(input.exitCode);
+    const complete = input.refusal || (requiredReleaseTextPresent(input.command, input.outputTail) && nonZeroIntegerExitCode(input.exitCode));
     if (!complete) {
-      return releaseFailure('technical_blocker_evidence_required', 'release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields.');
+      return releaseFailure('technical_blocker_evidence_required', 'release: technical_blocker requires a reason plus command, non-zero integer exitCode, and outputTail; or mcpRefusal with tool, reason code, and message; or hookRefusal with same-session session and captured text. Bare prose is insufficient.');
     }
-    return { ok: true as const, releaseKind: input.releaseKind, evidence: { kind: input.releaseKind, command: input.command, exitCode: input.exitCode, outputTail: input.outputTail } };
+    return { ok: true as const, releaseKind: input.releaseKind, evidence: { kind: input.releaseKind, ...(input.refusal || { command: input.command, exitCode: input.exitCode, outputTail: input.outputTail }) } };
   }
 
   function contradictionEvidence(input: ReleaseInput): ReleaseResult {
@@ -135,7 +156,7 @@ function createClaims(dependencies: any) {
   }
 
   function technicalBlockerRelease(
-    args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown },
+    args?: ReleaseArguments,
     { requireClassification = false }: { requireClassification?: boolean } = {},
   ): ReleaseResult {
     const input = releaseInput(args);

@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const store = require('./store');
 const work = require('./work');
 const worktrees = require('./worktrees');
+const { withWorktreeSweepLock } = require('./worktree-sweep-lock');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
 const publish = require('./publish');
@@ -272,6 +273,10 @@ const PROJECT_PROP = { type: 'string', description: 'Board (current project).' }
 // exactly on its byte budget, so the bound would cost tokens no caller reads. The
 // store refuses an over-limit list and names the cap instead (SQ-900).
 const FILES_PROP = { type: 'array', items: { type: 'string' }, description: 'Declared file scope: paths, directory prefixes covering descendants, or globs matched consistently by hook and commit enforcement.' };
+// compactSchema strips property descriptions, so the agent-facing wording for these
+// two lives in MCP_SCHEMA_PROPERTY_DESCRIPTIONS; a second copy here would only drift.
+const ADD_FILES_PROP = { type: 'array', items: { type: 'string' } };
+const REMOVE_FILES_PROP = { type: 'array', items: { type: 'string' } };
 const LABELS_PROP = { type: 'array', items: { type: 'string' } };
 const CONTRACT_PROP = (verb: string) => ({ type: 'array', items: { type: 'string' }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: 'string', description: 'Filter by resolved model slug.' };
@@ -382,6 +387,64 @@ const LIST_RESULT_MAX_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 function closeDispatchExecutor(ticket?: any) {
   const executor = store.canonicalPreparedDispatchExecutor(ticket);
   if (executor) agentsync.cleanupNativeAgents({ name: executor });
+}
+
+// A claim holder that closes its own ticket (done, release) is still running inside the tree it
+// closes, and deleting a running agent's working directory breaks its SubagentStop hook. So a claim
+// that was live when the close began keeps the tree for the session sweep, which runs after the
+// executor exits; a claim the store already calls reclaimable is nobody's live work.
+function claimHeldLive(ticket?: any): boolean {
+  return Boolean(ticket?.claim?.by && !store.claimReclaimable(ticket));
+}
+
+function isolatedDispatchWorktree(dispatch: any): boolean {
+  return Boolean(dispatch?.worktree && dispatch.sharedTree === false && !dispatch.continuation);
+}
+
+function closedTicketCleanupApplies(slug: string, ticket: any): boolean {
+  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+}
+
+// remove deletes the ticket before its cleanup runs, so it passes the deleted ticket in as
+// `extraTicket`; without it the tree would read as unowned.
+function closeCleanupTickets(ticket: any, claimWasLive: boolean, extraTicket: any): any[] {
+  return [...store.worktreeGcTickets(), ...(extraTicket ? [extraTicket] : [])].map((candidate: any) => (
+    candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate
+  ));
+}
+
+// Every ticket close (integrate, groomClose, done, release, remove) reclaims that ticket's own
+// worktree at zero age under the sweep's rules, so a finished tree does not wait for a session sweep
+// that may never reach it (SQ-51, GH-439). The session sweep stays the backstop. A session sweep
+// that holds the sweep lock may be renaming this same tree into quarantine and repairing its
+// registration, so a held lock leaves the tree to it instead of racing it.
+async function cleanupClosedTicketWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean = false, extraTicket: any = null): Promise<void> {
+  try {
+    if (!closedTicketCleanupApplies(slug, ticket)) return;
+    await withWorktreeSweepLock(() => sweepClosedTicketWorktree(slug, projectPath, ticket, claimWasLive, extraTicket));
+  } catch (_) {
+    // The close has already been durably recorded. The session sweep remains the backstop.
+  }
+}
+
+async function sweepClosedTicketWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean, extraTicket: any): Promise<string[]> {
+  await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
+    execute: true,
+    currentPath: store.nearestRepoRoot(process.cwd()),
+    integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+    minAgeMs: 0,
+    ticketRef: ticket.ref,
+  });
+  return [];
+}
+
+// done, release and groomClose end the executor that held the ticket and then reclaim its tree.
+// `reclaim` is false for an integrating groomClose, which advances the integration branch before
+// it sweeps.
+async function closeExecutorAndReclaimTree(slug: string, projectPath: string, res: any, ticket: any, reclaim: boolean = true): Promise<void> {
+  if (!res.ok) return;
+  closeDispatchExecutor(ticket);
+  if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
 }
 
 function mutationAck(project?: any, result?: any, changed?: any) {
@@ -1135,6 +1198,8 @@ module.exports = {
   provenNoOpCloseout,
   PROJECT_PROP,
   FILES_PROP,
+  ADD_FILES_PROP,
+  REMOVE_FILES_PROP,
   LABELS_PROP,
   CONTRACT_PROP,
   MODEL_FILTER_PROP,
@@ -1144,6 +1209,9 @@ module.exports = {
   compactSchema,
   LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
+  claimHeldLive,
+  cleanupClosedTicketWorktree,
+  closeExecutorAndReclaimTree,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,

@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const store = require("./store");
 const work = require("./work");
 const worktrees = require("./worktrees");
+const { withWorktreeSweepLock } = require("./worktree-sweep-lock");
 const agentsync = require("./agentsync");
 const commitScope = require("./commit-scope");
 const publish = require("./publish");
@@ -189,6 +190,8 @@ function provenNoOpCloseout(slug, ticket, verify) {
 }
 const PROJECT_PROP = { type: "string", description: "Board (current project)." };
 const FILES_PROP = { type: "array", items: { type: "string" }, description: "Declared file scope: paths, directory prefixes covering descendants, or globs matched consistently by hook and commit enforcement." };
+const ADD_FILES_PROP = { type: "array", items: { type: "string" } };
+const REMOVE_FILES_PROP = { type: "array", items: { type: "string" } };
 const LABELS_PROP = { type: "array", items: { type: "string" } };
 const CONTRACT_PROP = (verb) => ({ type: "array", items: { type: "string" }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: "string", description: "Filter by resolved model slug." };
@@ -273,6 +276,40 @@ const LIST_RESULT_MAX_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 function closeDispatchExecutor(ticket) {
   const executor = store.canonicalPreparedDispatchExecutor(ticket);
   if (executor) agentsync.cleanupNativeAgents({ name: executor });
+}
+function claimHeldLive(ticket) {
+  return Boolean(ticket?.claim?.by && !store.claimReclaimable(ticket));
+}
+function isolatedDispatchWorktree(dispatch) {
+  return Boolean(dispatch?.worktree && dispatch.sharedTree === false && !dispatch.continuation);
+}
+function closedTicketCleanupApplies(slug, ticket) {
+  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+}
+function closeCleanupTickets(ticket, claimWasLive, extraTicket) {
+  return [...store.worktreeGcTickets(), ...extraTicket ? [extraTicket] : []].map((candidate) => candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate);
+}
+async function cleanupClosedTicketWorktree(slug, projectPath, ticket, claimWasLive = false, extraTicket = null) {
+  try {
+    if (!closedTicketCleanupApplies(slug, ticket)) return;
+    await withWorktreeSweepLock(() => sweepClosedTicketWorktree(slug, projectPath, ticket, claimWasLive, extraTicket));
+  } catch (_) {
+  }
+}
+async function sweepClosedTicketWorktree(slug, projectPath, ticket, claimWasLive, extraTicket) {
+  await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
+    execute: true,
+    currentPath: store.nearestRepoRoot(process.cwd()),
+    integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+    minAgeMs: 0,
+    ticketRef: ticket.ref
+  });
+  return [];
+}
+async function closeExecutorAndReclaimTree(slug, projectPath, res, ticket, reclaim = true) {
+  if (!res.ok) return;
+  closeDispatchExecutor(ticket);
+  if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
 }
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
@@ -998,6 +1035,8 @@ module.exports = {
   provenNoOpCloseout,
   PROJECT_PROP,
   FILES_PROP,
+  ADD_FILES_PROP,
+  REMOVE_FILES_PROP,
   LABELS_PROP,
   CONTRACT_PROP,
   MODEL_FILTER_PROP,
@@ -1007,6 +1046,9 @@ module.exports = {
   compactSchema,
   LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
+  claimHeldLive,
+  cleanupClosedTicketWorktree,
+  closeExecutorAndReclaimTree,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,

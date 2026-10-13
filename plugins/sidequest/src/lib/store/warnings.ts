@@ -817,6 +817,108 @@ function verifyPathWarning(ticket?: any, projectPath?: any) {
   return `recorded verify references paths absent from this repo: ${[...absent].join(', ')}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
 }
 
+const QUOTED_SPAN = /["'][^"']*["']/g;
+
+// A whitespace-delimited word is a candidate unless it is entirely wrapped in one pair of
+// matching quotes (then every shell already passes it through literally). A word that is only
+// partly quoted, like `src/"[id]"/a.test.js`, still comes back as a candidate; the quoted span
+// inside it is stripped later, in globCharacterPathToken, instead of here.
+function unquotedTokens(segment: string): string[] {
+  const tokens: string[] = [];
+  // A quoted span is consumed whole wherever it sits in a word so an internal space, whether
+  // the word starts quoted (`"src/app/[id] x/a.ts"`) or only holds a quoted span
+  // (`src/"a b"/[id]/x.test.ts`), doesn't split it into bare-looking fragments that dodge the
+  // quoted-token check below or leave a half-quoted token like `b"/[id]/x.test.ts`.
+  for (const match of segment.matchAll(/(?:"[^"]*"|'[^']*'|[^\s;&|()])+/g)) {
+    const word = match[0];
+    if (!/^(["']).*\1$/.test(word)) tokens.push(word);
+  }
+  return tokens;
+}
+
+// Four gates before a token counts as a glob-bearing path: not a bare flag/`.`/`..`, not a URL
+// (a `?` query string isn't a glob wildcard), path-shaped (a slash or a file extension), and
+// still holding a glob character once any quoted span inside it is stripped out. `--flag=value`
+// is unwrapped to its value first so a flag's value can be checked without also re-admitting a
+// bare flag like `--verbose`; `token === '..'` alone is excluded, not every path that merely
+// contains a `..` segment, so `../src/[id]/a.ts` is still caught.
+function globCharacterPathToken(token: string): boolean {
+  if (!token) return false;
+  const value = token.includes('=') ? token.slice(token.indexOf('=') + 1) : token;
+  // An empty value (a token that is just `flag=`) falls straight through to the path-shape
+  // check below and fails it, so it needs no exclusion of its own here.
+  if (/^(?:-|\.\.?$|[A-Za-z][\w+.-]*:\/\/)/.test(value)) return false;
+  if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(value)) return false;
+  return /[[\]*?]/.test(value.replace(QUOTED_SPAN, ''));
+}
+
+// `*` and `?` mark an intended glob; a token that only carries brackets is a literal path (a
+// dynamic-route segment like `[id]`). The two need opposite handling, so the advice splits on it.
+function isWildcardToken(token: string): boolean {
+  return /[*?]/.test(token.replace(QUOTED_SPAN, ''));
+}
+
+// A token with both (`app/[id]/*.test.js`) needs its own advice: quoting it for a runner that
+// globs its own arguments makes `[id]` a character class (0 tests, exit 0), so the bracket has to
+// be escaped while the glob stays live.
+function isMixedToken(token: string): boolean {
+  return isWildcardToken(token) && /[[\]]/.test(token.replace(QUOTED_SPAN, ''));
+}
+
+// Any quote already inside the token is dropped: the whole token goes inside one new pair, and a
+// leftover pair (`src/"a b"/[id]/x.ts`) would end the new one early.
+function doubleQuoted(token: string): string {
+  return `"${token.replace(/["']/g, '')}"`;
+}
+
+function literalBracketAdvice(token: string): string {
+  return `for a literal bracket path like ${JSON.stringify(token)}, quote it (${doubleQuoted(token)}) for a tool that takes literal paths (for example tsc or pytest); for a runner that globs its own arguments (for example node --test) quote it and also escape each "[" as "[[]" (${doubleQuoted(token.replace(/\[/g, '[[]'))}), because a quoted bare "[id]" is read as a character class that matches nothing, so node --test runs 0 tests (or a sibling path that does match) while still exiting 0`;
+}
+
+function mixedGlobAdvice(token: string): string {
+  const escaped = doubleQuoted(token.replace(/\[/g, '[[]'));
+  const shellEscaped = token.replace(/["']/g, '').replace(/[[\]]/g, '\\$&');
+  return `for a path that mixes a bracket segment and a glob like ${JSON.stringify(token)}, a runner that globs its own arguments (for example node --test) needs the bracket escaped and the glob kept, so quote it with each "[" written as "[[]" (${escaped}); a quoted bare "[id]" is read as a character class that matches nothing, so node --test runs 0 tests while still exiting 0. For a tool that takes literal paths (for example tsc or pytest) leave the glob unquoted for the shell to expand and backslash-escape each bracket (${shellEscaped}), because a quoted glob there is a hard error`;
+}
+
+function intendedGlobAdvice(token: string): string {
+  return `for an intended glob like ${JSON.stringify(token)}, quote it (${doubleQuoted(token)}) so a runner that globs its own arguments (for example node --test) sees the pattern; leave it unquoted, relying on the shell to expand it first, for a tool that takes literal paths (for example tsc or pytest), where a quoted glob is a hard error`;
+}
+
+// One sentence per token kind actually present, each naming the first token of that kind.
+function unquotedGlobAdvice(offenders: string[]): string {
+  const mixed = offenders.find(isMixedToken);
+  const wildcard = offenders.find((token) => isWildcardToken(token) && !isMixedToken(token));
+  const bracket = offenders.find((token) => !isWildcardToken(token));
+  return [bracket && literalBracketAdvice(bracket), wildcard && intendedGlobAdvice(wildcard), mixed && mixedGlobAdvice(mixed)].filter(Boolean).join('; ');
+}
+
+// zsh treats an unquoted path segment like `[id]` as a glob and (with `nomatch` set, the
+// default) aborts the whole verify command with "no matches found" before the pinned command
+// ever runs (GH-171). The wrapper now disarms that abort for every recorded command, but an
+// author can still hit surprises with other tools that glob-expand bracketed paths, so this
+// stays a warning naming the exact token rather than a silent no-op. The right fix depends on
+// the token kind and the tool, and quoting alone is backwards for one combination: a literal
+// `[id]` path handed to `node --test` (which globs its own arguments) needs `[[]id]`, because the
+// quoted form reads as a character class and runs 0 tests. Measured, not assumed; the test
+// `the advice for a literal bracket path matches real node --test behavior` pins it.
+function verifyUnquotedGlobIssue(ticket?: any) {
+  const verify = String(ticket?.executorVerify || '').trim();
+  if (!verify || manualVerify(verify)) return null;
+  const offenders = [...new Set(splitVerifyCommands(verify).segments.flatMap(unquotedTokens).filter(globCharacterPathToken))];
+  if (!offenders.length) return null;
+  return `recorded verify references an unquoted path with shell glob characters: ${offenders.join(', ')}. zsh used to abort the run with "no matches found" (or "bad pattern") when a token like ${JSON.stringify(offenders[0])} didn't match a real file, and bash can silently expand it into whichever different path happens to match instead. The fix depends on the token kind: ${unquotedGlobAdvice(offenders)}.`;
+}
+
+// Both callers spread an array instead of branching on a nullable, so neither legacy body gains a branch.
+function unquotedGlobIssues(ticket?: any): string[] {
+  return [verifyUnquotedGlobIssue(ticket)].filter((issue): issue is string => Boolean(issue));
+}
+
+function unquotedGlobPlanningWarnings(ticket?: any): string[] {
+  return unquotedGlobIssues(ticket).map((issue) => `Planning-depth warning: ${issue}`);
+}
+
 function derivedVerifyCommand(ticket?: any, projectPath?: any) {
   if (!projectPath) return null;
   const plugins = new Set<string>();
@@ -922,6 +1024,7 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   const projectPath = slug ? readMeta(slug)?.path : null;
   const verifyPath = verifyPathWarning(ticket, projectPath);
   if (verifyPath) warnings.push(verifyPath);
+  warnings.push(...unquotedGlobIssues(ticket));
   warnings.push(...preparedDispatchWarnings(dispatchState(ticket), projectPath));
   return warnings.map((warning) => `Dispatch warning: ${warning}`);
 }
@@ -1208,6 +1311,7 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any, slug?: any) {
   if (browserReview) warnings.push(browserReview);
   const verify = verifyCommandWarning(ticket, projectPath);
   if (verify) warnings.push(verify);
+  warnings.push(...unquotedGlobPlanningWarnings(ticket));
   warnings.push(...executorAnchorWarnings(ticket, projectPath));
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));

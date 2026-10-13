@@ -2454,6 +2454,42 @@ test('an isolated executor can inspect but not mutate the shared checkout with g
   assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Read-only git commands/);
 });
 
+// GH-422. Executors appended `; echo anc=$?` to the briefing's raw `git merge-base` check and the compound
+// command was refused. The briefing now prints a single `sync-check` command, and every Bash guard in this
+// plugin has to let each form of it through for an isolated executor, including one that names the shared
+// checkout as its --worktree.
+test('the sync-check commands the briefing prints pass every Bash guard for an isolated executor', () => {
+  const agentId = 'sync-check-guards';
+  const { sessionId, executor } = dispatched(agentId);
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const briefingFor = (continuation: Record<string, unknown> | undefined) => agentsync.renderTicketBriefing({
+    ref: 'SQ-422', title: 'Sync guards', model: 'opus', effort: 'high', category: {},
+    dispatch: { sharedTree: false, baseCommit: base, integrationTarget: { mode: 'local', branch: 'main' }, ...(continuation ? { continuation } : {}) },
+  }, 'sync-guard-token', undefined, PROJECT);
+  const commands = [
+    briefingFor(undefined),
+    briefingFor({ mode: 'live_claim_resume', sourceWorktree: PROJECT, commit: retained }),
+    briefingFor({ mode: 'dirty_worktree_resume', commit: retained, baseCommit: retained }),
+  ].flatMap((briefing: string) => [...briefing.matchAll(/`(node "[^"]*sidequest-launcher\.js" sync-check [^`]*)`/g)].map((match) => match[1]));
+  assert.equal(commands.length, 3, 'one sync-check command per briefing variant');
+
+  const guards = ['guard-shared-checkout-git.js', 'guard-destructive-git.js', 'guard-shared-tree-commit.js', 'guard-home-delete.js', 'guard-heredoc-isolated.js', 'guard-bash-windows-paths.js', 'repeated-command-warn.js'];
+  for (const command of commands) {
+    for (const guard of guards) {
+      const out = runHook(path.join(HOOKS, guard), {
+        session_id: sessionId,
+        agent_id: agentId,
+        agent_type: executor,
+        cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`),
+        tool_name: 'Bash',
+        tool_input: { command },
+      });
+      assert.equal(out?.hookSpecificOutput?.permissionDecision, undefined, `${guard} must not refuse: ${command}`);
+    }
+  }
+});
+
 test('an unrelated executor subagent does not inherit a session fallback claim', () => {
   const activeAgentId = 'active-shared-git';
   const { sessionId, executor } = dispatched(activeAgentId);
@@ -3232,6 +3268,108 @@ function sq3147RotatedWave(label: string) {
   assert.equal(wave.recorded(three).worktree, worktrees.canonicalPath(one.path));
   return { wave, one, two, three };
 }
+
+// Same-message spawns run their WorktreeCreate hooks as concurrent processes, which is the shape GH-406 reported.
+function createWorktreesConcurrently(sessionId: string, names: string[]): Promise<Array<{ ok: boolean; output: string }>> {
+  const { execFile } = require('node:child_process');
+  return Promise.all(names.map(name => new Promise<{ ok: boolean; output: string }>((resolve) => {
+    const child = execFile(process.execPath, [path.join(HOOKS, 'worktree-create.js')], { encoding: 'utf8', env: { ...process.env, SIDEQUEST_HOME }, windowsHide: true },
+      (error: Error | null, stdout: string, stderr: string) => resolve({ ok: !error, output: (error ? stderr || error.message : stdout).trim() }));
+    child.stdin.end(JSON.stringify({ hook_event_name: 'WorktreeCreate', name, session_id: sessionId, cwd: PROJECT }));
+  })));
+}
+
+async function claimEachOwnCheckout(wave: ReturnType<typeof sq3139CrossedWave>, live: ReturnType<typeof sq3139CrossedWave>['runtimes']) {
+  for (const runtime of live) {
+    const ack = await wave.claim(runtime);
+    assert.equal(ack.ok, true, `${runtime.ref} claims: ${ack.reason || ''} ${ack.message || ''}`);
+  }
+  for (const runtime of live) {
+    assert.equal(wave.recorded(runtime).worktree, worktrees.canonicalPath(runtime.path), `${runtime.ref} is leased the checkout its own executor runs in`);
+  }
+}
+
+for (const reversed of [false, true]) {
+  test(`GH-406: siblings whose checkouts are created in ${reversed ? 'reverse' : 'board'} order each end leased to their own executor's checkout`, async () => {
+    const wave = sq3139CrossedWave(reversed ? 'gh406reverse' : 'gh406board');
+    const creationOrder = reversed ? [wave.second, wave.first] : [wave.first, wave.second];
+    try {
+      for (const runtime of creationOrder) assert.equal(createWorktree(wave.sessionId, runtime.name).ok, true, `${runtime.ref} is created`);
+      const bound = wave.runtimes.map(runtime => wave.recorded(runtime).worktree).sort();
+      assert.deepEqual(bound, wave.runtimes.map(runtime => worktrees.canonicalPath(runtime.path)).sort(), 'each creation holds one reservation');
+      // The hook payload names no ticket, so creation in this order still crosses the pair; the claim settles it.
+      const crossedAtCreation = wave.recorded(wave.first).worktree !== worktrees.canonicalPath(wave.first.path);
+      assert.equal(crossedAtCreation, !reversed, 'the fixture reproduces the creation-order crossing in exactly one order');
+      await claimEachOwnCheckout(wave, wave.runtimes);
+    } finally {
+      wave.cleanup();
+    }
+  });
+}
+
+test('GH-406: concurrent WorktreeCreate hooks of one message each bind a free reservation instead of refusing already_bound', async () => {
+  const wave = sq3139CrossedWave('gh406race', ['one', 'two', 'three']);
+  try {
+    const results = await createWorktreesConcurrently(wave.sessionId, wave.runtimes.map(runtime => runtime.name));
+    assert.deepEqual(results.filter(result => !result.ok), [], 'no sibling spawn dies on a reservation another hook took first');
+    const bound = wave.runtimes.map(runtime => wave.recorded(runtime).worktree).sort();
+    assert.deepEqual(bound, wave.runtimes.map(runtime => worktrees.canonicalPath(runtime.path)).sort(), 'every checkout holds exactly one reservation');
+    await claimEachOwnCheckout(wave, wave.runtimes);
+  } finally {
+    wave.cleanup();
+  }
+});
+
+test('GH-406: a concurrent sibling creation that fails leaves the live siblings their own checkouts', async () => {
+  const wave = sq3139CrossedWave('gh406fail', ['one', 'two', 'three']);
+  const failed = wave.first;
+  const live = wave.runtimes.slice(1);
+  try {
+    fs.mkdirSync(failed.path, { recursive: true });
+    fs.writeFileSync(path.join(failed.path, 'occupant.txt'), 'blocks creation\n');
+    const results = await createWorktreesConcurrently(wave.sessionId, wave.runtimes.map(runtime => runtime.name));
+    assert.deepEqual(results.map(result => result.ok), [false, true, true], results.map(result => result.output).join('\n'));
+    await claimEachOwnCheckout(wave, live);
+    const failedRecord = wave.recorded(failed);
+    assert.equal(failedRecord.outcome, 'launched', 'the failed spawn retires nobody else and stays retryable');
+    assert.equal(failedRecord.worktree || null, null, 'the failed ticket keeps no binding to a live sibling checkout');
+    assert.equal(fs.existsSync(path.join(failed.path, 'occupant.txt')), true, 'recovery touched nothing at the uncreated path');
+  } finally {
+    wave.cleanup();
+  }
+});
+
+// The Linux runner ran the failing hook to completion before its siblings bound anything (PR #534 CI). The reservation
+// it released was free again, so a live sibling rebound it and the last sibling of the message was left with no record
+// and nothing a claim could trade for the checkout it ran in.
+test('GH-406: a reservation released by a failed creation is not rebound by a later sibling hook', async () => {
+  const wave = sq3139CrossedWave('gh406rebind', ['one', 'two', 'three']);
+  const failing = wave.first;
+  const live = wave.runtimes.slice(1);
+  const releasedByFailure = () => wave.runtimes.filter(runtime => wave.recorded(runtime).worktreeBindingExchange?.reason === 'worktree_create_failed');
+  try {
+    fs.mkdirSync(failing.path, { recursive: true });
+    fs.writeFileSync(path.join(failing.path, 'occupant.txt'), 'blocks creation\n');
+    assert.equal(createWorktree(wave.sessionId, failing.name).ok, false, 'the first creation fails');
+    const releasedReservations = releasedByFailure();
+    assert.equal(releasedReservations.length, 1, 'exactly one reservation records the failed creation');
+    const released = releasedReservations[0];
+    if (!released) throw new Error('no reservation records the failed creation');
+    for (const runtime of live) assert.equal(createWorktree(wave.sessionId, runtime.name).ok, true, `${runtime.ref} is created`);
+    assert.equal(wave.recorded(released).worktree || null, null, `${released.ref} was rebound by a later sibling hook`);
+    const bound = wave.runtimes.filter(runtime => runtime !== released).map(runtime => wave.recorded(runtime).worktree).sort();
+    assert.deepEqual(bound, live.map(runtime => worktrees.canonicalPath(runtime.path)).sort(), 'the live siblings hold the two created checkouts');
+    await claimEachOwnCheckout(wave, live);
+    const unclaimed = wave.runtimes.filter(runtime => !store.getTicket(slug, runtime.ref).claim);
+    assert.equal(unclaimed.length, 1, 'the claims leave exactly one reservation for the spawn that died');
+    const stranded = unclaimed[0];
+    if (!stranded) throw new Error('every reservation was claimed');
+    assert.equal(wave.recorded(stranded).worktree || null, null, `${stranded.ref} keeps no binding to a live sibling checkout`);
+    assert.equal(wave.recorded(stranded).outcome, 'launched', 'the stranded reservation stays retryable');
+  } finally {
+    wave.cleanup();
+  }
+});
 
 test('SQ-3147: a rotated crossing settles through the claim-time exchange when nobody is superseded', async () => {
   const { wave, two, three } = sq3147RotatedWave('rotation');

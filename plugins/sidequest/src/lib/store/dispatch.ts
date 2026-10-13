@@ -8,7 +8,7 @@ const { compareSemver } = require('../plugin-freshness.js');
 const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
 const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require('./composition-admission.js');
 import type { CompositionDispatch, CompositionTicket } from './composition-admission';
-import type { VerificationRequirement } from '../kernel/verification';
+import type { CompletedVerificationCapture, VerificationRequirement } from '../kernel/verification';
 import { authorizeWorkDeclaration, prepareWorkProvenance, workDeclaration } from './work-provenance';
 
 type NativeCheckoutCreation = CompositionDispatch & {
@@ -1146,7 +1146,7 @@ function attemptCommit(ticket?: any, opts?: any) {
   return opts?.commit || ticket?.checkpoint?.commit || ticket?.submission?.commit || null;
 }
 
-type ObservedWorktree = { facts: ReturnType<typeof immutableWorktreeFacts>; registered: boolean };
+type ObservedWorktree = { facts: ReturnType<typeof immutableWorktreeFacts>; registered: boolean; commits: string[]; pinned: ReadonlyMap<string, string> };
 type ObservedWorktreeFacts = ReadonlyMap<string, ObservedWorktree>;
 
 // A release observes its checkouts under the ticket file lock before BEGIN, so the write transaction reads facts
@@ -1155,12 +1155,17 @@ function observeReleaseWorktreeFacts(slug: string, ticket: StoredRecord): Observ
   const state = dispatchState(ticket);
   if (state?.sharedTree !== false) return new Map();
   const worktrees = [state.worktree, state.releaseObservedCheckout?.worktree].filter(Boolean).map((worktree: string): string => canonicalPath(worktree));
-  return new Map(worktrees.map((worktree: string) => [worktree, observeWorktree(slug, worktree)]));
+  return new Map(worktrees.map((worktree: string) => [worktree, observeWorktree(slug, worktree, state.baseCommit)]));
 }
 
-function observeWorktree(slug: string, worktree: string): ObservedWorktree {
+function observeWorktree(slug: string, worktree: string, baseCommit: string): ObservedWorktree {
   const facts = immutableWorktreeFacts(slug, worktree);
-  return { facts, registered: registeredProjectCheckout(facts) };
+  return {
+    facts,
+    registered: registeredProjectCheckout(facts),
+    commits: facts ? commitsSinceBaseline(facts.worktree, baseCommit, facts.revision) : [],
+    pinned: facts ? pinnedCandidateRevisions(facts.repository) : new Map(),
+  };
 }
 
 function worktreeFactsFor(slug: string, worktree: string, observed?: ObservedWorktreeFacts) {
@@ -1171,12 +1176,36 @@ function observedCheckoutRegistered(worktree: string, facts: StoredRecord, obser
   return observed ? observed.get(canonicalPath(worktree))?.registered === true : registeredProjectCheckout(facts);
 }
 
-function captureTerminalWorktreeRevision(slug?: any, state?: any, at?: any, observed?: ObservedWorktreeFacts) {
+function captureTerminalWorktreeRevision(slug?: any, ticket?: any, state?: any, at?: any, observed?: ObservedWorktreeFacts) {
   if (!terminalRevisionBound(slug, state)) return;
   const facts = worktreeFactsFor(slug, state.worktree, observed);
   if (!factsDescribeBoundCheckout(facts, state)) return;
   state.terminalWorktreeRevision = facts.revision;
   state.terminalWorktreeObservedAt = at;
+  const checkout = terminalCheckoutObservation(state, facts, observed);
+  recordTerminalCheckoutCommits(state, ownTerminalCheckoutCommits(slug, ticket, checkout.pinned, checkout.commits));
+}
+
+// Under the write lock git is refused, so a release passes what it observed before BEGIN.
+function terminalCheckoutObservation(state: StoredRecord, facts: WorktreeFacts, observed?: ObservedWorktreeFacts): Pick<ObservedWorktree, 'commits' | 'pinned'> {
+  if (observed) return observed.get(canonicalPath(state.worktree)) ?? { commits: [], pinned: new Map() };
+  return { commits: commitsSinceBaseline(facts.worktree, state.baseCommit, facts.revision), pinned: pinnedCandidateRevisions(facts.repository) };
+}
+
+// A crossed checkout carries a sibling's commits; sanctioning them here made the SQ-75 ownership check read the
+// sibling's checkout as this ticket's own and resume it.
+function ownTerminalCheckoutCommits(slug: string, ticket: StoredRecord, pinned: ReadonlyMap<string, string>, commits: readonly string[]): string[] {
+  const siblingRevisions = listTickets(slug)
+    .filter((other: StoredRecord) => isOtherTicket(other, ticket))
+    .flatMap((other: StoredRecord) => ticketRecordedRevisions(other, dispatchState(other), pinned));
+  return commits.filter(commit => !recordsRevision(siblingRevisions, commit));
+}
+
+// The board commit tool was the only writer, so a generation whose executor committed with raw git in its
+// isolated checkout ended without sanctionedCommits and could never be a provenance source (SQ-3675).
+function recordTerminalCheckoutCommits(state: StoredRecord, commits: readonly string[]): void {
+  const recorded: string[] = Array.isArray(state.sanctionedCommits) ? state.sanctionedCommits.map(String) : [];
+  state.sanctionedCommits = [...new Set([...recorded, ...commits])];
 }
 
 function terminalRevisionBound(slug: unknown, state: StoredRecord): boolean {
@@ -1234,7 +1263,7 @@ function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: a
   const state = dispatchState(ticket);
   if (!state) return;
   const at = new Date().toISOString();
-  captureTerminalWorktreeRevision(opts?.slug, state, at);
+  captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
   const release = opts?.releaseKind ? {
     kind: opts.releaseKind,
     reason: opts.releaseReason || null,
@@ -1579,7 +1608,7 @@ function pinnedCandidateRevisions(repository?: any) {
   return pinned;
 }
 
-function ticketRecordedRevisions(ticket?: any, state?: any, pinned?: Map<string, string>): string[] {
+function ticketRecordedRevisions(ticket?: any, state?: any, pinned?: ReadonlyMap<string, string>): string[] {
   const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
   return [
     ...(Array.isArray(state?.sanctionedCommits) ? state.sanctionedCommits : []),
@@ -1667,6 +1696,14 @@ function retainedOwnershipFallback(slug?: any, ticket?: any, state?: any, reposi
   return null;
 }
 
+function lastReleasedVerification(ticket: { verificationCaptures?: readonly CompletedVerificationCapture[] }, commit: string): CompletedVerificationCapture | null {
+  return ticket.verificationCaptures?.slice().reverse().find(capture => capture.candidate.source === 'git' && capture.candidate.value === commit) ?? null;
+}
+
+function releasedCheckpointEvidence(ticket: { verificationCaptures?: readonly CompletedVerificationCapture[] }, attempt: { release?: { reason?: string } } | null, commit: string) {
+  return { releaseReason: attempt?.release?.reason ?? null, verification: lastReleasedVerification(ticket, commit) };
+}
+
 function retainedWorktreeContinuationState(slug?: any, ticket?: any, state?: any) {
   const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
   const attempt = attempts[attempts.length - 1] || null;
@@ -1743,7 +1780,8 @@ function retainedWorktreeContinuationState(slug?: any, ticket?: any, state?: any
     return {
       continuation: {
         mode: 'retained_worktree_resume', ticketRef: ticket.ref, sourceWorktree: worktree, sourceBranch, baseCommit, commit: observedRevision, commits,
-        clean: true, releasedAt: state.terminalAt, releaseKind: attempt?.release?.kind || (checkpointCommit ? 'checkpoint' : 'handback'), lease: leaseFacts,
+        clean: true, releasedAt: state.terminalAt, releaseKind: attempt?.release?.kind || (checkpointCommit ? 'checkpoint' : 'handback'),
+        ...releasedCheckpointEvidence(ticket, attempt, observedRevision), lease: leaseFacts,
       },
     };
   } catch (error: any) {
@@ -2762,7 +2800,8 @@ function priorAttemptFields(plan: PreparedDispatchPlan) {
 
 function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRecord, plan: PreparedDispatchPlan, opts: DispatchOptions, preflight: DispatchPreflight) {
   const provenance = preparationProvenanceFields(plan, opts, preflight.preparedCompatibility);
-  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref));
+  const integrationCommit = opts.workProvenance ? integrationBaseCommit(slug, plan.integrationTargetState) : '';
+  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref), integrationCommit);
   return {
     ...provenance,
     lifecycleAttempt: { ...provenance.lifecycleAttempt, workProvenance },
@@ -3230,14 +3269,18 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+function launchedIsolatedReservation(state?: any, sessionId?: any) {
+  return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === 'launched' && !state.terminalAt);
+}
+
+// A reservation a failed sibling creation released is held for the claim that proves whose it was; letting a later
+// hook rebind it left the last sibling of the message with no record and nothing to trade at claim (GH-406).
+function holdsNoCheckout(state: any) {
+  return !state.worktree && !state.continuation?.sourceWorktree && state.worktreeBindingExchange?.reason !== 'worktree_create_failed';
+}
+
 function dispatchCreationCandidate(state?: any, sessionId?: any) {
-  return Boolean(state
-    && state.sessionId === sessionId
-    && state.sharedTree === false
-    && state.outcome === 'launched'
-    && !state.terminalAt
-    && !state.worktree
-    && !state.continuation?.sourceWorktree);
+  return launchedIsolatedReservation(state, sessionId) && holdsNoCheckout(state);
 }
 
 // A WorktreeCreate that finds only a PREPARED dispatch for its session means the
@@ -3510,21 +3553,27 @@ function recordNativeCheckoutBinding(slug: string, ticket: CompositionTicket, st
     repository: response.repository, worktree: response.worktree };
 }
 
-function freshNativeCheckoutBinding(slug: string, ticketId: string, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
+// Null when a sibling hook took this reservation after the caller's snapshot was read.
+function freshNativeCheckoutBinding(slug: string, ticketId: string, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult | null {
   const ticket: CompositionTicket = getTicket(slug, ticketId);
   const state: NativeCheckoutCreation = dispatchState(ticket);
-  if (!dispatchCreationCandidate(state, request.sessionId)) return { ok: false, reason: 'already_bound' };
+  if (!dispatchCreationCandidate(state, request.sessionId)) return null;
   if (request.attempt && request.attempt !== state.preparedAt) return { ok: false, reason: 'stale_attempt' };
   return retainedCompositionCheckoutRefusal(ticket, request.worktree)
     ?? recordNativeCheckoutBinding(slug, ticket, state, request);
 }
 
+// Sibling hooks spawned in one message read the same snapshot and race for its first reservation. The loser used to
+// refuse `already_bound` and kill its spawn while a sibling reservation was still free, leaving that sibling's
+// executor without any checkout binding (GH-406), so a reservation taken meanwhile is skipped instead.
 function bindAvailableNativeCheckout(slug: string, request: NativeCheckoutBindingRequest, tickets: readonly CompositionTicket[]): NativeCheckoutBindingResult {
-  const candidate = tickets.find(ticket => dispatchCreationCandidate(dispatchState(ticket), request.sessionId));
-  if (candidate) return dependencies.withCompositionGenerationLock(slug, candidate.id,
-    () => freshNativeCheckoutBinding(slug, candidate.id, request));
+  for (const candidate of tickets.filter(ticket => dispatchCreationCandidate(dispatchState(ticket), request.sessionId))) {
+    const bound: NativeCheckoutBindingResult | null = dependencies.withCompositionGenerationLock(slug, candidate.id,
+      () => freshNativeCheckoutBinding(slug, candidate.id, request));
+    if (bound) return bound;
+  }
   if (unlaunchedSessionDispatch(slug, request.sessionId)) return { ok: false, reason: 'dispatch_launch_unrecorded' };
-  const candidates = tickets.map(candidate => ({ candidate, state: dispatchState(candidate) })).filter(candidate => Boolean(candidate.state));
+  const candidates = listTickets(slug).map((candidate: CompositionTicket) => ({ candidate, state: dispatchState(candidate) })).filter((candidate: { state: unknown }) => Boolean(candidate.state));
   return { ...unavailableWorktreeBinding(slug, candidates, request.sessionId, request.worktree), ok: false };
 }
 
@@ -3947,6 +3996,20 @@ function crossedWorktreeBinding(slug?: any, ticket?: any, actualWorktree?: any) 
 // name, so a release without `--by` is answered as somebody else's claim and the crossed claim stays live.
 function gatedClaimHolder(ticket?: any) {
   return ticket?.claim?.by ? String(ticket.claim.by) : '<your claim id>';
+}
+
+// The owner label the board already holds for a subagent caller: the claim holder, or the submitter once submit
+// released the claim, on every dispatch bound to its agent id. A hook defaults an omitted `by` from it, and
+// refuses unless exactly one label comes back (GH-424).
+function dispatchCallerOwners(identity?: any) {
+  const agentId = String(identity?.agentId || '').trim();
+  const ref = String(identity?.ref || '').trim().toUpperCase();
+  if (!agentId) return [];
+  return listProjects({ all: true })
+    .flatMap((project: any) => listTickets(project.slug))
+    .filter((ticket: any) => dispatchState(ticket)?.agentId === agentId && (!ref || String(ticket.ref).toUpperCase() === ref))
+    .map((ticket: any) => ({ ref: ticket.ref, by: String(ticket.claim?.by || ticket.submission?.by || '').trim() }))
+    .filter((owner: any) => owner.by);
 }
 
 function dispatchIsolationExpectation(identity?: any) {
@@ -5364,6 +5427,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchIdentityDiagnosis,
     crossedWorktreeBinding,
     dispatchIsolationExpectation,
+    dispatchCallerOwners,
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,

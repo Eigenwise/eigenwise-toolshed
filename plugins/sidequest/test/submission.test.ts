@@ -6818,6 +6818,105 @@ test('GH-378: submit never repoints another board\'s refs/sidequest/<ref> and na
   assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`]), foreign, 'the foreign candidate ref is left in place');
 });
 
+// GH-424. rework is reached through the JSON-RPC layer here because the by default lives in runTool, which a
+// direct tool.handler call skips.
+async function reworkAsSession(sessionId: string | null, args: Record<string, unknown>) {
+  const previous = process.env.CLAUDE_CODE_SESSION_ID;
+  const previousFallback = process.env.CLAUDE_SESSION_ID;
+  if (sessionId === null) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = sessionId;
+  delete process.env.CLAUDE_SESSION_ID;
+  try {
+    const response = await mcp.handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'rework', arguments: { project: PROJECT_DIR, ...args } } });
+    const text = response.result.content[0].text;
+    return response.result.isError ? { isError: true, text } : JSON.parse(text);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previous;
+    if (previousFallback !== undefined) process.env.CLAUDE_SESSION_ID = previousFallback;
+  }
+}
+
+function submittedCandidate(title: string, by: string) {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh424.js'), `${title}\n`);
+  git(['add', 'lib/gh424.js']);
+  git(['commit', '-m', title]);
+  const commit = git(['rev-parse', 'HEAD']);
+  const ticket = addTicket(title);
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, by, { commit }).ok, true);
+  return ticket;
+}
+
+test('rework defaults an omitted by to the session id: it passes for the owner and names both labels otherwise (GH-424)', async () => {
+  const owned = submittedCandidate('gh424 owner session', 'gh424-session');
+  const defaulted = await reworkAsSession('gh424-session', { ref: owned.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(defaulted.ok, true, defaulted.message);
+  assert.strictEqual(store.getTicket(slug, owned.ref).rejectedSubmissions[0].rejectedBy, 'gh424-session');
+
+  const foreign = submittedCandidate('gh424 foreign owner', 'exec-y');
+  const refused = await reworkAsSession('gh424-session', { ref: foreign.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'not_owner');
+  assert.match(refused.message, /submitter "exec-y"/);
+  assert.match(refused.message, /got "gh424-session"/);
+  assert.ok(store.getTicket(slug, foreign.ref).submission, 'a refused default leaves the candidate in place');
+
+  const anonymous = await reworkAsSession(null, { ref: foreign.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(anonymous.isError, true);
+  assert.match(anonymous.text, /rework: "by" is required/);
+
+  const explicit = await reworkAsSession('gh424-session', { ref: foreign.ref, by: 'exec-y', review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(explicit.ok, true, 'an explicit by wins over the session default');
+});
+
+test('rework defaults an omitted by to the session the host switched to, not the startup environment (GH-424, GH-467)', async () => {
+  const owned = submittedCandidate('gh424 cleared session', 'gh424-cleared');
+  const sessionsDirectory = path.join(String(process.env.SIDEQUEST_CLAUDE_HOME), 'sessions');
+  const recordFile = path.join(sessionsDirectory, `${process.ppid}.json`);
+  fs.mkdirSync(sessionsDirectory, { recursive: true });
+  fs.writeFileSync(recordFile, JSON.stringify({ pid: process.ppid, sessionId: 'gh424-cleared' }));
+  try {
+    const defaulted = await reworkAsSession('gh424-startup', { ref: owned.ref, review: 'Missing a case.', reason: 'Repair the case.' });
+    assert.strictEqual(defaulted.ok, true, defaulted.message);
+    assert.strictEqual(store.getTicket(slug, owned.ref).rejectedSubmissions[0].rejectedBy, 'gh424-cleared');
+  } finally {
+    fs.rmSync(recordFile, { force: true });
+  }
+});
+
+test('rework stores over-long review and reason as a comment and keeps a truncated summary with its id (GH-424)', async () => {
+  const review = `review-${'r'.repeat(1500)}`;
+  const reason = `reason-${'x'.repeat(5000)}`;
+  const refusedTicket = submittedCandidate('gh424 overlong refused', 'exec-z');
+  const refused = await callMcp('rework', { project: PROJECT_DIR, ref: refusedTicket.ref, by: 'reviewer', review, reason });
+  assert.strictEqual(refused.reason, 'not_owner');
+  assert.strictEqual((store.getTicket(slug, refusedTicket.ref).comments || []).length, 0, 'a refused rework writes no comment');
+
+  const ticket = submittedCandidate('gh424 overlong', 'exec-z');
+  const reworked = await callMcp('rework', { project: PROJECT_DIR, ref: ticket.ref, by: 'exec-z', review, reason });
+  assert.strictEqual(reworked.ok, true, reworked.message);
+  const stored = store.getTicket(slug, ticket.ref);
+  const comment = stored.comments.at(-1);
+  assert.strictEqual(comment.kind, 'comment');
+  assert.strictEqual(comment.by, 'exec-z');
+  assert.ok(comment.body.includes(review) && comment.body.includes(reason), 'the comment holds the whole text');
+  const rejection = stored.rejectedSubmissions[0];
+  assert.strictEqual(rejection.review.length, 1000);
+  assert.strictEqual(rejection.reason.length, 4000);
+  for (const field of [rejection.review, rejection.reason]) assert.ok(field.endsWith(`[full text: comment ${comment.id}]`), field.slice(-80));
+
+  const unbounded = submittedCandidate('gh424 beyond a comment', 'exec-z');
+  await assert.rejects(
+    callMcp('rework', { project: PROJECT_DIR, ref: unbounded.ref, by: 'exec-z', review: 'ok', reason: 'z'.repeat(17000) }),
+    /too long to keep even as a comment \(\d+ chars, max 16000\)/,
+  );
+  assert.ok(store.getTicket(slug, unbounded.ref).submission, 'a text no comment can hold is refused with the candidate in place');
+});
+
 // SQ-3424: on a board with verifyEnvironment: shared, an isolated dispatch pins environment: 'shared'
 // onto its command verifier. The executor cannot run that command in its worktree, so submit admits
 // the candidate as deferred, the wave gate records gate_deferred without provisioning anything, and
@@ -7007,4 +7106,69 @@ test('SQ-3424: manual and document verifiers still require evidence and never re
   const documentGiven = directSubmitWithVerifier('document verifier with evidence', 'evidence-document-given.js', { executorVerifyKind: 'document', executorVerify: 'rendered docs' }, 'rendered docs');
   assert.strictEqual(documentGiven.ok, true, documentGiven.message);
   assert.strictEqual(documentGiven.ticket.submission.verificationResult.status, 'passed');
+});
+
+for (const suppliedVerify of [undefined, 'test/wrong-path.test.ts']) {
+  test(`command submit resolves the dispatch-pinned verifier when verify is ${suppliedVerify === undefined ? 'omitted' : 'mismatched'}`, async () => {
+    cleanBranch();
+    const command = 'node -e "process.exit(0)"';
+    const ticket = addTicket('automatic pinned command', { category: 'submission.fixture', executorVerifyKind: 'command', executorVerify: command, files: ['README.md'] });
+    const by = 'automatic-verifier-worker';
+    const sessionId = 'automatic-verifier-session';
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+    assert.strictEqual(prepared.ticket.dispatch.verificationRequirement.command, command);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(ticket, commit);
+    const capture = await runVerifyCapture(command, PROJECT_DIR);
+    try {
+      assert.strictEqual(capture.status, 'passed');
+      assert.strictEqual(recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR).ok, true);
+      const accepted = await callMcp('submit', { project: PROJECT_DIR, ref: ticket.ref, by, commit, base: commit, worktree: PROJECT_DIR, verify: suppliedVerify, body: 'Pinned capture verifies this unchanged candidate.' });
+      assert.strictEqual(accepted.ok, true, accepted.message);
+      const submission = store.getTicket(slug, ticket.ref).submission;
+      assert.strictEqual(submission.verify, command, 'submission stores the dispatch-pinned command');
+      assert.strictEqual(submission.verificationResult.verifierSource, 'pinned');
+    } finally {
+      fs.rmSync(capture.logPath, { force: true });
+    }
+  });
+}
+
+test('MCP release accepts typed refusal evidence and still refuses bare prose', async () => {
+  const ticket = addTicket('typed release refusal');
+  const by = 'typed-release-worker';
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'This release fixture needs a local direct claim.' }).ok, true);
+  const args = { project: PROJECT_DIR, ref: ticket.ref, by, reason: 'The MCP tool refused the operation.', kind: 'technical_blocker', status: 'todo' };
+  const bare = await callMcp('release', args);
+  assert.strictEqual(bare.reason, 'technical_blocker_evidence_required');
+  assert.strictEqual(store.getTicket(slug, ticket.ref).claim.by, by, 'bare prose keeps the claim');
+  const incomplete = await callMcp('release', { ...args, mcpRefusal: { tool: 'scopeRequest', message: 'Outside the declared files.' } });
+  assert.strictEqual(incomplete.reason, 'technical_blocker_evidence_required');
+  const mcpRefusal = { tool: 'scopeRequest', reason: 'scope_refused', message: 'Outside the declared files.' };
+  const accepted = await callMcp('release', { ...args, mcpRefusal });
+  assert.strictEqual(accepted.ok, true, accepted.message);
+  const released = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(released.claim, null);
+  assert.deepStrictEqual(released.release.evidence.mcpRefusal, mcpRefusal);
+});
+
+test('hook refusal evidence must name the current MCP session', async () => {
+  const ticket = addTicket('same-session hook release');
+  const by = 'hook-release-worker';
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'This hook release fixture needs a local direct claim.' }).ok, true);
+  const session = require('../lib/mcp-shared.js').runtimeSessionId() || 'hook-release-session';
+  const args = { project: PROJECT_DIR, ref: ticket.ref, by, session, reason: 'The hook refused this operation.', kind: 'technical_blocker', status: 'todo' };
+  const rejected = await callMcp('release', { ...args, hookRefusal: { session: 'another-session', text: 'PreToolUse denied the operation.' } });
+  assert.strictEqual(rejected.reason, 'technical_blocker_evidence_required');
+  const hookRefusal = { session, text: 'PreToolUse denied the operation.' };
+  const accepted = await callMcp('release', { ...args, hookRefusal });
+  assert.strictEqual(accepted.ok, true, accepted.message);
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref).release.evidence.hookRefusal, hookRefusal);
+});
+
+test('command verification refuses an absent pinned command', () => {
+  const { commandVerificationResult } = require('../lib/kernel/verification.js');
+  const refused = commandVerificationResult({ kind: 'command', evidenceContract: '' }, 'node -e "process.exit(0)"', [], 'SQ-fixture', { source: 'git', value: COMMIT }, 'attempt');
+  assert.strictEqual(refused.diagnostic.code, 'executor_verify_required');
 });

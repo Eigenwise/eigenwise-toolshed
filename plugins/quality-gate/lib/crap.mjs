@@ -22,8 +22,19 @@ async function descriptors(text, file, analyzer, complexityCsv, root, policy, or
   return rows.map((row) => ({ ...row, informational: Boolean(row.unverified) }));
 }
 
+async function fileDescriptors(root, file, analyzer, complexityCsv, policy, oracles) {
+  const bytes = fs.readFileSync(path.resolve(root, file));
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    return unsupportedDescriptor(bytes.toString('utf8'), file, 'UTF-8 decode failed: ' + error.message);
+  }
+  return descriptors(text, file, analyzer, complexityCsv, root, policy, oracles);
+}
+
 async function sourceMetrics(root, files, analyzer, complexityCsv, policy, oracles) {
-  return (await Promise.all(files.map(async (file) => (await descriptors(fs.readFileSync(path.resolve(root, file), 'utf8'), file, analyzer, complexityCsv, root, policy, oracles)).map((descriptor) => ({ ...descriptor, relativePath: file }))))).flat();
+  return (await Promise.all(files.map(async (file) => (await fileDescriptors(root, file, analyzer, complexityCsv, policy, oracles)).map((descriptor) => ({ ...descriptor, relativePath: file }))))).flat();
 }
 
 function scoredMetric(metric, report, input, lines) {
@@ -69,7 +80,9 @@ async function changedAgainstBase(report, analyzer) {
     }
     return descriptors(text, file, analyzer, undefined, report.root, report.pythonPolicy, oracles);
   };
-  return changedMetricsAgainstBase(report.metrics, Object.keys(report.files), report.base, readBaseline);
+  const changed = await changedMetricsAgainstBase(report.metrics, Object.keys(report.files), report.base, readBaseline);
+  const changedIdentities = new Set(changed.map((metric) => metric.relativePath + ':' + metric.identity));
+  return changed.concat(report.metrics.filter((metric) => metric.informational && !changedIdentities.has(metric.relativePath + ':' + metric.identity)));
 }
 
 export async function crapReport(options = {}) {

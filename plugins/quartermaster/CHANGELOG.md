@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.1 (2026-10-12)
+
+Released in v3.595.0, up from 0.12.0.
+
+### Fixes
+
+- The CRAP gate enforces only new complexity and reports touched legacy functions as informational (SQ-3523)
+  The quality-gate core classifies every changed function against the base: `new` (no partner at the base), `modified-raised` (its cyclomatic complexity rose) or `legacy-unchanged` (equal or lower). Only `new` and `modified-raised` rows must score below 6 or count as unverified; a `legacy-unchanged` row is printed as `LEGACY` with its number and never fails or touches the exit code, so a pass-through edit inside a big legacy function is no longer a refactor demand. The repository gate (`scripts/quality/crap.mjs`) prints the three classes as separate sections with their counts in the summary line, and gap pairing now prefers an equal name before falling back to order, so a helper inserted above an edited function does not take its partner. The Quartermaster `crap-gate` reference and the Sidequest `verify-discipline` skill tell executors to block only on new complexity the change introduced.
+- Quartermaster never installs per-turn blocking quality hooks (SQ-3635)
+  The CRAP gate reference, setup, and resupply skills now say plainly that the gate is an on-demand command or CI step, and that Quartermaster never writes UserPromptSubmit, Stop, or PreToolUse hooks that block a turn on a receipt. Resupply routes an existing receipt-demanding hook to a removal recommendation, and scoring never demands files that arrived through a merge, rebase, or pull.
+- Resupply offers no longer force another turn (SQ-3642)
+  Quartermaster's Stop hook now shows a non-blocking resupply offer to the user after the reply instead of making Claude continue. Once-per-session offers, cooldowns and decline bookkeeping stay unchanged.
+
 ## 0.12.0 (2026-10-07)
 
 Released in v3.593.0, up from 0.11.10.

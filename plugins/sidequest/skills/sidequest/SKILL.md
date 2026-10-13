@@ -133,7 +133,7 @@ optionally `--status todo`).
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
 - **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent. If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch.agentId` or its exact original Agent-returned identifier; never `claim.by` or a guessed/replacement address. Honor user Pause retries. Missing/mismatched identity stays continuation UNVERIFIED; preserve claim/work. A resume keeps claim, token-file path, and worktree binding. Require authentic response/activity; queued/unknown/completed/absent/failed-send is not death. Never restart terminal executors. Confirmed death requires salvage before replacement. Lost binding and died-before-claim recovery, including preparing-session authority and deadlines: `references/orchestration.md`.
-- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence**: an executor ends its own run at submit, done, or release. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for one `pulse` still shows alive after its ticket went terminal (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
+- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence**: an executor ends its own run at submit, done, or release. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for a terminal ticket whose executor the host still lists running (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
 `submit` (claim released, parked in `doing`); `submit.body` is the canonical report, so no separate pre-submit
@@ -230,14 +230,14 @@ cause with evidence (`file:line`), the fix, verification.
 Only the main thread can set MCP `dispatch.workProvenance` before preparation. Its `kind` is
 `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only`
 or `fixture-only`. Each source names a native producer ref, its exact `preparedAt` (current dispatch
-or an archived attempt) and an immutable owned `commit`, optionally a `captureId`; a generation missing
-retained facts, or a submitted one whose current submission names another candidate, is refused by
-name. The board freezes base, scope, byte identities and capture identity. A released native
-preparation never becomes a submitted source.
+or an archived attempt) and an immutable owned `commit`, optionally a `captureId`. Missing
+`baseCommit`/`sanctionedCommits` derive from its captures; ambiguity, other gaps or a
+submission naming another candidate refuse by name. The board freezes base, scope, byte
+and capture identity. The source stays unaccepted on its producer.
 
 Unchanged inherited work and a declared GREEN behavior-preserving refactor do not need invented
 new reds. New owned behavior keeps its own control requirements. Source/test byte drift, changed
 producer generations, incompatible captures, worker self-grants and late declarations refuse.
 The declaration is factual provenance only: execution, quality and admission remain UNVERIFIED.
-It cannot rebind an old receipt or exempt held authored code. Record factual verification or a
-checkpoint, preserve the immutable commit/range, then release preparation. Submission stays held.
+It cannot rebind an old receipt or exempt held authored code. While its sources match, the
+dispatch submits normally with the frozen record; integration runs the pinned verifier.

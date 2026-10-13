@@ -25,6 +25,8 @@ const {
   provenNoOpCloseout,
   PROJECT_PROP,
   FILES_PROP,
+  ADD_FILES_PROP,
+  REMOVE_FILES_PROP,
   LABELS_PROP,
   CONTRACT_PROP,
   MODEL_FILTER_PROP,
@@ -55,8 +57,18 @@ const {
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
   withoutCategories,
-  snapshotContextRetrieval
+  snapshotContextRetrieval,
+  cleanupClosedTicketWorktree,
+  claimHeldLive
 } = require("./mcp-shared");
+function liveClaimRemovalRefusal(ticket, force) {
+  if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
+  return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
+}
+async function removedTicketAck(slug, projectPath, ticket) {
+  await cleanupClosedTicketWorktree(slug, projectPath, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false });
+  return { ok: true, ref: ticket.ref };
+}
 function sameBasenameSiblingDetails(project, ticket, projectPath, tool) {
   const details = store.scopeConsumerWarningDetails(ticket, projectPath);
   if (!details.length) return {};
@@ -113,6 +125,27 @@ const REVIEW_TARGET_PROP = {
   },
   required: ["ref"]
 };
+const TICKET_FIELD_PROPS = {
+  title: { type: "string" },
+  description: { type: "string" },
+  priority: { type: "string", enum: store.VALID_PRIORITY },
+  highStakes: { type: "boolean" },
+  labels: LABELS_PROP,
+  files: FILES_PROP,
+  produces: CONTRACT_PROP("produces"),
+  changes: CONTRACT_PROP("changes"),
+  consumes: CONTRACT_PROP("consumes"),
+  contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
+  readonly: { type: "boolean", description: "Closeout override." },
+  workingTreeDelivery: { type: "boolean" },
+  externalDeliverable: { type: "boolean", description: "Explicitly declare the deliverable is outside the repository. The orchestrator may set this during a live claim; it lets that executor close a clean writable dispatch with its current-attempt pinned verify-capture." },
+  anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
+  verify: VERIFY_ORACLE_PROP,
+  verifyCwd: VERIFY_CWD_PROP,
+  verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS },
+  attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
+  reviewTarget: REVIEW_TARGET_PROP
+};
 const tools = [
   {
     name: "add",
@@ -121,28 +154,13 @@ const tools = [
       type: "object",
       properties: {
         project: PROJECT_PROP,
-        title: { type: "string" },
-        description: { type: "string" },
-        priority: { type: "string", enum: store.VALID_PRIORITY },
-        highStakes: { type: "boolean" },
-        labels: LABELS_PROP,
-        files: FILES_PROP,
-        produces: CONTRACT_PROP("produces"),
-        changes: CONTRACT_PROP("changes"),
-        consumes: CONTRACT_PROP("consumes"),
-        contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
-        readonly: { type: "boolean", description: "Closeout override." },
+        ...TICKET_FIELD_PROPS,
         workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence." },
-        anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
-        verify: VERIFY_ORACLE_PROP,
-        verifyCwd: VERIFY_CWD_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
-        attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
         storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
         category: { type: "string", description: "Enabled category id from category_list." },
-        reviewTarget: REVIEW_TARGET_PROP,
         route: {
           type: "object",
           properties: { model: { type: "string" }, effort: { type: "string", enum: store.VALID_EFFORTS } },
@@ -175,7 +193,7 @@ const tools = [
       }
       const complexity = store.coerceComplexity(args.complexity);
       if (!category && complexity == null && !args.unclassified) throw new Error("add: pass category, legacy complexity + why, or unclassified:true.");
-      if (complexity != null && (!args.why || String(args.why).trim().length < 20)) throw new Error("add: why is required with complexity (min 20 chars).");
+      if (complexity != null && (!args.why || String(args.why).trim().length < 20)) throw new Error('add: why is required with complexity (min 20 chars). Pass why: "<why this score fits>", or drop complexity and pass category.');
       if (args.storyId !== void 0) validateStoryId(args.storyId);
       const created = store.createTicket(slug, {
         title: args.title,
@@ -189,6 +207,7 @@ const tools = [
         contractWaiver: args.contractWaiver,
         readonly: args.readonly,
         workingTreeDelivery: args.workingTreeDelivery,
+        externalDeliverable: args.externalDeliverable,
         executorAnchors: args.anchors,
         executorVerifyKind: args.verifyKind,
         executorAttestationArtifact: args.attestationArtifact,
@@ -220,31 +239,17 @@ const tools = [
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
-        title: { type: "string" },
-        description: { type: "string" },
-        priority: { type: "string", enum: store.VALID_PRIORITY },
+        ...TICKET_FIELD_PROPS,
         status: { type: "string", enum: store.VALID_STATUS },
-        highStakes: { type: "boolean" },
-        labels: LABELS_PROP,
-        files: FILES_PROP,
+        addFiles: ADD_FILES_PROP,
+        removeFiles: REMOVE_FILES_PROP,
         by: { type: "string", description: "Human-readable update label. It cannot authorize closeout fields on a live claim." },
-        produces: CONTRACT_PROP("produces"),
-        changes: CONTRACT_PROP("changes"),
-        consumes: CONTRACT_PROP("consumes"),
-        contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
-        readonly: { type: "boolean", description: "Closeout override." },
         workingTreeDelivery: { type: "boolean", description: "Orchestrator-only live-claim declaration for a shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths." },
-        externalDeliverable: { type: "boolean", description: "Explicitly declare the deliverable is outside the repository. The orchestrator may set this during a live claim; it lets that executor close a clean writable dispatch with its current-attempt pinned verify-capture." },
-        anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
-        verify: VERIFY_ORACLE_PROP,
-        verifyCwd: VERIFY_CWD_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
-        attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
         storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string" },
         category: { type: "string", description: 'Enabled category id from category_list. Use "none" to clear. A bound reviewTarget pins its review-audit category.' },
-        reviewTarget: REVIEW_TARGET_PROP,
         route: {
           anyOf: [
             {
@@ -287,7 +292,7 @@ const tools = [
       const verificationAmendmentRefusal = verificationWasAmended ? recordedSubmissionVerificationAmendmentRefusal(existing) : null;
       if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch = { source: "mcp", by: String(args.by || "").trim() || null };
-      for (const k of ["title", "description", "priority", "status", "highStakes", "labels", "files", "complexity"]) {
+      for (const k of ["title", "description", "priority", "status", "highStakes", "labels", "files", "addFiles", "removeFiles", "complexity"]) {
         if (args[k] !== void 0) patch[k] = args[k];
       }
       if (args.produces !== void 0 || args.changes !== void 0 || args.consumes !== void 0) {
@@ -354,14 +359,12 @@ const tools = [
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
-      if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !args.force) {
-        return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
-      }
-      const ref = ticket.ref;
+      const refusal = liveClaimRemovalRefusal(ticket, args.force);
+      if (refusal) return refusal;
       if (!store.deleteTicket(slug, ticket.id, { allowLiveClaimDeletion: args.force === true })) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
-      return { ok: true, ref };
+      return removedTicketAck(slug, meta.path, ticket);
     }
   },
   {
