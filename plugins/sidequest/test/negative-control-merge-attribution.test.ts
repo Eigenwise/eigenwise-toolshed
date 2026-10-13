@@ -250,3 +250,77 @@ test('GH-160: commits fast-forwarded from the integration branch are not the can
   const completion = store.addComment(slug, ticket.ref, { by, body: verified, source: 'mcp' });
   assert.equal(completion.ok, true, completion.message);
 });
+
+// A fork PR rework's integration branch is the PR branch, which upstream develop's commits never reach.
+function mergeFromBranch(project: ReturnType<typeof fixtureProject>, published: boolean) {
+  const { git, write, commit } = project;
+  const upstreamWork = {
+    'test/upstream.test.js': "test('upstream develop test', () => {\n  upstream();\n});\n",
+    'test/fixture.test.js': "test('shared test', () => {\n  sharedUpstream();\n});\n\ntest('resolution test', () => {\n  resolution();\n});\n",
+  };
+  git(['branch', 'pr']);
+  git(['checkout', '-b', 'upstream-work']);
+  const tip = commit(upstreamWork, 'upstream develop');
+  git(['checkout', 'main']);
+  if (published) {
+    git(['update-ref', 'refs/remotes/upstream/develop', tip]);
+    git(['branch', '-D', 'upstream-work']);
+  }
+  return {
+    write,
+    merge: (resolve?: () => void) => {
+      git(['merge', '--no-commit', '--no-ff', tip]);
+      resolve?.();
+      git(['add', '.']);
+      git(['commit', '--no-edit']);
+    },
+  };
+}
+
+const prBranch = { integrationBranch: 'pr', integrationMode: 'local' };
+
+test('SQ-176: tests merged in from a published branch the integration branch does not reach are not the candidate\'s', () => {
+  const project = fixtureProject('sq-negative-control-published-');
+  const by = 'published-merge-executor';
+  const { merge } = mergeFromBranch(project, true);
+  const ticket = claimSharedTree(project.slug, by, prBranch);
+
+  project.commit(ownWork, 'own work');
+  merge();
+
+  assert.equal(store.addComment(project.slug, ticket.ref, { by, body: `${control}\n[sidequest:negative-control-test] failed own change test`, source: 'mcp' }).ok, true);
+  const completion = store.addComment(project.slug, ticket.ref, { by, body: verified, source: 'mcp' });
+  assert.equal(completion.ok, true, completion.message);
+});
+
+test('SQ-176: a test only the resolution of a published-branch merge changed is still demanded', () => {
+  const project = fixtureProject('sq-negative-control-published-resolution-');
+  const by = 'published-resolution-executor';
+  const { merge, write } = mergeFromBranch(project, true);
+  const ticket = claimSharedTree(project.slug, by, prBranch);
+
+  project.commit(ownWork, 'own work');
+  merge(() => write('test/fixture.test.js', "test('shared test', () => {\n  sharedUpstream();\n});\n\ntest('resolution test', () => {\n  resolvedInTheMerge();\n});\n"));
+
+  assert.equal(store.addComment(project.slug, ticket.ref, { by, body: `${control}\n[sidequest:negative-control-test] failed own change test`, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(project.slug, ticket.ref, { by, body: verified, source: 'mcp' });
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, /resolution test/);
+  assert.doesNotMatch(refusal.message, /upstream develop test|shared test/);
+});
+
+test('SQ-176: tests merged in from a branch only this checkout has are still the candidate\'s own', () => {
+  const project = fixtureProject('sq-negative-control-local-only-');
+  const by = 'local-only-merge-executor';
+  const { merge } = mergeFromBranch(project, false);
+  const ticket = claimSharedTree(project.slug, by, prBranch);
+
+  project.commit(ownWork, 'own work');
+  merge();
+
+  assert.equal(store.addComment(project.slug, ticket.ref, { by, body: control, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(project.slug, ticket.ref, { by, body: verified, source: 'mcp' });
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, /upstream develop test/);
+  assert.match(refusal.message, /own change test/);
+});

@@ -1022,7 +1022,8 @@ function changeTestNames(root, change, files) {
 function foreignTips(slug, ticket, root) {
   const refs = commitScope.integrationTargetRefs(ticketIntegrationTarget(slug, ticket));
   if (!refs.length) return [];
-  return gitOutput(root, ["for-each-ref", "--no-contains", "HEAD", "--format=%(objectname) %(refname)", ...refs]).split(/\r?\n/).map((line) => line.split(" ")).filter(([, ref]) => refs.includes(String(ref))).map(([tip]) => String(tip));
+  const isForeign = (ref) => refs.includes(ref) || ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD");
+  return gitOutput(root, ["for-each-ref", "--no-contains", "HEAD", "--format=%(objectname) %(refname)", ...refs, "refs/remotes/"]).split(/\r?\n/).map((line) => line.split(" ")).filter(([, ref]) => isForeign(String(ref))).map(([tip]) => String(tip));
 }
 function commitChange(line) {
   const [commit = "", ...parents] = line.split(" ");
