@@ -353,6 +353,33 @@ const COMPACT_OUTCOMES = new Set(['completed', 'aborted', 'incomplete', 'empty_s
 const COMPACT_ERROR_CODES = new Set([...COMPACT_FATAL_ERROR_TYPES, 'websocket_missing_terminal', 'upstream_http_error', 'unknown_error']);
 const COMPACT_USAGE_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens'];
 
+function sentryInputTokens(usage) {
+  return ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
+    .reduce((total, field) => total + (Number.isFinite(usage?.[field]) ? usage[field] : 0), 0);
+}
+
+function sentryUsageRearms(usage, compactTrigger, ordinaryTurnCompleted) {
+  const lowWatermark = compactTrigger - Math.min(CODEX_COMPACT_HEADROOM, compactTrigger * 0.25);
+  return usage < lowWatermark || (ordinaryTurnCompleted && usage > compactTrigger);
+}
+
+function observeGrokSseFrame(frame, transformer, inference, usageCapture, sessionId, model, recordSentryUsage) {
+  const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trim();
+  if (!data || data === '[DONE]') return;
+  try {
+    const event = JSON.parse(data);
+    transformer.event(event);
+    inference.terminal ||= event.type === 'response.completed';
+    inference.sawError ||= ['error', 'response.failed', 'response.incomplete'].includes(event.type);
+    if (event?.response?.usage) {
+      const usage = grokBackend.anthropicUsage(event.response.usage);
+      inference.sentryUsage = usage;
+      usageCapture?.observeEvent({ type: 'message_delta', usage });
+      recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+    }
+  } catch {}
+}
+
 function systemPromptText(system) {
   if (typeof system === 'string') return system;
   if (!Array.isArray(system)) return '';
@@ -362,6 +389,55 @@ function systemPromptText(system) {
 function isCompactionRequest(payload) {
   return !!payload && payload.stream === true
     && systemPromptText(payload.system).includes(COMPACTION_SYSTEM_PROMPT);
+}
+
+// A request with no prior assistant turn has nothing to compact, so its recovery is upstream of the
+// gateway. A side request looks the same as a first turn here, and its recovery is the same too.
+const CONTEXT_OVERFLOW_RECOVERY = {
+  first_turn: 'nothing to compact, the request has no prior turn: shrink the first prompt (a dispatched subagent\'s briefing) or route to a larger-window model',
+  continuation: 'compact the conversation and retry',
+  compaction: 'the compaction request itself is over the limit: drop older turns or start a fresh conversation, or route to a larger-window model',
+  UNVERIFIED: 'phase UNVERIFIED: compact if the conversation has prior turns, otherwise shrink the prompt or route to a larger-window model',
+};
+
+function requestPhase(payload) {
+  if (isCompactionRequest(payload)) return 'compaction';
+  if (!Array.isArray(payload.messages)) return 'UNVERIFIED';
+  return payload.messages.some((message) => message?.role === 'assistant') ? 'continuation' : 'first_turn';
+}
+
+// requestBody is always JSON the gateway parsed or serialized itself before forwarding.
+function contextOverflowDetails(requestBody, refusedBy, tokens, tokensFrom, limitTokens) {
+  return {
+    phase: requestPhase(JSON.parse(requestBody)),
+    refused_by: refusedBy,
+    request_bytes: Buffer.byteLength(requestBody),
+    tokens: tokens || null,
+    tokens_from: tokens ? tokensFrom : null,
+    limit_tokens: limitTokens,
+  };
+}
+
+// The "(N tokens > M tokens)" part stays first: Claude Code parses it to size its compaction.
+function describeContextOverflow(error, overflow) {
+  const measured = overflow.tokens ? `${overflow.tokens} tokens from ${overflow.tokens_from}` : 'tokens UNVERIFIED';
+  error.message += ` [model-gateway: phase ${overflow.phase}, refused by ${overflow.refused_by}; request ${overflow.request_bytes} bytes, ${measured}, limit ${overflow.limit_tokens} tokens; recovery: ${CONTEXT_OVERFLOW_RECOVERY[overflow.phase]}]`;
+  error.overflow = overflow;
+  return error;
+}
+
+function parsedRequestTooLarge(upstreamBody) {
+  try {
+    const parsed = JSON.parse(upstreamBody.toString());
+    return parsed.error.type === 'request_too_large' && typeof parsed.error.message === 'string' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function upstreamTokenCounts(message) {
+  const counts = /(\d+)\s+tokens\s*>\s*(\d+)\s+tokens/i.exec(message);
+  return counts && { tokens: Number(counts[1]), limitTokens: Number(counts[2]) };
 }
 
 function sseErrorFrame(type, message) {
@@ -836,6 +912,67 @@ function routeStatus(statusCode, override) {
   return 'ok';
 }
 
+const ROUTE_BACKENDS = new Set(['codex', 'anthropic']);
+const ROUTE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const ROUTE_VIAS = new Set(['direct', 'dispatch', 'dispatch-cached']);
+const COMPACT_TERMINAL_CODES = new Set(['message_stop']);
+
+function allowedValue(value, allowedValues) {
+  return allowedValues.has(value) ? value : null;
+}
+
+function integerOrNull(value) {
+  return Number.isInteger(value) ? value : null;
+}
+
+// Overflow fields are built only by contextOverflowDetails: code-chosen labels and integers, never prompt text.
+function routeSpanAttributes(identity, route, status, statusCode, durationMs) {
+  const compaction = route.compaction || {};
+  return [
+    otlpAttribute('source', 'codex-gateway'),
+    otlpAttribute('source_event_id', identity.routeId),
+    otlpAttribute('source_schema', '1'),
+    otlpAttribute('event_name', 'codex_gateway.route'),
+    otlpAttribute('route_id', identity.routeId),
+    otlpAttribute('trace_id', identity.traceId),
+    otlpAttribute('span_id', identity.spanId),
+    otlpAttribute('parent_span_id', identity.parentSpanId),
+    otlpAttribute('trace_linked', !!identity.incoming),
+    otlpAttribute('session_id', identity.sessionId),
+    otlpAttribute('selected_model', safeMetadataId(route.selectedModel)),
+    otlpAttribute('effective_model', safeMetadataId(route.effectiveModel)),
+    otlpAttribute('backend', allowedValue(route.backend, ROUTE_BACKENDS)),
+    otlpAttribute('effort', allowedValue(route.effort, ROUTE_EFFORTS)),
+    otlpAttribute('fallback', route.fallback === true),
+    otlpAttribute('via', allowedValue(route.via, ROUTE_VIAS)),
+    otlpAttribute('status', status),
+    otlpAttribute('status_code', integerOrNull(statusCode)),
+    otlpAttribute('compaction_outcome', allowedValue(compaction.outcome, COMPACT_OUTCOMES)),
+    otlpAttribute('upstream_status_code', integerOrNull(compaction.upstreamStatus)),
+    otlpAttribute('compaction_terminal_code', allowedValue(compaction.terminalCode, COMPACT_TERMINAL_CODES)),
+    otlpAttribute('compaction_error_code', allowedValue(compaction.errorCode, COMPACT_ERROR_CODES)),
+    ...COMPACT_USAGE_FIELDS.map((field) => otlpAttribute(`compaction_${field}`, compaction.usage?.[field])),
+    ...Object.entries(route.overflow || {}).map(([field, value]) => otlpAttribute(`overflow_${field}`, value)),
+    otlpAttribute('duration_ms', durationMs),
+  ].filter(Boolean);
+}
+
+function routeSpan(identity, startedAt, endedAt, attributes, status) {
+  return {
+    traceId: identity.traceId,
+    spanId: identity.spanId,
+    ...(identity.parentSpanId ? { parentSpanId: identity.parentSpanId } : {}),
+    ...(identity.incoming ? { flags: identity.incoming.flags } : {}),
+    name: 'codex_gateway.route',
+    kind: 2,
+    startTimeUnixNano: startedAt.toString(),
+    endTimeUnixNano: endedAt.toString(),
+    attributes,
+    events: [{ timeUnixNano: endedAt.toString(), name: 'codex_gateway.route', attributes }],
+    status: { code: status === 'ok' ? 1 : 2 },
+  };
+}
+
 function buildRouteTelemetry(req) {
   const endpoint = loopbackTelemetryEndpoint();
   if (!endpoint) return { enabled: false, setRoute() {}, finish() {} };
@@ -859,52 +996,19 @@ function buildRouteTelemetry(req) {
       finished = true;
       try {
         const elapsed = process.hrtime.bigint() - started;
-        const durationMs = Number(elapsed) / 1000000;
+        const identity = { routeId, traceId, spanId, parentSpanId, incoming, sessionId };
         const status = routeStatus(statusCode, statusOverride);
-        const attributes = [
-          otlpAttribute('source', 'codex-gateway'),
-          otlpAttribute('source_event_id', routeId),
-          otlpAttribute('source_schema', '1'),
-          otlpAttribute('event_name', 'codex_gateway.route'),
-          otlpAttribute('route_id', routeId),
-          otlpAttribute('trace_id', traceId),
-          otlpAttribute('span_id', spanId),
-          otlpAttribute('parent_span_id', parentSpanId),
-          otlpAttribute('trace_linked', !!incoming),
-          otlpAttribute('session_id', sessionId),
-          otlpAttribute('selected_model', safeMetadataId(route.selectedModel)),
-          otlpAttribute('effective_model', safeMetadataId(route.effectiveModel)),
-          otlpAttribute('backend', ['codex', 'anthropic'].includes(route.backend) ? route.backend : null),
-          otlpAttribute('effort', ['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort) ? route.effort : null),
-          otlpAttribute('fallback', route.fallback === true),
-          otlpAttribute('via', ['direct', 'dispatch', 'dispatch-cached'].includes(route.via) ? route.via : null),
-          otlpAttribute('status', status),
-          otlpAttribute('status_code', Number.isInteger(statusCode) ? statusCode : null),
-          otlpAttribute('compaction_outcome', COMPACT_OUTCOMES.has(route.compaction?.outcome) ? route.compaction.outcome : null),
-          otlpAttribute('upstream_status_code', Number.isInteger(route.compaction?.upstreamStatus) ? route.compaction.upstreamStatus : null),
-          otlpAttribute('compaction_terminal_code', route.compaction?.terminalCode === 'message_stop' ? 'message_stop' : null),
-          otlpAttribute('compaction_error_code', COMPACT_ERROR_CODES.has(route.compaction?.errorCode) ? route.compaction.errorCode : null),
-          ...COMPACT_USAGE_FIELDS.map((field) => otlpAttribute(`compaction_${field}`, route.compaction?.usage?.[field])),
-          otlpAttribute('duration_ms', durationMs),
-        ].filter(Boolean);
-        const endedAt = startedAt + elapsed;
-        postRouteSpan(endpoint, {
-          traceId,
-          spanId,
-          ...(parentSpanId ? { parentSpanId } : {}),
-          ...(incoming ? { flags: incoming.flags } : {}),
-          name: 'codex_gateway.route',
-          kind: 2,
-          startTimeUnixNano: startedAt.toString(),
-          endTimeUnixNano: endedAt.toString(),
-          attributes,
-          events: [{ timeUnixNano: endedAt.toString(), name: 'codex_gateway.route', attributes }],
-          status: { code: status === 'ok' ? 1 : 2 },
-        });
+        const attributes = routeSpanAttributes(identity, route, status, statusCode, Number(elapsed) / 1000000);
+        postRouteSpan(endpoint, routeSpan(identity, startedAt, startedAt + elapsed, attributes, status));
       } catch {}
     },
   };
 }
+
+// The request handler calls fireContextSentry(res, sessionId, model). The sentry's 413 also needs the
+// request bytes and the route telemetry, so both are recorded per request here and read back through
+// res.req instead of widening that call.
+const routeContexts = new WeakMap();
 
 function createRouteTelemetry(req) {
   let telemetry;
@@ -916,7 +1020,9 @@ function createRouteTelemetry(req) {
   let route = {};
   let finished = false;
   let cancelled = false;
-  return {
+  const requestChunks = [];
+  req.on('data', (chunk) => requestChunks.push(chunk));
+  const routeTelemetry = {
     enabled: telemetry.enabled === true,
     setRoute(nextRoute) {
       route = { ...nextRoute };
@@ -933,6 +1039,10 @@ function createRouteTelemetry(req) {
           usage: compactUsageSnapshot(nextCompaction?.usage),
         },
       };
+      telemetry.setRoute(route);
+    },
+    setOverflow(overflow) {
+      route = { ...route, overflow };
       telemetry.setRoute(route);
     },
     cancel() {
@@ -953,6 +1063,8 @@ function createRouteTelemetry(req) {
       telemetry.finish(statusCode, statusOverride);
     },
   };
+  routeContexts.set(req, { requestChunks, routeTelemetry });
+  return routeTelemetry;
 }
 
 function requestHeader(req, name) {
@@ -1077,8 +1189,11 @@ function runWorker() {
     }
   }
 
+  // Subagents share their parent's session id. Keying by agent too stops one agent's crossing
+  // turn from refusing a sibling's request, which has nothing of its own to compact.
   function sentrySessionId(req) {
-    return SENTRY_ENABLED ? requestSessionId(req) : null;
+    const sessionId = SENTRY_ENABLED && requestSessionId(req);
+    return sessionId ? JSON.stringify([sessionId, requestHeader(req, 'x-claude-code-agent-id')]) : null;
   }
 
   function sentryModel(model) {
@@ -1109,38 +1224,43 @@ function runWorker() {
     return state;
   }
 
-  function recordSentryUsage(sessionId, event, model) {
-    if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
-    if (!sentryPolicyFor(model)) return;
-    const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
-      .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
-    if (usage <= 0) return;
+  function recordSentryUsage(sessionId, event, model, ordinaryTurnCompleted = false) {
+    if (event.type !== 'message_delta') return;
     const state = sentrySession(sessionId, model);
+    if (!state || !sentryPolicyFor(model)) return;
+    const usage = sentryInputTokens(event.usage);
+    if (usage <= 0) return;
     state.usage = usage;
-    const compactTrigger = sentryModel(model).compactTrigger;
-    const lowWatermark = compactTrigger - Math.min(CODEX_COMPACT_HEADROOM, compactTrigger * 0.25);
-    if (usage < lowWatermark) state.fired = false;
+    state.fired &&= !sentryUsageRearms(usage, sentryModel(model).compactTrigger, ordinaryTurnCompleted);
   }
 
-  function contextOverflowBody(actualTokens, maxTokens, prefix) {
+  function contextOverflowBody(message, overflow) {
     return JSON.stringify({
       type: 'error',
-      error: {
-        type: 'request_too_large',
-        message: `${prefix} (${actualTokens} tokens > ${maxTokens} tokens)`,
-      },
+      error: describeContextOverflow({ type: 'request_too_large', message }, overflow),
     });
   }
 
-  function fireContextSentry(res, sessionId, model) {
-    if (!sentryPolicyFor(model)) return false;
+  function crossedContextSentry(sessionId, model) {
+    if (!sentryPolicyFor(model)) return null;
     const state = sentrySession(sessionId, model);
     const compactTrigger = sentryModel(model).compactTrigger;
-    if (!state || state.fired || state.usage <= compactTrigger) return false;
+    if (!state || state.fired || state.usage <= compactTrigger) return null;
     state.fired = true;
+    return { usage: state.usage, compactTrigger };
+  }
+
+  function fireContextSentry(res, sessionId, model) {
+    const { requestChunks, routeTelemetry } = routeContexts.get(res.req);
+    if (isCompactionRequest(JSON.parse(Buffer.concat(requestChunks).toString()))) return false;
+    const crossing = crossedContextSentry(sessionId, model);
+    if (!crossing) return false;
     const backendName = resolveGatewayModelPolicy(model)?.backend === 'grok' ? 'Grok' : 'Codex';
-    const body = contextOverflowBody(state.usage, compactTrigger,
-      `Prompt is too long for the ${backendName} context window; compact and retry.`);
+    const overflow = contextOverflowDetails(Buffer.concat(requestChunks), 'gateway_sentry', crossing.usage, 'previous_turn_usage', crossing.compactTrigger);
+    routeTelemetry.setOverflow(overflow);
+    const body = contextOverflowBody(
+      `Prompt is too long for the ${backendName} context window; compact and retry. (${crossing.usage} tokens > ${crossing.compactTrigger} tokens)`,
+      overflow);
     res.writeHead(413, {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
@@ -1163,17 +1283,48 @@ function runWorker() {
     return usage;
   }
 
-  function normalizeGenuineContextOverflow(body, sessionId, model) {
-    const text = body.toString();
-    let parsed;
-    try { parsed = JSON.parse(text); } catch { return body; }
-    if (parsed?.error?.type !== 'request_too_large' || typeof parsed.error.message !== 'string') return body;
+  // Upstream's own token counts and wording stay as sent. Without counts, the previous turn's usage
+  // (or window + 1 when this agent has none) stands in so Claude Code can still size its compaction.
+  function normalizeGenuineContextOverflow(upstreamBody, requestBody, sessionId, model, routeTelemetry) {
+    const parsed = parsedRequestTooLarge(upstreamBody);
+    if (!parsed) return upstreamBody;
     const usage = noteGenuineOverflow(sessionId, model);
-    if (/\d+\s+tokens\s*>\s*\d+\s+tokens/i.test(text)) return body;
-    const maxTokens = codexContextWindow(model);
-    const actualTokens = usage || maxTokens + 1;
-    parsed.error.message += ` (${actualTokens} tokens > ${maxTokens} tokens)`;
+    const counts = upstreamTokenCounts(parsed.error.message);
+    const overflow = counts
+      ? contextOverflowDetails(requestBody, 'upstream', counts.tokens, 'upstream', counts.limitTokens)
+      : contextOverflowDetails(requestBody, 'upstream', usage, 'previous_turn_usage', codexContextWindow(model));
+    if (!counts) parsed.error.message += ` (${usage || overflow.limit_tokens + 1} tokens > ${overflow.limit_tokens} tokens)`;
+    describeContextOverflow(parsed.error, overflow);
+    routeTelemetry.setOverflow(overflow);
     return Buffer.from(JSON.stringify(parsed));
+  }
+
+  function answerUpstreamFailure(clientRes, statusCode, resHeaders, upstreamBody) {
+    const authenticationFailure = codexAuthenticationFailure(upstreamBody, statusCode);
+    const responseBody = authenticationFailure || upstreamBody;
+    if (authenticationFailure) resHeaders['content-type'] = 'application/json';
+    resHeaders['content-length'] = responseBody.length;
+    clientRes.writeHead(statusCode, resHeaders);
+    clientRes.end(responseBody);
+  }
+
+  // claude-code-proxy releases before MIN_PROXY_VERSION signal overflow with their own non-413 shape.
+  function answerLegacyContextOverflow(upstreamBody, requestBody, sessionId, model, clientRes, routeTelemetry, upstreamStatus) {
+    if (!/context window|context length|input exceeds|prompt token count|too many tokens/i.test(upstreamBody.toString())) return false;
+    const usage = SENTRY_ENABLED ? noteGenuineOverflow(sessionId, model) : 0;
+    const limitTokens = codexContextWindow(model);
+    const numbers = SENTRY_ENABLED ? ` (${usage || limitTokens + 1} tokens > ${limitTokens} tokens)` : '';
+    const overflow = contextOverflowDetails(requestBody, 'upstream', usage, 'previous_turn_usage', limitTokens);
+    const normalized = contextOverflowBody(`Input exceeds the model context window; compact and retry.${numbers}`, overflow);
+    routeTelemetry.setOverflow(overflow);
+    routeTelemetry.finish(413);
+    clientRes.writeHead(413, {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(normalized),
+      'x-model-gateway-upstream-status': String(upstreamStatus),
+    });
+    clientRes.end(normalized);
+    return true;
   }
 
   function logAdvertisedSentryPolicies() {
@@ -1608,8 +1759,9 @@ function runWorker() {
         upRes.on('end', () => {
           if (settled) return;
           settled = true;
-          routeTelemetry?.finish(413);
-          const normalized = rewriteCodexJson(normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId, contextModel), advertisedModel, false);
+          const normalized = rewriteCodexJson(
+            normalizeGenuineContextOverflow(Buffer.concat(chunks), body, sessionId, contextModel, routeTelemetry), advertisedModel, false);
+          routeTelemetry.finish(413);
           resHeaders['content-length'] = normalized.length;
           clientRes.writeHead(413, resHeaders);
           clientRes.end(normalized);
@@ -1643,30 +1795,9 @@ function runWorker() {
           const upstreamBody = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, false);
           if (answerEmptyCodexCompletion(upRes.statusCode, upstreamBody, body, advertisedModel, clientRes, routeTelemetry)) return;
           noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
-          const text = upstreamBody.toString();
-          if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
-            const normalized = SENTRY_ENABLED
-              ? contextOverflowBody(noteGenuineOverflow(sessionId, contextModel) || codexContextWindow(contextModel) + 1,
-                codexContextWindow(contextModel), 'Input exceeds the model context window; compact and retry.')
-              : JSON.stringify({
-                type: 'error',
-                error: { type: 'request_too_large', message: 'Input exceeds the model context window; compact and retry.' },
-              });
-            routeTelemetry?.finish(413);
-            clientRes.writeHead(413, {
-              'content-type': 'application/json',
-              'content-length': Buffer.byteLength(normalized),
-              'x-model-gateway-upstream-status': String(upRes.statusCode),
-            });
-            return clientRes.end(normalized);
-          }
-          routeTelemetry?.finish(upRes.statusCode);
-          const authenticationFailure = codexAuthenticationFailure(upstreamBody, upRes.statusCode);
-          const responseBody = authenticationFailure || upstreamBody;
-          if (authenticationFailure) resHeaders['content-type'] = 'application/json';
-          resHeaders['content-length'] = responseBody.length;
-          clientRes.writeHead(upRes.statusCode, resHeaders);
-          clientRes.end(responseBody);
+          if (answerLegacyContextOverflow(upstreamBody, body, sessionId, contextModel, clientRes, routeTelemetry, upRes.statusCode)) return;
+          routeTelemetry.finish(upRes.statusCode);
+          answerUpstreamFailure(clientRes, upRes.statusCode, resHeaders, upstreamBody);
         });
         return;
       }
@@ -1696,6 +1827,7 @@ function runWorker() {
           const inference = attempt || newCompactAttempt();
           const observeEvent = (event) => {
             noteCompactEvent(inference, event);
+            inference.sentryUsage = event.usage ?? inference.sentryUsage;
             if (filterPlanTools || (SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
             usageCapture?.observeEvent(event);
           };
@@ -1721,6 +1853,8 @@ function runWorker() {
           if (!attempt) {
             upRes.on('end', () => {
               filter.end();
+              if (deliverableAttempt(inference)) recordSentryUsage(sessionId,
+                { type: 'message_delta', usage: inference.sentryUsage }, contextModel, !isCompactionRequest(JSON.parse(body)));
               closeFinishedTurn(inference, clientRes);
               routeTelemetry?.finish(upRes.statusCode, deliverableAttempt(inference) ? null : 'upstream_error');
               clientRes.end();
@@ -1798,6 +1932,12 @@ function runWorker() {
           const upstreamBody = Buffer.concat(chunks);
           usageCapture?.observeJson(upstreamBody);
           const completed = completedCodexJson(upstreamBody);
+          if (completed) {
+            const response = JSON.parse(upstreamBody);
+            const ordinaryTurnCompleted = ['end_turn', 'stop_sequence', 'tool_use'].includes(response.stop_reason)
+              && !isCompactionRequest(JSON.parse(body));
+            recordSentryUsage(sessionId, { type: 'message_delta', usage: response.usage }, contextModel, ordinaryTurnCompleted);
+          }
           const filtered = rewriteCodexJson(upstreamBody, advertisedModel, filterPlanTools);
           routeTelemetry?.finish(upRes.statusCode, completed ? null : 'upstream_error');
           resHeaders['content-length'] = filtered.length;
@@ -1881,6 +2021,7 @@ function runWorker() {
       clientRes.end(body);
       return;
     }
+    const inference = newCompactAttempt();
     const upstreamPayload = grokBackend.translateRequest(payload, model);
     const body = JSON.stringify(upstreamPayload);
     const target = new URL(GROK_ENDPOINT);
@@ -1936,21 +2077,17 @@ function runWorker() {
             if (!match) break;
             const frame = pending.slice(0, match.index);
             pending = pending.slice(match.index + match[0].length);
-            const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trim();
-            if (!data || data === '[DONE]') continue;
-            try {
-              const event = JSON.parse(data);
-              transformer.event(event);
-              if (event?.response?.usage) {
-                const usage = grokBackend.anthropicUsage(event.response.usage);
-                usageCapture?.observeEvent({ type: 'message_delta', usage });
-                recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
-              }
-            } catch {}
+            observeGrokSseFrame(frame, transformer, inference, usageCapture, sessionId, model, recordSentryUsage);
           }
         };
         upstream.on('data', consume);
-        upstream.on('end', () => { pending += decoder.end(); transformer.end(); clientRes.end(); });
+        upstream.on('end', () => {
+          pending += decoder.end();
+          transformer.end();
+          if (deliverableAttempt(inference)) recordSentryUsage(sessionId,
+            { type: 'message_delta', usage: inference.sentryUsage }, model, !isCompactionRequest(payload));
+          clientRes.end();
+        });
         upstream.on('error', () => clientRes.destroy());
         return;
       }
@@ -1960,7 +2097,8 @@ function runWorker() {
         let response;
         try { response = JSON.parse(Buffer.concat(chunks).toString()); } catch { response = null; }
         const usage = response?.usage && grokBackend.anthropicUsage(response.usage);
-        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model,
+          response.status === 'completed' && !isCompactionRequest(payload));
         const translated = grokBackend.translateResponse(response, advertisedModel);
         const translatedBody = Buffer.from(JSON.stringify(translated));
         usageCapture?.observeJson(translatedBody);
@@ -2346,6 +2484,7 @@ function runWorker() {
 
 module.exports = {
   catalogReadiness, createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, getCodexReadiness,
-  hasOpenAiRejectionEvidence, healthzCodexReadiness, listenOnUnixSocket, noteCodexUpstreamRejection, runWorker,
+  hasOpenAiRejectionEvidence, healthzCodexReadiness, listenOnUnixSocket, noteCodexUpstreamRejection, requestPhase,
+  runWorker, DispatchSessionRouteCache, dispatchRouteFromMessages,
   sharedProxyAndAuthCheck,
 };

@@ -71,7 +71,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   'native-agent': ['prompt', 'shared-tree', 'unverified-transport', 'session', 'dir', 'name'],
   models: ['full'],
   route: ['ticket'],
-  'board-config': ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
+  'board-config': ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
   projects: ['archived'],
   routing: ['enabled', 'disabled'],
   'archive-board': [],
@@ -94,18 +94,36 @@ const MUTATING_COMMANDS = new Set([
   'global-fallback', 'global_fallback',
 ]);
 
+const BOARD_CONFIG_MUTATING_OPTIONS = ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'];
+
+function namedEntitySubcommandMutates(positional: any[]): boolean {
+  return positional.length > 0 && !['list', 'ls', 'get', 'show'].includes(String(positional[0]).toLowerCase());
+}
+
+function nativeAgentSubcommandMutates(positional: any[]): boolean {
+  return positional[0] !== 'cleanup';
+}
+
+function boardConfigOptionsMutate(_positional: any[], opts: any): boolean {
+  return BOARD_CONFIG_MUTATING_OPTIONS.some((key) => Object.hasOwn(opts, key));
+}
+
+const SUBCOMMAND_MUTATES: Record<string, (positional: any[], opts: any) => boolean> = {
+  claims: (positional) => positional[0] === 'sweep',
+  'native-agent': nativeAgentSubcommandMutates,
+  native_agent: nativeAgentSubcommandMutates,
+  profile: namedEntitySubcommandMutates,
+  profiles: namedEntitySubcommandMutates,
+  category: namedEntitySubcommandMutates,
+  categories: namedEntitySubcommandMutates,
+  story: (positional) => ['add', 'update', 'edit', 'log', 'rotate'].includes(String(positional[0]).toLowerCase()),
+  'board-config': boardConfigOptionsMutate,
+  board_config: boardConfigOptionsMutate,
+};
+
 function commandMutates(command: string, opts: any, positional: any[]): boolean {
   if (MUTATING_COMMANDS.has(command)) return true;
-  if (command === 'claims') return positional[0] === 'sweep';
-  if (command === 'native-agent' || command === 'native_agent') return positional[0] !== 'cleanup';
-  if (command === 'profile' || command === 'profiles' || command === 'category' || command === 'categories') {
-    return positional.length > 0 && !['list', 'ls', 'get', 'show'].includes(String(positional[0]).toLowerCase());
-  }
-  if (command === 'story') return ['add', 'update', 'edit', 'log', 'rotate'].includes(String(positional[0] || '').toLowerCase());
-  if (command === 'board-config' || command === 'board_config') {
-    return ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'].some((key) => Object.hasOwn(opts, key));
-  }
-  return false;
+  return SUBCOMMAND_MUTATES[command]?.(positional, opts) ?? false;
 }
 
 function mutationProjectPath(projectArg: unknown): string | null {
@@ -267,7 +285,7 @@ const HELP_COMMANDS: any = {
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json',
-  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
+  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment isolated|shared] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -444,10 +462,12 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment <isolated|shared>] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
     --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.
+    --verify-environment shared pins the command or suite verifier of each new isolated dispatch to run in the
+    shared checkout at integrate instead of in the executor's worktree; in-flight dispatches keep their pin.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.

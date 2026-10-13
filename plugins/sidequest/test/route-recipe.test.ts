@@ -41,6 +41,18 @@ function jsonCli(...args: any[]) {
 }
 
 test('route returns the live workflow recipe as JSON', () => {
+  const hardCoding = jsonCli('route', 'coding.hard');
+  assert.equal(hardCoding.result.status, 0, hardCoding.result.stderr);
+  assert.deepEqual(hardCoding.body.route, { model: 'opus', effort: 'medium' });
+  const debugging = jsonCli('route', 'debugging');
+  assert.equal(debugging.result.status, 0, debugging.result.stderr);
+  assert.deepEqual(debugging.body.route, { model: 'opus', effort: 'medium' });
+  const spike = jsonCli('route', 'spike-investigation');
+  assert.equal(spike.result.status, 0, spike.result.stderr);
+  assert.deepEqual(spike.body.route, { model: 'opus', effort: 'medium' });
+  const review = jsonCli('route', 'review-audit');
+  assert.equal(review.result.status, 0, review.result.stderr);
+  assert.deepEqual(review.body.route, { model: 'sonnet', effort: 'medium' });
   const added = jsonCli('category', 'add', 'workflow-terra', '--profile', 'coding', '--name', 'Workflow Terra', '--route-model', 'codex-terra', '--route-effort', 'medium');
   assert.equal(added.result.status, 0, added.result.stderr);
 

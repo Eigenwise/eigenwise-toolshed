@@ -26,8 +26,12 @@ export function makeGitRepo({ plugins = { sidequest: '3.6.17', workbench: '0.63.
   };
 
   spawnSync('git', ['init', '--bare', '-b', 'main', origin], { encoding: 'utf8', windowsHide: true });
+  // receive-pack and commit start a detached `git maintenance run --auto` that can still be writing
+  // when cleanup removes the directory (ENOTEMPTY on origin.git in CI).
+  runIn(origin, ['config', 'maintenance.auto', 'false']);
   const git = (...args) => runIn(root, args);
   git('init', '-q', '-b', 'main');
+  git('config', 'maintenance.auto', 'false');
   git('config', 'user.email', 'release-test@example.com');
   git('config', 'user.name', 'release test');
   git('config', 'commit.gpgsign', 'false');

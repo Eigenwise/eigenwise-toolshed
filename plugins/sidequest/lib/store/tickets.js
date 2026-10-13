@@ -604,6 +604,8 @@ function createTickets(dependencies) {
     const surfaceFiles = storyDeclaredFiles(slug, ticket);
     return {
       slug,
+      repository: readMeta(slug)?.path || "",
+      sources: normalizeFiles([...normalizeFiles(ticket.files), ...effectiveScope(slug, ticket)]),
       owner: ticket.storyId ? "this ticket's story" : "this ticket",
       surfaces: declaredPackageSurfaces(surfaceFiles, slug),
       testRoots: boardConfig(slug)?.autoApproveTestScope === false ? reachableTestRoots({ files: surfaceFiles }, slug) : []
@@ -619,10 +621,39 @@ function createTickets(dependencies) {
   function packageScopeRulings(ticket, additions, slug) {
     const readOnly = dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true;
     const context = packageScopeContext(ticket, slug);
-    return normalizeFiles(additions).map((file) => ({
-      file,
-      reason: readOnly ? "a read-only dispatch never widens its write scope" : packageScopeRefusalReason(file, context)
-    }));
+    return normalizeFiles(additions).map((file) => {
+      if (readOnly) return { file, reason: "a read-only dispatch never widens its write scope" };
+      const source = buildOutputSource(file, context);
+      return { file, reason: source ? null : packageScopeRefusalReason(file, context) };
+    });
+  }
+  function buildOutputSource(file, context) {
+    if (neverAutoApproved(file) || !context.repository) return null;
+    return commitScope.trackedBuildOutputSource(context.repository, file, context.sources);
+  }
+  function foreignReleaseFragmentOwners(slug, fragments = []) {
+    return fragments.map((fragment) => {
+      const owner = getTicket(slug, path.basename(fragment, ".md"));
+      return owner ? ` ${fragment} is owned by ${owner.ref} (${owner.title}).` : "";
+    }).join("");
+  }
+  function buildOutputReasons(slug, ticket, approved = []) {
+    const context = packageScopeContext(ticket, slug);
+    return approved.map((file) => {
+      const source = buildOutputSource(file, context);
+      return source ? ` ${file}: build output of ${source}.` : "";
+    }).join("");
+  }
+  function explainScopeRuling(slug, decide) {
+    return () => {
+      const result = decide();
+      if (!result.ticket || !result.comment) return result;
+      const ownership = foreignReleaseFragmentOwners(slug, commitScope.foreignReleaseFragmentScopePaths(result.refused, result.ticket.ref));
+      if (ownership) result.message = `${result.message ?? ""}${ownership}`;
+      result.comment.body += ownership + buildOutputReasons(slug, result.ticket, result.approved);
+      putTicket(slug, result.ticket);
+      return result;
+    };
   }
   function packageScopeRefusalNote(rulings) {
     const refusals = rulings.filter((ruling) => ruling.reason);
@@ -638,7 +669,7 @@ function createTickets(dependencies) {
     by = String(by || "agent");
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
-    return withTicketLock(slug, found.id, () => {
+    return withTicketLock(slug, found.id, explainScopeRuling(slug, () => {
       const t = getTicket(slug, found.id);
       if (!t) return { ok: false, reason: "not_found" };
       const held = t.claim;
@@ -729,7 +760,7 @@ function createTickets(dependencies) {
         comment,
         ...refusalMessage ? { message: refusalMessage } : {}
       };
-    });
+    }));
   }
   function migrateLegacyScopeRequest(slug, idOrRef) {
     const found = getTicket(slug, idOrRef);

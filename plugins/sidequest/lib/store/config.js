@@ -1,5 +1,6 @@
 "use strict";
 const { normalizeDeniedTools } = require("../denied-tools.js");
+const { VERIFICATION_ENVIRONMENTS } = require("../kernel/verification.js");
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
@@ -145,6 +146,13 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     if (value == null) return true;
     if (typeof value !== "boolean") throw new Error("worktreeIsolation must be a boolean.");
     return value;
+  }
+  function normalizeVerifyEnvironment(value) {
+    const environment = String(value == null ? "isolated" : value).trim().toLowerCase();
+    if (!VERIFICATION_ENVIRONMENTS.includes(environment)) {
+      throw new Error('verifyEnvironment must be "isolated" or "shared".');
+    }
+    return environment;
   }
   function normalizeWorktreeBase(value) {
     const base = String(value == null ? "auto" : value).trim().toLowerCase();
@@ -319,6 +327,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       delivery: normalizeDeliveryMode(meta.delivery),
       integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
       worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
+      verifyEnvironment: normalizeVerifyEnvironment(meta.verifyEnvironment),
       worktreeBase: normalizeWorktreeBase(meta.worktreeBase),
       notIntegratedSalvageAgeHours: normalizeNotIntegratedSalvageAgeHours(meta.notIntegratedSalvageAgeHours),
       worktreeRecoveryRetentionAgeHours: normalizeWorktreeRecoveryRetentionAgeHours(meta.worktreeRecoveryRetentionAgeHours),
@@ -341,61 +350,38 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       warnings: [...selected.warnings, ...layer.warnings]
     };
   }
+  const BOARD_CONFIG_NORMALIZERS = {
+    name: normalizeBoardName,
+    alwaysInScope: normalizeAlwaysInScope,
+    readOnlyDeniedTools: normalizeReadOnlyDeniedTools,
+    deniedTools: normalizeDeniedTools,
+    generatedPairs: normalizeGeneratedPairs,
+    integrationMode: normalizeIntegrationMode,
+    integrationBranch: normalizeIntegrationBranch,
+    delivery: normalizeDeliveryMode,
+    integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs,
+    worktreeIsolation: normalizeWorktreeIsolation,
+    verifyEnvironment: normalizeVerifyEnvironment,
+    worktreeBase: normalizeWorktreeBase,
+    notIntegratedSalvageAgeHours: normalizeNotIntegratedSalvageAgeHours,
+    worktreeRecoveryRetentionAgeHours: normalizeWorktreeRecoveryRetentionAgeHours,
+    autoApproveTestScope: normalizeAutoApproveTestScope,
+    autoApproveScope: normalizeAutoApproveScope,
+    worktreeSetup: normalizeWorktreeSetup,
+    worktreeDependencyPaths: normalizeWorktreeDependencyPaths
+  };
+  function boardConfigPatchEntries(patch) {
+    return patch && typeof patch === "object" ? Object.entries(patch) : [];
+  }
   function setBoardConfig(slug, patch) {
     return withMetaLock(slug, () => {
       const meta = readMeta(slug);
       if (!meta) return { ok: false, reason: "not_found" };
-      if (!patch || typeof patch !== "object") return { ok: true, config: boardConfig(slug) };
-      if (Object.prototype.hasOwnProperty.call(patch, "name")) {
-        meta.name = normalizeBoardName(patch.name);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "alwaysInScope")) {
-        meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "readOnlyDeniedTools")) {
-        meta.readOnlyDeniedTools = normalizeReadOnlyDeniedTools(patch.readOnlyDeniedTools);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "deniedTools")) {
-        meta.deniedTools = normalizeDeniedTools(patch.deniedTools);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "generatedPairs")) {
-        meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "integrationMode")) {
-        meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "integrationBranch")) {
-        meta.integrationBranch = normalizeIntegrationBranch(patch.integrationBranch);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "delivery")) {
-        meta.delivery = normalizeDeliveryMode(patch.delivery);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "integrationVerifyTimeoutMs")) {
-        meta.integrationVerifyTimeoutMs = normalizeIntegrationVerifyTimeoutMs(patch.integrationVerifyTimeoutMs);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "worktreeIsolation")) {
-        meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "worktreeBase")) {
-        meta.worktreeBase = normalizeWorktreeBase(patch.worktreeBase);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "notIntegratedSalvageAgeHours")) {
-        meta.notIntegratedSalvageAgeHours = normalizeNotIntegratedSalvageAgeHours(patch.notIntegratedSalvageAgeHours);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "worktreeRecoveryRetentionAgeHours")) {
-        meta.worktreeRecoveryRetentionAgeHours = normalizeWorktreeRecoveryRetentionAgeHours(patch.worktreeRecoveryRetentionAgeHours);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "autoApproveTestScope")) {
-        meta.autoApproveTestScope = normalizeAutoApproveTestScope(patch.autoApproveTestScope);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "autoApproveScope")) {
-        meta.autoApproveScope = normalizeAutoApproveScope(patch.autoApproveScope);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "worktreeSetup")) {
-        meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, "worktreeDependencyPaths")) {
-        meta.worktreeDependencyPaths = normalizeWorktreeDependencyPaths(patch.worktreeDependencyPaths);
+      const entries = boardConfigPatchEntries(patch);
+      if (!entries.length) return { ok: true, config: boardConfig(slug) };
+      for (const [key, value] of entries) {
+        const normalize = BOARD_CONFIG_NORMALIZERS[key];
+        if (normalize) meta[key] = normalize(value);
       }
       putProject(slug, meta);
       return { ok: true, config: boardConfig(slug) };
@@ -416,6 +402,6 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
     return Array.from(/* @__PURE__ */ new Set([...files, ...arrayOrEmpty(ticket?.scopeResolution?.granted), ...alwaysInScopeBeside(config, files), ...paired]));
   }
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeVerifyEnvironment, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 module.exports = { createConfig };

@@ -8,6 +8,8 @@ const { compareSemver } = require('../plugin-freshness.js');
 const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
 const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require('./composition-admission.js');
 import type { CompositionDispatch, CompositionTicket } from './composition-admission';
+import type { VerificationRequirement } from '../kernel/verification';
+import { authorizeWorkDeclaration, prepareWorkProvenance, workDeclaration } from './work-provenance';
 
 type NativeCheckoutCreation = CompositionDispatch & {
   sessionId?: string | null; worktreeBindingSource?: string;
@@ -25,6 +27,8 @@ type NativeCheckoutFacts = {
   gitDirectory: string; commonGitDirectory: string; checkoutInstance: string; revision: string;
 };
 type NativeCheckoutCompletion = { ok: true; alreadyCompleted: boolean } | { ok: false; reason: string };
+// Git output read before the write transaction; checkoutStatus is null when git could not report it.
+type ObservedNativeCheckout = { facts: NativeCheckoutFacts | null; checkoutStatus?: string | null };
 
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
@@ -87,30 +91,75 @@ function requirementsMatch(left: any, right: any) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 
+function liveVerificationRequirement(state: any, ticket: any): VerificationRequirement | undefined {
+  return state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+}
+
+function applyLiveVerificationRequirement(state: any, ticket: any, requirement: VerificationRequirement) {
+  state.verificationRequirement = requirement;
+  const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
+  if (!attempt) return;
+  const refreshedAttempt = Object.freeze({ ...attempt, verificationRequirement: requirement });
+  state.lifecycleAttempt = refreshedAttempt;
+  ticket.lifecycleAttempt = refreshedAttempt;
+}
+
+function trimmedOrNull(value: unknown) {
+  return String(value || '').trim() || null;
+}
+
+function recordVerificationAmendment(ticket: any, amendment: any, previousRequirement: VerificationRequirement | undefined, nextRequirement: VerificationRequirement) {
+  const record = Object.freeze({
+    at: new Date().toISOString(),
+    by: trimmedOrNull(amendment?.by),
+    oldCommand: trimmedOrNull(previousRequirement?.command),
+    newCommand: trimmedOrNull(nextRequirement.command),
+  });
+  ticket.verificationAmendments = [...(Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments : []), record].slice(-20);
+  return record;
+}
+
+// Only an isolated command|suite dispatch defers its verifier to the shared checkout; a
+// board left at the default pins nothing, so its requirements stay byte-identical.
+function pinnedVerificationRequirement(ticket: any, projectPath: string, verifyEnvironment: unknown, sharedTree: boolean) {
+  const requirement = preparedVerificationRequirement(ticket, projectPath);
+  const deferred = !sharedTree && verifyEnvironment === 'shared' && ['command', 'suite', 'typecheck'].includes(requirement.kind);
+  return deferred ? Object.freeze({ ...requirement, environment: 'shared' as const }) : requirement;
+}
+
+type ProducerAttemptHistory = {
+  preparedAt?: string; terminalAt?: string; baseCommit?: string; declaredFiles?: readonly string[];
+  sanctionedCommits?: readonly string[]; verificationRequirement?: { command?: string };
+  attempts: Array<{ preparedAt?: string }>;
+};
+
+function retainedAttemptHistory(current: ProducerAttemptHistory) {
+  const attempts = structuredClone(current.attempts);
+  const terminalAttempt = attempts.find(attempt => attempt.preparedAt === current.preparedAt);
+  if (current.terminalAt && terminalAttempt) {
+    Object.assign(terminalAttempt, structuredClone({
+      baseCommit: current.baseCommit, declaredFiles: current.declaredFiles,
+      sanctionedCommits: current.sanctionedCommits, verificationRequirement: current.verificationRequirement,
+    }));
+  }
+  return attempts;
+}
+
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree, withTicketLocks, withTicketFileLocks, guardedTransaction, ticketGenerations, changedTicketSince, unclaimedDispatchWorktreeReclaim } = dependencies;
+
+  function boardVerificationRequirement(slug: string, ticket: any, sharedTree: boolean) {
+    return pinnedVerificationRequirement(ticket, String(readMeta(slug)?.path || ''), boardConfig(slug)?.verifyEnvironment, sharedTree);
+  }
 
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
-    const previousRequirement = state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-    const nextRequirement = preparedVerificationRequirement(ticket, String(readMeta(slug)?.path || ''));
+    const previousRequirement = liveVerificationRequirement(state, ticket);
+    const nextRequirement = boardVerificationRequirement(slug, ticket, state.sharedTree === true);
     if (requirementsMatch(previousRequirement, nextRequirement)) return null;
-    state.verificationRequirement = nextRequirement;
-    const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
-    if (attempt) {
-      const refreshedAttempt = Object.freeze({ ...attempt, verificationRequirement: nextRequirement });
-      state.lifecycleAttempt = refreshedAttempt;
-      ticket.lifecycleAttempt = refreshedAttempt;
-    }
-    const record = Object.freeze({
-      at: new Date().toISOString(),
-      by: String(amendment?.by || '').trim() || null,
-      oldCommand: String(previousRequirement?.command || '').trim() || null,
-      newCommand: String(nextRequirement.command || '').trim() || null,
-    });
-    ticket.verificationAmendments = [...(Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments : []), record].slice(-20);
-    return record;
+    applyLiveVerificationRequirement(state, ticket, nextRequirement);
+    return recordVerificationAmendment(ticket, amendment, previousRequirement, nextRequirement);
   }
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -1097,15 +1146,54 @@ function attemptCommit(ticket?: any, opts?: any) {
   return opts?.commit || ticket?.checkpoint?.commit || ticket?.submission?.commit || null;
 }
 
-function captureTerminalWorktreeRevision(slug?: any, state?: any, at?: any) {
-  if (!slug || state?.sharedTree !== false || !state.worktree || !state.worktreeGitDirectory || !state.worktreeCommonGitDirectory) return;
-  const facts = immutableWorktreeFacts(slug, state.worktree);
-  if (!facts || facts.worktree !== canonicalPath(state.worktree)
-    || facts.gitDirectory !== canonicalPath(state.worktreeGitDirectory)
-    || facts.commonGitDirectory !== canonicalPath(state.worktreeCommonGitDirectory)
-    || facts.checkoutInstance !== String(state.worktreeCheckoutInstance || '')) return;
+type ObservedWorktree = { facts: ReturnType<typeof immutableWorktreeFacts>; registered: boolean };
+type ObservedWorktreeFacts = ReadonlyMap<string, ObservedWorktree>;
+
+// A release observes its checkouts under the ticket file lock before BEGIN, so the write transaction reads facts
+// instead of running git while it holds every project's writers (SQ-3348).
+function observeReleaseWorktreeFacts(slug: string, ticket: StoredRecord): ObservedWorktreeFacts {
+  const state = dispatchState(ticket);
+  if (state?.sharedTree !== false) return new Map();
+  const worktrees = [state.worktree, state.releaseObservedCheckout?.worktree].filter(Boolean).map((worktree: string): string => canonicalPath(worktree));
+  return new Map(worktrees.map((worktree: string) => [worktree, observeWorktree(slug, worktree)]));
+}
+
+function observeWorktree(slug: string, worktree: string): ObservedWorktree {
+  const facts = immutableWorktreeFacts(slug, worktree);
+  return { facts, registered: registeredProjectCheckout(facts) };
+}
+
+function worktreeFactsFor(slug: string, worktree: string, observed?: ObservedWorktreeFacts) {
+  return observed ? observed.get(canonicalPath(worktree))?.facts ?? null : immutableWorktreeFacts(slug, worktree);
+}
+
+function observedCheckoutRegistered(worktree: string, facts: StoredRecord, observed?: ObservedWorktreeFacts): boolean {
+  return observed ? observed.get(canonicalPath(worktree))?.registered === true : registeredProjectCheckout(facts);
+}
+
+function captureTerminalWorktreeRevision(slug?: any, state?: any, at?: any, observed?: ObservedWorktreeFacts) {
+  if (!terminalRevisionBound(slug, state)) return;
+  const facts = worktreeFactsFor(slug, state.worktree, observed);
+  if (!factsDescribeBoundCheckout(facts, state)) return;
   state.terminalWorktreeRevision = facts.revision;
   state.terminalWorktreeObservedAt = at;
+}
+
+function terminalRevisionBound(slug: unknown, state: StoredRecord): boolean {
+  return Boolean(slug) && state?.sharedTree === false && Boolean(state.worktree) && Boolean(state.worktreeGitDirectory) && Boolean(state.worktreeCommonGitDirectory);
+}
+
+type WorktreeFacts = NonNullable<ReturnType<typeof immutableWorktreeFacts>>;
+
+function factsDescribeBoundCheckout(facts: WorktreeFacts | null, state: StoredRecord): facts is WorktreeFacts {
+  if (!facts) return false;
+  return sameCheckoutLocation(facts, state) && facts.checkoutInstance === String(state.worktreeCheckoutInstance || '');
+}
+
+function sameCheckoutLocation(facts: WorktreeFacts, state: StoredRecord): boolean {
+  return facts.worktree === canonicalPath(state.worktree)
+    && facts.gitDirectory === canonicalPath(state.worktreeGitDirectory)
+    && facts.commonGitDirectory === canonicalPath(state.worktreeCommonGitDirectory);
 }
 
 function sameRevision(left?: any, right?: any) {
@@ -1787,8 +1875,13 @@ function parkedCreationRecord(state: any) {
 }
 
 function reclaimRetiredAttemptCheckout(slug: string, projectPath: string, ticket: any, state: any, facts?: any) {
+  const decision = retiredAttemptCheckoutReclaim(slug, projectPath, ticket, state, facts);
+  return decision?.reclaim ? decision.reclaim() : decision;
+}
+
+function retiredAttemptCheckoutReclaim(slug: string, projectPath: string, ticket: any, state: any, facts?: any) {
   const kept = siblingKeepingCheckout(slug, projectPath, ticket, state);
-  if (!kept) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+  if (!kept) return unclaimedDispatchWorktreeReclaim(projectPath, state, facts);
   return {
     worktree: state.worktree,
     reclaimed: false,
@@ -1835,7 +1928,10 @@ function dispatchWorktreeOverrideRefusal(ticket: any, worktree: unknown, project
 // Typing them only inside these phases would be a partial schema the rest of the store never honours.
 type StoredRecord = any;
 type DispatchOptions = StoredRecord;
-type DispatchTokenFiles = { prior: string | null; staged: string | null };
+type CheckoutReclaimResult = { worktree: string; reclaimed: boolean; reason?: string; message?: string; branch?: string | null; branchKept?: string };
+// Filesystem work a preparation stages: token files it writes before commit and retired checkouts it removes
+// only after its write transaction commits.
+type DispatchPreparationEffects = { prior: string | null; staged: string | null; checkoutReclaims: Array<() => CheckoutReclaimResult> };
 type InstallFacts = { installPath: string | null; identity: string | null; version: string | null };
 type DispatchPreflight = {
   projectPath: string; preparedCompatibility: StoredRecord | null; servingCompatibilityWarning: string | null;
@@ -1867,9 +1963,13 @@ function retireUnboundDispatchOnly(slug: string, idOrRef: string, opts: Dispatch
   return Object.assign(superseded, { retired: true });
 }
 
+function investigationWithoutRepositoryWrites(ticket: { files?: unknown; description?: string }): boolean {
+  return !normalizeFiles(ticket.files).length && /\bno repository writes\b/i.test(ticket.description || '');
+}
+
 function undeclaredScopeRefusal(slug: string, ticket: StoredRecord, opts: DispatchOptions): string | null {
   const noDeclaredFileScope = unscopedWriteCannotAutoApprove(ticket, {
-    dispatchReadOnly,
+    dispatchReadOnly: (candidate: StoredRecord) => dispatchReadOnly(candidate) || investigationWithoutRepositoryWrites(candidate),
     normalizeFiles,
     autoApproveScope: boardConfig(slug)?.autoApproveScope,
   });
@@ -2004,12 +2104,17 @@ function assertRetainedRecoveryContinues(slug: string, t: StoredRecord, current:
   }
 }
 
-function reclaimRetiredCheckout(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): CrossBoundWorktree | null {
+function queueCheckoutReclaim(effects: DispatchPreparationEffects, decision: { reclaim?: () => CheckoutReclaimResult } | null): void {
+  if (decision?.reclaim) effects.checkoutReclaims.push(decision.reclaim);
+}
+
+function reclaimRetiredCheckout(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord, effects: DispatchPreparationEffects): CrossBoundWorktree | null {
   if (!reclaimsRetiredCheckout(slug, projectPath, t, current)) return null;
   const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-  const recovery = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
+  const recovery = retiredAttemptCheckoutReclaim(slug, projectPath, t, recoveryFacts.state, {
     checkpointCommit: recoveryFacts.checkpointCommit,
   });
+  queueCheckoutReclaim(effects, recovery);
   if (recovery?.reason === 'cross_bound_worktree') {
     releaseCrossedCreationBinding(current, recovery.sibling, new Date().toISOString(), 'cross_bound_supersede');
     return { sibling: recovery.sibling, worktree: recovery.worktree, message: recovery.message, parkedCheckout: recovery.parkedCheckout };
@@ -2075,7 +2180,6 @@ function ensurePreparedLaunchName(t: StoredRecord, current: StoredRecord): void 
 function reusePreparedRecovery(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions) {
   if (opts.sessionId) current.sessionId = String(opts.sessionId);
   ensurePreparedLaunchName(t, current);
-  putTicket(slug, t);
   return {
     ok: true,
     ticket: t,
@@ -2103,9 +2207,9 @@ function applyRecoveryFallback(t: StoredRecord, current: StoredRecord, currentRo
   });
 }
 
-function guardLockedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, projectPath: string) {
+function guardLockedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, projectPath: string, effects: DispatchPreparationEffects) {
   assertNoPendingSubmission(t);
-  const crossBoundWorktree = reclaimRetiredCheckout(slug, projectPath, t, current);
+  const crossBoundWorktree = reclaimRetiredCheckout(slug, projectPath, t, current, effects);
   assertNoLiveRuntimeAttempt(t, current, opts);
   const repeatFailure = repeatNoCommitDispatchError(t, current);
   const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
@@ -2115,16 +2219,16 @@ function guardLockedDispatch(slug: string, t: StoredRecord, current: StoredRecor
   return { crossBoundWorktree, repeatFailure, unboundAttemptsSkipped, retainedContinuation };
 }
 
-function prepareLockedDispatch(slug: string, idOrRef: string, found: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, tokenFiles: DispatchTokenFiles) {
+function prepareLockedDispatch(slug: string, idOrRef: string, found: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, effects: DispatchPreparationEffects) {
   const t = getTicket(slug, found.id);
   if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   const current = dispatchState(t);
-  const guarded = guardLockedDispatch(slug, t, current, opts, preflight.projectPath);
+  const guarded = guardLockedDispatch(slug, t, current, opts, preflight.projectPath, effects);
   const resolvedPolicy = resolveDispatchRoutePolicy(slug, t, current);
   const currentRoute = activeDispatchRoute(t);
   if (reusablePreparedRecovery(t, current)) return reusePreparedRecovery(slug, t, current, opts);
   applyRecoveryFallback(t, current, currentRoute);
-  return mintPreparedDispatch(slug, t, current, opts, preflight, tokenFiles, { ...guarded, resolvedPolicy });
+  return mintPreparedDispatch(slug, t, current, opts, preflight, effects, { ...guarded, resolvedPolicy });
 }
 
 function blankEffort(effort: unknown): boolean {
@@ -2158,7 +2262,7 @@ function routedRecovery(t: StoredRecord, current: StoredRecord): StoredRecord | 
 
 function priorAttemptHistory(current: StoredRecord) {
   return {
-    attempts: Array.isArray(current?.attempts) ? current.attempts.slice() : [],
+    attempts: Array.isArray(current?.attempts) ? retainedAttemptHistory(current) : [],
     supersededTokens: Array.isArray(current?.supersededTokens) ? current.supersededTokens.slice() : [],
   };
 }
@@ -2167,10 +2271,10 @@ function liveDispatchToken(t: StoredRecord, current: StoredRecord): boolean {
   return Boolean(current) && !current.terminalAt && Boolean(t.dispatchNonce);
 }
 
-function supersedeLiveToken(projectPath: string, t: StoredRecord, current: StoredRecord, supersededTokens: StoredRecord[], now: string): void {
+function supersedeLiveToken(projectPath: string, t: StoredRecord, current: StoredRecord, supersededTokens: StoredRecord[], now: string, effects: DispatchPreparationEffects): void {
   if (!liveDispatchToken(t, current)) return;
   if (current.outcome === 'prepared' && current.sharedTree === false) {
-    reclaimUnclaimedDispatchWorktree(projectPath, current);
+    queueCheckoutReclaim(effects, unclaimedDispatchWorktreeReclaim(projectPath, current));
   }
   supersededTokens.push({
     digest: dispatchTokenDigest(t.dispatchNonce),
@@ -2238,7 +2342,7 @@ function assertReviewCheckoutIsolation(t: StoredRecord, reviewTargetState: Store
 }
 
 function dispatchIsolation(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, effectiveFiles: readonly string[]): DispatchIsolation {
-  const readonly = dispatchReadOnly(t);
+  const readonly = dispatchReadOnly(t) || investigationWithoutRepositoryWrites(t);
   const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
   const reviewTargetState = reviewDispatchTarget(slug, t);
   const sharedTree = initialSharedTree(reviewTargetState, worktreeIsolation, requestedSharedTree(opts, current));
@@ -2292,7 +2396,7 @@ function workingTreeDeliveryRequested(t: StoredRecord, sharedTree: boolean, effe
 
 function deliveryVerification(slug: string, t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]) {
   const workingTreeDelivery = workingTreeDeliveryRequested(t, sharedTree, effectiveFiles);
-  const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
+  const verificationRequirement = boardVerificationRequirement(slug, t, sharedTree);
   if (workingTreeDelivery && verificationRequirement.kind === 'review') {
     throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
   }
@@ -2463,15 +2567,15 @@ function assertPublishedReleaseBaseline(slug: string, t: StoredRecord, projectPa
   }
 }
 
-function planPreparedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, tokenFiles: DispatchTokenFiles, guarded: GuardedDispatch) {
+function planPreparedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, effects: DispatchPreparationEffects, guarded: GuardedDispatch) {
   const now = new Date().toISOString();
   defaultClaudeEffort(t);
   const preparedExec = preparedExecutableRoute(slug, t, opts);
   const fallbackReason = policyFallbackReason(current, guarded.resolvedPolicy);
   const recovery = routedRecovery(t, current);
   const history = priorAttemptHistory(current);
-  supersedeLiveToken(preflight.projectPath, t, current, history.supersededTokens, now);
-  tokenFiles.prior = dispatchTokenFile(t);
+  supersedeLiveToken(preflight.projectPath, t, current, history.supersededTokens, now, effects);
+  effects.prior = dispatchTokenFile(t);
   const effectiveFiles = dispatchEffectiveFiles(slug, t, current);
   const isolation = dispatchIsolation(slug, t, current, opts, effectiveFiles);
   assertDispatchCheckoutShape(slug, t, isolation, effectiveFiles, preflight.projectPath, opts);
@@ -2657,8 +2761,12 @@ function priorAttemptFields(plan: PreparedDispatchPlan) {
 }
 
 function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRecord, plan: PreparedDispatchPlan, opts: DispatchOptions, preflight: DispatchPreflight) {
+  const provenance = preparationProvenanceFields(plan, opts, preflight.preparedCompatibility);
+  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref));
   return {
-    ...preparationProvenanceFields(plan, opts, preflight.preparedCompatibility),
+    ...provenance,
+    lifecycleAttempt: { ...provenance.lifecycleAttempt, workProvenance },
+    workProvenance,
     ...checkoutPlacementFields(plan, preflight, opts),
     declaredFiles: plan.artifact.declaredFiles,
     boardAddedFiles: plan.artifact.boardAddedFiles,
@@ -2686,8 +2794,8 @@ function preparedDispatchWarnings(plan: PreparedDispatchPlan, preflight: Dispatc
     .filter((warning): warning is string => Boolean(warning));
 }
 
-function mintPreparedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, tokenFiles: DispatchTokenFiles, guarded: GuardedDispatch) {
-  const plan = planPreparedDispatch(slug, t, current, opts, preflight, tokenFiles, guarded);
+function mintPreparedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight, effects: DispatchPreparationEffects, guarded: GuardedDispatch) {
+  const plan = planPreparedDispatch(slug, t, current, opts, preflight, effects, guarded);
   // Everything above this line only validates. Minting the replacement token
   // any earlier meant a later refusal — a changed project registration, an
   // unresolvable integration target, an unreadable evidence directory — left
@@ -2696,41 +2804,83 @@ function mintPreparedDispatch(slug: string, t: StoredRecord, current: StoredReco
   t.dispatchNonce = mintDispatchToken();
   t.dispatch = preparedDispatchRecord(slug, t, current, plan, opts, preflight);
   consumePreparedComposition(t, dispatchTokenDigest(t.dispatchNonce));
-  tokenFiles.staged = dispatchTokenFile(t);
+  effects.staged = dispatchTokenFile(t);
   t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
   stampDispatchEvent(t, 'dispatch', plan.now);
   writeDispatchTokenFile(t);
-  putTicket(slug, t);
   const warnings = preparedDispatchWarnings(plan, preflight);
   return { ok: true, ticket: t, token: t.dispatchNonce, recovery: plan.recovery, ...(warnings.length ? { warnings } : {}) };
 }
 
-function discardReplacedTokenFile(tokenFiles: DispatchTokenFiles): void {
-  if (tokenFiles.prior && tokenFiles.staged && tokenFiles.prior !== tokenFiles.staged) {
-    try { fs.unlinkSync(tokenFiles.prior); } catch (_: unknown) {}
+function discardReplacedTokenFile(effects: DispatchPreparationEffects): void {
+  if (effects.prior && effects.staged && effects.prior !== effects.staged) {
+    try { fs.unlinkSync(effects.prior); } catch (_: unknown) {}
   }
 }
 
-function discardUncommittedTokenFile(tokenFiles: DispatchTokenFiles): void {
-  if (tokenFiles.staged && tokenFiles.staged !== tokenFiles.prior) {
-    try { fs.unlinkSync(tokenFiles.staged); } catch (_: unknown) {}
+function discardUncommittedTokenFile(effects: DispatchPreparationEffects): void {
+  if (effects.staged && effects.staged !== effects.prior) {
+    try { fs.unlinkSync(effects.staged); } catch (_: unknown) {}
   }
+}
+
+function changedDuringPreparationError(slug: string, changedId: string): Error {
+  const changed = getTicket(slug, changedId);
+  return new Error(`prepare dispatch: ${changed?.ref || changedId} changed while this dispatch was reading its checkouts, so nothing was written and no checkout was removed. Read the ticket again and dispatch once more if it still needs a runtime.`);
+}
+
+function checkoutReclaimWarning(reclaim: () => CheckoutReclaimResult): string[] {
+  try {
+    return reclaimOutcomeWarning(reclaim());
+  } catch (error) {
+    return [`Dispatch committed; removing the retired checkout failed and it was left in place: ${error instanceof Error ? error.message : String(error)}`];
+  }
+}
+
+function reclaimOutcomeWarning(result: CheckoutReclaimResult): string[] {
+  if (!result.reclaimed) return [`Dispatch committed; retired checkout ${result.worktree} was kept: ${result.message || result.reason}`];
+  return result.branchKept ? [`Dispatch committed; retired checkout ${result.worktree} was removed, but deleting its branch ${result.branch} failed and the branch was kept: ${result.branchKept}`] : [];
+}
+
+// Git observation and token staging ran under the ticket file locks alone. The write transaction only rechecks that
+// no locked ticket moved, then writes; retired checkouts are removed after the commit, still under the file locks,
+// and a removal failure is reported against the committed dispatch rather than thrown as if nothing was written.
+// The generations are read first so every observation that follows, the composition admission included, is covered.
+function commitLockedPreparation(slug: string, lockedIds: readonly string[], assertAdmissionHolds: () => void, effects: DispatchPreparationEffects, prepare: () => StoredRecord) {
+  const generations = ticketGenerations(slug, lockedIds);
+  assertAdmissionHolds();
+  const prepared = prepare();
+  guardedTransaction(() => {
+    const changedId = changedTicketSince(slug, generations);
+    if (changedId) throw changedDuringPreparationError(slug, changedId);
+    putTicket(slug, prepared.ticket);
+  });
+  const warnings = [...(prepared.warnings || []), ...effects.checkoutReclaims.flatMap(checkoutReclaimWarning)];
+  return warnings.length ? { ...prepared, warnings } : prepared;
 }
 
 function prepareUnderDispatchLocks(slug: string, idOrRef: string, found: StoredRecord, opts: DispatchOptions, preflight: DispatchPreflight) {
-  const tokenFiles: DispatchTokenFiles = { prior: null, staged: null };
+  const effects: DispatchPreparationEffects = { prior: null, staged: null, checkoutReclaims: [] };
   try {
     const prepared = dependencies.withCompositionDispatchPreparation(slug, found.id,
-      () => prepareLockedDispatch(slug, idOrRef, found, opts, preflight, tokenFiles));
-    discardReplacedTokenFile(tokenFiles);
+      (lockedIds: readonly string[], assertAdmissionHolds: () => void) => commitLockedPreparation(slug, lockedIds, assertAdmissionHolds, effects,
+        () => prepareLockedDispatch(slug, idOrRef, found, opts, preflight, effects)));
+    discardReplacedTokenFile(effects);
     return prepared;
   } catch (error) {
-    discardUncommittedTokenFile(tokenFiles);
+    discardUncommittedTokenFile(effects);
     throw error;
   }
 }
 
-function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
+function prepareDispatch(slug: string, idOrRef: string, opts: Record<string, unknown> = {}, grant: { allowWorkProvenance?: boolean } = {}) {
+  const current = getTicket(slug, idOrRef)?.dispatch;
+  authorizeWorkDeclaration(opts.workProvenance, opts.sessionId, grant.allowWorkProvenance === true, Boolean(current && !current.terminalAt));
+  const declaration = opts.workProvenance === undefined ? undefined : workDeclaration(opts.workProvenance);
+  return prepareDispatchRequest(slug, idOrRef, { ...opts, workProvenance: declaration });
+}
+
+function prepareDispatchRequest(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (opts.retireOnly === true) return retireUnboundDispatchOnly(slug, idOrRef, opts);
   const { projectPath, found } = dispatchableTicket(slug, idOrRef, opts);
@@ -2881,7 +3031,7 @@ function recoverLiveClaimDispatch(slug?: any, idOrRef?: any, opts?: LiveClaimRec
     return { ok: false, reason: 'missing_recovery_facts', message: 'Live-claim recovery requires claimHolder, executor, worktree, recoveryEvidence, and a connected session.' };
   }
   const lockKeys = recoveryLockKeys(slug, found, request.worktree);
-  return withLockedTickets(lockKeys, () => recoverLockedLiveClaim(slug, found.id, idOrRef, request, lockKeys));
+  return withTicketLocks(lockKeys, () => recoverLockedLiveClaim(slug, found.id, idOrRef, request, lockKeys));
 }
 
 function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
@@ -3434,37 +3584,46 @@ function compositionCheckoutWasReused(previous: CompositionDispatch, worktree: s
     previous.worktreeCheckoutInstance === facts.checkoutInstance].some(Boolean);
 }
 
-function cleanCompositionCheckoutRefusal(worktree: string): NativeCheckoutCompletion | undefined {
+function checkoutStatus(worktree: string): string | null {
   try {
-    if (gitOutput(worktree, ['status', '--porcelain'])) return { ok: false, reason: 'composition_checkout_dirty' };
+    return gitOutput(worktree, ['status', '--porcelain']);
   } catch {
-    return { ok: false, reason: 'composition_checkout_unobservable' };
+    return null;
   }
 }
 
-function compositionCheckoutIdentityRefusal(ticket: CompositionTicket, worktree: string, facts: NativeCheckoutFacts): NativeCheckoutCompletion | undefined {
+function observeNativeCheckout(slug: string, worktree: string, ticket: CompositionTicket): ObservedNativeCheckout {
+  return { facts: immutableWorktreeFacts(slug, worktree), checkoutStatus: ticket.compositionAdmission ? checkoutStatus(worktree) : undefined };
+}
+
+function cleanCompositionCheckoutRefusal(status: string | null | undefined): NativeCheckoutCompletion | undefined {
+  if (status == null) return { ok: false, reason: 'composition_checkout_unobservable' };
+  if (status) return { ok: false, reason: 'composition_checkout_dirty' };
+}
+
+function compositionCheckoutIdentityRefusal(ticket: CompositionTicket, worktree: string, facts: NativeCheckoutFacts, observed: ObservedNativeCheckout): NativeCheckoutCompletion | undefined {
   const admission = ticket.compositionAdmission;
   if (!admission) return;
   if (compositionCheckoutWasReused(admission.releasedDispatch, worktree, facts)) return { ok: false, reason: 'composition_checkout_reused' };
-  return cleanCompositionCheckoutRefusal(worktree);
+  return cleanCompositionCheckoutRefusal(observed.checkoutStatus);
 }
 
-function nativeCheckoutCompletionFacts(slug: string, worktree: string, state: NativeCheckoutCreation): NativeCheckoutFacts | { ok: false; reason: string } {
-  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
+function nativeCheckoutCompletionFacts(observed: ObservedNativeCheckout, state: NativeCheckoutCreation): NativeCheckoutFacts | { ok: false; reason: string } {
+  const facts = observed.facts;
   if (!facts) return { ok: false, reason: 'invalid_worktree_binding' };
   if (facts.revision !== String(compositionCheckoutCommit(state)).trim()) return { ok: false, reason: 'worktree_revision_mismatch' };
   return facts;
 }
 
-function completeNativeCheckoutForTicket(slug: string, id: string, binding: { sessionId: string; worktree: string }, attempt?: string): NativeCheckoutCompletion {
+function completeNativeCheckoutForTicket(slug: string, id: string, binding: { sessionId: string; worktree: string }, attempt: string | undefined, observed: ObservedNativeCheckout): NativeCheckoutCompletion {
   const ticket = getTicket(slug, id);
   const current: NativeCheckoutCreation | undefined = dispatchState(ticket);
   const generation = worktreeCallbackGenerationRefusal(current, attempt);
   if (generation) return { ...generation, ok: false };
   if (!launchedNativeCheckoutMatches(current, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
-  const facts = nativeCheckoutCompletionFacts(slug, binding.worktree, current);
+  const facts = nativeCheckoutCompletionFacts(observed, current);
   if ('ok' in facts) return facts;
-  return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts)
+  return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts, observed)
     ?? recordNativeCheckoutCompletion(slug, ticket, current, facts);
 }
 
@@ -3474,8 +3633,9 @@ function completeDispatchWorktreeCreation(slug: string, sessionId?: string, work
   if (!binding) return { ok: false, reason: 'missing_binding_facts' };
   for (const candidate of listTickets(slug)) {
     if (!launchedNativeCheckoutMatches(dispatchState(candidate), binding)) continue;
+    const observed = observeNativeCheckout(slug, binding.worktree, candidate);
     return dependencies.withCompositionGenerationLock(slug, candidate.id,
-      () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt));
+      () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt, observed));
   }
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
@@ -3610,9 +3770,8 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
-function recordRecoveredCheckoutIdentity(slug: string, state: NativeCheckoutCreation, worktree: string): void {
+function recordRecoveredCheckoutIdentity(state: NativeCheckoutCreation, facts: NativeCheckoutFacts | null): void {
   if (state.worktreeCreationCompletedAt) return;
-  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
   const checkoutCommit = String(compositionCheckoutCommit(state)).trim();
   if (facts && checkoutCommit && facts.revision === checkoutCommit) recordCreatedCheckoutIdentity(state, facts);
 }
@@ -3640,13 +3799,13 @@ function terminalizeFailedCheckoutCreation(slug: string, ticket: ExecutorDispatc
   putTicket(slug, ticket);
 }
 
-function recoverLaunchedCheckout(slug: string, id: string, binding: { sessionId: string; worktree: string }, error: unknown, attempt?: string, options?: { created?: boolean }) {
+function recoverLaunchedCheckout(slug: string, id: string, binding: { sessionId: string; worktree: string }, error: unknown, attempt: string | undefined, options: { created?: boolean } | undefined, facts: NativeCheckoutFacts | null) {
   const ticket: ExecutorDispatchedTicket = getTicket(slug, id);
   const state: NativeCheckoutCreation | undefined = dispatchState(ticket);
   const generation = worktreeCallbackGenerationRefusal(state, attempt);
   if (generation) return generation;
   if (!launchedNativeCheckoutMatches(state, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
-  recordRecoveredCheckoutIdentity(slug, state, binding.worktree);
+  recordRecoveredCheckoutIdentity(state, facts);
   const held = holdOrReleaseUncreatedCheckout(slug, ticket, state, binding.sessionId, options?.created);
   if (held) return held;
   terminalizeFailedCheckoutCreation(slug, ticket, error);
@@ -3671,7 +3830,8 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
       && state.worktree && canonicalPath(state.worktree) === boundWorktree);
   });
   if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous_binding' : 'dispatch_binding_unavailable' };
-  const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options));
+  const facts: NativeCheckoutFacts | null = dispatchState(matches[0]).worktreeCreationCompletedAt ? null : immutableWorktreeFacts(slug, boundWorktree);
+  const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options, facts));
   if (!terminal?.ok || terminal.heldFor) return terminal;
   const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };
@@ -3969,7 +4129,7 @@ function dispatchDelta(slug?: any, ticket?: any) {
       }).trim().split(/\r?\n/).filter(Boolean);
     }
     const committed = commits.length ? commitScope.rangePaths(workspace.root, commits) : [];
-    return { ok: true, workspace, ...workingState, committed };
+    return { ok: true, workspace, ...workingState, committed, commitCount: commits.length };
   } catch (error: any) {
     return { ok: false, reason: 'git_error', message: error?.message || String(error) };
   }
@@ -4150,44 +4310,116 @@ function applyExchangedCreationBinding(state?: any, facts?: any, otherRef?: any,
 // stalled attempt's own, and that fact is immutable: it then refused every retry of the stalled ticket (SQ-2926).
 function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: any, reportedWorktree?: any) {
   const reported = canonicalPath(String(reportedWorktree || '').trim());
+  if (!reported) return null;
+  const parties = crossedCreationParties(slug, ticketId, sessionId, reported);
+  if (!parties) return null;
+  const lockedIds = [parties.target.id, parties.holder.id].sort();
+  return withTicketFileLocks(lockedIds.map((id: string) => ({ slug, id })), () => {
+    const generations = ticketGenerations(slug, lockedIds);
+    const crossing = crossedCreationExchange(slug, ticketId, sessionId, reported);
+    if (!crossing || crossing.holder.id !== parties.holder.id) return null;
+    return guardedTransaction(() => writeCreationExchange(slug, sessionId, crossing, lockedIds, generations));
+  });
+}
+
+type CreationParties = { target: StoredRecord; holder: StoredRecord; held: string };
+
+function crossedCreationParties(slug: string, ticketId: string, sessionId: string, reported: string): CreationParties | null {
   const target = getTicket(slug, ticketId);
   const targetState = dispatchState(target);
-  if (!reported || !attributableCreationReservation(target, targetState, sessionId)) return null;
+  if (!attributableCreationReservation(target, targetState, sessionId)) return null;
   const held = targetState.worktree ? canonicalPath(targetState.worktree) : '';
   if (held === reported) return null;
-  const holder = listTickets(slug).find((candidate?: any) => candidate.id !== target.id
+  const holder = crossedCreationHolderOf(slug, target, sessionId, reported);
+  return holder ? { target, holder, held } : null;
+}
+
+type CreationCrossing = { target: StoredRecord; holder: StoredRecord; reportedFacts: WorktreeFacts; heldFacts: WorktreeFacts | null };
+
+// Read again under both file locks, after their generations: the Git facts then describe these exact records.
+function crossedCreationExchange(slug: string, ticketId: string, sessionId: string, reported: string): CreationCrossing | null {
+  const parties = crossedCreationParties(slug, ticketId, sessionId, reported);
+  return parties ? crossingAtSharedBaseline(slug, parties.target, parties.holder, reported, parties.held) : null;
+}
+
+function crossedCreationHolderOf(slug: string, target: StoredRecord, sessionId: string, reported: string): StoredRecord | undefined {
+  return listTickets(slug).find((candidate?: any) => candidate.id !== target.id
     && crossedCreationHolder(dispatchState(candidate), sessionId)
     && canonicalPath(dispatchState(candidate).worktree) === reported);
-  if (!holder) return null;
+}
+
+function crossingAtSharedBaseline(slug: string, target: StoredRecord, holder: StoredRecord, reported: string, held: string): CreationCrossing | null {
+  const baseline = sharedDispatchBaseline(dispatchState(target), dispatchState(holder));
+  if (!baseline) return null;
+  const facts = baselineCheckoutFacts(slug, baseline, reported, held);
+  return facts ? { target, holder, ...facts } : null;
+}
+
+function sharedDispatchBaseline(targetState: StoredRecord, holderState: StoredRecord): string {
   const baseline = String(targetState.baseCommit || '').trim();
-  if (!baseline || baseline !== String(dispatchState(holder).baseCommit || '').trim()) return null;
-  const reportedFacts = immutableWorktreeFacts(slug, reported);
-  if (!reportedFacts || reportedFacts.revision !== baseline) return null;
-  const heldFacts = held ? immutableWorktreeFacts(slug, held) : null;
-  if (held && (!heldFacts || heldFacts.revision !== baseline)) return null;
-  const [firstId, secondId] = [target.id, holder.id].sort();
-  const factsFor = new Map([[target.id, reportedFacts], [holder.id, heldFacts]]);
-  const refFor = new Map([[target.id, holder.ref], [holder.id, target.ref]]);
-  return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
-    const now = new Date().toISOString();
-    const movedRecord = heldFacts ? null : movedCreationRecord(dispatchState(getTicket(slug, holder.id)));
-    for (const id of [firstId, secondId]) {
-      const ticket = getTicket(slug, id);
-      const state = dispatchState(ticket);
-      const eligible = id === target.id
-        ? attributableCreationReservation(ticket, state, sessionId)
-        : crossedCreationHolder(state, sessionId);
-      if (!eligible) return null;
-      const facts = factsFor.get(id);
-      if (facts && state.worktree && canonicalPath(state.worktree) === facts.worktree) return null;
-      if (facts) applyExchangedCreationBinding(state, facts, refFor.get(id), now);
-      else releaseCrossedCreationBinding(state, refFor.get(id), now);
-      if (facts && movedRecord) Object.assign(state, movedRecord);
-      stampDispatchEvent(ticket, 'worktree-create-exchange', now);
-      putTicket(slug, ticket);
-    }
-    return { ok: true, exchangedWith: holder.ref };
-  }));
+  return baseline && baseline === String(holderState.baseCommit || '').trim() ? baseline : '';
+}
+
+// Both checkouts must still sit at the shared dispatch base, or the exchange could hand an executor's commits away.
+function baselineCheckoutFacts(slug: string, baseline: string, reported: string, held: string) {
+  const reportedFacts = checkoutAtBaseline(slug, reported, baseline);
+  if (!reportedFacts) return null;
+  if (!held) return { reportedFacts, heldFacts: null };
+  const heldFacts = checkoutAtBaseline(slug, held, baseline);
+  return heldFacts ? { reportedFacts, heldFacts } : null;
+}
+
+function checkoutAtBaseline(slug: string, worktree: string, baseline: string): WorktreeFacts | null {
+  const facts = immutableWorktreeFacts(slug, worktree);
+  return facts && facts.revision === baseline ? facts : null;
+}
+
+// Both records are checked before either is written: a refusal on the second side must leave the first unwritten,
+// because the transaction commits whatever was put before a null return.
+function writeCreationExchange(slug: string, sessionId: string, crossing: CreationCrossing, lockedIds: readonly string[], generations: ReadonlyMap<string, string>) {
+  if (changedTicketSince(slug, generations)) return null;
+  const sides = lockedIds.map((id) => creationExchangeSide(slug, sessionId, crossing, id));
+  if (!sides.every((side): side is CreationExchangeSide => side !== null)) return null;
+  const now = new Date().toISOString();
+  const movedRecord = holderCreationRecord(crossing, sides);
+  for (const side of sides) {
+    applyCreationExchange(side.state, side.facts, side.otherRef, movedRecord, now);
+    stampDispatchEvent(side.ticket, 'worktree-create-exchange', now);
+    putTicket(slug, side.ticket);
+  }
+  return { ok: true, exchangedWith: crossing.holder.ref };
+}
+
+type CreationExchangeSide = { ticket: StoredRecord; state: StoredRecord; facts: WorktreeFacts | null; otherRef: string };
+
+function holderCreationRecord(crossing: CreationCrossing, sides: readonly CreationExchangeSide[]) {
+  const holderSide = sides.find((side) => side.ticket.id === crossing.holder.id);
+  return crossing.heldFacts || !holderSide ? null : movedCreationRecord(holderSide.state);
+}
+
+function creationExchangeSide(slug: string, sessionId: string, crossing: CreationCrossing, id: string): CreationExchangeSide | null {
+  const ticket = getTicket(slug, id);
+  const state = dispatchState(ticket);
+  const isTarget = id === crossing.target.id;
+  if (!creationExchangeEligible(isTarget, ticket, state, sessionId)) return null;
+  const facts = isTarget ? crossing.reportedFacts : crossing.heldFacts;
+  if (alreadyHoldsCheckout(state, facts)) return null;
+  return { ticket, state, facts, otherRef: isTarget ? crossing.holder.ref : crossing.target.ref };
+}
+
+function creationExchangeEligible(isTarget: boolean, ticket: StoredRecord, state: StoredRecord, sessionId: string): boolean {
+  return isTarget ? attributableCreationReservation(ticket, state, sessionId) : crossedCreationHolder(state, sessionId);
+}
+
+function alreadyHoldsCheckout(state: StoredRecord, facts: WorktreeFacts | null): boolean {
+  if (!facts || !state.worktree) return false;
+  return canonicalPath(state.worktree) === facts.worktree;
+}
+
+function applyCreationExchange(state: StoredRecord, facts: WorktreeFacts | null, otherRef: string, movedRecord: StoredRecord | null, now: string): void {
+  if (facts) applyExchangedCreationBinding(state, facts, otherRef, now);
+  else releaseCrossedCreationBinding(state, otherRef, now);
+  if (facts && movedRecord) Object.assign(state, movedRecord);
 }
 
 // Everything a sibling launch leaves before any claim: launched, still live, and nobody holding its claim.
@@ -4204,7 +4436,6 @@ function guessedRuntimeIdentity(ticket?: any, state?: any, sessionId?: any, exec
 
 type ClaimAdmission = () => boolean;
 type ClaimAdmissionCheck = (slug: any, ticketId: any, opts: any) => any;
-type LockedWork = () => any;
 type TicketKey = { slug: string; id: string };
 
 // Only a token admits an exchange: a direct claim proves nothing about which reservation this runtime is.
@@ -4214,17 +4445,6 @@ function tokenAdmission(admission: ClaimAdmissionCheck, slug?: any, ticketId?: a
 
 function admittedByToken(result?: any) {
   return Boolean(result?.ok && result.token);
-}
-
-function nestedTicketLocks(keys: TicketKey[], fn: LockedWork): LockedWork {
-  return () => withLockedTickets(keys, fn);
-}
-
-// Every exchange that rewrites two records takes both locks in one order, so two callers locking the same pair
-// can never each hold one and wait on the other.
-function withLockedTickets(keys: TicketKey[], fn: LockedWork): any {
-  const [first, ...rest] = [...keys].sort((left, right) => `${left.slug}/${left.id}`.localeCompare(`${right.slug}/${right.id}`));
-  return withTicketLock(first!.slug, first!.id, rest.length ? nestedTicketLocks(rest, fn) : fn);
 }
 
 function claimIdentity(sessionId?: any, executor?: any, agentId?: any) {
@@ -4310,7 +4530,7 @@ function exchangeGuessedClaimIdentity(slug?: any, ticketId?: any, sessionId?: an
   const exchange = guessedIdentityExchange(slug, ticketId, claimIdentity(sessionId, executor, agentId));
   if (!exchange) return null;
   const keys = [{ slug, id: exchange.target.id }, ...(exchange.holder ? [{ slug: exchange.holder.slug, id: exchange.holder.ticket.id }] : [])];
-  return withLockedTickets(keys, () => applyGuessedIdentityExchange(exchange, admitted));
+  return withTicketLocks(keys, () => applyGuessedIdentityExchange(exchange, admitted));
 }
 
 // Everything a reservation records about the checkout it holds. These describe the checkout, not the ticket, so when
@@ -4456,7 +4676,7 @@ function applyCrossedCheckoutExchange(exchange: any, admitted?: ClaimAdmission) 
 function exchangeCrossedClaimCheckout(slug?: any, ticketId?: any, sessionId?: any, observedWorktree?: any, admitted?: ClaimAdmission) {
   const exchange = crossedCheckoutExchange(slug, ticketId, sessionId, observedWorktree);
   if (!exchange) return adoptParkedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted);
-  return withLockedTickets([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
+  return withTicketLocks([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
 }
 
 function parkedCheckoutOf(ticket?: any) {
@@ -4523,7 +4743,7 @@ function applyParkedCheckoutAdoption(adoption: any, admitted?: ClaimAdmission) {
 function adoptParkedClaimCheckout(slug: string, ticketId: string, sessionId: string, observedWorktree: string, admitted?: ClaimAdmission) {
   const adoption = parkedCheckoutAdoption(slug, ticketId, sessionId, observedWorktree);
   if (!adoption) return null;
-  return withLockedTickets([{ slug, id: adoption.target.id }, { slug, id: adoption.parker.id }], () => applyParkedCheckoutAdoption(adoption, admitted));
+  return withTicketLocks([{ slug, id: adoption.target.id }, { slug, id: adoption.parker.id }], () => applyParkedCheckoutAdoption(adoption, admitted));
 }
 
 // No token has vouched for this reservation's runtime yet, so the agent id and the checkout it holds may be a
@@ -4790,12 +5010,12 @@ function releaseObservationStillHolds(state?: any, observation?: any, by?: any) 
 
 // An observation that is not a registered linked checkout of this project cannot establish where the work is, so the
 // retained binding is dropped and the next dispatch gets a fresh checkout.
-function applyReleaseObservedCheckout(slug?: any, state?: any, observed?: any) {
+function applyReleaseObservedCheckout(slug?: any, state?: any, observed?: any, observedFacts?: ObservedWorktreeFacts) {
   const recorded = state.worktree ? canonicalPath(state.worktree) : null;
   if (!observed || observed === recorded) return;
   const now = new Date().toISOString();
-  const facts = immutableWorktreeFacts(slug, observed);
-  if (!registeredProjectCheckout(facts)) {
+  const facts = worktreeFactsFor(slug, observed, observedFacts);
+  if (!observedCheckoutRegistered(observed, facts, observedFacts)) {
     state.retainedWorktreeDropped = { at: now, reason: 'release_observed_checkout_unverified', recorded, observed };
     return;
   }
@@ -4805,13 +5025,13 @@ function applyReleaseObservedCheckout(slug?: any, state?: any, observed?: any) {
 
 // Runs inside the release lock, before the terminal revision is captured, so the retained continuation is keyed to
 // the checkout the releasing executor ran in.
-function rekeyReleasedCheckout(slug?: any, ticket?: any, by?: any) {
+function rekeyReleasedCheckout(slug?: any, ticket?: any, by?: any, observedFacts?: ObservedWorktreeFacts) {
   const state = dispatchState(ticket);
   const observation = state?.releaseObservedCheckout;
   if (!observation) return;
   delete state.releaseObservedCheckout;
   if (!releaseObservationStillHolds(state, observation, by)) return;
-  applyReleaseObservedCheckout(slug, state, canonicalPath(observation.worktree));
+  applyReleaseObservedCheckout(slug, state, canonicalPath(observation.worktree), observedFacts);
 }
 
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any, worktree?: any) {
@@ -5164,6 +5384,8 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     markDispatchStopped,
     agentDispatchWorktrees,
     reconcileLaunchedDispatches,
+    observeReleaseWorktreeFacts,
+    captureTerminalWorktreeRevision,
   };
 }
 

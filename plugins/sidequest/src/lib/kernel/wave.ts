@@ -45,7 +45,7 @@ export type AssembledWave = Readonly<{
 export type WaveGateResult = Readonly<{
   assembly: AssembledWave;
   verification: VerificationResult;
-  state: 'gate_passed' | 'gate_failed';
+  state: 'gate_passed' | 'gate_failed' | 'gate_deferred';
 }>;
 
 export type DeliveryResult = Readonly<{
@@ -139,36 +139,39 @@ export function openWave(input: Readonly<{
   });
 }
 
-export function assembleWave(wave: Wave, candidates: readonly WaveCandidate[]): WaveAssemblyDecision {
-  const invalidated: CandidateInvalidation[] = [];
-  const byRef = new Map(candidates.map((candidate) => [candidate.ref, candidate]));
-  for (const participant of wave.participants) {
-    const candidate = byRef.get(participant.ref);
-    if (!candidate) {
-      invalidated.push(invalidation(participant.ref, 'participant_missing', `${participant.ref} is not ready for the opened wave.`));
-      continue;
-    }
-    if (!sameBaseline(wave.baseline, candidate.baseline) && !candidate.baselineCompatible) {
-      invalidated.push(invalidation(candidate.ref, 'baseline_moved', `${candidate.ref} was verified against ${candidate.baseline.revision.source}:${candidate.baseline.revision.value}, but this wave is pinned to ${wave.baseline.revision.source}:${wave.baseline.revision.value}.`));
-      continue;
-    }
-    if (!verificationAccepted(candidate.verification)) {
-      invalidated.push(invalidation(candidate.ref, 'verification_required', `${candidate.ref} has no accepted verifier evidence for the opened wave.`));
-      continue;
-    }
-    // Name the paths. "changed surfaces outside its wave-declared surfaces" sent four
-    // integration attempts hunting a baseline mismatch that did not exist, because the
-    // refusal never said which path was outside.
-    const outside = candidate.surfaces.filter((surface) => !isInScope(surface, participant.declaredSurfaces));
-    if (outside.length) {
-      invalidated.push(invalidation(
-        candidate.ref,
-        'surface_overlap',
-        `${candidate.ref} changed surfaces outside its wave-declared surfaces: ${outside.join(', ')}.`,
-        outside,
-      ));
-    }
+// A deferred result is admitted into the wave but never read as accepted: the pinned command runs
+// once, in the shared checkout, when integrate delivers the wave.
+function verificationAdmitted(verification: VerificationResult): boolean {
+  return verificationAccepted(verification) || verification.status === 'deferred';
+}
+
+function baselineMoved(wave: Wave, candidate: WaveCandidate): boolean {
+  return !sameBaseline(wave.baseline, candidate.baseline) && !candidate.baselineCompatible;
+}
+
+function participantInvalidation(wave: Wave, participant: WaveParticipant, candidate: WaveCandidate | undefined): CandidateInvalidation | null {
+  if (!candidate) return invalidation(participant.ref, 'participant_missing', `${participant.ref} is not ready for the opened wave.`);
+  if (baselineMoved(wave, candidate)) {
+    return invalidation(candidate.ref, 'baseline_moved', `${candidate.ref} was verified against ${candidate.baseline.revision.source}:${candidate.baseline.revision.value}, but this wave is pinned to ${wave.baseline.revision.source}:${wave.baseline.revision.value}.`);
   }
+  if (!verificationAdmitted(candidate.verification)) {
+    return invalidation(candidate.ref, 'verification_required', `${candidate.ref} has no accepted verifier evidence for the opened wave.`);
+  }
+  // Name the paths. "changed surfaces outside its wave-declared surfaces" sent four
+  // integration attempts hunting a baseline mismatch that did not exist, because the
+  // refusal never said which path was outside.
+  const outside = candidate.surfaces.filter((surface) => !isInScope(surface, participant.declaredSurfaces));
+  if (outside.length) {
+    return invalidation(candidate.ref, 'surface_overlap', `${candidate.ref} changed surfaces outside its wave-declared surfaces: ${outside.join(', ')}.`, outside);
+  }
+  return null;
+}
+
+export function assembleWave(wave: Wave, candidates: readonly WaveCandidate[]): WaveAssemblyDecision {
+  const byRef = new Map(candidates.map((candidate) => [candidate.ref, candidate]));
+  const invalidated = wave.participants
+    .map((participant) => participantInvalidation(wave, participant, byRef.get(participant.ref)))
+    .filter((entry): entry is CandidateInvalidation => entry !== null);
   const admitted = candidates.filter((candidate) => wave.participants.some((participant) => participant.ref === candidate.ref));
   if (invalidated.length) {
     const unique = new Map(invalidated.map((entry) => [entry.ref, entry]));
@@ -184,19 +187,23 @@ export function recordAssembledWaveGate(assembly: AssembledWave, verification: V
   return Object.freeze({
     assembly,
     verification,
-    state: verificationAccepted(verification) ? 'gate_passed' : 'gate_failed',
+    state: verification.status === 'deferred' ? 'gate_deferred' : verificationAccepted(verification) ? 'gate_passed' : 'gate_failed',
   });
 }
 
 export function recordWaveDelivery(gate: WaveGateResult, revision: SourceRevision, verification: VerificationResult): DeliveryResult | Diagnostic {
-  if (gate.state !== 'gate_passed') {
+  if (gate.state === 'gate_failed') {
     return diagnostic('assembled_wave_gate_required', 'Delivery requires a passing assembled-wave gate. Refresh the wave and reverify its candidates after fixing the gate.');
+  }
+  const accepted = verificationAccepted(verification);
+  if (gate.state === 'gate_deferred' && !accepted) {
+    return diagnostic('deferred_gate_delivery_verification_required', `The assembled-wave gate was deferred to the environment lane, so delivery requires accepted verification of the merged tree; the delivery verification returned ${verification.status}.`);
   }
   return Object.freeze({
     gate,
     revision: Object.freeze({ ...revision }),
     verification,
-    state: verificationAccepted(verification) ? 'delivered' : 'delivery_failed',
+    state: accepted ? 'delivered' : 'delivery_failed',
   });
 }
 

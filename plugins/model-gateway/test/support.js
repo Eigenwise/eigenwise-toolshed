@@ -302,6 +302,20 @@ function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
   return { environment, home, ownsHome };
 }
 
+// runtime.js resolves the state directory from os.homedir() and reads context-window.json when it loads,
+// and the catalog notes read CODEX_GATEWAY_COMPACT_TRIGGER per call, so a test that requires the CLI
+// in-process must point this process at a throwaway home before that require, or a developer's saved
+// compact-at and session env change what the assertions see (SQ-3435). Call it before `require(CLI)`.
+function isolateInProcessGatewayEnvironment(testRunner) {
+  const { environment, home } = createGatewayTestEnvironment();
+  for (const key of Object.keys(process.env)) {
+    if (!Object.hasOwn(environment, key)) delete process.env[key];
+  }
+  Object.assign(process.env, environment);
+  testRunner.after(() => removeGatewayTestHome(home));
+  return home;
+}
+
 function gatewayTestEnvironment(t, overrides = {}, isolatedOverrides = {}) {
   const testEnvironment = createGatewayTestEnvironment(overrides, isolatedOverrides);
   gatewayTestEnvironments.set(testEnvironment.environment, testEnvironment);
@@ -410,4 +424,4 @@ async function startCountingProxy(t) {
   return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount, targets: () => [...targets] };
 }
 
-module.exports = { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild };
+module.exports = { gatewayTestEnvironment, isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild };

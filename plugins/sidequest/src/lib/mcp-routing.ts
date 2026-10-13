@@ -1,5 +1,14 @@
 'use strict';
 
+const BOARD_CONFIG_PATCH_KEYS = new Set(['name', 'alwaysInScope', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
+// These settings read null as "leave it alone"; the others hand null to their normalizer (worktreeSetup: null clears the command).
+const BOARD_CONFIG_NULL_LEAVES_ALONE = new Set(['alwaysInScope', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'verifyEnvironment']);
+
+function boardConfigPatchAccepts(key: string, value: unknown): boolean {
+  if (!BOARD_CONFIG_PATCH_KEYS.has(key) || value === undefined) return false;
+  return value !== null || !BOARD_CONFIG_NULL_LEAVES_ALONE.has(key);
+}
+
 const {
   path,
   fs,
@@ -428,6 +437,7 @@ const tools: ToolDefinition[] = [
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'false runs executors in the shared checkout (default true).' },
+        verifyEnvironment: { type: 'string', enum: ['isolated', 'shared'], description: 'shared: the pinned verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated).' },
         worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Isolated-worktree base.' },
         notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Default 168 hours.' },
         worktreeRecoveryRetentionAgeHours: { type: 'integer', minimum: 1, description: 'Hours, default 336.' },
@@ -450,24 +460,7 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const patch: any = {};
-      if (args.name !== undefined) patch.name = args.name;
-      if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
-      if (args.readOnlyDeniedTools !== undefined) patch.readOnlyDeniedTools = args.readOnlyDeniedTools;
-      if (args.deniedTools !== undefined) patch.deniedTools = args.deniedTools;
-      if (args.generatedPairs !== undefined) patch.generatedPairs = args.generatedPairs;
-      if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
-      if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
-      if (args.delivery != null) patch.delivery = args.delivery;
-      if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
-      if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
-      if (args.worktreeBase !== undefined) patch.worktreeBase = args.worktreeBase;
-      if (args.notIntegratedSalvageAgeHours !== undefined) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
-      if (args.worktreeRecoveryRetentionAgeHours !== undefined) patch.worktreeRecoveryRetentionAgeHours = args.worktreeRecoveryRetentionAgeHours;
-      if (args.autoApproveTestScope !== undefined) patch.autoApproveTestScope = args.autoApproveTestScope;
-      if (args.autoApproveScope !== undefined) patch.autoApproveScope = args.autoApproveScope;
-      if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
-      if (args.worktreeDependencyPaths !== undefined) patch.worktreeDependencyPaths = args.worktreeDependencyPaths;
+      const patch = Object.fromEntries(Object.entries(args).filter(([key, value]) => boardConfigPatchAccepts(key, value)));
       const result = Object.keys(patch).length
         ? store.setBoardConfig(slug, patch)
         : { ok: true, config: store.boardConfig(slug) };

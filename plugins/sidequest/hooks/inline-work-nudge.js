@@ -173,12 +173,9 @@ function writeSessionState(file, state) {
 
 // src/hooks/inline-work-nudge.ts
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
-var INVESTIGATION_READ_THRESHOLD = 8;
-var SUBSTANTIVE_ESCALATION_START = 4;
-var NATIVE_AGENT_ESCALATION_START = 2;
+var SUBSTANTIVE_ADVISORY_THRESHOLD = 25;
 var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
-var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep", "Glob"]);
 function boardFor(input) {
   const store = require(runtimeModule("store"));
   const start = stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -202,7 +199,7 @@ function isPureRead(command) {
 }
 function isVerificationRun(command) {
   const parts = command.split(/(?:&&|\|\||;)/).map((part) => part.trim()).filter(Boolean);
-  return parts.every((part) => /^(?:cd\s+\S+$|npm\s+(?:test|t|run\s+(?:test|build|typecheck)\S*)\b|node\s+(?:--import\s+\S+\s+)*(?:-e|--eval|--test)\b|(?:npx\s+)?tsc\b)/i.test(part));
+  return parts.every((part) => /^(?:cd\s+\S+$|npm\s+(?:--prefix\s+\S+\s+)?(?:test|t|run\s+(?:test|build|typecheck)\S*)\b|node\s+(?:--import\s+\S+\s+)*(?:-e|--eval|--test)\b|(?:npx\s+)?tsc\b)/i.test(part));
 }
 function isBoundedTranscriptLookup(command, prompt) {
   if (!/\b(?:find|search|locate|look\s+up)\b[\s\S]*\b(?:session|transcript)\b/i.test(prompt)) return false;
@@ -214,31 +211,18 @@ function isSubstantive(toolName, command, prompt) {
   if (EDIT_TOOLS.has(toolName)) return true;
   return SHELL_TOOLS.has(toolName) && !isPureRead(command) && !isVerificationRun(command) && !isBoundedTranscriptLookup(command, prompt);
 }
-function isReadClass(toolName, command) {
-  return READ_TOOLS.has(toolName) || SHELL_TOOLS.has(toolName) && Boolean(command) && isPureRead(command);
-}
-function isEscalationPoint(activityCount, firstEscalation) {
-  let escalation = firstEscalation;
-  while (escalation < activityCount) escalation *= 3;
-  return activityCount === escalation;
-}
-function nudgeMessage(readActions, substantiveActions, repeated) {
-  const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";
-  return `sidequest: ${readActions} reads / ${substantiveActions} commands with no board call.${earlierReminder} Multi-file work defaults to board dispatch under this project's standing authorization: file the ticket(s) with add and dispatch now; do not offer. Only a one-or-two-file edit at a known location stays inline.`;
-}
-function nativeAgentNudgeMessage(nativeAgentSpawns, repeated) {
-  const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";
-  return `sidequest: ${nativeAgentSpawns} native subagents this session; native Explore/general-purpose inherits the session model.${earlierReminder} Fan-out or deep investigation belongs in spike tickets on routed executors (codebase-exploration, research, spike-investigation). In your next reply offer dispatch, or name why native agents serve the user better.`;
+function nudgeMessage(substantiveActions) {
+  return `sidequest: ${substantiveActions} substantive actions without a board call. Consider one owner and a focused check for a bounded fix. Small fixes at known locations may stay inline; use a story or wave only for 3+ independently checkable pieces with a stated reason.`;
 }
 function main() {
   const input = readStdin();
   if (!input || isSubagent(input)) return;
-  const id = stringField(input, "session_id", "sessionId").trim();
+  const sessionId = stringField(input, "session_id", "sessionId").trim();
   const toolName = stringField(input, "tool_name", "toolName");
   const command = shellCommand(input);
   const prompt = stringField(input, "prompt").trim();
-  if (!id || !toolName || AUTOMATION_TAG.test(prompt) || !boardFor(input)) return;
-  const file = sessionStateFile("inline-work", id);
+  if (!sessionId || !toolName || AUTOMATION_TAG.test(prompt) || !boardFor(input)) return;
+  const file = sessionStateFile("inline-work", sessionId);
   const state = readSessionState(file);
   if (isBoardInteraction(toolName, command)) {
     state.boardInteraction = true;
@@ -246,35 +230,14 @@ function main() {
     const subagentType = isRecord(input.tool_input) && typeof input.tool_input.subagent_type === "string" ? canonicalExecutorName(input.tool_input.subagent_type) : "";
     if (/^sidequest-exec/.test(subagentType)) {
       state.boardInteraction = true;
-    } else {
-      const nativeAgentSpawns = (Number(state.nativeAgentSpawns) || 0) + 1;
-      state.nativeAgentSpawns = nativeAgentSpawns;
-      if (!state.nativeAgentChoiceSurfaced ? nativeAgentSpawns >= NATIVE_AGENT_ESCALATION_START : isEscalationPoint(nativeAgentSpawns, NATIVE_AGENT_ESCALATION_START)) {
-        const repeated = Boolean(state.nativeAgentChoiceSurfaced);
-        state.nativeAgentChoiceSurfaced = true;
-        writeSessionState(file, state);
-        writeSystemMessage("PreToolUse", nativeAgentNudgeMessage(nativeAgentSpawns, repeated));
-        return;
-      }
     }
   } else if (isSubstantive(toolName, command, prompt)) {
     const substantiveActions = (Number(state.substantiveActions) || 0) + 1;
     state.substantiveActions = substantiveActions;
-    if (!state.boardInteraction && (!state.soloChoiceSurfaced || isEscalationPoint(substantiveActions, SUBSTANTIVE_ESCALATION_START))) {
-      const repeated = Boolean(state.soloChoiceSurfaced);
-      state.soloChoiceSurfaced = true;
+    if (!state.boardInteraction && !state.advisorySurfaced && substantiveActions >= SUBSTANTIVE_ADVISORY_THRESHOLD) {
+      state.advisorySurfaced = true;
       writeSessionState(file, state);
-      writeSystemMessage("PreToolUse", nudgeMessage(Number(state.readActions) || 0, substantiveActions, repeated));
-      return;
-    }
-  } else if (isReadClass(toolName, command)) {
-    const readActions = (Number(state.readActions) || 0) + 1;
-    state.readActions = readActions;
-    if (!state.boardInteraction && (!state.investigationChoiceSurfaced ? readActions >= INVESTIGATION_READ_THRESHOLD : isEscalationPoint(readActions, INVESTIGATION_READ_THRESHOLD * 3))) {
-      const repeated = Boolean(state.investigationChoiceSurfaced);
-      state.investigationChoiceSurfaced = true;
-      writeSessionState(file, state);
-      writeSystemMessage("PreToolUse", nudgeMessage(readActions, Number(state.substantiveActions) || 0, repeated));
+      writeSystemMessage("PreToolUse", nudgeMessage(substantiveActions));
       return;
     }
   }

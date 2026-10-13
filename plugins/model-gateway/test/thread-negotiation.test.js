@@ -2,12 +2,9 @@
 
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const net = require('node:net');
-const path = require('node:path');
 const test = require('node:test');
-const { spawnGatewayProcess } = require('./support.js');
+const { startGateway } = require('./support.js');
 
-const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const THREAD_REFUSAL = {
   type: 'error',
   error: {
@@ -17,17 +14,6 @@ const THREAD_REFUSAL = {
   },
 };
 const THREAD_REFUSAL_BODY = JSON.stringify(THREAD_REFUSAL);
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 function request(port, pathname, body) {
   return new Promise((resolve, reject) => {
@@ -55,24 +41,7 @@ function request(port, pathname, body) {
   });
 }
 
-async function waitForHealth(port) {
-  const deadline = Date.now() + 5000;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const response = await request(port, '/healthz');
-      if (response.status === 200) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw lastError || new Error('shim did not become healthy');
-}
-
 async function startGatewayFixture(testContext, { anthropic = false } = {}) {
-  const shimPort = await freePort();
-  const proxyPort = await freePort();
   const codexBodies = [];
   const proxy = http.createServer((request, response) => {
     const chunks = [];
@@ -87,7 +56,9 @@ async function startGatewayFixture(testContext, { anthropic = false } = {}) {
       response.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-terra', content: [] }));
     });
   });
-  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  // Every port is bound with 0 and held: two release-then-rebind picks once came back equal on ubuntu CI,
+  // so the shim lost its port to this proxy and the proxy answered the refusal tests with 200 (SQ-3489).
+  const proxyPort = await new Promise((resolve) => proxy.listen(0, '127.0.0.1', () => resolve(proxy.address().port)));
   testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
 
   const anthropicBodies = [];
@@ -106,18 +77,12 @@ async function startGatewayFixture(testContext, { anthropic = false } = {}) {
     testContext.after(() => new Promise((resolve) => anthropicServer.close(resolve)));
   }
 
-  spawnGatewayProcess(testContext, process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_ANTHROPIC_UPSTREAM: anthropicPort ? `http://127.0.0.1:${anthropicPort}` : 'http://127.0.0.1:9',
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      CODEX_GATEWAY_SENTRY: '0',
-    },
-    stdio: 'ignore',
+  const { port: shimPort } = await startGateway(testContext, 'serve-shim', {
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_ANTHROPIC_UPSTREAM: anthropicPort ? `http://127.0.0.1:${anthropicPort}` : 'http://127.0.0.1:9',
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+    CODEX_GATEWAY_SENTRY: '0',
   });
-  await waitForHealth(shimPort);
   return { shimPort, codexBodies, anthropicBodies };
 }
 
@@ -135,7 +100,7 @@ function codexPayload(thread) {
 }
 
 function assertThreadRefusal(response) {
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 400, `expected the local thread refusal, got: ${response.body}`);
   assert.equal(response.headers['content-type'], 'application/json');
   assert.equal(response.body.toString(), THREAD_REFUSAL_BODY);
   const refusal = JSON.parse(response.body);

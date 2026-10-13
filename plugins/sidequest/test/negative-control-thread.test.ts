@@ -91,7 +91,7 @@ test('negative controls collect claim-holder test markers across the whole threa
   });
   assert.equal(refusal.reason, 'negative_control_test_required');
   assert.match(refusal.message, new RegExp(unreportedTestName));
-  assert.match(refusal.message, new RegExp(standaloneMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(refusal.message, /\[sidequest:negative-control-test\] failed <test name>/);
 
   const prefixedMarker = `[sidequest:negative-control-test] failed   pidRecordLines in ${unreportedTestName}`;
   assert.equal(store.addComment(slug, ticket.ref, { by, body: prefixedMarker, source: 'mcp' }).ok, true);

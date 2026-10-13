@@ -141,10 +141,6 @@ function writeDeny(hookEventName, permissionDecisionReason) {
   });
 }
 
-// src/hooks/shared/runtime-identity.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path2 = __toESM(require("node:path"));
-
 // src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
@@ -155,6 +151,8 @@ function runtimeModule(name) {
 }
 
 // src/hooks/shared/runtime-identity.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_path2 = __toESM(require("node:path"));
 function executorAgent(type) {
   if (!type) return false;
   try {
@@ -235,8 +233,20 @@ function targetRoot(target, cwd) {
     return canonicalPath(directory);
   }
 }
-function refusal() {
-  return "sidequest: refusing a mutating git command against the shared checkout from an isolated worktree. Read-only git commands such as log, diff, show, rev-parse, and ls-files are allowed for review; make repository changes only in the assigned worktree.";
+function otherExecutorWorktree(root, found) {
+  if (!found.expectedWorktree || samePath(root, found.expectedWorktree)) return false;
+  try {
+    const worktrees = require(runtimeModule("worktrees"));
+    return worktrees.isAgentWorktree(found.projectPath, root);
+  } catch (_) {
+    return false;
+  }
+}
+function protectedCheckout(root, found) {
+  return samePath(root, found.projectPath) || otherExecutorWorktree(root, found);
+}
+function refusal(root) {
+  return `sidequest: refusing a mutating git command against the shared checkout (${root}) from an isolated worktree. The shared checkout means the project's registered root and every other executor's worktree; a clone you created under your ticket's verification directory or scratchpad is not it and stays writable. Read-only git commands such as log, diff, show, rev-parse, and ls-files are allowed for review; make repository changes only in the assigned worktree.`;
 }
 function main() {
   const input = readStdin();
@@ -248,9 +258,8 @@ function main() {
   if (!found || found.sharedTree || found.terminal || !found.projectPath) return;
   const invocation = gitInvocation(commandText(input));
   if (!invocation || !MUTATING_SUBCOMMANDS.has(invocation.subcommand)) return;
-  if (samePath(targetRoot(invocation.target, stringField(input, "cwd")), found.projectPath)) {
-    writeDeny("PreToolUse", refusal());
-  }
+  const root = targetRoot(invocation.target, stringField(input, "cwd"));
+  if (protectedCheckout(root, found)) writeDeny("PreToolUse", refusal(root));
 }
 try {
   main();

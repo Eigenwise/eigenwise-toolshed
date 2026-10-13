@@ -316,6 +316,7 @@
           "enum": [
             "suite",
             "command",
+            "typecheck",
             "document",
             "link",
             "schema",
@@ -501,6 +502,7 @@
           "enum": [
             "suite",
             "command",
+            "typecheck",
             "document",
             "link",
             "schema",
@@ -1790,6 +1792,57 @@
         "worktree": {
           "type": "string"
         },
+        "workProvenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "sources"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "new-behavior",
+                "behavior-preserving-refactor",
+                "inherited-read-only",
+                "docs",
+                "type-annotation-only",
+                "fixture-only"
+              ]
+            },
+            "sources": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ref",
+                  "preparedAt",
+                  "commit"
+                ],
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "preparedAt": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{40}$"
+                  },
+                  "captureId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
         "full": {
           "type": "boolean"
         }
@@ -2291,6 +2344,14 @@
         },
         "worktreeIsolation": {
           "type": "boolean"
+        },
+        "verifyEnvironment": {
+          "type": "string",
+          "enum": [
+            "isolated",
+            "shared"
+          ],
+          "description": "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)."
         },
         "worktreeBase": {
           "type": "string",

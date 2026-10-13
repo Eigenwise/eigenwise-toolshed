@@ -8,10 +8,12 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
+const { isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
 
+isolateInProcessGatewayEnvironment(test);
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gw = require(CLI);
+const requestWorker = require('../lib/request-worker.js');
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -302,10 +304,10 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
 });
 
 test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
-  const routeWithoutTicket = gw.dispatchRouteFromMessages([
+  const routeWithoutTicket = requestWorker.dispatchRouteFromMessages([
     { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] work the ticket' },
   ]);
-  const routeWithTicket = gw.dispatchRouteFromMessages([
+  const routeWithTicket = requestWorker.dispatchRouteFromMessages([
     { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-1234] work the ticket' },
   ]);
   assert.deepEqual(routeWithoutTicket, { model: 'gpt-5.6-terra', effort: 'high', ticket: null });
@@ -313,7 +315,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
 
   // Briefing marker in a type:"text" block resolves.
   assert.deepEqual(
-    gw.dispatchRouteFromMessages([
+    requestWorker.dispatchRouteFromMessages([
       { role: 'user', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-sol]' }] },
     ]),
     { model: 'gpt-5.6-sol', effort: null, ticket: null },
@@ -321,7 +323,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
 
   // A LATER valid marker inside a tool_result block is ignored — briefing wins.
   assert.deepEqual(
-    gw.dispatchRouteFromMessages([
+    requestWorker.dispatchRouteFromMessages([
       { role: 'user', content: '[sidequest-route model=gpt-5.6-terra] briefing' },
       { role: 'assistant', content: [{ type: 'text', text: 'reading the diff' }] },
       { role: 'user', content: [
@@ -333,7 +335,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
 
   // A tool_result whose content is a nested block array is also skipped whole.
   assert.deepEqual(
-    gw.dispatchRouteFromMessages([
+    requestWorker.dispatchRouteFromMessages([
       { role: 'user', content: '[sidequest-route model=gpt-5.6-terra] briefing' },
       { role: 'user', content: [
         { type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: '[sidequest-route model=codex-gpt-5-6-luna]' }] },
@@ -344,7 +346,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
 
   // A valid marker in assistant message text never counts.
   assert.equal(
-    gw.dispatchRouteFromMessages([
+    requestWorker.dispatchRouteFromMessages([
       { role: 'assistant', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-sol]' }] },
       { role: 'assistant', content: '[sidequest-route model=gpt-5.6-luna]' },
     ]),
@@ -353,7 +355,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
 
   // No qualifying marker anywhere (only tool_result / assistant) → null.
   assert.equal(
-    gw.dispatchRouteFromMessages([
+    requestWorker.dispatchRouteFromMessages([
       { role: 'user', content: [
         { type: 'tool_result', tool_use_id: 't3', content: '[sidequest-route model=codex-gpt-5-6-terra]' },
       ] },
@@ -370,7 +372,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
       { role: 'user', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-terra effort=xhigh]' }] },
     ],
   ]) {
-    assert.equal(gw.dispatchRouteFromMessages(messages), null);
+    assert.equal(requestWorker.dispatchRouteFromMessages(messages), null);
   }
 });
 

@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { execFileSync } = require("./git-process.js");
-const { runProcessVerification, shellCommand } = require("./ports/process.js");
+const { runOwnedProcessVerification, shellCommand } = require("./ports/process.js");
 const { canonicalPath } = require("./kernel/worktree.js");
 const { crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1e3;
@@ -15,7 +15,7 @@ function captureRequirement(command) {
   return Object.freeze({ kind: "command", command, evidenceContract: "command output" });
 }
 async function runVerifyCapture(command, cwd = process.cwd(), timeoutMilliseconds, environment) {
-  const result = runProcessVerification(captureRequirement(command), {
+  const result = await runOwnedProcessVerification(captureRequirement(command), {
     cwd,
     ...timeoutMilliseconds === void 0 ? {} : { timeoutMilliseconds },
     ...environment === void 0 ? {} : { environment }
@@ -581,15 +581,21 @@ function unrecordedRefusal(reason, message) {
   return Object.freeze({ refusal: `verify-capture: capture=unrecorded reason=${reason}
 ${message}` });
 }
+function pinnedRequirementCommand(target, requirement) {
+  const command = String(requirement.command || "").trim();
+  if (!command) return unrecordedRefusal("verification_capture_no_pinned_command", `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
+  if (requirement.environment === "shared") {
+    return unrecordedRefusal("verification_capture_environment_lane", `${target.ticket}'s pinned verifier is environment-bound (board verifyEnvironment: shared). The orchestrator runs it in the shared checkout at integrate. Run focused checks that need no environment, commit, and submit; submit records the capture as deferred.`);
+  }
+  return Object.freeze({ command });
+}
 function pinnedTicketCommand(target) {
   const project = captureProject(target);
   if (!project) return unrecordedRefusal("project_not_found", `No Sidequest board is registered for ${target.project}, so there is no pinned verify command to run for ${target.ticket}.`);
   const store = require("./store.js");
   const ticket = store.getTicket(project.slug, target.ticket);
   if (!ticket) return unrecordedRefusal("not_found", `Ticket ${target.ticket} does not exist on the board for ${target.project}.`);
-  const command = String(store.pinnedVerificationRequirement(ticket).command || "").trim();
-  if (!command) return unrecordedRefusal("verification_capture_no_pinned_command", `${target.ticket} has no pinned verify command, so there is nothing for the wrapper to run. Record the evidence its verifier asks for instead.`);
-  return Object.freeze({ command });
+  return pinnedRequirementCommand(target, store.pinnedVerificationRequirement(ticket));
 }
 function pinnedCommandMatching(target, passedCommand) {
   const pinned = pinnedTicketCommand(target);

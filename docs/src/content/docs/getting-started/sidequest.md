@@ -47,11 +47,38 @@ Once this save-and-read check works, use the story workflow below when the task 
 5. When a ticket is ready, ask Claude to integrate it if its checks pass. Independent review is required only for a contract-named seam the check cannot exercise or a required high-stakes review. Multiple review lenses need distinct named risks; wave count alone adds no review.
 
 Each ticket carries a focused check that decides whether its work is ready. Claude records that check against
-the final clean committed candidate once and reports what passed, failed, or needs your decision.
+the final clean committed candidate once and reports what passed, failed, or needs your decision,
+unless the dispatch pins a shared environment: then it submits deferred evidence for delivery.
 Delivery still runs its real pinned verifier. After delivery, Claude runs one combined full merged-tree
 gate per wave before versioning, including a singleton. A changed tree after rebase needs a fresh gate.
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
+
+A verifier pinned to a shared environment (`verifyEnvironment: shared`) skips executor capture and the
+assembled-wave gate. Its environment lane is integrate's delivery gate in the shared checkout, against
+the merged tree. Claude runs CLI `sidequest integrate <ref> --project <path> --json` through background
+Bash (`run_in_background`) and acts on its completion notification; MCP refuses `environment_lane_requires_cli`.
+Delivery must be `merge` or `replay`: `apply` leaves the checkout dirty and blocks the next lane item.
+A `groomClose` closure with `deliveryCommit` is also a lane run. CLI integrate
+runs it under an owned process tree: at the deadline the whole tree ends and the delivery rolls back with exit
+124. On POSIX that tree is the verifier's process group, so anything it starts with `setsid` (or another new
+session or group) escapes the deadline and needs its own teardown in the verify command. On Windows the
+tree is the job owner's job, which holds detached descendants too; a process started through a service or
+broker (dockerd, for one) is outside it. A verifier that exits 0 but leaves the tree unaccounted for (a member
+still alive, or no account of the job's members) is recorded as `could_not_run` with the cleanup error, and the
+delivery rolls back. A verifier that exits non-zero is recorded as `failed_suite` with its own exit code even then,
+with the cleanup error added to the evidence. The run passes only when the tree's owner reports that it finished;
+an owner that dies first is recorded as `could_not_run`, whatever the verifier exited, and the delivery rolls back.
+The owner reports how the run ended on a private channel the verifier never sees, so the verifier's stdout and
+stderr are only the suite's log: nothing it prints, even a copy of an owner line, changes the verdict.
+
+A lane candidate never ran that verifier before it was submitted, so a failed lane run (or a `--no-ff` merge
+that conflicts) is the first anyone saw of the failure. After the rollback, integrate sends the ticket back to
+`todo` through the ordinary rework path once, with the command, log path, failures and output tail as the
+rework evidence, so the next dispatch's briefing carries the failure under "Pending rework". Nothing is
+spawned: you still decide to dispatch it. A second lane failure of the same ticket stays parked with
+`environment_lane_second_failure` naming both logs, and a candidate bound to a review is never reworked
+automatically. Default boards keep their existing failure handling.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
 runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or
@@ -67,6 +94,29 @@ command and descendants ended, then the parent explicitly hands the slot to the 
 terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
 and process counts cannot. No polling or automatic restart is needed.
 
+On Windows the pinned verify (the verify-capture wrapper), `test:full` and `build:check` run inside a
+Job Object. The first run builds a small owner from `scripts/windows-job-owner.cs` with the .NET
+Framework `csc.exe` that ships with Windows and caches it per user under the temp directory, keyed by
+the source hash, so later runs skip the compile. The owner joins its own job before it creates the
+verify command, so the command and every descendant that inherited the job, including ones reparented
+away from their parent or started detached, are job members from the instant they exist; a Python, cmd,
+pnpm, Turbo chain can't outlive the owner, and killing the owner at any point kills the tree. A process
+created through a broker (a service, COM activation, a daemon such as `dockerd` that `docker` asks to
+start a container) is outside the job and is not tracked. The deadline (600 s by
+default) or a caller `AbortSignal` asks the owner to exit, which reports the job's own list of live
+members and closes the job; an owner that does not exit in time is killed, which closes the job just the
+same. A pre-aborted signal starts nothing. The capture then fails as `timeout` or `could_not_run`, and
+its reason names the processes the job ended, any that refused to end, the broker boundary, and the
+output log path. When the owner left no account of its job, or one cut off mid-write or malformed, the
+reason says "survivor state unknown" rather than claiming none survived. The owner gets its report file
+and a per-run nonce only as its own arguments, stamps every report line with that nonce, and removes
+`SIDEQUEST_JOB_OWNER_REPORT` from the environment the verify inherits. A report line without the nonce
+counts for nothing, so a verify that finds the report file and writes an empty-job record into it still
+gets "survivor state unknown". A host with no `csc.exe` fails the run with `JOB_OWNER_UNAVAILABLE`
+instead of running the verify unowned. Set `SIDEQUEST_JOB_AFFINITY_MASK` (for example `3` for two
+cores) in the verify's environment to pin the whole job to those processors. POSIX keeps its
+process-group supervision unchanged; the signal option does not cancel a POSIX phase.
+
 Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
 only says where a read starts; the processed cursor advances after the instructions are consumed.
 
@@ -74,21 +124,30 @@ Tickets should fit implementation plus final verification comfortably before abo
 Larger work is split along cohesive boundaries. A Continuation checkpoint commits progress, records
 remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
 
-Quality uses the existing local owner: early measured complexity where supported, then trustworthy fresh
+Quality gates are optional. Run `/quartermaster:setup` and approve the gate proposal to turn one on
+through `.claude/quartermaster/crap.json` and a project live rule. Sidequest discovers the configured
+gate in the executor briefing; user-injected rules still apply. Without a gate, run the pinned verifier,
+state once "no quality gate is configured for this project; Quartermaster setup can add one", and continue.
+Gate absence never holds integration or marks work UNVERIFIED.
+
+A configured gate uses the existing local owner: early measured complexity where supported, then trustworthy fresh
 coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
-supported path rather than another full suite. Each new or modified function must score CRAP below 6;
-untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
-tooling and reports stay local and uncommitted. Before a long measurement run, freeze its inputs and
+supported path rather than another full suite. Report per-function rows honestly, with no averages;
+untouched legacy functions stay outside scope. Missing analyzer or coverage for a configured gate is UNVERIFIED, and measurement
+tooling and reports stay local and uncommitted. The repository's `scripts/quality/crap.mjs` parses with
+TypeScript's sync named-pipe API by default; `collectFunctions(text, file, { transport: 'async' })` or
+`CRAP_PARSER_TRANSPORT=async` switches to the stdio transport, which also runs under
+`node --permission --allow-fs-read=* --allow-child-process`. Before a long measurement run, freeze its inputs and
 check source/coverage identity, native ownership and deadline fit. Supported focused real coverage can
 run separately from the normal final gate. Source stays fixed during immutable capture; failed or
 unsupported measurement stays visible.
 
 ### Choose the planning depth
 
-Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
+A bounded fix defaults to one owner and a focused check. Small fixes in a few known files may run inline without a ticket. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave needs 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
 
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
-tests: shared authority and callers, the smallest existing seam, measured-quality support, genuine
+tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine
 native baseline/candidate ownership, a runnable check and its actual timeout/resource fit. Small
 deterministic fixes keep one owner and a focused check. A plan advisor is useful only for a named
 architectural risk or contested approach worth its cost. Quartermaster handles setup; the dedicated
@@ -183,6 +242,8 @@ Settings covers routing profiles, model fallback, theme, notification preference
 
 ## Daily use
 
+The shipped coding profile defaults to `medium` effort for `coding.hard`, `debugging`, `spike-investigation`, and `review-audit`. Their models are unchanged, and board-local routing overrides keep their configured values. The effective category route controls dispatch, including provider-specific fallbacks.
+
 Ask Claude to do the board work in plain language:
 
 - `Show me the Sidequest backlog for this project.`
@@ -191,7 +252,7 @@ Ask Claude to do the board work in plain language:
 - `What is blocking the checkout ticket?`
 - `Review and integrate the checkout ticket if its verification passed.`
 
-For substantial changes, Claude can turn the request into a story with linked tickets so you can see the whole plan before execution. Side issues that come up during a session can become separate tickets instead of disappearing into the current task.
+For 3+ independently checkable pieces, Claude can create a story with linked tickets after stating why separate owners help. Side issues that come up during a session can become separate tickets instead of disappearing into the current task.
 
 Sidequest keeps ticket activity visible in the board. Ask Claude to check active work after a restart or when you need help with a ticket that was started in another session.
 
@@ -203,7 +264,7 @@ CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither co
 
 ### When Sidequest speaks up
 
-You don't have to ask for the board. On a project with a working board, Claude is told at session start that it has standing authorization to file tickets and dispatch them for multi-file changes, work at an unknown location, and investigations, without offering first. The first prompt that looks like a work request (a change verb like fix, add, or refactor, or anything longer than a greeting) gets a one-time reminder to ticket and dispatch. If Claude then keeps editing inline, a short nudge tells it to file the ticket and dispatch now. Edits, Bash, and PowerShell commands count toward that nudge; test and build runs (`npm test`, `node --test`, `node -e`, `npm run build`) and plain reads don't. A board call quiets the nudge only until your next prompt. All of this is advice to Claude and never blocks a tool call. Quick one- or two-file edits at a known location, direct questions, and operational requests stay inline.
+You don't have to ask for the board. On a project with a working board, Claude is told at session start that it has standing authorization to file tickets and dispatch them for multi-file changes, work at an unknown location, and investigations, without offering first. The first prompt that looks like a work request (a change verb like fix, add, or refactor, or anything longer than a greeting) gets a one-time reminder to ticket and dispatch. If Claude then keeps editing inline, a short nudge tells it to file the ticket and dispatch now. Edits, Bash, and PowerShell commands count toward that nudge; test and build runs (`npm test`, `node --test`, `node -e`, `npm run build`) and plain reads don't. A board call quiets the nudge only until your next prompt. All of this is advice to Claude and never blocks a tool call. Quick one- or two-file edits at a known location, direct questions, and operational requests stay inline. Native `Explore`, `claude-code-guide`, and `Plan` agents can investigate without a ticket. General-purpose and custom agents can also run ticket-free when their prompt and description carry no write intent. Spawns naming ticket refs or Sidequest route markers, Sidequest executor types, and resumed denied write work still need a prepared dispatch.
 
 In a git repository root with no board yet, that first work request gets one line instead: the first `add` creates the board and dispatch works right away through the default profile. Nothing is created until then, and temp folders, the Sidequest home, `~/.claude`, and folders that aren't a git root stay silent.
 
@@ -232,6 +293,31 @@ A fresh worktree only has what git checks out. Anything gitignored, like `node_m
 The wave gate applies the same entries to the checkout it verifies in, except a copy there never overwrites a file the candidates carry.
 
 Some build tools refuse a linked `node_modules`. Next.js 16 builds with Turbopack by default, and Turbopack stops with `Symlink [project]/node_modules is invalid, it points out of the filesystem root` because the link leads outside the worktree. Use `{ "path": "node_modules", "mode": "copy" }` for those projects. On macOS the copy is an APFS clone (`cp -c`), so it takes seconds and shares disk blocks with your checkout; elsewhere, or on a volume that can't clone, it's a plain copy. Links inside the copied directory keep their relative targets, so they still resolve inside the worktree. The sweep counts the copy, links included, as install content and deletes it with the worktree instead of quarantining it.
+
+### A Docker/browser project with one shared environment
+
+For a project such as Contractify, keep implementation isolated and run its Docker/browser gate in
+the checkout the app actually serves. Ask Claude to configure the board with:
+
+- `worktreeIsolation: true`
+- `verifyEnvironment: shared`
+- `delivery: merge`
+- `integrationBranch` equal to the branch checked out in that shared checkout
+- `integrationVerifyTimeoutMs` at least as long as the measured gate duration
+
+The pinned gate must include any app rebuild/restart needed to serve the merged code and container
+teardown. Confirm the served checkout and branch, measure the gate time, and check that the app does
+not write tracked files. A broker such as dockerd is outside the owned client process tree.
+
+Executors use their own worktrees, run environment-free focused checks, commit and submit deferred
+evidence. Claude backgrounds CLI integrate, which merges onto the current tip and runs the gate under
+the delivery lock. The next lane item waits for that run to finish. A failure rolls back and returns
+the ticket for rework once; Claude decides when to dispatch it again.
+
+A per-worktree environment is a separate project opt-in through `worktreeSetup`: keep
+`verifyEnvironment: isolated`, provision each worktree's environment there, and make its verifier use
+that worktree's ports, database and volumes. It costs concurrent Docker/browser resources, so choose
+it only when the project can afford that load. Sidequest does not create those environments by default.
 
 ### Reaping services an executor started
 
@@ -275,7 +361,7 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 
 **Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Unknown versions, schema changes, and incompatible older loaded versions refuse dispatch until reload.
 
-**A plain Agent spawn is refused.** Sidequest denies generic Agents in favor of ticket executors, and the refusal says what it found. If it says the project has no install, dispatch would refuse too: run `claude plugin install sidequest@eigenwise-toolshed --scope project` from that project, then reload plugins. "No Board MCP server has recorded itself" or "has exited" (with its pid) means the board server really is gone for this session: run `/mcp` and reconnect `plugin:sidequest:board`, or restart Claude Code. A new session id from `/clear`, a resume, or compaction does not count, because the server records itself by process and project. If the liveness markers can't be read, the refusal says the state is unknown rather than down.
+**A plain Agent spawn is refused.** Sidequest denies generic Agents in favor of ticket executors, and the refusal says what it found. If it says the project has no install, dispatch would refuse too: run `claude plugin install sidequest@eigenwise-toolshed --scope project` from that project, then reload plugins. "No Board MCP server has recorded itself" or "has exited" (with its pid) means the board server really is gone for this session: run `/mcp` and reconnect `plugin:sidequest:board`, or restart Claude Code. A new session id from `/clear`, a resume, or compaction does not count, because the server records itself by process and project. The same server also follows the new id for dispatch and every other board call, reading it from the record Claude Code keeps for its own process, so you don't need to reload plugins after `/clear`. If the liveness markers can't be read, the refusal says the state is unknown rather than down.
 
 **A session gets no Sidequest briefing at start.** Only an orchestrator gets one: a session whose project has a registered board. A project with no board, or a session launched as a Sidequest executor (`--agent sidequest-exec-*` or `SIDEQUEST_AGENT`), gets no orchestrator block, though sweep and reload notices still show. The first board call registers the project, so the next session is briefed. `SIDEQUEST_NUDGE=off` still silences it everywhere.
 
@@ -285,13 +371,19 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route. A refused dispatch leaves the ticket's current token working, so the executor that already holds it keeps running: Sidequest only replaces the token once the new dispatch is saved. For a non-Git project it also captures the filesystem snapshot before the final checks, and a project registration change rejects that capture rather than recording it. That snapshot is bounded by a path count, a byte total, and a wall clock, and it refuses with the limit it hit instead of hanging. The walk never counts `.git`, `node_modules`, `.next`, `dist`, `build`, `target`, `.venv`, `vendor`, or what the root `.gitignore` excludes, and a cap refusal names what it skipped and which top-level folders held the paths it did count. A deadline refusal names the file it was reading when the clock ran out, which is the whole diagnostic when a sync client or network share is the thing blocking. A board registered before its folder (or a parent) became a Git repository moves to the Git adapter on its next dispatch, and that dispatch's warnings say so. A third dispatch after two durable terminal no-commit rounds is blocked by default, on the theory that an unreadable environment reproduces the same failure every time; overriding it takes an explicit `allowRepeatFailure` (CLI `--allow-repeat-failure`), and taking that override is recorded on the ticket.
 
+**A dispatch or release says the ticket changed while it was reading checkouts.** Dispatch and release run their Git checks under the ticket's own lock, before they take the board database's write lock, so a slow `git status` in one project can't stall writes everywhere else. They then re-read the ticket and only write if nothing moved. If something did, nothing was written: read the ticket again and retry if it still applies. Those two writes also refuse to start a child process or wait on any lock file while they hold the write lock. If one ever tries, it fails with `WriteLockHeldError` and rolls back, which is a Sidequest bug to report rather than something to retry. A retired checkout is only removed after the new dispatch is saved, and right before removing it Sidequest checks again: if a commit landed in it or its branch moved since the dispatch looked, the checkout and branch stay. If the removal fails the dispatch still stands and its warnings name the checkout that was left in place; if the checkout went but deleting its branch failed, the warning says the branch was kept. The next dispatch checks it again.
+
 **An executor died before it ever claimed its ticket.** An API error at launch, a refused first claim, a failed or cancelled worktree setup, or an Agent call that came back without a claim all leave the same thing behind: a dispatch nobody holds. There's no claim to release and nothing for TaskStop to stop. Tell Claude what the host reported. The session that spawned the executor retires the dead attempt right away with that failure text as recovery evidence, then dispatches a fresh one or closes the ticket. A different session, say after a restart, can't see the failure, so it waits out the retirement deadline the refusal prints (15 minutes after the last sign of life, or the hour-long backstop while worktree setup never finished). If the stop hook already marked the attempt failed, the same request just prepares the replacement.
 
 **Work landed but the ticket won't close.** When an executor released (for example as a technical blocker or a handback) and you committed or cherry-picked its change yourself, there's no submission for `integrate` or `done` to consume. Close it with `groomClose` and the landed commit as the delivery commit, delivery method manual, once that commit is on the recorded integration branch. For a cherry-pick, that's the cherry-picked commit, not the executor's original.
 
 **An unscoped executor could only write `docs/`.** Older builds gave a write ticket with no declared files, dispatched with `allowUnscoped`, only the board's `alwaysInScope` paths, so a repo with a `docs/` folder quietly scoped the executor to `docs/` and nothing else. Now `allowUnscoped` gives the executor the whole tree, and the dispatch result's `writeScope` and the briefing say so in one line, for example `write scope: unscoped (whole tree), always-in-scope: docs/`. A whole-tree scope needs an isolated worktree, so an unscoped dispatch that would run in the shared checkout is refused at dispatch; declare the paths the ticket needs instead.
 
+**Destructive Git is refused in a dirty shared checkout.** The refusal lists dirty paths and gives a named-stash command followed by `sidequest recover-shared`. The project path appears only in the recovery command, leaving room for that guidance under long Windows temp paths within the hook's 768-byte output budget. An unregistered evidence clone stays outside this shared-checkout guard.
+
 **A legitimate recursive delete gets refused.** Sidequest blocks a Bash or PowerShell command that recursively deletes the user profile or the `.claude` root, even inside a real cleanup. A home-relative target such as `~/repos/app/build` or `$HOME/repos/app/build` is judged by where it resolves, the same as its absolute spelling, so only the profile, `.claude`, or a parent of either is refused. Point the delete at a specific project or scratchpad path instead.
+
+**Read-only dispatch and report closeout.** A read-only ticket, or an unscoped investigation declaring no repository writes, may dispatch into the shared checkout without whole-tree write scope. A dispatched executor that made no commit and has no dirty declared path or pending submission may close with `done` carrying its report. Actual repository changes still require commit and submit. The inline-work hook gives at most one advisory per session after 25 substantive actions, and skips reads and verification commands.
 
 **A read-only ticket cannot start in a new repository.** Claude reports the checkout choice and keeps the ticket read-only. You do not need to commit notes or change board settings.
 
@@ -326,6 +418,8 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 **Submit refuses a ticket you claimed directly with `verification_capture_required`.** A direct claim has no dispatch briefing, so nothing handed you the wrapper line. The refusal prints it: `node "<plugin>/lib/verify-capture.js" --project "<project>" --ticket "<ref>"`. Run it from the checkout holding the committed candidate, then submit again. It runs the ticket's current verify, so an `update` to the verify after an earlier dispatch is what gets checked, not that dispatch's old command. A capture recorded during the earlier dispatch doesn't count for your claim.
 
 **Verification fails before any edit.** The active claim holder can record `[sidequest:verify-complete] failed: <evidence>` or `[sidequest:verify-complete] could_not_run: <evidence>` before touching the repository. That preserves the failure report only. A passing completion, submit, or done still needs the declared scoped work and required verification.
+
+**You want to keep GREEN or held work without claiming it passed.** An executor can use the advisory `checkpoint` (`ref`, `by`, a `commit` or `worktree`, `verify`, and an optional TTL of 1 to 1440 minutes) plus an ordinary factual comment. It records the scoped preparation and leaves controls, coverage, CRAP and admission unresolved. It is not a final verification receipt, accepted source, admission, delivery or adoption, and it needs a live claim. A passing `[sidequest:verify-complete]`, submit or done still goes through the full completion gate.
 
 **A delivered ticket's verify command no longer runs.** Ask Claude to record a passing replacement verifier; Sidequest keeps the original requirement and its evidence on the ticket alongside the replacement.
 
@@ -370,3 +464,24 @@ The correction appends an audit and comment, preserves the original verdict, com
 Optional, if Sidequest saves you time: [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
 
 See the [generated Sidequest reference](../../reference/sidequest/) for agent-facing tool and configuration details, or the [Sidequest plugin README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest) for the project landing page.
+
+
+## Declare inherited work before execution
+
+The main Claude thread can freeze `dispatch.workProvenance` as `new-behavior`,
+`behavior-preserving-refactor`, or `inherited-read-only`. Sources name an exact native producer
+generation and its immutable owned commit. Sidequest records the source/test bytes and any
+existing capture's candidate, command and nonce. Changed bytes or generations refuse. Workers
+cannot grant this authority to themselves, and a declaration cannot change a running dispatch.
+
+Unchanged inherited tests and declared GREEN refactors don't need fabricated historical reds.
+New owned behavior still needs its own controls. This declaration proves provenance only; its
+execution, quality and admission stay **UNVERIFIED**, and submission stays held. Keep a factual
+checkpoint and release the preparation with its commit and range. A released preparation stays
+unaccepted and cannot replace a pending submission in the existing composition flow.
+
+## Work kind and completion oracle
+
+The author pins `verifyKind` and `verify` before dispatch: `suite` or `command` for executable regressions, `typecheck` with a typechecker command for annotation work, or `schema` or `document` for their evidence contracts. Dispatch freezes that oracle. The main thread also freezes `workProvenance.kind`: `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only` or `fixture-only`. Successful completion records `negativeControl: not_required(<reason>)` for the non-behavior kinds. With no frozen kind, changed source under changed tests still requires a control; declare annotation/refactor intent before dispatch instead of asking the executor to infer it.
+
+New behavior requires the existing claim-holder marker: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.

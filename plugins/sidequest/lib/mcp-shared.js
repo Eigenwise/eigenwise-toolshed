@@ -1,6 +1,7 @@
 "use strict";
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const store = require("./store");
 const work = require("./work");
@@ -105,8 +106,17 @@ function resolveLifecycleProject(projectArg, args, action) {
   }
   return sessionProject;
 }
+function hostSessionId() {
+  try {
+    const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), ".claude");
+    const record = JSON.parse(fs.readFileSync(path.join(claudeHome, "sessions", `${process.ppid}.json`), "utf8"));
+    return record.pid === process.ppid && typeof record.sessionId === "string" ? record.sessionId.trim() : "";
+  } catch (_) {
+    return "";
+  }
+}
 function runtimeSessionId() {
-  const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+  const v = hostSessionId() || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
   return String(v).trim() || null;
 }
 function sessionOf(args) {

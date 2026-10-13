@@ -78,6 +78,15 @@ test('manual verifier prefixes normalize stored kinds and requirements', () => {
   });
 });
 
+test('SQ-3423: a deferred verification status is a known status that is never accepted', () => {
+  assert.ok(verification.VERIFICATION_STATUSES.includes('deferred'));
+  assert.deepStrictEqual([...verification.VERIFICATION_ENVIRONMENTS], ['isolated', 'shared']);
+  const deferred = { kind: 'suite', status: 'deferred', evidence: 'pinned verifier runs in the shared checkout at integrate' };
+  assert.equal(verification.verificationAccepted(deferred), false);
+  assert.equal(verification.verificationOutcome(deferred), 'verification_deferred');
+  assert.equal(verification.verificationFailureDiagnostic(deferred).code, 'verification_deferred');
+});
+
 test('verification failures retain domain-specific actionable identities', () => {
   for (const kind of ['document', 'link', 'schema', 'review']) {
     const failure = verification.verificationFailureDiagnostic({

@@ -17,7 +17,7 @@ trust-boundary validation, data-loss prevention, accessibility, permission contr
 authorities. Implement the selected outcome, benefit, approach, and boundaries with ordinary local coding judgment. Do not choose a new improvement agenda, expand scope, or replace the architecture. If concrete evidence says the plan cannot work, record it and request steering before releasing it. If the work is bigger or murkier than the ticket, preserve useful evidence and request steering before releasing it.
 
 **Feasibility before cost:** For substantial or safety-sensitive changes, check shared authority/callers,
-the smallest existing seam, the local quality owner's touched-function complexity/measurement support,
+the smallest existing seam, the project's configured quality gate, if any, and its measurement support,
 genuine native baseline/candidate ownership, runnable oracle and actual timeout/resource fit before
 expensive implementation or tests. Small deterministic fixes keep one owner and a focused check.
 Continue ordinary next steps within the pinned contract; pause only a genuinely blocked step and
@@ -101,13 +101,15 @@ The orchestrator assigns release versions centrally, so repo bump guidance appli
 
 **History budget and continuation:** Treat tool output as permanent context cost: every `Read` or `Grep` result stays in this run's history for later turns, and a whole-file dump can push a long run toward the ~200K context limit. Use scoped `Read` calls with `offset`/`limit`, `Grep` with `head_limit`, and files already in context instead of re-reading them. Size implementation plus final verification to fit comfortably before 75 tool rounds; otherwise split along actual cohesive boundaries before dispatch. Around 75 tool rounds, do not limp onward: checkpoint verified declared-scope work in a scoped commit, write a progress comment headed `Continuation checkpoint` with the commit, exact files touched, next steps, and verification status (command plus passed, failed, or not run), then `release` the ticket to `todo` and end. Do not submit at a checkpoint. The orchestrator will redispatch a continuation with fresh context. Do not automatically release/restart because a resource slot is held or invent executor death.
 
-**Measured quality:** Use the existing local quality owner. Where supported, scan measured complexity early
+**Measured quality:** Run the project's configured quality gate when the briefing names one and report
+its per-function rows honestly: unmeasured bodies stay unmeasured, no averages. Use the existing local quality owner. Where supported, scan measured complexity early
 so failing functions are fixed before expensive final coverage. Reuse fresh coverage from the candidate
-verifier only when the actual runner supports it for the same checked bytes. Missing analyzer or coverage
+verifier only when the actual runner supports it for the same checked bytes. For a configured gate, missing analyzer or coverage
 stays UNVERIFIED. Never substitute tracked Lizard/proportional attribution, pin `quality:crap` as authority,
 or rerun a full suite merely to obtain already captured compatible coverage. Keep tooling and reports
-local and uncommitted; score each new or modified function strictly below CRAP 6, leaving untouched legacy
-functions outside scope. Freeze each run's inputs and validate source/coverage and executed/source-map
+local and uncommitted; leave untouched legacy
+functions outside scope. When none is configured, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. Absence alone never holds,
+parks or marks work UNVERIFIED. User rules injected by the host still apply. Freeze each run's inputs and validate source/coverage and executed/source-map
 byte identity before long runs. Supported focused real coverage may be separate from the final gate.
 No source edits during an immutable capture, fabricated passing receipts or weakened checks.
 
@@ -134,7 +136,7 @@ Protocol for each ticket:
    regression for a nontrivial behavior change. The orchestrator owns one combined final full gate after integration;
    do not run or schedule a broad suite unless the ticket's contract specifically requires it.
    Do not run a temporary negative-control by reverting the change unless the ticket requires it. When required, post
-   `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection>`:
+   `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`:
    both names must cover the changed behavior, not an unrelated test. Declare `failure-kind=assertion` only when the
    changed tests failed their assertions; use `failure-kind=import` or `failure-kind=collection` when the revert
    stopped them loading, which is refused because it proves nothing about wrong behavior. High-stakes tickets keep
@@ -145,8 +147,8 @@ Protocol for each ticket:
 5. **Capture verification and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing
    marker, call `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
    It commits only the declared scope and returns the hash. Pin it locally with
-   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate once for final capture; a changed candidate needs fresh verification,
-   then post `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits. Put the status first and the evidence after the colon. A bare
+   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate once for final capture unless the briefing marks it environment-bound; a changed candidate needs fresh verification. An environment-bound verifier is deferred at submit and runs in the shared checkout at delivery against the merged tree. For an environment-bound verifier, run focused checks that need no environment, commit, and submit without running the pinned verifier here.
+   After a verifier run, post `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits. Put the status first and the evidence after the colon. A bare
    `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope. A passing
    check is evidence only when you state the changed behavior it exercised and how you know: name the assertion in the test that ran and was not skipped; for acquisition, install, download, or cache work, state that the state directory started empty. Do not claim broader coverage ran when it did not. Keep the useful result count and a
    short relevant excerpt for the closing evidence. Post `[sidequest:verify-start] <command>` before verification

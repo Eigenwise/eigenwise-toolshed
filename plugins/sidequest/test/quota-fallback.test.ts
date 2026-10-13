@@ -391,16 +391,16 @@ test('PostToolUseFailure records observed terminal executor failures without rel
 test('every seeded Opus category recovers to its explicit Codex fallback without replacing local overrides', () => {
   const expected = new Map([
     ['debugging', {
-      route: { model: 'opus', effort: 'high' },
-      fallback: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+      route: { model: 'opus', effort: 'medium' },
+      fallback: { model: 'codex-gpt-5-6-terra', effort: 'medium' },
     }],
     ['coding.hard', {
-      route: { model: 'opus', effort: 'xhigh' },
-      fallback: { model: 'codex-gpt-6-1-sol', effort: 'xhigh' },
+      route: { model: 'opus', effort: 'medium' },
+      fallback: { model: 'codex-gpt-6-1-sol', effort: 'medium' },
     }],
     ['spike-investigation', {
-      route: { model: 'opus', effort: 'high' },
-      fallback: { model: 'codex-gpt-6-1-sol', effort: 'high' },
+      route: { model: 'opus', effort: 'medium' },
+      fallback: { model: 'codex-gpt-6-1-sol', effort: 'medium' },
     }],
     ['visual-evaluation', {
       route: { model: 'opus', effort: 'medium' },

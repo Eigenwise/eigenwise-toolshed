@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.12.0 (2026-10-07)
+
+Released in v3.593.0, up from 0.11.10.
+
+### Features
+
+- quartermaster crap: every lizard row is bound to its own definition, misread spans are corrected, and the gate fails closed on a changed line no row measures; adds --cc-only and the stale-base warning (SQ-3459)
+  Closes GitHub issues #357, #471, #476, #477, #482, #433 and #423; supersedes PRs #478, #358, #434 and #425.
+
+  The CRAP gate no longer skips a `function`, method or constructor whose parameter list holds a call,
+  such as `load(path = resolve(), opts)`. lizard reports no row at all for that function, and can lose
+  plain functions after it in the same file, so the gate never checked them, and a file holding only
+  such functions exited 2 with "lizard reported zero functions". The gate now reads each definition
+  lizard left out from the source and scores it by its own branch count, labelled `source=source-scan`.
+  An edit to it counts as a change against the base revision, and it passes or fails on coverage like
+  any other function.
+
+  The CRAP gate no longer trusts the span lizard 1.24.0 reports for a JavaScript-family function. It
+  reads where each function really starts and ends from the source and corrects three misreads:
+
+  - A template literal nested in another one's `${...}` (#471) made lizard run a row past the function's
+    end, charging an edit in a later function to the wrong one at the wrong complexity, or drop every
+    function after it, so a new over-ceiling function passed as `0 of 0`. The gate now clamps that row to
+    the real body, recounts its branches, and reads the functions lizard lost from the source
+    (`source=source-scan`).
+  - lizard's TypeScript reader could end a `.tsx` component inside its JSX (#476), so an edit near the
+    bottom of the component sat outside every row and passed. The gate now widens the row to the
+    component's real end.
+  - For an arrow whose `=>` ends a line (#477), lizard started and ended the row on the body's first
+    line, so the gate exited 2 for a line with no coverage data, and an edit lower in the arrow sat in no
+    row. The gate now starts the row at the arrow and ends it with the arrow's body.
+
+  User-visible change: a change the gate used to pass can now exit 2. When a changed or new line lies
+  inside a function the source scan finds but no row of that function's own measures, even after these
+  corrections, the gate exits 2 with "changed lines are unmeasured at `<file>:<line>`" instead of passing
+  code nothing measured. A parent's row never stands in for a nested function lizard dropped, and the
+  gate now ends an honest row where the body ends, so a change to the next function's signature line no
+  longer counts as a change to the function above it. A regex literal holding an unbalanced `(` or `{`
+  shifts every later lizard row up a line; the gate widens such a row back onto its signature where it
+  can, and exits 2 for an edit below one it cannot place.
+
+  A change could also fail on functions it never touched (#482). A `<` comparison such as
+  `s.pages < maxPages` makes lizard read a type argument, so the same unchanged text got different bounds
+  on the base and candidate sides. An untouched function then had no base copy to pair with and failed as
+  new code. In a JavaScript-family file, the gate now counts a function as changed or new only when a
+  changed line falls inside its span. A changed line is an added or edited line, or for a deletion, the
+  line just above it.
+
+  The unverified-measurement guard counts function-like tokens in code only (#433): in a JavaScript-family
+  file, `function`, `=>` or `name(...) {` inside a comment or string text is no definition, while a
+  template's `${...}` expression is code. Other languages keep the raw-text count.
+
+  `crap --cc-only` checks the cc 6 ceiling without coverage (#423): lizard only, no coverage command, no
+  lcov, the same changed-function selection and exit codes. A full-gate failure whose cc alone reaches the
+  ceiling says so (`cc 6 or more fails at any coverage`), and a local base behind its upstream warns on
+  stderr without failing the gate.
+
+### Fixes
+
+- Recommend native Claude Code mods through resupply (SQ-3408)
+- Quality gates are discovered per project (SQ-3451)
+  Sidequest briefings discover the project quality gate instead of imposing a shipped CRAP threshold. Projects without a gate run their pinned verifier and continue. Quartermaster setup and resupply offer the gate as an opt-in proposal, with its command and measurement costs.
+- CRAP gate's regex-literal test passes on lizard 1.24.0 and 1.24.1 (SQ-3468)
+  The real-lizard test for a function below a regex literal holding `(` assumed every lizard misreads it. CI has no `lizard` on PATH and gets PyPI's latest (1.24.1) through `pipx run`, which reads the function on its real lines, so the test failed there. It now asks the resolved lizard for the row first and expects exit 1 with the row at line 10 when the row is right, or exit 2 naming line 12 as unmeasured when it sits one line high. A new injected-CSV test pins that fail-closed path for any lizard version. Only tests changed.
+
 ## 0.11.10 (2026-10-03)
 
 Released in v3.589.0, up from 0.11.9.

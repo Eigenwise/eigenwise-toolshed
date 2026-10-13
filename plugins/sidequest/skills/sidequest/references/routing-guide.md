@@ -4,6 +4,8 @@ Category routing is the normal path. Read the board's selected routing profile a
 
 ## Model and effort guidance
 
+The shipped coding profile uses `medium` effort for `coding.hard`, `debugging`, `spike-investigation`, and `review-audit`, including their provider-specific routes and fallbacks. Models stay unchanged. Board-local overrides keep their configured effort. Read the effective route rather than replacing it with the general model guidance below.
+
 From Anthropic's [Choosing the right model](https://platform.claude.com/docs/en/about-claude/models/choosing-a-model),
 [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), and
 [Effort](https://platform.claude.com/docs/en/build-with-claude/effort):

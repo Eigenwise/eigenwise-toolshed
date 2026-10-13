@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const store = require('./store');
 const work = require('./work');
@@ -148,10 +149,22 @@ function resolveLifecycleProject(projectArg?: any, args?: any, action?: any) {
   return sessionProject;
 }
 
-// The MCP server inherits its Claude Code session identity. Tool callers only
-// know labels, which cannot be used by the Agent lifecycle hooks.
+// Claude Code spawns this server with the session id of that moment, then /clear or /resume switches the
+// session while the server keeps running (GH-467). The host rewrites sessions/<its pid>.json on every switch
+// and sends no session id on tool calls, so that record outranks the startup environment.
+function hostSessionId(): string {
+  try {
+    const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+    const record = JSON.parse(fs.readFileSync(path.join(claudeHome, 'sessions', `${process.ppid}.json`), 'utf8'));
+    return record.pid === process.ppid && typeof record.sessionId === 'string' ? record.sessionId.trim() : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// Tool callers only know labels, which cannot be used by the Agent lifecycle hooks.
 function runtimeSessionId() {
-  const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  const v = hostSessionId() || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   return String(v).trim() || null;
 }
 

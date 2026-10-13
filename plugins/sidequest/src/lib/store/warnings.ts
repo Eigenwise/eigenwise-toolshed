@@ -91,13 +91,13 @@ function attestationErrors(value?: any, artifact?: any) {
   return [];
 }
 
-function verifyOracleErrors(kind?: any, value?: any, artifact?: any) {
+function verifyOracleErrors(kind?: string, value?: string, artifact?: string) {
   const verifyKind = normalizeVerifyOracleKind(kind, value);
   if (verifyKind === 'attestation') return attestationErrors(value, artifact);
-  if (String(artifact || '').trim()) return ['attestationArtifact requires verifyKind: attestation.'];
-  if (verifyKind === 'manual' && /^manual:/i.test(String(value || '').trim())) return verifyCommandErrors(value);
-  if (verifyKind === 'command' || verifyKind === 'suite') return verifyCommandErrors(value);
-  return [];
+  if ([artifact, String(artifact).trim()].every(Boolean)) return ['attestationArtifact requires verifyKind: attestation.'];
+  const executable = ['command', 'suite', 'typecheck'].includes(verifyKind);
+  const manualCommand = [verifyKind === 'manual', /^manual:/i.test(String(value).trim())].every(Boolean);
+  return [executable, manualCommand].some(Boolean) ? verifyCommandErrors(value) : [];
 }
 
 function requireVerifyOracle(kind?: any, value?: any, artifact?: any) {

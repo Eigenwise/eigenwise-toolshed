@@ -181,6 +181,105 @@ test('preparing a ticket without a recorded verifier pins the legacy custom requ
   assert.equal(store.releaseTicket(slug, ticket.ref, 'no-verifier-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+function commandVerifyFixture(title: string, extra: Record<string, unknown> = {}) {
+  return store.createTicket(slug, { title, category: 'dispatch.lifecycle', files: ['tracked.js'], executorVerify: 'node -e 0', source: 'test', ...extra });
+}
+
+function preparedRequirement(ticket: { ref: string }, options: Record<string, unknown> = {}) {
+  const prepared = store.prepareDispatch(slug, ticket.ref, options);
+  const requirement = prepared.ticket.dispatch.verificationRequirement;
+  assert.deepEqual(prepared.ticket.lifecycleAttempt.verificationRequirement, requirement);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'verify-environment-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  return requirement;
+}
+
+test('SQ-3423: verifyEnvironment defaults to isolated, accepts shared, and refuses anything else', () => {
+  assert.equal(store.boardConfig(slug).verifyEnvironment, 'isolated');
+  assert.throws(() => store.setBoardConfig(slug, { verifyEnvironment: 'remote' }), /verifyEnvironment must be "isolated" or "shared"\./);
+  assert.equal(store.boardConfig(slug).verifyEnvironment, 'isolated');
+  assert.equal(store.setBoardConfig(slug, { verifyEnvironment: 'Shared' }).config.verifyEnvironment, 'shared');
+  assert.equal(store.setBoardConfig(slug, { verifyEnvironment: 'isolated' }).config.verifyEnvironment, 'isolated');
+});
+
+test('SQ-3423: a default board pins the historical command requirement byte for byte', () => {
+  const requirement = preparedRequirement(commandVerifyFixture('default board command verify'));
+  assert.equal(JSON.stringify(requirement), JSON.stringify({ kind: 'command', command: 'node -e 0', evidenceContract: 'node -e 0' }));
+});
+
+test('SQ-3423: a shared verify environment pins environment only onto isolated command and suite dispatches', () => {
+  store.setBoardConfig(slug, { verifyEnvironment: 'shared' });
+  try {
+    const command = preparedRequirement(commandVerifyFixture('shared board command verify'));
+    assert.equal(command.environment, 'shared');
+    assert.equal(JSON.stringify(command), JSON.stringify({ kind: 'command', command: 'node -e 0', evidenceContract: 'node -e 0', environment: 'shared' }));
+
+    const suite = preparedRequirement(store.createTicket(slug, { title: 'shared board suite verify', category: 'dispatch.lifecycle', files: ['plugins/verification-fixture/src/check.ts'], executorVerifyKind: 'suite', source: 'test' }));
+    assert.equal(suite.kind, 'suite');
+    assert.equal(suite.environment, 'shared');
+
+    const custom = preparedRequirement(createFixture('shared board legacy custom verify'));
+    assert.equal(custom.kind, 'custom');
+    assert.equal('environment' in custom, false);
+
+    const orchestratorSessionId = `verify-environment-shared-tree-${Date.now()}`;
+    const sharedTree = preparedRequirement(commandVerifyFixture('shared board shared-tree command verify'), { sessionId: orchestratorSessionId, sharedTree: true, runtimeCwd: PROJECT });
+    assert.equal(sharedTree.kind, 'command');
+    assert.equal('environment' in sharedTree, false);
+
+    const workingTree = preparedRequirement(commandVerifyFixture('shared board working-tree delivery', { workingTreeDelivery: true }), { sessionId: `verify-environment-working-tree-${Date.now()}`, sharedTree: true, runtimeCwd: PROJECT });
+    assert.equal(workingTree.kind, 'command');
+    assert.equal('environment' in workingTree, false);
+  } finally {
+    store.setBoardConfig(slug, { verifyEnvironment: 'isolated' });
+  }
+});
+
+test('SQ-3423: a live isolated dispatch keeps its shared environment pin when its verifier is amended', () => {
+  store.setBoardConfig(slug, { verifyEnvironment: 'shared' });
+  const ticket = commandVerifyFixture('shared board live verify amendment');
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `verify-environment-sync-${Date.now()}` });
+    assert.equal(prepared.ticket.dispatch.verificationRequirement.environment, 'shared');
+    store.setBoardConfig(slug, { verifyEnvironment: 'isolated' });
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.verificationRequirement.environment, 'shared');
+
+    store.setBoardConfig(slug, { verifyEnvironment: 'shared' });
+    const amended = store.updateTicket(slug, ticket.ref, { executorVerify: 'node -e 1', source: 'test' });
+    assert.equal(amended.dispatch.verificationRequirement.command, 'node -e 1');
+    assert.equal(amended.dispatch.verificationRequirement.environment, 'shared');
+    assert.equal(amended.lifecycleAttempt.verificationRequirement.environment, 'shared');
+    assert.equal(amended.verificationAmendments.at(-1).newCommand, 'node -e 1');
+  } finally {
+    store.setBoardConfig(slug, { verifyEnvironment: 'isolated' });
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'verify-environment-sync-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  }
+});
+
+test('SQ-3423: the board-config CLI sets, prints, and refuses verifyEnvironment', () => {
+  const cliEnvironment = { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT };
+  const runBoardConfig = (...args: string[]) => spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'board-config', '--project', PROJECT, ...args], { encoding: 'utf8', env: cliEnvironment });
+  try {
+    const shared = runBoardConfig('--verify-environment', 'shared', '--generated-pairs', '[]');
+    assert.equal(shared.status, 0, shared.stderr);
+    assert.match(shared.stdout, /^verify environment: shared$/m);
+    assert.match(shared.stdout, /^generated pairs: \(none\)$/m);
+    assert.match(shared.stdout, /^worktree isolation: enabled$/m);
+
+    const refused = runBoardConfig('--verify-environment', 'remote');
+    assert.notEqual(refused.status, 0);
+    assert.match(`${refused.stdout}${refused.stderr}`, /verifyEnvironment must be "isolated" or "shared"\./);
+    assert.equal(JSON.parse(runBoardConfig('--json').stdout).verifyEnvironment, 'shared');
+
+    const malformed = runBoardConfig('--generated-pairs', 'not-json');
+    assert.notEqual(malformed.status, 0);
+    assert.match(malformed.stderr, /--generated-pairs must be a JSON array of \{ from, to \} patterns\./);
+  } finally {
+    const reset = runBoardConfig('--verify-environment', 'isolated', '--json');
+    assert.equal(reset.status, 0, reset.stderr);
+    assert.equal(JSON.parse(reset.stdout).verifyEnvironment, 'isolated');
+  }
+});
+
 test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
   const snapshotProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-filesystem-snapshot-'));
   fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'snapshot fixture\n');
@@ -5123,3 +5222,53 @@ test('GH-361: no prepared dispatch spawn, before or after the launch hook, carri
 
 
 export {};
+
+
+test('shared-tree investigation dispatch grants no whole-tree write scope', () => {
+  for (const category of ['research', 'dispatch.lifecycle']) {
+    const ticket = store.createTicket(slug, {
+      title: 'Read the repository only', category,
+      description: 'Investigate the call flow. No repository writes.', source: 'test',
+    });
+    const sessionId = `readonly-shared-${ticket.id}`;
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId, runtimeCwd: PROJECT });
+    assert.equal(prepared.ticket.dispatch.readonly, true);
+    assert.equal(prepared.ticket.dispatch.sharedTree, true);
+    assert.notEqual(prepared.ticket.dispatch.unscopedOverride?.writeScope, 'write scope: unscoped (whole tree)');
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'readonly-cleanup', { force: true, status: 'todo', source: 'test' }).ok, true);
+  }
+  const ticket = store.createTicket(slug, { title: 'Write repository files', category: 'dispatch.lifecycle', source: 'test' });
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, runtimeCwd: PROJECT }), /no declared file scope for write work/);
+});
+
+test('write-capable executor done accepts a report only with no commits or dirty declared paths', () => {
+  for (const change of ['none', 'dirty', 'committed', 'empty-commit']) {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-report-closeout-'));
+    execFileSync('git', ['clone', '--quiet', PROJECT, repository]);
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
+    execFileSync('git', ['config', 'user.name', 'Report Closeout Test'], { cwd: repository });
+    const projectSlug = store.ensureProject(repository).slug;
+    const ticket = store.createTicket(projectSlug, { title: 'Investigate a scoped write task', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test' });
+    const sessionId = `report-closeout-${ticket.id}`;
+    const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId, sharedTree: true, runtimeCwd: repository });
+    const executor = prepared.ticket.dispatchExecutor;
+    const agentName = `report-worker-${ticket.id}`;
+    assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentName, agentName).ok, true);
+    const by = `report-owner-${ticket.id}`;
+    assert.equal(store.claimTicket(projectSlug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+    if (change === 'dirty' || change === 'committed') fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 2;\n');
+    if (change === 'committed') execFileSync('git', ['commit', '--quiet', '-am', 'change tracked file'], { cwd: repository });
+    if (change === 'empty-commit') execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'empty commit'], { cwd: repository });
+    const body = 'Investigation finished, no repository change was needed.';
+    const result = store.completeTicket(projectSlug, ticket.ref, by, { sessionId, body });
+    assert.equal(result.ok, change === 'none', `done result for ${change}: ${result.reason}`);
+    if (change === 'none') {
+      assert.equal(store.getTicket(projectSlug, ticket.ref).status, 'done');
+      assert.ok(store.getTicket(projectSlug, ticket.ref).comments.some((comment: { body: string }) => comment.body === body));
+      assert.equal(store.getTicket(projectSlug, ticket.ref).submission, undefined);
+    } else {
+      assert.equal(store.releaseTicket(projectSlug, ticket.ref, by, { sessionId, status: 'todo', source: 'test' }).ok, true);
+    }
+  }
+});

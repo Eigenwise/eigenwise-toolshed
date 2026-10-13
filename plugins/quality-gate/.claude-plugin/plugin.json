@@ -1,0 +1,11 @@
+{
+  "name": "quality-gate",
+  "version": "0.1.0",
+  "description": "Local JavaScript and TypeScript function complexity and measured V8 coverage, with per-function CRAP scores strictly below 6.",
+  "author": { "name": "Eigenwise", "email": "kenny@eigenwise.io" },
+  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/quality-gate",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "license": "MIT",
+  "suiteTimeout": 120000,
+  "keywords": ["quality", "complexity", "coverage", "crap", "typescript"]
+}

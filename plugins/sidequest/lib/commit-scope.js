@@ -57,6 +57,7 @@ __export(commit_scope_exports, {
   submissionRange: () => submissionRange,
   ticketCommitScope: () => ticketCommitScope,
   ticketReleaseFragment: () => ticketReleaseFragment,
+  trackedBuildOutputSource: () => trackedBuildOutputSource,
   unpublishedReleaseTip: () => unpublishedReleaseTip,
   unscopedWorkingPaths: () => unscopedWorkingPaths,
   validateCommitRangeScope: () => validateCommitRangeScope,
@@ -88,6 +89,14 @@ function gitResult(cwd, args) {
   } catch (error) {
     return { ok: false, message: errorMessage(error) };
   }
+}
+function trackedBuildOutputSource(repository, file, sources) {
+  const output = (0, import_scope_match.normalizeScope)(file);
+  const match = /^(plugins\/[^/]+)\/((?:lib|bin)\/.+|hooks\/[^/]+)\.js$/.exec(output);
+  if (!match) return null;
+  const source = `${match[1]}/src/${match[2]}.ts`;
+  if (!(0, import_scope_match.isInScope)(source, sources)) return null;
+  return indexedPaths(repository).includes(output) ? source : null;
 }
 function patchIds(cwd, args) {
   try {
@@ -851,6 +860,7 @@ async function commitScoped(cwd, message, files) {
   submissionRange,
   ticketCommitScope,
   ticketReleaseFragment,
+  trackedBuildOutputSource,
   unpublishedReleaseTip,
   unscopedWorkingPaths,
   validateCommitRangeScope,

@@ -31,6 +31,7 @@ module.exports = __toCommonJS(composition_admission_exports);
 var import_node_crypto = require("node:crypto");
 var import_node_child_process = require("node:child_process");
 var import_commit_scope = require("../commit-scope");
+var import_db = require("../db");
 var import_review_binding = require("../kernel/review-binding");
 var import_worktree = require("../kernel/worktree");
 var import_composition_range = require("./composition-range");
@@ -484,10 +485,11 @@ function createCompositionAdmissions(dependencies) {
     ];
     return [...new Set(identities)].sort();
   }
+  function lockKeys(slug, identities) {
+    return identities.map((id) => ({ slug, id }));
+  }
   function withCompositionLocks(slug, identities, callback) {
-    const [identity, ...remaining] = identities;
-    if (!identity) return callback();
-    return dependencies.withTicketLock(slug, identity, () => withCompositionLocks(slug, remaining, callback));
+    return (0, import_db.stillSpawnsInsideItsWrite)("withCompositionLocks", () => dependencies.withTicketLocks(lockKeys(slug, identities), callback));
   }
   function dispatchAdmissionRefusal(slug, root, locked) {
     const admission = root.compositionAdmission;
@@ -500,20 +502,23 @@ function createCompositionAdmissions(dependencies) {
     const observed = { ...rootGeneration(root), sources };
     return expectedRefusal(admission, observed) || proveCandidate(slug, root, admission, observed);
   }
-  function prepareUnderCompositionLocks(slug, ref, identities, callback) {
+  function dispatchLockIdentities(slug, ref, root) {
+    return root?.compositionAdmission ? lockIdentities(slug, root, root.compositionAdmission) : [root?.id ?? ref];
+  }
+  function assertDispatchAdmissionHolds(slug, ref, identities) {
     dependencies.invalidateStoreCaches();
     const root = dependencies.getTicket(slug, ref);
     if (!root) throw new Error("Composition root disappeared while acquiring its locks.");
-    const refusal = dispatchAdmissionRefusal(slug, root, identities);
+    if (dispatchLockIdentities(slug, ref, root).join("\n") !== identities.join("\n")) {
+      throw new Error("prepare dispatch: admission_changed: Composition admission changed while this dispatch waited for its locks, so nothing was written. Dispatch again to take the current admission's source locks.");
+    }
+    const refusal = root.compositionAdmission ? dispatchAdmissionRefusal(slug, root, identities) : void 0;
     if (refusal) throw new Error(`prepare dispatch: ${refusal.reason}: ${refusal.message}`);
-    return callback();
   }
   function withCompositionDispatchPreparation(slug, ref, callback) {
-    const root = dependencies.getTicket(slug, ref);
-    if (!root?.compositionAdmission) return dependencies.withTicketLock(slug, root?.id ?? ref, callback);
-    const identities = lockIdentities(slug, root, root.compositionAdmission);
+    const identities = dispatchLockIdentities(slug, ref, dependencies.getTicket(slug, ref));
     try {
-      return withCompositionLocks(slug, identities, () => prepareUnderCompositionLocks(slug, ref, identities, callback));
+      return dependencies.withTicketFileLocks(lockKeys(slug, identities), () => callback(identities, () => assertDispatchAdmissionHolds(slug, ref, identities)));
     } finally {
       dependencies.invalidateStoreCaches();
     }
@@ -559,7 +564,7 @@ function createCompositionAdmissions(dependencies) {
   }
   function withCompositionGenerationLock(slug, ref, callback, use = { boundary: "active" }) {
     const root = dependencies.getTicket(slug, ref);
-    if (!root?.compositionAdmission) return dependencies.withTicketLock(slug, root?.id ?? ref, callback);
+    if (!root?.compositionAdmission) return dependencies.withTicketLocks(lockKeys(slug, [root?.id ?? ref]), callback);
     const identities = lockIdentities(slug, root, root.compositionAdmission);
     try {
       return withCompositionLocks(slug, identities, () => useUnderCompositionLocks(slug, ref, identities, use, callback));

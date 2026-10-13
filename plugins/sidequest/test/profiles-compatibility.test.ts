@@ -247,6 +247,11 @@ test('DETACH provenance remains visible and CLI, MCP, and REST agree on effectiv
 });
 
 test('provider capability changes migrate only untouched seeds and preserve prepared Gateway dispatches', () => {
+  assert.deepEqual(store.getCategory('coding.hard', { project }).route, { model: 'opus', effort: 'medium' });
+  assert.deepEqual(store.getCategory('coding.hard', { project }).fallback, { model: 'codex-gpt-6-1-sol', effort: 'medium' });
+  assert.deepEqual(store.getCategory('debugging', { project }).fallback, { model: 'codex-gpt-5-6-terra', effort: 'medium' });
+  assert.deepEqual(store.getCategory('spike-investigation', { project }).fallback, { model: 'codex-gpt-6-1-sol', effort: 'medium' });
+  assert.deepEqual(store.getCategory('review-audit', { project }).route, { model: 'codex-gpt-5-6-terra', effort: 'medium' });
   const seededBoard = store.ensureProject(path.join(HOME, 'capability-seed-board'), 'Capability seed board').slug;
   const overrideBoard = store.ensureProject(path.join(HOME, 'capability-override-board'), 'Capability override board').slug;
   assert.deepEqual(store.getCategory('coding.normal', { project: seededBoard }).route, {
