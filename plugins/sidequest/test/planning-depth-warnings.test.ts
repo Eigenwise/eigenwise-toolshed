@@ -151,6 +151,16 @@ test('add stays quiet for a filename glob whose matching file does not exist yet
   assert.deepStrictEqual(added.warnings, []);
 });
 
+test('add stays quiet for a root-level glob that has no directory part', () => {
+  const added = cliJson([
+    'add', '-t', 'root glob scope', '--complexity', '3',
+    '--why', 'declare a glob at the project root for a file the executor will create',
+    '--file', 'root-level-new-*.integration.test.ts',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, []);
+});
+
 test('add warns when a declared glob directory is typo\'d', () => {
   fs.mkdirSync(path.join(PROJ, 'glob-typo-fixtures'), { recursive: true });
   const added = cliJson([

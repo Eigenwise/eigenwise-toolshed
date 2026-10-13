@@ -1200,13 +1200,8 @@ ${String(ticket?.description || "")}`;
     warnings.push(...scopeConsumerWarnings(ticket, projectPath));
     const absent = commitScope.scopedPaths(ticket.files).filter((file) => {
       const scope = String(file || "");
-      if (scope.includes("*")) {
-        const slashIndex = scope.lastIndexOf("/", scope.indexOf("*"));
-        if (slashIndex === -1) return false;
-        const declaredDir = path.resolve(projectPath, scope.slice(0, slashIndex));
-        return !fs.existsSync(declaredDir) && fs.existsSync(path.dirname(declaredDir));
-      }
-      const declared = path.resolve(projectPath, scope);
+      const globDirEnd = Math.max(scope.lastIndexOf("/", scope.indexOf("*")), 0);
+      const declared = path.resolve(projectPath, scope.includes("*") ? scope.slice(0, globDirEnd) : scope);
       return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
     });
     if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(", ")}.`);
