@@ -1,6 +1,6 @@
 # Patterns
 
-Last Updated: 2026-10-10
+Last Updated: 2026-10-16
 
 - Build from source, run committed output: Sidequest TypeScript under `src/` compiles to `lib/`, `bin/`, and bundled hook files, while `scripts/generate-bundled-agents.mjs` renders the committed `agents/` roster from `lib/agentsync.js`. Runtime manifests point at generated files; release suite discovery is shared through `plugins/sidequest/lib/suite-resolver.js` and re-exported by `scripts/release/lib/suites.mjs`.
 - Stable executor packaging and migration: the Sidequest plugin owns its generated diagnostic, dispatch, and read-only agent definitions in `agents/`; session-start maintenance and normal CLI sync remove only marked legacy generated files from user agent directories, preserving custom content.
