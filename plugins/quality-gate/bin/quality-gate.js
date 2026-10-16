@@ -38,6 +38,7 @@ Every new or complexity-raised owned body must score strictly below 6 with measu
 Comments and formatting count; equal/lowered complexity legacy edits are informational.
 Untouched bodies and independently edited nested bodies do not charge their parents.
 --base defaults to the local develop, main or master branch; HEAD means score all selected bodies.
+With a base, only selected files that differ from it or are untracked are parsed.
 --cc-only checks the complexity floor without running coverage; it cannot prove a full CRAP pass.
 --lcov overrides both isolated command output and config lcov. Config lcov is a fallback
 behind fresh isolated command output, then coverage/lcov.info when unset.

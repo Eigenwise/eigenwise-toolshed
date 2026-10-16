@@ -100,6 +100,15 @@ export function selectedFiles(root, settings) {
     .filter((file) => !settings.exclude.some((pattern) => path.matchesGlob(file, pattern)));
 }
 
+// With a base, only files that differ from it (or are new and untracked) can hold changed bodies, so
+// the rest are never parsed (GH-554).
+export function filesChangedSince(root, base, files) {
+  if (!base) return files;
+  const listed = (argumentsList) => runGit(root, [...argumentsList, '-z']).split('\0');
+  const changed = new Set([...listed(['diff', '--name-only', '--no-renames', base]), ...listed(['ls-files', '--others', '--exclude-standard'])]);
+  return files.filter((file) => changed.has(file));
+}
+
 export function sourceHashes(root, files) {
   return Object.fromEntries(files.map((file) => [file, crypto.createHash('sha256').update(fs.readFileSync(path.resolve(root, file))).digest('hex')]));
 }
