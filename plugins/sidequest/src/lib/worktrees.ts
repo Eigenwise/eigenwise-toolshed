@@ -2167,10 +2167,12 @@ type ObservedCheckout = { gitDirectory: string; commonGitDirectory: string; revi
 type ReclaimRefusal = { worktree: string; reclaimed: false; reason: string; message?: string; discardable?: true; retainedCheckout?: true };
 type TerminalReclaimLease = Readonly<Record<string, unknown>>;
 type CheckoutReclaim = { worktree: string; reclaim: () => ReturnType<typeof removeReclaimedWorktree> };
+// `settlingRevisions` are the commits that already hold landed work: the integration branch tip and any recorded delivery.
+type CheckpointFacts = { checkpointCommit?: string | null; settlingRevisions?: readonly string[] };
 
 // Decides from observation alone. A reclaimable checkout comes back with `reclaim`, the removal itself, so a
 // caller holding a write transaction can commit first and remove the checkout afterwards (SQ-3348).
-function unclaimedDispatchWorktreeReclaim(repository: string, dispatch: ReclaimableDispatch | null | undefined, facts: { checkpointCommit?: string | null } = {}): ReclaimRefusal | CheckoutReclaim | null {
+function unclaimedDispatchWorktreeReclaim(repository: string, dispatch: ReclaimableDispatch | null | undefined, facts: CheckpointFacts = {}): ReclaimRefusal | CheckoutReclaim | null {
   const worktree = unclaimedIsolatedWorktree(dispatch);
   if (!dispatch || !worktree) return null;
   const entry = registeredWorktreeEntry(repository, worktree);
@@ -2178,7 +2180,7 @@ function unclaimedDispatchWorktreeReclaim(repository: string, dispatch: Reclaima
   return terminalLifecycleRefusal(dispatch, entry) || leasedCheckoutReclaim(repository, worktree, entry, dispatch, facts);
 }
 
-function leasedCheckoutReclaim(repository: string, worktree: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, facts: { checkpointCommit?: string | null }): ReclaimRefusal | CheckoutReclaim {
+function leasedCheckoutReclaim(repository: string, worktree: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, facts: CheckpointFacts): ReclaimRefusal | CheckoutReclaim {
   const lease = terminalReclaimLease(repository, dispatch, entry);
   return retainedContentRefusal(worktree, entry, dispatch, lease, facts)
     || { worktree: entry.worktree, reclaim: () => removeReclaimedWorktree(repository, entry, dispatch, lease) };
@@ -2267,7 +2269,7 @@ function terminalReclaimLease(repository: string, dispatch: ReclaimableDispatch,
   });
 }
 
-function retainedContentRefusal(worktree: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease, facts: { checkpointCommit?: string | null }): ReclaimRefusal | null {
+function retainedContentRefusal(worktree: string, entry: RegisteredWorktreeEntry, dispatch: ReclaimableDispatch, lease: TerminalReclaimLease, facts: CheckpointFacts): ReclaimRefusal | null {
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, [entry.worktree]);
   if (!cleanup.allowed) return { worktree, reclaimed: false, reason: 'lease_refused', message: `immutable recovery fact: ${cleanup.reason}` };
   return uncommittedContentRefusal(entry, dispatch) || checkpointRefusal(entry, facts) || baseAncestryRefusal(entry, dispatch);
@@ -2284,14 +2286,16 @@ function uncommittedContentRefusal(entry: RegisteredWorktreeEntry, dispatch: Rec
   };
 }
 
-function checkpointRefusal(entry: RegisteredWorktreeEntry, facts: { checkpointCommit?: string | null }): ReclaimRefusal | null {
+// A checkpoint that already landed is not work at risk, so a reverted delivery stays redispatchable (GH-548).
+function checkpointRefusal(entry: RegisteredWorktreeEntry, facts: CheckpointFacts): ReclaimRefusal | null {
   const checkpointCommit = String(facts.checkpointCommit || '').trim();
   if (!checkpointCommit) return null;
+  if ((facts.settlingRevisions || []).some((revision) => gitIsAncestor(entry.worktree, checkpointCommit, revision))) return null;
   return {
     worktree: entry.worktree,
     reclaimed: false,
     reason: 'checkpointed_worktree',
-    message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}.`,
+    message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}, which neither the integration branch nor a recorded delivery holds; it settles once one of them contains it.`,
   };
 }
 
