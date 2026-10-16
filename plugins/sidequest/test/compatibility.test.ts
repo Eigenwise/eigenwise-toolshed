@@ -156,7 +156,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(submit?.description ?? '', /clear\/force need owner/);
   const rework = byName.get('rework');
   assert.equal(rework?.inputSchema.properties?.force, undefined);
-  assert.match(rework?.description ?? '', /repair unbound; bound needs oracle/);
+  assert.match(rework?.description ?? '', /repair unbound; bound needs verdict.finalize or oracle/);
   assert.match(byName.get('supersede_submission')?.description ?? '', /candidate rejection permits supersession/);
   assert.equal(byName.get('comments')?.inputSchema.properties?.full?.description, undefined);
   assert.match(byName.get('release')?.inputSchema.properties?.command?.description as string, /Required for blocker\/contradiction/);

@@ -558,7 +558,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+          "description": "Drop declared paths; conflicts with files. Isolated: now; shared: redispatch."
         },
         "by": {
           "type": "string"
@@ -829,7 +829,7 @@
   },
   {
     "name": "claim",
-    "description": "Claim before work; proceed only on ok:true.",
+    "description": "Claim before work; proceed on ok:true.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1073,14 +1073,14 @@
         "deliveryRevision": {
           "type": "string",
           "pattern": "^[0-9a-fA-F]{7,64}$",
-          "description": "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable."
+          "description": "Target-reachable, never an ancestor of the candidate base; proves paths at its tree, not the working tree. Ignored when reachable."
         },
         "resolvedPaths": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable."
+          "description": "Hand-resolved paths; needs deliveryRevision, refused when reachable."
         },
         "verificationSupersession": {
           "type": "object",
@@ -1237,7 +1237,7 @@
             "rejected",
             "inconclusive"
           ],
-          "description": "Candidate, not reviewer prose."
+          "description": "Explicit candidate outcome, not reviewer prose."
         },
         "why": {
           "type": "string"
@@ -1247,6 +1247,57 @@
         },
         "by": {
           "type": "string"
+        },
+        "finalize": {
+          "type": "object",
+          "properties": {
+            "authority": {
+              "enum": [
+                "main-attestation"
+              ]
+            },
+            "sourceRef": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "value"
+              ]
+            },
+            "evidence": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sourceRef",
+            "evidence"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "commit"
+              ]
+            },
+            {
+              "required": [
+                "sourceRevision"
+              ]
+            }
+          ],
+          "description": "Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate."
         },
         "correct": {
           "type": "object",
@@ -1295,25 +1346,15 @@
             {
               "required": [
                 "commit"
-              ],
-              "not": {
-                "required": [
-                  "sourceRevision"
-                ]
-              }
+              ]
             },
             {
               "required": [
                 "sourceRevision"
-              ],
-              "not": {
-                "required": [
-                  "commit"
-                ]
-              }
+              ]
             }
           ],
-          "description": "Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision."
+          "description": "Main-only accepted->rejected; by/text/evidence; expectedVerdictAt from list({ref}) reviewDecision|oracle verdict.at."
         }
       },
       "required": [
@@ -1346,7 +1387,7 @@
         },
         "grant": {
           "type": "boolean",
-          "description": "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."
+          "description": "Grants all refused paths; pass no files. Refuses the claim holder’s own by."
         }
       },
       "required": [
@@ -1386,7 +1427,7 @@
   },
   {
     "name": "rework",
-    "description": "repair unbound; bound needs oracle.",
+    "description": "repair unbound; bound needs verdict.finalize or oracle.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1515,7 +1556,7 @@
   },
   {
     "name": "integrate",
-    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.",
+    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod or deliveryRevision; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1557,14 +1598,14 @@
         "deliveryRevision": {
           "type": "string",
           "pattern": "^[0-9a-fA-F]{7,64}$",
-          "description": "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable."
+          "description": "Target-reachable, never an ancestor of the candidate base; proves paths at its tree, not the working tree. Ignored when reachable."
         },
         "resolvedPaths": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable."
+          "description": "Hand-resolved paths; needs deliveryRevision, refused when reachable."
         },
         "reason": {
           "type": "string"
@@ -1707,7 +1748,6 @@
   },
   {
     "name": "comments",
-    "description": "Read comments before work.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2410,7 +2450,7 @@
             "isolated",
             "shared"
           ],
-          "description": "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)."
+          "description": "shared: verify at integration only. Frozen per dispatch; default isolated."
         },
         "worktreeBase": {
           "type": "string",

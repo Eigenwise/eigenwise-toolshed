@@ -317,8 +317,8 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 const ATTESTATION_VERIFY_CONTRACT = 'Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
 // A rebased or squash-merged candidate never byte-matches the working tree, and the
 // refusal only reaches an operator who already knows these two properties exist.
-const DELIVERY_REVISION_CONTRACT = 'Target-reachable revision after base proving path bytes. Ignored if candidate reachable.';
-const RESOLVED_PATHS_CONTRACT = 'Manual paths: deliveryRevision+reason; unreachable candidates only.';
+const DELIVERY_REVISION_CONTRACT = 'Target-reachable, never an ancestor of the candidate base; proves paths at its tree, not the working tree. Ignored when reachable.';
+const RESOLVED_PATHS_CONTRACT = 'Hand-resolved paths; needs deliveryRevision, refused when reachable.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
@@ -364,11 +364,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   verdict: {
     outcome: 'Explicit candidate outcome, not reviewer prose.',
-    finalize: 'Main-only. Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate.',
-    correct: 'Main-only accepted->rejected; by/text/evidence. expectedVerdictAt=list({ref}).ticket.(reviewDecision|oracle).verdict.at.',
+    finalize: 'Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate.',
+    correct: 'Main-only accepted->rejected; by/text/evidence; expectedVerdictAt from list({ref}) reviewDecision|oracle verdict.at.',
   },
   scopeRequest: {
-    grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
+    grant: 'Grants all refused paths; pass no files. Refuses the claim holder’s own by.',
   },
 };
 

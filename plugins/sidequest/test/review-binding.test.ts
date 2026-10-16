@@ -959,7 +959,18 @@ async function completedNormalReviewFixture(label: string, readonly = true) {
   return { repository, slug, commit, source, review: store.getTicket(slug, review.ref), input };
 }
 
-test('explicit main-attestation accepts an undispatched review without inventing reviewer runtime evidence', () => {
+// The verdict handler reads the runtime session from the host environment; CI has none, so a
+// main-thread finalization test must supply one instead of borrowing the developer's.
+function withMainSession<T>(fn: () => T): T {
+  const previous = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = 'synthetic-main-external-session';
+  try { return fn(); } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previous;
+  }
+}
+
+test('explicit main-attestation accepts an undispatched review without inventing reviewer runtime evidence', () => withMainSession(() => {
   const { repository, slug, commit } = board('external-accepted');
   const source = submittedSource(slug, commit, 'external-accepted', { admittedScope: ['candidate.txt'] });
   const review = store.createTicket(slug, { title: 'External review', category: 'review-audit' }, { ref: source.ref, commit });
@@ -977,7 +988,7 @@ test('explicit main-attestation accepts an undispatched review without inventing
   assert.equal(reviewBinding.reviewProvenance(source, after).reason, 'review_attempt_missing');
   const readiness = store.validateIntegrationSubmission(slug, source.ref, {});
   assert.equal(readiness.ok, true, JSON.stringify(readiness));
-});
+}));
 
 test('undispatched external rejection mirrors outcome and native correction preserves attested authority', () => {
   const { slug, commit } = board('external-rejected');
@@ -1001,7 +1012,7 @@ test('undispatched external rejection mirrors outcome and native correction pres
   assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
 });
 
-test('external rejected decision blocks integration without creating a reviewer completion', () => {
+test('external rejected decision blocks integration without creating a reviewer completion', () => withMainSession(() => {
   const { repository, slug, commit } = board('external-direct-reject');
   const source = submittedSource(slug, commit, 'external-direct-reject');
   const review = store.createTicket(slug, { title: 'External negative review', category: 'review-audit' }, { ref: source.ref, commit });
@@ -1015,9 +1026,9 @@ test('external rejected decision blocks integration without creating a reviewer 
   assert.equal(after.completion, undefined);
   assert.equal(after.dispatch, undefined);
   assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
-});
+}));
 
-test('external finalization rejects active released stale foreign and malformed review bindings without writes', () => {
+test('external finalization rejects active released stale foreign and malformed review bindings without writes', () => withMainSession(() => {
   const { repository, slug, commit } = board('external-guard-table');
   const source = submittedSource(slug, commit, 'external-guard-table');
   const review = store.createTicket(slug, { title: 'External review guards', category: 'review-audit' }, { ref: source.ref, commit });
@@ -1046,7 +1057,7 @@ test('external finalization rejects active released stale foreign and malformed 
   assert.equal(tool('verdict').handler({ ...request, finalize: { ...request.finalize, authority: 'inferred' } }).reason, 'invalid_finalization');
   assert.equal(tool('verdict').handler({ ...request, finalize: { ...request.finalize, commit: 'f'.repeat(40) } }).reason, 'stale_expected');
   assert.equal(bindingBytes(slug, source.ref, review.ref), before);
-});
+}));
 
 test('external authority cannot replace a dispatched normal review or accept a changed binding', async () => {
   const { slug, source, review, input } = await completedNormalReviewFixture('external-guards');

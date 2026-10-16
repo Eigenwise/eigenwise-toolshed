@@ -816,7 +816,7 @@ const tools = [
   },
   {
     name: "verdict",
-    description: "Record an oracle verdict, or finalize an already-done independent bound review through main-thread MCP. For a never-dispatched bound review, explicitly use finalize.authority=main-attestation with by/text/evidence naming where the review happened; accepted permits integration without claiming reviewer runtime provenance. Finalization validates the exact source/candidate, preserves existing completion/evidence and mirrors accepted/rejected without restarting either executor. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
+    description: "Record an oracle verdict, or finalize a done bound review from the main thread. For a never-dispatched bound review, explicitly use finalize.authority=main-attestation with by/text/evidence naming where the review happened; accepted permits integration without claiming reviewer runtime provenance. Finalization validates the exact source/candidate, preserves existing completion/evidence and mirrors accepted/rejected without restarting either executor. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
     inputSchema: {
       type: "object",
       properties: {
