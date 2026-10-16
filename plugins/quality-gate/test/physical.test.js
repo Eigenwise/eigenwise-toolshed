@@ -142,7 +142,7 @@ for (const fixture of [
   test('Python source-ordered ownership: ' + fixture.label, async (context) => {
     const original = pythonBody.replace('subject', 'outer').replace('    return 0', fixture.body + '    return 0');
     const { root, file, base } = await project(context, 'py', original);
-    const baseline = await crapReport({ project: root, base, ccOnly: true });
+    const baseline = await crapReport({ project: root, base: 'HEAD', ccOnly: true });
     assert.equal(baseline.metrics[0].complexity, 6);
     for (const scenario of [
       { label: 'child-only edit preserves outer fingerprint and excludes legacy CC6 parent', text: original.replace(fixture.before, fixture.after), identity: fixture.identity, name: fixture.child, failures: [] },

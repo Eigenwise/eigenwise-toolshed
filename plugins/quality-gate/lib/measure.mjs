@@ -126,6 +126,14 @@ export async function measureFiles(files, { projectRoot, base, coverageDirectory
   const repositoryPaths = relativePaths.filter((file) => !externalSources.has(normalizedPath(path.resolve(projectRoot, file))));
   if (repositoryPaths.length && !base) throw new Error('Repository files require --base, including mixed repository/external measurement');
   const analyzer = await createAnalyzer(projectRoot);
+  try {
+    return await measureWithAnalyzer(analyzer, { projectRoot, base, coverageDirectory, externalSources, relativePaths });
+  } finally {
+    await analyzer.close();
+  }
+}
+
+async function measureWithAnalyzer(analyzer, { projectRoot, base, coverageDirectory, externalSources, relativePaths }) {
   const evaluatorVersions = { typescript: resolveCompiler(projectRoot)('typescript/package.json').version, node: process.version };
   const coverageScripts = await readCoverage(coverageDirectory);
   const metrics = (await Promise.all(relativePaths.map(async (file) => {
