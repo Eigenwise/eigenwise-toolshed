@@ -309,7 +309,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyCwd": {
           "type": "string"
@@ -359,8 +359,13 @@
           ]
         },
         "storyId": {
-          "type": "string",
-          "pattern": "^US-\\d+$"
+          "type": "string"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "complexity": {
           "type": "integer",
@@ -483,7 +488,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyCwd": {
           "type": "string"
@@ -561,8 +566,7 @@
         "storyId": {
           "anyOf": [
             {
-              "type": "string",
-              "pattern": "^US-\\d+$"
+              "type": "string"
             },
             {
               "const": "none"
