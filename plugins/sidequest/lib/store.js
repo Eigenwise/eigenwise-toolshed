@@ -1234,7 +1234,7 @@ function completionWorkFacts(slug, ticket) {
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
   const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed, ...mergeResolvedPaths(delta.workspace)])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
   try {
-    const ownedPaths = (0, import_work_provenance.ownedWorkPaths)(delta.workspace.root, state.workProvenance, changedPaths, (ref) => getTicket(slug, ref));
+    const ownedPaths = (0, import_work_provenance.ownedWorkPaths)(delta.workspace.root, state.workProvenance, changedPaths, (ref) => getTicket(slug, ref), ticket.ref);
     return { ok: true, applicable: true, declaredFiles, changedPaths, ownedPaths, delta, provenance: state.workProvenance };
   } catch (error) {
     return { ok: false, reason: "work_provenance_mismatch", message: error instanceof Error ? error.message : String(error) };

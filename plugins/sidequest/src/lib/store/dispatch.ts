@@ -9,7 +9,7 @@ const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
 const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require('./composition-admission.js');
 import type { CompositionDispatch, CompositionTicket } from './composition-admission';
 import type { CompletedVerificationCapture, VerificationRequirement } from '../kernel/verification';
-import { authorizeWorkDeclaration, prepareWorkProvenance, workDeclaration } from './work-provenance';
+import { authorizeWorkDeclaration, prepareWorkProvenance, retainedAttemptHistory, workDeclaration } from './work-provenance';
 
 type NativeCheckoutCreation = CompositionDispatch & {
   sessionId?: string | null; worktreeBindingSource?: string;
@@ -125,24 +125,6 @@ function pinnedVerificationRequirement(ticket: any, projectPath: string, verifyE
   const requirement = preparedVerificationRequirement(ticket, projectPath);
   const deferred = !sharedTree && verifyEnvironment === 'shared' && ['command', 'suite', 'typecheck'].includes(requirement.kind);
   return deferred ? Object.freeze({ ...requirement, environment: 'shared' as const }) : requirement;
-}
-
-type ProducerAttemptHistory = {
-  preparedAt?: string; terminalAt?: string; baseCommit?: string; declaredFiles?: readonly string[];
-  sanctionedCommits?: readonly string[]; verificationRequirement?: { command?: string };
-  attempts: Array<{ preparedAt?: string }>;
-};
-
-function retainedAttemptHistory(current: ProducerAttemptHistory) {
-  const attempts = structuredClone(current.attempts);
-  const terminalAttempt = attempts.find(attempt => attempt.preparedAt === current.preparedAt);
-  if (current.terminalAt && terminalAttempt) {
-    Object.assign(terminalAttempt, structuredClone({
-      baseCommit: current.baseCommit, declaredFiles: current.declaredFiles,
-      sanctionedCommits: current.sanctionedCommits, verificationRequirement: current.verificationRequirement,
-    }));
-  }
-  return attempts;
 }
 
 function createDispatch(dependencies: any) {
@@ -2801,7 +2783,7 @@ function priorAttemptFields(plan: PreparedDispatchPlan) {
 function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRecord, plan: PreparedDispatchPlan, opts: DispatchOptions, preflight: DispatchPreflight) {
   const provenance = preparationProvenanceFields(plan, opts, preflight.preparedCompatibility);
   const integrationCommit = opts.workProvenance ? integrationBaseCommit(slug, plan.integrationTargetState) : '';
-  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref), integrationCommit);
+  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref), integrationCommit, t.ref);
   return {
     ...provenance,
     lifecycleAttempt: { ...provenance.lifecycleAttempt, workProvenance },
