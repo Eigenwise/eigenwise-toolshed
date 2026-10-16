@@ -72,7 +72,7 @@ const MUTATING_TOOLS = /* @__PURE__ */ new Set([
 const GLOBAL_MUTATION_TOOLS = /* @__PURE__ */ new Set(["category_add", "category_edit", "category_rm", "global_fallback", "profile_create", "profile_edit", "profile_retire", "profile_repoint", "profile_promote"]);
 const mutationTails = /* @__PURE__ */ new Map();
 const CONDITIONAL_MUTATION_FIELDS = {
-  verdict: ["correct"],
+  verdict: ["correct", "finalize"],
   new_board_profile: ["profile"],
   global_fallback: ["model", "effort"],
   board_config: [
@@ -299,8 +299,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     recoveryEvidence: "Unclaimed: preparing session retires now; others past deadline; CLI too."
   },
   verdict: {
-    outcome: "Candidate, not reviewer prose.",
-    correct: "Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision."
+    outcome: "Explicit candidate outcome, not reviewer prose.",
+    finalize: "Main-thread completed normal bound review decision; accepted/rejected/by/text/evidence, exact sourceRef and one commit or sourceRevision. Preserves original completion.",
+    correct: "Main-thread accepted-to-rejected correction; rejected/by/text/evidence. expectedVerdictAt: list({ref}).ticket.reviewDecision.verdict.at (oracle.verdict.at for oracle). One commit or sourceRevision."
   },
   scopeRequest: {
     grant: "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."

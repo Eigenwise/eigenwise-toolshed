@@ -1,5 +1,5 @@
 import type { ReviewCandidate, OracleVerdictOutcome, ReviewMirror } from '../kernel/review-binding';
-import { sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory, reviewProvenance } from '../kernel/review-binding';
+import { mainAttestedReviewOutcome, sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory, reviewProvenance } from '../kernel/review-binding';
 
 export type ReviewVerdictCorrection = Readonly<{
   from: 'accepted'; to: 'rejected'; verdictAt: string; sourceTicketId: string; sourceRef: string;
@@ -22,7 +22,7 @@ export type CorrectionTicket = {
   submission?: { commit?: string; sourceRevision?: ReviewCandidate; at?: string; integratedAt?: string; supersededBy?: string; review?: ReviewMirror };
   comments?: CorrectionComment[];
 };
-export type ReviewDecisionHistory = { verdict?: { outcome: OracleVerdictOutcome; at: string }; corrections?: ReviewVerdictCorrection[] };
+export type ReviewDecisionHistory = { verdict?: { outcome: OracleVerdictOutcome; at: string; authority?: 'main-attestation'; reviewerRuntimeProvenance?: false }; corrections?: ReviewVerdictCorrection[] };
 export type Refusal = { ok: false; reason: string; message: string };
 type CorrectionResult = Refusal | { ok: true; idempotent?: true; correction: ReviewVerdictCorrection; reviewOutcome: { sourceRef: string; outcome: 'rejected' } };
 type Grant = { allowAcceptedReviewCorrection?: boolean };
@@ -80,10 +80,16 @@ export function activeCorrectionTicket(ticket: CorrectionTicket): boolean {
   return Boolean(ticket.claim?.by) || activeCorrectionDispatch(ticket);
 }
 
+export function undispatchedReviewRefusal(review: CorrectionTicket): Refusal | undefined {
+  const unavailable = [review.status !== 'todo', Boolean(review.dispatch), Boolean(review.completion), Boolean(review.oracle)];
+  if (unavailable.includes(true)) return refuse('review_dispatched', 'External main-attestation requires a never-dispatched bound review in todo, without invented completion or runtime provenance.');
+}
+
 export function completedNormalReviewRefusal(review: CorrectionTicket): Refusal | undefined {
   if (review.oracle) return refuse('use_verdict', 'Use the separate oracle verdict lifecycle for an experimental review.');
   if (activeCorrectionTicket(review)) return refuse('review_active', 'A claimed or actively dispatched review cannot be finalized.');
   if (correctionReviewCategory(review.category) !== 'review-audit') return refuse('review_unbound', 'Finalization requires a bound review-audit ticket.');
+  if (review.reviewDecision?.verdict?.authority === 'main-attestation') return undispatchedReviewRefusal(review);
   return completionRefusal(review);
 }
 
@@ -96,6 +102,7 @@ function completionRefusal(review: CorrectionTicket): Refusal | undefined {
 }
 
 export function independentReviewRefusal(source: CorrectionTicket, review: CorrectionTicket): Refusal | undefined {
+  if (mainAttestedReviewOutcome(source, review)) return;
   const provenance = reviewProvenance(source, review);
   if (provenance.reason !== 'ok') return refuse(provenance.reason, 'Finalization requires distinct immutable submitted-source and completed-review runtime provenance.');
   const current = [source.dispatch?.outcome === 'submitted', source.dispatch?.terminalAt === provenance.source?.terminalAt,

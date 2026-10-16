@@ -1,13 +1,15 @@
 import { reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
 import type { ReviewCandidate } from '../kernel/review-binding';
-import { completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
+import { undispatchedReviewRefusal, activeCorrectionTicket, correctionReviewCategory, completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
 import type { CorrectionTicket, CorrectionComment, Refusal, Relation } from './review-corrections';
 
 export type ReviewDecision = Readonly<{
   outcome: 'accepted' | 'rejected'; text: string; evidence: string; by: string; sessionId: string;
   sourceRef: string; candidate: ReviewCandidate; at: string; commentId: string;
+  authority?: 'main-attestation'; reviewerRuntimeProvenance?: false;
 }>;
 export type FinalizationInput = {
+  authority?: 'main-attestation';
   by: string; sessionId: string; text: string; evidence: string; outcome: 'accepted' | 'rejected';
   expected: { sourceRef: string; candidate: ReviewCandidate };
 };
@@ -44,6 +46,7 @@ function requestRefusal(input: FinalizationInput, granted: boolean): Refusal | u
 }
 
 function decisionEvidenceRefusal(input: FinalizationInput): Refusal | undefined {
+  if (input.authority !== undefined && input.authority !== 'main-attestation') return refuse('invalid_finalization', 'External authority must explicitly be main-attestation.');
   if (!['accepted', 'rejected'].includes(input.outcome)) return refuse('invalid_finalization', 'Completed review finalization requires explicit accepted or rejected.');
   if (![input.by, input.text, input.evidence].every(nonemptyText)) return refuse('evidence_required', 'Finalization requires nonempty by, text and evidence.');
 }
@@ -63,12 +66,19 @@ function decisionRetryRefusal(review: FinalizationTicket, source: CorrectionTick
   const history = reviewVerdictHistory(review);
   const previous = history?.verdict;
   const effective = history?.corrections?.at(-1)?.to ?? previous?.outcome ?? 'planned';
-  const matching = [review.reviewTarget?.outcome === effective, source.submission?.review?.outcome === effective];
+  const matching = [(review.reviewTarget?.outcome ?? 'planned') === effective, (source.submission?.review?.outcome ?? 'planned') === effective];
   if (matching.includes(false)) return refuse('binding_mismatch', 'Both binding halves must match the recorded decision.');
   if (previous && [!history?.corrections?.length,
-    JSON.stringify(previous) === JSON.stringify({ ...previous, outcome: input.outcome, text: input.text, evidence: input.evidence })].includes(false)) {
+    JSON.stringify(previous) === JSON.stringify({ ...previous, outcome: input.outcome, text: input.text, evidence: input.evidence, authority: input.authority })].includes(false)) {
     return refuse('already_finalized', 'A different decision already exists. Use the native accepted-to-rejected correction path for a mistaken approval; repair requires a fresh candidate.');
   }
+}
+
+function reviewFinalizationRefusal(review: FinalizationTicket, input: FinalizationInput): Refusal | undefined {
+  if (input.authority !== 'main-attestation') return completedNormalReviewRefusal(review);
+  if (activeCorrectionTicket(review)) return refuse('review_active', 'A claimed or actively dispatched review cannot be finalized.');
+  if (correctionReviewCategory(review.category) !== 'review-audit') return refuse('review_unbound', 'External finalization requires a bound review-audit ticket.');
+  return undispatchedReviewRefusal(review);
 }
 
 export function createReviewFinalization(dependencies: Dependencies) {
@@ -76,21 +86,21 @@ export function createReviewFinalization(dependencies: Dependencies) {
     dependencies.invalidateStoreCaches();
     const review = dependencies.getTicket(slug, reviewId);
     if (!review) return refuse('not_found', 'Review ticket not found.');
-    const reviewRefusal = completedNormalReviewRefusal(review) || expectedBindingRefusal(review, input);
+    const reviewRefusal = reviewFinalizationRefusal(review, input) || expectedBindingRefusal(review, input);
     if (reviewRefusal) return reviewRefusal;
     return finalizeSource(slug, review, input);
   }
 
-  function sourceRefusal(slug: string, review: FinalizationTicket, source: FinalizationTicket): Refusal | undefined {
+  function sourceRefusal(slug: string, review: FinalizationTicket, source: FinalizationTicket, input: FinalizationInput): Refusal | undefined {
     return sourceCorrectionRefusal(source, dependencies.pendingSubmission(source))
       || correctionBindingRefusal(review, source, dependencies.submissionReviewRelation(slug, source))
-      || independentReviewRefusal(source, review);
+      || (input.authority === 'main-attestation' ? undefined : independentReviewRefusal(source, review));
   }
 
   function finalizeSource(slug: string, review: FinalizationTicket, input: FinalizationInput): Result {
     const source = dependencies.getTicket(slug, input.expected.sourceRef);
     if (!source) return refuse('source_unavailable', 'The original source ticket is unavailable.');
-    const invalid = sourceRefusal(slug, review, source) || decisionRetryRefusal(review, source, input);
+    const invalid = sourceRefusal(slug, review, source, input) || decisionRetryRefusal(review, source, input);
     if (invalid) return invalid;
     const previous = review.reviewDecision?.verdict;
     if (previous) return { ok: true, idempotent: true, decision: previous, reviewOutcome: { sourceRef: source.ref, outcome: previous.outcome } };
@@ -99,9 +109,10 @@ export function createReviewFinalization(dependencies: Dependencies) {
 
   function recordDecision(slug: string, review: FinalizationTicket, source: FinalizationTicket, input: FinalizationInput): Result {
     const at = new Date().toISOString();
-    const comment = dependencies.createComment({ by: input.by, body: `Completed review decision (${input.outcome}): ${input.text}`, kind: 'comment', source: 'mcp' }, at);
+    const comment = dependencies.createComment({ by: input.by, body: `${input.authority === 'main-attestation' ? 'Externally attested' : 'Completed'} review decision (${input.outcome}): ${input.text}`, kind: 'comment', source: 'mcp' }, at);
     const decision: ReviewDecision = { outcome: input.outcome, text: input.text, evidence: input.evidence, by: input.by,
-      sessionId: input.sessionId, sourceRef: source.ref, candidate: { ...review.reviewTarget!.candidate! }, at, commentId: comment.id };
+      sessionId: input.sessionId, sourceRef: source.ref, candidate: { ...review.reviewTarget!.candidate! }, at, commentId: comment.id,
+      ...(input.authority === 'main-attestation' ? { authority: input.authority, reviewerRuntimeProvenance: false } : {}) };
     review.reviewDecision = { verdict: decision };
     review.comments = [...(review.comments ?? []), comment];
     dependencies.recordBoundReviewOutcome(slug, review, input.outcome);

@@ -613,7 +613,7 @@ test('raw MCP rework refuses a bound candidate for an arbitrary client with any 
     const ack = JSON.parse(response.result.content[0].text);
     assert.equal(ack.ok, false, `${label} cannot reject over raw MCP`);
     assert.equal(ack.reason, 'candidate_review_locked', `${label} gets the lock`);
-    assert.match(ack.message, /A failed review records its evidence on the review ticket/);
+    assert.match(ack.message, /main-thread MCP verdict.finalize/);
   }
 
   // Session ids, publish-lock holders, and whole submission records cannot even
@@ -934,7 +934,7 @@ const finalizationGrant = { allowCompletedReviewFinalization: true };
 
 async function completedNormalReviewFixture(label: string, readonly = true) {
   const { repository, slug, commit } = board(`normal-${label}`);
-  const source = submittedSource(slug, commit, label);
+  const source = submittedSource(slug, commit, label, { admittedScope: ['candidate.txt'] });
   const review = store.createTicket(slug, { title: `normal review ${label}`, category: 'review-audit',
     readonly, route: { model: 'sonnet', effort: 'high' }, files: ['candidate.txt'] }, { ref: source.ref, commit });
   const session = `normal-review-session-${label}`;
@@ -959,6 +959,55 @@ async function completedNormalReviewFixture(label: string, readonly = true) {
   return { repository, slug, commit, source, review: store.getTicket(slug, review.ref), input };
 }
 
+test('explicit main-attestation accepts an undispatched review without inventing reviewer runtime evidence', () => {
+  const { repository, slug, commit } = board('external-accepted');
+  const source = submittedSource(slug, commit, 'external-accepted', { admittedScope: ['candidate.txt'] });
+  const review = store.createTicket(slug, { title: 'External review', category: 'review-audit' }, { ref: source.ref, commit });
+  const before = store.getTicket(slug, review.ref);
+  const accepted = tool('verdict').handler({ project: repository, ref: review.ref, by: 'synthetic-owner',
+    text: 'Explicit external acceptance', outcome: 'accepted',
+    finalize: { authority: 'main-attestation', sourceRef: source.ref, commit, evidence: 'Human verdict in synthetic review record' } });
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  const after = store.getTicket(slug, review.ref);
+  assert.equal(after.reviewDecision.verdict.authority, 'main-attestation');
+  assert.equal(after.reviewDecision.verdict.reviewerRuntimeProvenance, false);
+  assert.deepEqual(after.dispatch, before.dispatch);
+  assert.deepEqual(after.completion, before.completion);
+  assert.equal(after.status, before.status);
+  assert.equal(reviewBinding.reviewProvenance(source, after).reason, 'review_attempt_missing');
+  const readiness = store.validateIntegrationSubmission(slug, source.ref, {});
+  assert.equal(readiness.ok, true, JSON.stringify(readiness));
+});
+
+test('undispatched external rejection mirrors outcome and native correction preserves attested authority', () => {
+  const { slug, commit } = board('external-rejected');
+  const source = submittedSource(slug, commit, 'external-rejected');
+  const review = store.createTicket(slug, { title: 'External negative review', category: 'review-audit' }, { ref: source.ref, commit });
+  const input = { by: 'synthetic-owner', sessionId: 'synthetic-main', text: 'External candidate decision',
+    evidence: 'Human verdict in synthetic review record', outcome: 'accepted' as const,
+    authority: 'main-attestation' as const, expected: { sourceRef: source.ref, candidate: { source: 'git', value: commit } } };
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, authority: undefined }, finalizationGrant).reason, 'review_nonfinalized');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, evidence: '' }, finalizationGrant).reason, 'evidence_required');
+  const accepted = store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant);
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).idempotent, true);
+  const corrected = store.correctAcceptedReviewVerdict(slug, review.ref, { by: input.by, sessionId: input.sessionId,
+    text: 'External review found a concrete candidate defect', evidence: input.evidence,
+    expected: { ...input.expected, outcome: 'accepted', verdictAt: accepted.decision.at } }, correctionGrant);
+  assert.equal(corrected.ok, true, JSON.stringify(corrected));
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'rejected');
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'rejected');
+  assert.equal(store.getTicket(slug, review.ref).reviewDecision.verdict.authority, 'main-attestation');
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
+});
+
+test('external authority cannot replace a dispatched normal review or accept a changed binding', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('external-guards');
+  const before = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, authority: 'main-attestation' }, finalizationGrant).reason, 'review_dispatched');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+});
+
 test('normal public done then explicit MCP acceptance mirrors outcome without restarting either terminal worker', async () => {
   const { repository, slug, commit, source, review, input } = await completedNormalReviewFixture('accepted');
   assert.equal(review.oracle, undefined, 'normal completion creates no experimental oracle');
@@ -980,7 +1029,8 @@ test('normal public done then explicit MCP acceptance mirrors outcome without re
     assert.equal(afterReview.oracle, undefined);
     assert.equal(afterReview.reviewDecision.verdict.sessionId, input.sessionId);
     assert.deepEqual(afterReview.reviewDecision.verdict.candidate, review.reviewTarget.candidate, 'decision preserves the complete bound identity');
-    assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).ok, true, 'native integration readiness accepts the exact completed review');
+    const readiness = store.validateIntegrationSubmission(slug, source.ref, {});
+    assert.equal(readiness.ok, true, JSON.stringify(readiness));
   } finally {
     if (previousSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
     else process.env.CLAUDE_CODE_SESSION_ID = previousSession;
@@ -1064,7 +1114,7 @@ test('generic ticket updates cannot fabricate completed normal review decision a
   const { slug, review } = await completedNormalReviewFixture('immutable-decision');
   store.updateTicket(slug, review.ref, { reviewDecision: { verdict: { outcome: 'accepted', evidence: 'forged generic patch' } } });
   assert.equal(store.getTicket(slug, review.ref).reviewDecision, undefined);
-  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'planned');
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome ?? 'planned', 'planned');
 });
 
 test('normal finalization refuses foreign target and unsupported attestation provenance without writes', async () => {

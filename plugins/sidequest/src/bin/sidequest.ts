@@ -361,7 +361,7 @@ Working the board safely (multi-agent):
     scopeRequest grant:true from the orchestrator's main thread instead.
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest rework <id|SQ-n> --by <submitter id> --review <review-ticket-or-evidence> --reason "what needs repair"  reject an UNBOUND ready submission for repair; by must match the submitter identity (\`sidequest pulse <id|SQ-n>\` -> submittedBy, e.g. sq-3174-exec-opus-m3x7), not a reviewer; retain its candidate and review evidence, then dispatch the same ticket for a normal replacement claim
-    a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record the failed review's evidence on the review ticket, release that review with --kind oracle, and repair through a fresh ticket, dispatch, commit, review, and candidate
+    a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record evidence on the review ticket and use main-thread MCP verdict.finalize for a completed normal review with explicit outcome and exact source/candidate; active experimental reviews keep their oracle lifecycle. Repair through a fresh ticket, dispatch, commit, review, and candidate
   sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path] [--force]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).

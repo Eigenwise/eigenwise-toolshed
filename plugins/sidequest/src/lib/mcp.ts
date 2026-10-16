@@ -363,7 +363,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     recoveryEvidence: 'Unclaimed: preparing session retires now; others past deadline; CLI too.',
   },
   verdict: {
-    outcome: 'Explicit candidate outcome, never reviewer prose.',
+    outcome: 'Explicit candidate outcome, not reviewer prose.',
     finalize: 'Main-thread completed normal bound review decision; accepted/rejected/by/text/evidence, exact sourceRef and one commit or sourceRevision. Preserves original completion.',
     correct: 'Main-thread accepted-to-rejected correction; rejected/by/text/evidence. expectedVerdictAt: list({ref}).ticket.reviewDecision.verdict.at (oracle.verdict.at for oracle). One commit or sourceRevision.',
   },

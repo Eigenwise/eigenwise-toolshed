@@ -1004,6 +1004,7 @@ const tools: ToolDefinition[] = [
           type: 'object',
           description: 'Main-thread MCP only: explicit accepted/rejected decision for an already-done normal bound independent review. Requires by/text/evidence and the original source/candidate. Both tickets must be terminal and unclaimed, source pending and binding exact. Exact retry writes nothing; contradictory decision requires existing correction/repair rules. Does not create oracle/experiment state or rerun review/tests.',
           properties: {
+            authority: { enum: ['main-attestation'], description: 'Explicit external review authority for a never-dispatched bound review. Evidence names where the review happened. Records missing independent reviewer runtime provenance and permits accepted integration.' },
             sourceRef: { type: 'string' },
             commit: { type: 'string' },
             sourceRevision: { type: 'object', properties: { source: { type: 'string' }, value: { type: 'string' } }, required: ['source', 'value'] },
@@ -1155,7 +1156,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'rework',
-    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record a failed review as evidence on the review ticket and release it with kind oracle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.',
+    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record review evidence on the review ticket. A completed normal review uses main-thread verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.',
     inputSchema: {
       type: 'object',
       properties: {

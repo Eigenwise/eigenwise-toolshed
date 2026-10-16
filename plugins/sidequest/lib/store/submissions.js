@@ -6,7 +6,7 @@ const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capt
 const { worktreeSetupDeadlineMs } = require("../hook-timeouts.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
-const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
+const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance, mainAttestedReviewOutcome } = require("../kernel/review-binding");
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require("../refusal-guidance.js");
@@ -148,9 +148,14 @@ function createSubmissions(dependencies) {
       message: reviewLockMessage(operation, ticket, relation)
     };
   }
+  function completedBoundReview(ticket, relation) {
+    const review = relation.reviewTicket;
+    if (!review) return false;
+    return [!relation.conflict, review.status === "done" || mainAttestedReviewOutcome(ticket, review) === "accepted"].every(Boolean);
+  }
   function terminalReviewFailure(ticket, relation) {
     const reviewTicket = relation.reviewTicket;
-    if (relation.conflict || !reviewTicket || reviewTicket.status !== "done") {
+    if (!completedBoundReview(ticket, relation)) {
       return `${reviewRelationRef(relation)} has not terminally completed its bound review of ${ticket.ref}`;
     }
     const target = reviewTicket.reviewTarget;
@@ -158,6 +163,7 @@ function createSubmissions(dependencies) {
     if (target?.ticketId !== ticket.id || target?.candidate?.source !== submitted?.source || target?.candidate?.value !== submitted?.value) {
       return `${reviewRelationRef(relation)} is not the review of this exact candidate`;
     }
+    if (mainAttestedReviewOutcome(ticket, reviewTicket) === "accepted") return null;
     const provenance = reviewProvenance(ticket, reviewTicket);
     if (provenance.reason === "source_attempt_missing") {
       return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || "under review"}`;
