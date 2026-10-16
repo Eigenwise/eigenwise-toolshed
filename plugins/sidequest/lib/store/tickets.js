@@ -772,7 +772,8 @@ function createTickets(dependencies) {
       const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "matching package surface derived from the ticket’s declared files";
       const undeclared = !normalizeFiles(t.files).length ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.` : "";
       const foreignReleaseFragmentMessage = foreignReleaseFragments.length ? commitScope.foreignReleaseFragmentRefusalMessage("scopeRequest", t.ref, foreignReleaseFragments) : "";
-      const scopeExpansionRefusalMessage = additions.length ? `Scope expansion refused: ${refused.join(", ")}.` : "";
+      const refusedAdditions = additions.filter((file) => !commitScope.isInScope(file, approved));
+      const scopeExpansionRefusalMessage = refusedAdditions.length ? `Scope expansion refused: ${refusedAdditions.join(", ")}.` : "";
       const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(" ");
       const declaredGuidance = declaredScopeGuidance(t, refusedOutsideDeclaredFiles);
       const guidance = `${undeclared}${declaredGuidance}${outstandingScopeGuidance(stillRefused, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)}`;
@@ -1100,6 +1101,11 @@ function createTickets(dependencies) {
       throw new Error(`${ticket.ref}: removeFiles would revoke ${revoked.join(", ")}, which the bound checkout has already changed since the dispatch base. Keep the path declared, or release the claim first and then remove it.`);
     }
   }
+  function assertLiveClaimReplace(ticket, next) {
+    const dropped = liveClaimDroppedFiles(ticket, next).filter((file) => !commitScope.isInScope(file, next));
+    if (!dropped.length) return;
+    throw new Error(`${ticket.ref}: update files would replace the live claim's declared scope and drop ${dropped.join(", ")}, which the claim still holds (including any path a scopeRequest granted). Use addFiles to add paths without dropping the rest, removeFiles to drop paths the bound checkout has not written, or release the claim first and then replace the list.`);
+  }
   function patchedFileScope(ticket, patch) {
     const adjusts = patch.addFiles !== void 0 || patch.removeFiles !== void 0;
     if (patch.files !== void 0 && adjusts) {
@@ -1187,6 +1193,7 @@ function createTickets(dependencies) {
       }
       const prevStatus = t.status;
       const filesPatch = patchedFileScope(t, patch);
+      if (patch.files !== void 0) assertLiveClaimReplace(t, normalizeFiles(patch.files));
       if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
       if (patch.description != null) t.description = String(patch.description).trim();
       if (patch.status != null) t.status = nextStatus;
