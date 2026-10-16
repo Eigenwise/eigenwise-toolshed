@@ -66,11 +66,12 @@ test('dispatch-required guidance names both routed and direct claim paths', () =
   assert.match(message, /direct:true/i);
 });
 
-test('bound-candidate guidance sends a failed review to the oracle instead of a rejection', () => {
+test('bound-candidate guidance names explicit normal finalization and separate experimental oracle', () => {
   const message = claimRefusalMessage('candidate_review_locked', 'SQ-42');
   assert.match(message, /bound to a review-audit ticket/i);
   assert.match(message, /--kind oracle/);
-  assert.match(message, /oracle accepts that defect conclusion/i);
+  assert.match(message, /MCP verdict.finalize/);
+  assert.match(message, /explicit accepted\/rejected/);
   assert.match(message, /integrated repair can supersede/i);
   assert.doesNotMatch(message, /sidequest rework/i);
 });

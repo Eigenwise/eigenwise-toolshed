@@ -237,9 +237,11 @@ for (const [label, bytes, reason] of [
     await assert.doesNotReject(async () => { report = await crapReport({ project: root, base, ccOnly: true }); });
     assert.equal(report.checked, 1);
     assert.equal(report.changedMetrics.find((row) => row.name === 'added').complexity, 1);
-    assert.equal(report.unverified[0].relativePath, 'broken.py');
-    assert.match(report.unverified[0].unverified, reason);
+    assert.deepEqual(report.unverified, [], 'an unchanged file is not analysed against a base (GitHub #554)');
     assert.equal(report.failures.length, 0);
+    const wholeTree = await crapReport({ project: root, base: 'HEAD', ccOnly: true });
+    assert.equal(wholeTree.unverified[0].relativePath, 'broken.py');
+    assert.match(wholeTree.unverified[0].unverified, reason);
   });
 }
 

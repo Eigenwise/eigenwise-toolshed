@@ -233,6 +233,44 @@ export function effectiveOracleVerdictOutcome(oracle?: {
   return verdict?.outcome;
 }
 
+export function reviewVerdictHistory<History>(ticket: { reviewDecision?: History; oracle?: History }): History | undefined {
+  return ticket.reviewDecision ?? ticket.oracle;
+}
+
+export type AttestedReviewTicket = {
+  id: string; ref: string; status?: string; dispatch?: unknown; completion?: unknown;
+  claim?: { by?: string }; dispatchNonce?: string; oracle?: unknown;
+  reviewTarget?: ReviewMirror;
+  submission?: { commit?: string; sourceRevision?: ReviewCandidate; at?: string; review?: ReviewMirror };
+  reviewDecision?: {
+    verdict?: { authority?: string; reviewerRuntimeProvenance?: boolean; sourceRef?: string; candidate?: ReviewCandidate;
+      outcome: OracleVerdictOutcome; by?: string; evidence?: string; sessionId?: string };
+    corrections?: readonly { to: OracleVerdictOutcome }[];
+  };
+};
+
+export function mainAttestedReviewOutcome(source: AttestedReviewTicket, review: AttestedReviewTicket): OracleVerdictOutcome | undefined {
+  const decision = review.reviewDecision?.verdict;
+  if (decision?.authority !== 'main-attestation') return;
+  const identity = [decision.by, decision.evidence, decision.sessionId];
+  if (!identity.every(value => typeof value === 'string' && Boolean(value.trim()))) return;
+  if (!mainAttestationMatchesSource(source, review)) return;
+  return effectiveOracleVerdictOutcome(review.reviewDecision);
+}
+
+function mainAttestationMatchesSource(source: AttestedReviewTicket, review: AttestedReviewTicket): boolean {
+  const decision = review.reviewDecision!.verdict!;
+  const candidate = reviewCandidateFromSubmission(source.submission);
+  const matches = [review.status === 'todo', !review.dispatch, !review.completion, !review.claim?.by, !review.dispatchNonce, !review.oracle,
+    decision.reviewerRuntimeProvenance === false,
+    decision.sourceRef === source.ref, review.reviewTarget?.ticketId === source.id, source.submission?.review?.ticketId === review.id,
+    sameReviewCandidate(candidate, decision.candidate), sameReviewCandidate(candidate, review.reviewTarget?.candidate),
+    sameReviewCandidate(candidate, source.submission?.review?.candidate),
+    review.reviewTarget?.outcome === effectiveOracleVerdictOutcome(review.reviewDecision),
+    source.submission?.review?.outcome === effectiveOracleVerdictOutcome(review.reviewDecision)];
+  return matches.every(Boolean);
+}
+
 export function reviewRelationOutcome(relation?: ReviewRelation | null): string {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || 'planned');
 }
@@ -241,7 +279,7 @@ export function reviewLockMessage(operation: string, ticket: { ref?: string } | 
   const candidate = relation.candidate?.value || 'its candidate';
   return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)}`
     + ' and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.'
-    + ' A failed review records its evidence on the review ticket and releases it for an external oracle;'
+    + ' A completed normal review records its explicit outcome through main-thread MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation and by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle;'
     + ' Record outcome rejected when the candidate must not ship. A mistaken finalized accepted can be corrected'
     + ' by the main thread using MCP verdict with correct, original list verdict timestamp, exact source/candidate, and evidence;'
     + ' only an integrated repair may supersede it. The repair still requires independent review before integration.';

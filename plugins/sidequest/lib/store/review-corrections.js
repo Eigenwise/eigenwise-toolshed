@@ -18,7 +18,14 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var review_corrections_exports = {};
 __export(review_corrections_exports, {
-  createReviewCorrections: () => createReviewCorrections
+  activeCorrectionTicket: () => activeCorrectionTicket,
+  completedNormalReviewRefusal: () => completedNormalReviewRefusal,
+  correctionBindingRefusal: () => correctionBindingRefusal,
+  correctionReviewCategory: () => correctionReviewCategory,
+  createReviewCorrections: () => createReviewCorrections,
+  independentReviewRefusal: () => independentReviewRefusal,
+  sourceCorrectionRefusal: () => sourceCorrectionRefusal,
+  undispatchedReviewRefusal: () => undispatchedReviewRefusal
 });
 module.exports = __toCommonJS(review_corrections_exports);
 var import_review_binding = require("../kernel/review-binding");
@@ -54,7 +61,43 @@ function correctionReviewCategory(category) {
 function activeCorrectionTicket(ticket) {
   return Boolean(ticket.claim?.by) || activeCorrectionDispatch(ticket);
 }
+function undispatchedReviewRefusal(review) {
+  const unavailable = [review.status !== "todo", Boolean(review.dispatch), Boolean(review.completion), Boolean(review.oracle)];
+  if (unavailable.includes(true)) return refuse("review_dispatched", "External main-attestation requires a never-dispatched bound review in todo, without invented completion or runtime provenance.");
+}
+function completedNormalReviewRefusal(review) {
+  if (review.oracle) return refuse("use_verdict", "Use the separate oracle verdict lifecycle for an experimental review.");
+  if (activeCorrectionTicket(review)) return refuse("review_active", "A claimed or actively dispatched review cannot be finalized.");
+  if (correctionReviewCategory(review.category) !== "review-audit") return refuse("review_unbound", "Finalization requires a bound review-audit ticket.");
+  if (review.reviewDecision?.verdict?.authority === "main-attestation") return undispatchedReviewRefusal(review);
+  return completionRefusal(review);
+}
+function completionRefusal(review) {
+  const completion = review.completion ?? {};
+  const completed = [
+    review.status === "done",
+    review.dispatch?.outcome === "done",
+    requiredCorrectionText(review.dispatch?.terminalAt),
+    completion.state === "done",
+    requiredCorrectionText(completion.key),
+    requiredCorrectionText(completion.at)
+  ];
+  if (completed.includes(false)) return refuse("review_nonfinalized", "Finalization requires the original terminal done review completion.");
+  if (!review.reviewTarget?.ticketId) return refuse("review_unbound", "Finalization requires the original source binding.");
+}
+function independentReviewRefusal(source, review) {
+  if ((0, import_review_binding.mainAttestedReviewOutcome)(source, review)) return;
+  const provenance = (0, import_review_binding.reviewProvenance)(source, review);
+  if (provenance.reason !== "ok") return refuse(provenance.reason, "Finalization requires distinct immutable submitted-source and completed-review runtime provenance.");
+  const current = [
+    source.dispatch?.outcome === "submitted",
+    source.dispatch?.terminalAt === provenance.source?.terminalAt,
+    review.dispatch?.terminalAt === provenance.reviewer?.terminalAt
+  ];
+  if (current.includes(false)) return refuse("stale_provenance", "Finalization requires the current original submitted-source and completed-review generations.");
+}
 function finalizedReviewRefusal(ticket, readonlyExecutor) {
+  if (ticket.reviewDecision) return completedNormalReviewRefusal(ticket);
   if (ticket.status === "awaiting-oracle") return refuse("use_verdict", "Use ordinary verdict for an awaiting-oracle review.");
   if (activeCorrectionTicket(ticket)) return refuse("review_active", "A claimed or actively dispatched review cannot be corrected.");
   if (correctionReviewCategory(ticket.category) !== "review-audit") return refuse("review_unbound", "Correction requires a bound review-audit ticket.");
@@ -63,7 +106,7 @@ function finalizedReviewRefusal(ticket, readonlyExecutor) {
 function finalizedReviewBindingRefusal(ticket) {
   const target = ticket.reviewTarget;
   if (!target || !target.ticketId) return refuse("review_unbound", "Correction requires the original source binding.");
-  if (!ticket.oracle?.verdict) return refuse("no_verdict", "The original verdict is unavailable.");
+  if (!(0, import_review_binding.reviewVerdictHistory)(ticket)?.verdict) return refuse("no_verdict", "The original verdict is unavailable.");
 }
 function reviewFinalizationRefusal(ticket, readonlyExecutor) {
   const bindingRefusal = finalizedReviewBindingRefusal(ticket);
@@ -72,7 +115,8 @@ function reviewFinalizationRefusal(ticket, readonlyExecutor) {
   if (!readonlyExecutor) return refuse("review_nonreadonly", "Correction requires a readonly review.");
 }
 function expectedVerdictRefusal(ticket, expected) {
-  const { oracle = {}, reviewTarget = {} } = ticket;
+  const { reviewTarget = {} } = ticket;
+  const oracle = (0, import_review_binding.reviewVerdictHistory)(ticket) ?? {};
   const verdict = oracle.verdict;
   if (!verdict) return refuse("no_verdict", "The original verdict is unavailable.");
   if (verdict.outcome !== "accepted") return refuse("not_accepted", "Only an original accepted verdict can be corrected.");
@@ -82,7 +126,7 @@ function expectedVerdictRefusal(ticket, expected) {
     reviewTarget.ref === expected.sourceRef,
     (0, import_review_binding.sameReviewCandidate)(reviewTarget.candidate, expected.candidate)
   ];
-  if (matches.includes(false)) return refuse("stale_expected", "Read list({ref: reviewRef}).ticket.oracle.verdict.at and the exact original source/candidate before correcting.");
+  if (matches.includes(false)) return refuse("stale_expected", "Read list({ref: reviewRef}).ticket.reviewDecision.verdict.at (or ticket.oracle.verdict.at for an oracle) and the exact original source/candidate before correcting.");
 }
 function sourceCorrectionRefusal(source, pending) {
   if (activeCorrectionTicket(source)) return refuse("source_active", "The original source is claimed or actively dispatched.");
@@ -132,7 +176,8 @@ function correctionRetryRefusal(previous, count, source, input) {
   if (matching.includes(false)) return refuse("already_corrected", "A different correction already exists for this verdict.");
 }
 function duplicateCorrectionRefusal(ticket, source, input) {
-  const { oracle = {}, reviewTarget = {} } = ticket;
+  const { reviewTarget = {} } = ticket;
+  const oracle = (0, import_review_binding.reviewVerdictHistory)(ticket) ?? {};
   const { corrections = [] } = oracle;
   const { submission = {} } = source;
   const { review: mirror = {} } = submission;
@@ -160,21 +205,21 @@ function createReviewCorrections(dependencies) {
     return correctSource(slug, ticket, input);
   }
   function sourceBindingRefusal(slug, ticket, source) {
-    return sourceCorrectionRefusal(source, dependencies.pendingSubmission(source)) || correctionBindingRefusal(ticket, source, dependencies.submissionReviewRelation(slug, source));
+    return sourceCorrectionRefusal(source, dependencies.pendingSubmission(source)) || correctionBindingRefusal(ticket, source, dependencies.submissionReviewRelation(slug, source)) || (ticket.reviewDecision ? independentReviewRefusal(source, ticket) : void 0);
   }
   function correctSource(slug, ticket, input) {
     const source = dependencies.getTicket(slug, input.expected.sourceRef);
     if (!source) return refuse("source_unavailable", "The original source ticket is unavailable.");
     const sourceRefusal = sourceBindingRefusal(slug, ticket, source) || duplicateCorrectionRefusal(ticket, source, input);
     if (sourceRefusal) return sourceRefusal;
-    const { oracle = {} } = ticket;
-    const { corrections = [] } = oracle;
+    const { corrections = [] } = (0, import_review_binding.reviewVerdictHistory)(ticket);
     const previous = corrections.at(-1);
     if (previous) return { ok: true, idempotent: true, correction: previous, reviewOutcome: { sourceRef: source.ref, outcome: "rejected" } };
     return appendCorrection(slug, ticket, source, input);
   }
   function appendCorrection(slug, ticket, source, input) {
-    const { reviewTarget = {}, oracle = {}, comments = [] } = ticket;
+    const { reviewTarget = {}, comments = [] } = ticket;
+    const oracle = (0, import_review_binding.reviewVerdictHistory)(ticket) ?? {};
     const { corrections = [] } = oracle;
     const at = (/* @__PURE__ */ new Date()).toISOString();
     const comment = dependencies.createComment({ by: input.by, body: `Oracle verdict correction (accepted -> rejected): ${input.text}`, kind: "comment", source: "mcp" }, at);
@@ -193,7 +238,9 @@ function createReviewCorrections(dependencies) {
       at,
       commentId: comment.id
     };
-    ticket.oracle = { ...oracle, corrections: [...corrections, correction] };
+    const history = { ...oracle, corrections: [...corrections, correction] };
+    if (ticket.reviewDecision) ticket.reviewDecision = history;
+    else ticket.oracle = history;
     ticket.comments = [...comments, comment];
     dependencies.recordBoundReviewOutcome(slug, ticket, "rejected", { correctedAt: at });
     ticket.updatedAt = at;
@@ -221,5 +268,12 @@ function createReviewCorrections(dependencies) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  createReviewCorrections
+  activeCorrectionTicket,
+  completedNormalReviewRefusal,
+  correctionBindingRefusal,
+  correctionReviewCategory,
+  createReviewCorrections,
+  independentReviewRefusal,
+  sourceCorrectionRefusal,
+  undispatchedReviewRefusal
 });

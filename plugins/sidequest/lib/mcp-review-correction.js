@@ -18,7 +18,8 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var mcp_review_correction_exports = {};
 __export(mcp_review_correction_exports, {
-  correctReviewVerdict: () => correctReviewVerdict
+  correctReviewVerdict: () => correctReviewVerdict,
+  finalizeReviewVerdict: () => finalizeReviewVerdict
 });
 module.exports = __toCommonJS(mcp_review_correction_exports);
 var import_review_binding = require("./kernel/review-binding");
@@ -43,6 +44,29 @@ function correctionCandidate(correct) {
   if (typeof correct.commit !== "string" || !(0, import_review_binding.isReviewCommit)(correct.commit)) return null;
   return { source: "git", value: correct.commit.trim().toLowerCase() };
 }
+function finalizeReviewVerdict(slug, args, sessionId) {
+  const outcomes = ["accepted", "rejected"];
+  const valid = [outcomes.includes(args.outcome), args.correct === void 0, args.constraint === void 0, args.why === void 0];
+  if (valid.includes(false)) return { ok: false, reason: "invalid_finalization", message: "Finalization requires accepted or rejected and accepts finalize evidence, not correct, why or constraint." };
+  const finalize = args.finalize;
+  if (!correctionObject(finalize)) return { ok: false, reason: "invalid_finalization", message: "Finalization requires its exact source/candidate and evidence." };
+  return finalizeValidatedRequest(slug, args, finalize, sessionId);
+}
+function finalizeValidatedRequest(slug, args, finalize, sessionId) {
+  if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return { ok: false, reason: "invalid_finalization", message: "Finalization sourceRef and evidence must be nonempty text." };
+  if (![void 0, "main-attestation"].some((authority) => authority === finalize.authority)) return { ok: false, reason: "invalid_finalization", message: "External authority must explicitly be main-attestation." };
+  const candidate = correctionCandidate(finalize);
+  if (!candidate) return { ok: false, reason: "invalid_finalization", message: "Finalization requires exactly one valid commit or sourceRevision." };
+  return store.finalizeCompletedReview(slug, args.ref, {
+    by: args.by,
+    sessionId: sessionId ?? "",
+    text: args.text,
+    outcome: args.outcome,
+    evidence: finalize.evidence,
+    authority: finalize.authority,
+    expected: { sourceRef: finalize.sourceRef, candidate }
+  }, { allowCompletedReviewFinalization: true });
+}
 function correctReviewVerdict(slug, args, sessionId) {
   if (args.outcome !== "rejected" || args.constraint !== void 0) return { ok: false, reason: "invalid_correction", message: "Correction requires outcome rejected and accepts why, not constraint." };
   const correct = args.correct;
@@ -66,5 +90,6 @@ function correctValidatedRequest(slug, args, correct, sessionId) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  correctReviewVerdict
+  correctReviewVerdict,
+  finalizeReviewVerdict
 });

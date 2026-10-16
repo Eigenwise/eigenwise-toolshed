@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createAnalyzer, changedMetricsAgainstBase, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
 import { crapScore, enforcedMetrics, THRESHOLD } from './measure.mjs';
-import { JAVASCRIPT_SOURCE, projectRoot, readConfig, gateSettings, selectedFiles, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
+import { JAVASCRIPT_SOURCE, projectRoot, readConfig, gateSettings, selectedFiles, filesChangedSince, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
 import { acquireCoverage, coverageByFile, coverageTrust, functionLineCoverage } from './lcov.mjs';
 import { lizardDescriptors } from './lizard.mjs';
 import { pythonDescriptors, verifyOracleOwnership } from './python.mjs';
@@ -61,9 +61,9 @@ function verdict(report) {
   return report;
 }
 
-function emptyScopeReason(files, metrics, changed) {
-  if (!files.length) return 'No supported source files matched sources and exclude.';
-  if (!metrics.length) return 'Selected files contain no runtime function bodies (type-only declarations are excluded).';
+function emptyScopeReason(selected, files, metrics, changed) {
+  if (!selected.length) return 'No supported source files matched sources and exclude.';
+  if (files.length && !metrics.length) return 'Selected files contain no runtime function bodies (type-only declarations are excluded).';
   if (!changed.length) return 'No function bodies changed against the base revision.';
   return null;
 }
@@ -89,15 +89,21 @@ export async function crapReport(options = {}) {
   const root = projectRoot(options.project ?? process.cwd());
   const { config, warnings } = readConfig(root);
   const settings = gateSettings(options, config);
-  const files = selectedFiles(root, settings);
+  const baseline = baseRevision(root, settings.base);
+  const selected = selectedFiles(root, settings);
+  const files = filesChangedSince(root, baseline.base, selected);
   const analyzer = files.some((file) => JAVASCRIPT_SOURCE.test(file) || file.endsWith('.vue')) ? await createAnalyzer(root) : null;
   const complexityCsv = options.complexity ? fs.readFileSync(path.resolve(root, options.complexity), 'utf8') : undefined;
-  const baseline = baseRevision(root, settings.base);
-  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, metrics: await sourceMetrics(root, files, analyzer, complexityCsv, settings.pythonPolicy, settings.pythonOracles), ccOnly: Boolean(options.ccOnly), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
+  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: Boolean(options.ccOnly), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
   if (settings.usedDeprecatedRatchet) report.warnings.push('--ratchet and config ratchet are deprecated. Use --base or config base instead.');
-  verifyOracleOwnership(report.metrics, settings.pythonOracles);
-  report.changedMetrics = await changedAgainstBase(report, analyzer);
-  report.nothingToScoreReason = emptyScopeReason(files, report.metrics, report.changedMetrics);
+  try {
+    report.metrics = await sourceMetrics(root, files, analyzer, complexityCsv, settings.pythonPolicy, settings.pythonOracles);
+    verifyOracleOwnership(report.metrics, settings.pythonOracles?.filter((entry) => files.includes(entry.file) || !selected.includes(entry.file)));
+    report.changedMetrics = await changedAgainstBase(report, analyzer);
+  } finally {
+    await analyzer?.close();
+  }
+  report.nothingToScoreReason = emptyScopeReason(selected, files, report.metrics, report.changedMetrics);
   return measureReport(report, settings);
 }
 

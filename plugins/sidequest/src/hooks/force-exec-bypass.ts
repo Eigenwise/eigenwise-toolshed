@@ -473,11 +473,8 @@ const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, un
     denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
   },
   mcp__plugin_sidequest_board__verdict: {
-    // verdict with correct appends an accepted-to-rejected correction to a finalized
-    // review verdict, which only the main thread may do. Ordinary verdict calls stay
-    // open to the review executor that closes its own readonly review.
-    matches: (input) => Object.hasOwn(input, 'correct'),
-    denial: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
+    matches: (input) => ['correct', 'finalize'].some(field => Object.hasOwn(input, field)),
+    denial: 'sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread.',
   },
 };
 

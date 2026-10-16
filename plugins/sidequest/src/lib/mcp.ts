@@ -117,7 +117,7 @@ const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'categor
 const mutationTails = new Map<string, Promise<void>>();
 
 const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
-  verdict: ['correct'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
+  verdict: ['correct', 'finalize'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
   board_config: ['name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
     'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
     'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
@@ -317,8 +317,8 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 const ATTESTATION_VERIFY_CONTRACT = 'Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
 // A rebased or squash-merged candidate never byte-matches the working tree, and the
 // refusal only reaches an operator who already knows these two properties exist.
-const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
-const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable.';
+const DELIVERY_REVISION_CONTRACT = 'Target-reachable, never an ancestor of the candidate base; proves paths at its tree, not the working tree. Ignored when reachable.';
+const RESOLVED_PATHS_CONTRACT = 'Hand-resolved paths; needs deliveryRevision, refused when reachable.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
@@ -329,7 +329,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   update: {
     verify: ATTESTATION_VERIFY_CONTRACT,
     addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
-    removeFiles: 'Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
+    removeFiles: 'Drop declared paths; conflicts with files. Isolated: now; shared: redispatch.',
   },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
@@ -345,7 +345,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears.' },
-  board_config: { verifyEnvironment: 'shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated).' },
+  board_config: { verifyEnvironment: 'shared: verify at integration only. Frozen per dispatch; default isolated.' },
   dispatch: {
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
     recoveryEvidence: 'Unverified; preparer retires now, else latest signal grace; bound name only.',
@@ -363,11 +363,12 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     recoveryEvidence: 'Unclaimed: preparing session retires now; others past deadline; CLI too.',
   },
   verdict: {
-    outcome: 'Candidate, not reviewer prose.',
-    correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
+    outcome: 'Explicit candidate outcome, not reviewer prose.',
+    finalize: 'Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate.',
+    correct: 'Main-only accepted->rejected; by/text/evidence; expectedVerdictAt from list({ref}) reviewDecision|oracle verdict.at.',
   },
   scopeRequest: {
-    grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
+    grant: 'Grants all refused paths; pass no files. Refuses the claim holder’s own by.',
   },
 };
 

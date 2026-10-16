@@ -9,7 +9,7 @@ const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
 const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require('./composition-admission.js');
 import type { CompositionDispatch, CompositionTicket } from './composition-admission';
 import type { CompletedVerificationCapture, VerificationRequirement } from '../kernel/verification';
-import { authorizeWorkDeclaration, prepareWorkProvenance, workDeclaration } from './work-provenance';
+import { authorizeWorkDeclaration, prepareWorkProvenance, retainedAttemptHistory, workDeclaration } from './work-provenance';
 
 type NativeCheckoutCreation = CompositionDispatch & {
   sessionId?: string | null; worktreeBindingSource?: string;
@@ -125,24 +125,6 @@ function pinnedVerificationRequirement(ticket: any, projectPath: string, verifyE
   const requirement = preparedVerificationRequirement(ticket, projectPath);
   const deferred = !sharedTree && verifyEnvironment === 'shared' && ['command', 'suite', 'typecheck'].includes(requirement.kind);
   return deferred ? Object.freeze({ ...requirement, environment: 'shared' as const }) : requirement;
-}
-
-type ProducerAttemptHistory = {
-  preparedAt?: string; terminalAt?: string; baseCommit?: string; declaredFiles?: readonly string[];
-  sanctionedCommits?: readonly string[]; verificationRequirement?: { command?: string };
-  attempts: Array<{ preparedAt?: string }>;
-};
-
-function retainedAttemptHistory(current: ProducerAttemptHistory) {
-  const attempts = structuredClone(current.attempts);
-  const terminalAttempt = attempts.find(attempt => attempt.preparedAt === current.preparedAt);
-  if (current.terminalAt && terminalAttempt) {
-    Object.assign(terminalAttempt, structuredClone({
-      baseCommit: current.baseCommit, declaredFiles: current.declaredFiles,
-      sanctionedCommits: current.sanctionedCommits, verificationRequirement: current.verificationRequirement,
-    }));
-  }
-  return attempts;
 }
 
 function createDispatch(dependencies: any) {
@@ -2142,6 +2124,21 @@ function assertRetainedRecoveryContinues(slug: string, t: StoredRecord, current:
   }
 }
 
+// The ticket's own refs/sidequest pin is left out: like ticket_closed_settled, a pin settles only a closed ticket,
+// and this ticket is being dispatched again.
+function checkpointSettlingRevisions(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): string[] {
+  const delivered = String(t.submission?.integration?.resultingHead || '').trim();
+  return [integrationTipCommit(slug, projectPath, current), delivered].filter(Boolean);
+}
+
+function integrationTipCommit(slug: string, projectPath: string, current: StoredRecord): string {
+  try {
+    return integrationTargetCommit(projectPath, current.integrationTarget || integrationTarget(slug));
+  } catch (_: unknown) {
+    return '';
+  }
+}
+
 function queueCheckoutReclaim(effects: DispatchPreparationEffects, decision: { reclaim?: () => CheckoutReclaimResult } | null): void {
   if (decision?.reclaim) effects.checkoutReclaims.push(decision.reclaim);
 }
@@ -2151,6 +2148,7 @@ function reclaimRetiredCheckout(slug: string, projectPath: string, t: StoredReco
   const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
   const recovery = retiredAttemptCheckoutReclaim(slug, projectPath, t, recoveryFacts.state, {
     checkpointCommit: recoveryFacts.checkpointCommit,
+    settlingRevisions: checkpointSettlingRevisions(slug, projectPath, t, current),
   });
   queueCheckoutReclaim(effects, recovery);
   if (recovery?.reason === 'cross_bound_worktree') {
@@ -2801,7 +2799,7 @@ function priorAttemptFields(plan: PreparedDispatchPlan) {
 function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRecord, plan: PreparedDispatchPlan, opts: DispatchOptions, preflight: DispatchPreflight) {
   const provenance = preparationProvenanceFields(plan, opts, preflight.preparedCompatibility);
   const integrationCommit = opts.workProvenance ? integrationBaseCommit(slug, plan.integrationTargetState) : '';
-  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref), integrationCommit);
+  const workProvenance = prepareWorkProvenance(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ''), ref => getTicket(slug, ref), integrationCommit, t.ref);
   return {
     ...provenance,
     lifecycleAttempt: { ...provenance.lifecycleAttempt, workProvenance },

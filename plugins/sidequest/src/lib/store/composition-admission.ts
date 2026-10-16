@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { ticketCommitScope, ticketReleaseFragment, validateCommitRangeScope, validateRelativeScopes } from '../commit-scope';
 import { stillSpawnsInsideItsWrite } from '../db';
-import { effectiveOracleVerdictOutcome, sameReviewCandidate } from '../kernel/review-binding';
+import { effectiveOracleVerdictOutcome, sameReviewCandidate, reviewVerdictHistory } from '../kernel/review-binding';
 import { canonicalPath, checkoutInstanceIdentity } from '../kernel/worktree';
 import type { ReviewBindingSide, ReviewMirror, ReviewOutcome, OracleVerdictOutcome } from '../kernel/review-binding';
-import type { ReviewVerdictCorrection } from './review-corrections';
+import type { ReviewDecisionHistory, ReviewVerdictCorrection } from './review-corrections';
 import { proveCompositionRange } from './composition-range';
 import type { CompositionSourceRange, CompositionRefusal } from './composition-range';
 const { contextRevision } = require('../context-packet');
@@ -48,6 +48,7 @@ export type CompositionTicket = {
   submission?: CompositionSubmission | null; links?: readonly { type: string; ref: string }[];
   checkpoint?: { commit?: string };
   reviewTarget?: ReviewMirror;
+  reviewDecision?: ReviewDecisionHistory;
   oracle?: { verdict?: { outcome: OracleVerdictOutcome; at: string }; corrections?: readonly ReviewVerdictCorrection[] };
   compositionAdmission?: CompositionAdmission;
   comments?: AdmissionComment[]; updatedAt?: string;
@@ -162,7 +163,7 @@ function sourceReviewIdentityRefusal(source: CompositionTicket, relation: Source
 }
 
 function latestCorrectionAt(review: CompositionTicket): string | undefined {
-  const corrections = review.oracle?.corrections ?? [];
+  const corrections = reviewVerdictHistory(review)?.corrections ?? [];
   return corrections.at(-1)?.at;
 }
 
@@ -179,7 +180,7 @@ function sourceBindingGenerationRefusal(source: CompositionTicket, review: Compo
 }
 
 function sourceReviewOutcomeRefusal(source: CompositionTicket, review: CompositionTicket): CompositionRefusal | undefined {
-  const outcome = effectiveOracleVerdictOutcome(review.oracle);
+  const outcome = effectiveOracleVerdictOutcome(reviewVerdictHistory(review));
   if (outcome === 'rejected') return refuse('source_rejected', `${source.ref}'s authoritative review rejected the candidate.`);
   return sourceBindingGenerationRefusal(source, review, outcome ?? 'planned');
 }
@@ -203,7 +204,7 @@ function sourceSnapshot(source: CompositionTicket, relation: SourceRelation | nu
   const review = relation?.reviewTicket;
   return contextRevision({ id: source.id, submission: source.submission, dispatch: source.dispatch,
     review: review && { id: review.id, status: review.status, target: review.reviewTarget,
-      oracle: review.oracle, dispatch: review.dispatch },
+      oracle: review.oracle, reviewDecision: review.reviewDecision, dispatch: review.dispatch },
     binding: relation && { conflict: relation.conflict, side: relation.side } });
 }
 

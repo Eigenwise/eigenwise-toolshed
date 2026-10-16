@@ -38,6 +38,7 @@ const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
 const { createReviewCorrections } = require("./store/review-corrections.js");
+const { createReviewFinalization } = require("./store/review-finalization.js");
 const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
@@ -1234,7 +1235,7 @@ function completionWorkFacts(slug, ticket) {
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
   const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed, ...mergeResolvedPaths(delta.workspace)])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
   try {
-    const ownedPaths = (0, import_work_provenance.ownedWorkPaths)(delta.workspace.root, state.workProvenance, changedPaths, (ref) => getTicket(slug, ref));
+    const ownedPaths = (0, import_work_provenance.ownedWorkPaths)(delta.workspace.root, state.workProvenance, changedPaths, (ref) => getTicket(slug, ref), ticket.ref);
     return { ok: true, applicable: true, declaredFiles, changedPaths, ownedPaths, delta, provenance: state.workProvenance };
   } catch (error) {
     return { ok: false, reason: "work_provenance_mismatch", message: error instanceof Error ? error.message : String(error) };
@@ -1467,6 +1468,17 @@ const { correctAcceptedReviewVerdict } = createReviewCorrections({
   getTicket,
   pendingSubmission: pendingSubmissionForTickets,
   isReadOnlyExecutor,
+  submissionReviewRelation,
+  withSourceTicketLock,
+  withTicketLock,
+  createComment,
+  recordBoundReviewOutcome,
+  putTicket,
+  invalidateStoreCaches
+});
+const { finalizeCompletedReview } = createReviewFinalization({
+  getTicket,
+  pendingSubmission: pendingSubmissionForTickets,
   submissionReviewRelation,
   withSourceTicketLock,
   withTicketLock,
@@ -3946,6 +3958,7 @@ module.exports = {
   appendExperimentEntry,
   applyExperimentVerdict,
   correctAcceptedReviewVerdict,
+  finalizeCompletedReview,
   admitComposition,
   appendOverturnLine,
   experimentPacket,

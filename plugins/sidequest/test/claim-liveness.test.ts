@@ -2155,6 +2155,28 @@ test('source provenance dispatch whose frozen source drifted cannot submit', asy
   releaseProvenance(ticket);
 });
 
+test('GH-549: a re-dispatch citing its own earlier generation comments and submits under its own live claim', async () => {
+  const origin = await nativeProvenanceProducer();
+  const ticket = await claimProvenance({ ref: origin.ref }, 'inherited-read-only', [origin]);
+  assert.equal(ticket.claim.by, origin.ref + '-owner');
+  assert.equal(ticket.dispatch.workProvenance.sources[0].generation.preparedAt, origin.preparedAt);
+  const commented = provenanceCompletion(ticket);
+  assert.equal(commented.ok, true, JSON.stringify(commented));
+  const commit = await commitProvenanceFragment(ticket);
+  const submitted = await submitProvenance(ticket, commit);
+  assert.equal(submitted.ok, true, JSON.stringify(submitted.message || submitted.failures));
+  assert.equal(store.getTicket(slug, ticket.ref).submission.workProvenance.sources[0].input.ref, origin.ref);
+});
+
+test('GH-549: a foreign producer holding a live claim is still refused as an active producer', async () => {
+  const origin = await nativeProvenanceProducer();
+  claimRouted(store.getTicket(slug, origin.ref), origin.ref + '-still-working');
+  const ticket = provenanceTicket('source provenance foreign producer still active');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'foreign-active-main', workProvenance: {
+    kind: 'inherited-read-only', sources: [origin] } }, { allowWorkProvenance: true }), { message: 'work provenance refused: producer is still active' });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
 async function laterProvenanceGeneration(ref: string) {
   const producer = store.getTicket(slug, ref);
   const holder = ref + '-later-producer';

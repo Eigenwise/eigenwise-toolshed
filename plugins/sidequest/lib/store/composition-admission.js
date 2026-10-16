@@ -98,7 +98,7 @@ function sourceReviewIdentityRefusal(source, relation) {
   return sourceReviewOutcomeRefusal(source, review);
 }
 function latestCorrectionAt(review) {
-  const corrections = review.oracle?.corrections ?? [];
+  const corrections = (0, import_review_binding.reviewVerdictHistory)(review)?.corrections ?? [];
   return corrections.at(-1)?.at;
 }
 function bindingOutcome(binding) {
@@ -111,7 +111,7 @@ function sourceBindingGenerationRefusal(source, review, expectedOutcome) {
   if (!bindings.every((binding) => binding?.correctedAt === correctedAt)) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative correction generation.`);
 }
 function sourceReviewOutcomeRefusal(source, review) {
-  const outcome = (0, import_review_binding.effectiveOracleVerdictOutcome)(review.oracle);
+  const outcome = (0, import_review_binding.effectiveOracleVerdictOutcome)((0, import_review_binding.reviewVerdictHistory)(review));
   if (outcome === "rejected") return refuse("source_rejected", `${source.ref}'s authoritative review rejected the candidate.`);
   return sourceBindingGenerationRefusal(source, review, outcome ?? "planned");
 }
@@ -134,6 +134,7 @@ function sourceSnapshot(source, relation) {
       status: review.status,
       target: review.reviewTarget,
       oracle: review.oracle,
+      reviewDecision: review.reviewDecision,
       dispatch: review.dispatch
     },
     binding: relation && { conflict: relation.conflict, side: relation.side }

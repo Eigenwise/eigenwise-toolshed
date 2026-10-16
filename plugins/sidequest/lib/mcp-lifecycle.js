@@ -61,8 +61,8 @@ const {
   state
 } = require("./mcp-shared");
 const { sourceRevisionBaseline } = require("./source-revision-capability");
-const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdictOutcome } = require("./kernel/review-binding.js");
-const { correctReviewVerdict } = require("./mcp-review-correction.js");
+const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdictOutcome, reviewVerdictHistory } = require("./kernel/review-binding.js");
+const { correctReviewVerdict, finalizeReviewVerdict } = require("./mcp-review-correction.js");
 const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
 const VERIFICATION_WAIVER_PROP = {
   type: "object",
@@ -158,7 +158,7 @@ function inheritedMirrorRefusal(mirror, review, candidate) {
   if (matches.includes(false)) return { ok: false, reason: "mirror_mismatch" };
 }
 function inheritedRejectedOutcomeRefusal(review, target, mirror, candidate) {
-  const rejected = [String(target.outcome) === "rejected", effectiveOracleVerdictOutcome(review.oracle) === "rejected"];
+  const rejected = [String(target.outcome) === "rejected", effectiveOracleVerdictOutcome(reviewVerdictHistory(review)) === "rejected"];
   if (rejected.includes(false)) return { ok: false, reason: "not_rejected" };
   if (!sameReviewCandidate(candidate, target.candidate)) return { ok: false, reason: "stale_candidate" };
   return inheritedMirrorRefusal(mirror, review, candidate);
@@ -816,7 +816,7 @@ const tools = [
   },
   {
     name: "verdict",
-    description: "Record an oracle verdict. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
+    description: "Record an oracle verdict, or finalize a done bound review from the main thread. For a never-dispatched bound review, explicitly use finalize.authority=main-attestation with by/text/evidence naming where the review happened; accepted permits integration without claiming reviewer runtime provenance. Finalization validates the exact source/candidate, preserves existing completion/evidence and mirrors accepted/rejected without restarting either executor. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -830,10 +830,23 @@ const tools = [
         },
         why: { type: "string" },
         constraint: { type: "string" },
-        by: { type: "string", description: "Required with correct; audit provenance, not permission." },
+        by: { type: "string", description: "Required with finalize or correct; audit provenance, not permission." },
+        finalize: {
+          type: "object",
+          description: "Main-thread MCP only: explicit accepted/rejected decision for an already-done normal bound independent review, or a never-dispatched bound review with authority main-attestation. Requires by/text/evidence naming the original review and exact source/candidate. Source must be terminal, unclaimed and pending; review must be unclaimed with exact binding. Exact retry writes nothing; contradictory decision requires existing correction/repair rules. Does not create oracle/experiment state or rerun review/tests.",
+          properties: {
+            authority: { enum: ["main-attestation"], description: "Explicit external review authority for a never-dispatched bound review. Evidence names where the review happened. Records missing independent reviewer runtime provenance and permits accepted integration." },
+            sourceRef: { type: "string" },
+            commit: { type: "string" },
+            sourceRevision: { type: "object", properties: { source: { type: "string" }, value: { type: "string" } }, required: ["source", "value"] },
+            evidence: { type: "string" }
+          },
+          required: ["sourceRef", "evidence"],
+          oneOf: [{ required: ["commit"] }, { required: ["sourceRevision"] }]
+        },
         correct: {
           type: "object",
-          description: "Main-thread MCP only: append accepted-to-rejected correction of a finalized readonly bound review. Requires outcome rejected, nonempty by/text/evidence, actual runtime identity, and an unclaimed terminal pending source. Read original at from list({ref: reviewRef}).ticket.oracle.verdict.at. Exact retry writes nothing; delivered or superseded sources refuse. Host-hook caller class is the trust boundary.",
+          description: "Main-thread MCP only: append accepted-to-rejected correction of a finalized normal bound review or readonly oracle review. Requires outcome rejected, nonempty by/text/evidence, actual runtime identity, and an unclaimed terminal pending source. Read original at from list({ref: reviewRef}).ticket.reviewDecision.verdict.at (or ticket.oracle.verdict.at for an oracle). Exact retry writes nothing; delivered or superseded sources refuse. Host-hook caller class is the trust boundary.",
           properties: {
             expectedOutcome: { type: "string", enum: ["accepted"] },
             expectedVerdictAt: { type: "string" },
@@ -843,13 +856,14 @@ const tools = [
             evidence: { type: "string" }
           },
           required: ["expectedOutcome", "expectedVerdictAt", "sourceRef", "evidence"],
-          oneOf: [{ required: ["commit"], not: { required: ["sourceRevision"] } }, { required: ["sourceRevision"], not: { required: ["commit"] } }]
+          oneOf: [{ required: ["commit"] }, { required: ["sourceRevision"] }]
         }
       },
       required: ["ref", "text", "outcome"]
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "verdict");
+      if (args.finalize !== void 0) return finalizeReviewVerdict(slug, args, runtimeSessionId());
       if (args.correct !== void 0) return correctReviewVerdict(slug, args, runtimeSessionId());
       const result = store.applyExperimentVerdict(slug, args.ref, {
         text: args.text,
@@ -963,7 +977,7 @@ const tools = [
   },
   {
     name: "rework",
-    description: "Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record a failed review as evidence on the review ticket and release it with kind oracle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.",
+    description: "Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record review evidence on the review ticket. A completed normal review uses main-thread verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.",
     inputSchema: {
       type: "object",
       properties: {

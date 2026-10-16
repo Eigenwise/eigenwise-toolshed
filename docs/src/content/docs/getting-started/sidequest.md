@@ -40,6 +40,30 @@ Once this save-and-read check works, use the story workflow below when the task 
 
 When an executor hands back a clean committed checkpoint in a retained worktree, its replacement gets a Resume section first. It names the checkout, pinned commit, handback reason, and last recorded verification result and log. After claiming, the replacement confirms HEAD and runs the pinned verifier on that candidate before continuing (shared-environment checks still wait for delivery). It reads new instructions or missing evidence rather than starting over with the full thread. The complete description, contract, scope, and verifier remain in the briefing.
 
+## Completed review decisions
+
+A completed independent review can say ACCEPTED while its source submission still shows a planned review outcome. The orchestrator records that decision explicitly through the main-thread MCP `verdict` tool:
+
+```json
+{
+  "ref": "SQ-12",
+  "by": "orchestrator",
+  "outcome": "accepted",
+  "text": "The exact candidate passes the completed review.",
+  "finalize": {
+    "sourceRef": "SQ-11",
+    "commit": "<exact original reviewTarget candidate hash>",
+    "evidence": "Original terminal review report and inspected range"
+  }
+}
+```
+
+Copy the original review's source and candidate from `reviewTarget`. Finalization requires a genuinely done, unclaimed independent bound review and its exact pending source. It preserves the reviewer, original completion and evidence, and updates both review outcome records. Use `rejected` when that candidate must not ship. Exact retries write nothing; a mistaken acceptance uses the main-thread `verdict.correct` contract with the original decision timestamp and evidence. Repairs still need a fresh candidate and independent review.
+
+For a bound review that was never dispatched, add `"authority": "main-attestation"` inside `finalize`. The main thread must supply `by`, `text` and evidence naming where the external review happened. Accepted permits integration, rejected blocks it. Sidequest records `reviewerRuntimeProvenance: false` and preserves the absent dispatch/completion. An active, released or partially completed reviewer cannot use this path.
+
+CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
@@ -457,7 +481,7 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 
 **A multi-commit candidate's release fragment sits in an earlier commit.** Closing it by its tip commit reads the fragment from the whole submitted range, the same range `submit` already accepted, so it no longer refuses `missing_release_fragment`.
 
-**A verdict approved a candidate you meant to reject.** A bound review's outcome describes the candidate: `accepted` approves it, `rejected` confirms it must not ship, and `inconclusive` approves nothing. Ask the main Claude thread to correct a mistaken finalized accepted with MCP `verdict.correct`. The review must be readonly and finalized, both review and source must be unclaimed and terminal, and the original source submission must still be pending. Delivered or superseded sources refuse correction.
+**A verdict approved a candidate you meant to reject.** A bound review's outcome describes the candidate: `accepted` approves it, `rejected` confirms it must not ship, and `inconclusive` approves nothing. Ask the main Claude thread to correct a mistaken finalized accepted with MCP `verdict.correct`. The review must have a finalized normal decision (including a writable reviewer or explicit external attestation), or a readonly oracle verdict. The source must be terminal, both tickets unclaimed, and the original submission still pending. Delivered or superseded sources refuse correction.
 
 Claude reads the original timestamp from `list({ref: reviewRef}).ticket.oracle.verdict.at` and supplies `outcome: "rejected"`, audit `by`, nonempty correction `text`, optional `why`, and `correct: {expectedOutcome: "accepted", expectedVerdictAt, sourceRef, evidence, commit}`. A non-Git candidate uses `sourceRevision: {source, value}` instead of `commit`; provide exactly one. `constraint` is not accepted for corrections. The timestamp is the original verdict's `at`, never a later comment or correction timestamp.
 

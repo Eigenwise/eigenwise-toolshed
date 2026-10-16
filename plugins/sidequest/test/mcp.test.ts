@@ -430,7 +430,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
   assert.deepEqual(rework.inputSchema.required, ['ref', 'review', 'reason']);
   assert.match(rework.description, /repair unbound/);
-  assert.match(rework.description, /bound needs oracle/, 'rework advertises the bound-candidate oracle route');
+  assert.match(rework.description, /bound needs verdict.finalize or oracle/, 'rework advertises completed-review finalization and the separate oracle route');
   assert.ok(rework.inputSchema.properties.reviewRef, 'reviewRef stays accepted for compatibility');
   for (const tool of resp.result.tools) {
     assert.doesNotMatch(String(tool.description || ''), /permanent/i, `${tool.name} must not promise a permanent candidate rejection`);
