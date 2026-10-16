@@ -212,8 +212,7 @@ function createReviewCorrections(dependencies) {
     if (!source) return refuse("source_unavailable", "The original source ticket is unavailable.");
     const sourceRefusal = sourceBindingRefusal(slug, ticket, source) || duplicateCorrectionRefusal(ticket, source, input);
     if (sourceRefusal) return sourceRefusal;
-    const oracle = (0, import_review_binding.reviewVerdictHistory)(ticket) ?? {};
-    const { corrections = [] } = oracle;
+    const { corrections = [] } = (0, import_review_binding.reviewVerdictHistory)(ticket);
     const previous = corrections.at(-1);
     if (previous) return { ok: true, idempotent: true, correction: previous, reviewOutcome: { sourceRef: source.ref, outcome: "rejected" } };
     return appendCorrection(slug, ticket, source, input);

@@ -297,7 +297,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   commit: '',
   add: '',
   update: '',
-  rework: 'repair unbound; bound needs oracle.',
+  rework: 'repair unbound; bound needs verdict.finalize or oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'clear/force need owner.',
   integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.',

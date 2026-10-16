@@ -814,7 +814,7 @@ const tools = [
   },
   {
     name: "verdict",
-    description: "Record an oracle verdict, or explicitly finalize an already-done independent bound normal review with finalize (main-thread MCP only). Finalization preserves the terminal review and evidence, validates the exact source/candidate and immutable provenance, and mirrors accepted/rejected without restarting either executor. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
+    description: "Record an oracle verdict, or finalize an already-done independent bound review through main-thread MCP. For a never-dispatched bound review, explicitly use finalize.authority=main-attestation with by/text/evidence naming where the review happened; accepted permits integration without claiming reviewer runtime provenance. Finalization validates the exact source/candidate, preserves existing completion/evidence and mirrors accepted/rejected without restarting either executor. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -831,7 +831,7 @@ const tools = [
         by: { type: "string", description: "Required with finalize or correct; audit provenance, not permission." },
         finalize: {
           type: "object",
-          description: "Main-thread MCP only: explicit accepted/rejected decision for an already-done normal bound independent review. Requires by/text/evidence and the original source/candidate. Both tickets must be terminal and unclaimed, source pending and binding exact. Exact retry writes nothing; contradictory decision requires existing correction/repair rules. Does not create oracle/experiment state or rerun review/tests.",
+          description: "Main-thread MCP only: explicit accepted/rejected decision for an already-done normal bound independent review, or a never-dispatched bound review with authority main-attestation. Requires by/text/evidence naming the original review and exact source/candidate. Source must be terminal, unclaimed and pending; review must be unclaimed with exact binding. Exact retry writes nothing; contradictory decision requires existing correction/repair rules. Does not create oracle/experiment state or rerun review/tests.",
           properties: {
             authority: { enum: ["main-attestation"], description: "Explicit external review authority for a never-dispatched bound review. Evidence names where the review happened. Records missing independent reviewer runtime provenance and permits accepted integration." },
             sourceRef: { type: "string" },
@@ -840,7 +840,7 @@ const tools = [
             evidence: { type: "string" }
           },
           required: ["sourceRef", "evidence"],
-          oneOf: [{ required: ["commit"], not: { required: ["sourceRevision"] } }, { required: ["sourceRevision"], not: { required: ["commit"] } }]
+          oneOf: [{ required: ["commit"] }, { required: ["sourceRevision"] }]
         },
         correct: {
           type: "object",
@@ -854,7 +854,7 @@ const tools = [
             evidence: { type: "string" }
           },
           required: ["expectedOutcome", "expectedVerdictAt", "sourceRef", "evidence"],
-          oneOf: [{ required: ["commit"], not: { required: ["sourceRevision"] } }, { required: ["sourceRevision"], not: { required: ["commit"] } }]
+          oneOf: [{ required: ["commit"] }, { required: ["sourceRevision"] }]
         }
       },
       required: ["ref", "text", "outcome"]

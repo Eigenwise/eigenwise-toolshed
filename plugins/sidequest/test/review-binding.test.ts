@@ -1001,6 +1001,53 @@ test('undispatched external rejection mirrors outcome and native correction pres
   assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
 });
 
+test('external rejected decision blocks integration without creating a reviewer completion', () => {
+  const { repository, slug, commit } = board('external-direct-reject');
+  const source = submittedSource(slug, commit, 'external-direct-reject');
+  const review = store.createTicket(slug, { title: 'External negative review', category: 'review-audit' }, { ref: source.ref, commit });
+  const rejected = tool('verdict').handler({ project: repository, ref: review.ref, by: 'synthetic-owner',
+    text: 'The external review found a concrete defect', outcome: 'rejected',
+    finalize: { authority: 'main-attestation', sourceRef: source.ref, commit, evidence: 'Synthetic external review record' } });
+  assert.equal(rejected.ok, true, JSON.stringify(rejected));
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'rejected');
+  const after = store.getTicket(slug, review.ref);
+  assert.equal(after.reviewTarget.outcome, 'rejected');
+  assert.equal(after.completion, undefined);
+  assert.equal(after.dispatch, undefined);
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
+});
+
+test('external finalization rejects active released stale foreign and malformed review bindings without writes', () => {
+  const { repository, slug, commit } = board('external-guard-table');
+  const source = submittedSource(slug, commit, 'external-guard-table');
+  const review = store.createTicket(slug, { title: 'External review guards', category: 'review-audit' }, { ref: source.ref, commit });
+  const request = { project: repository, ref: review.ref, by: 'synthetic-owner', text: 'External decision', outcome: 'accepted',
+    finalize: { authority: 'main-attestation', sourceRef: source.ref, commit, evidence: 'Synthetic external record' } };
+  const currentSource = store.getTicket(slug, source.ref);
+  const counterexamples = [
+    { review: { ...review, claim: { by: 'review-worker' } }, source: currentSource, reason: 'review_active' },
+    { review: { ...review, dispatchNonce: 'synthetic-live-nonce' }, source: currentSource, reason: 'review_active' },
+    { review: { ...review, dispatch: { terminalAt: '2026-10-01T00:00:00Z', outcome: 'released' } }, source: currentSource, reason: 'review_dispatched' },
+    { review: { ...review, completion: { state: 'done' } }, source: currentSource, reason: 'review_dispatched' },
+    { review: { ...review, reviewTarget: { ...review.reviewTarget, ticketId: 'foreign-source' } }, source: currentSource, reason: 'binding_mismatch' },
+    { review, source: { ...currentSource, submission: { ...currentSource.submission, commit: 'f'.repeat(40) } }, reason: 'binding_mismatch' },
+    { review, source: { ...currentSource, claim: { by: 'source-worker' } }, reason: 'source_active' },
+  ];
+  for (const counterexample of counterexamples) {
+    persist(slug, counterexample.review);
+    persist(slug, counterexample.source);
+    const before = bindingBytes(slug, source.ref, review.ref);
+    assert.equal(tool('verdict').handler(request).reason, counterexample.reason);
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+  persist(slug, review);
+  persist(slug, currentSource);
+  const before = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(tool('verdict').handler({ ...request, finalize: { ...request.finalize, authority: 'inferred' } }).reason, 'invalid_finalization');
+  assert.equal(tool('verdict').handler({ ...request, finalize: { ...request.finalize, commit: 'f'.repeat(40) } }).reason, 'stale_expected');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+});
+
 test('external authority cannot replace a dispatched normal review or accept a changed binding', async () => {
   const { slug, source, review, input } = await completedNormalReviewFixture('external-guards');
   const before = bindingBytes(slug, source.ref, review.ref);
@@ -1153,8 +1200,12 @@ test('malformed MCP finalization never falls through to oracle verdict or writes
   }
 });
 
-test('finalization refreshes source under source then review locks and rejects an intervening candidate change', async () => {
-  const { slug, source, review, input } = await completedNormalReviewFixture('source-race');
+for (const authority of [undefined, 'main-attestation'] as const) {
+test('finalization source lock rejects an intervening candidate change: ' + String(authority), async () => {
+  const fixture = await completedNormalReviewFixture('source-race');
+  const { slug, source } = fixture;
+  const review = authority ? { ...fixture.review, status: 'todo', dispatch: undefined, completion: undefined } : fixture.review;
+  const input = { ...fixture.input, authority };
   const { createReviewFinalization } = require('../lib/store/review-finalization.js');
   const events: string[] = [];
   const tickets = new Map([[review.ref, review], [review.id, review], [source.ref, store.getTicket(slug, source.ref)]]);
@@ -1186,6 +1237,8 @@ test('finalization refreshes source under source then review locks and rejects a
   assert.equal(store.getTicket(slug, review.ref).reviewDecision, undefined);
   assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'planned');
 });
+
+}
 
 test('actual verdict host hook denies subagent finalization including malformed input and permits main caller', () => {
   const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');

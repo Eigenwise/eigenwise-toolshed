@@ -171,6 +171,9 @@ function mainAttestationMatchesSource(source, review) {
     review.status === "todo",
     !review.dispatch,
     !review.completion,
+    !review.claim?.by,
+    !review.dispatchNonce,
+    !review.oracle,
     decision.reviewerRuntimeProvenance === false,
     decision.sourceRef === source.ref,
     review.reviewTarget?.ticketId === source.id,
@@ -188,7 +191,7 @@ function reviewRelationOutcome(relation) {
 }
 function reviewLockMessage(operation, ticket, relation) {
   const candidate = relation.candidate?.value || "its candidate";
-  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A completed normal review records its explicit outcome through main-thread MCP verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle; Record outcome rejected when the candidate must not ship. A mistaken finalized accepted can be corrected by the main thread using MCP verdict with correct, original list verdict timestamp, exact source/candidate, and evidence; only an integrated repair may supersede it. The repair still requires independent review before integration.`;
+  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A completed normal review records its explicit outcome through main-thread MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation and by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle; Record outcome rejected when the candidate must not ship. A mistaken finalized accepted can be corrected by the main thread using MCP verdict with correct, original list verdict timestamp, exact source/candidate, and evidence; only an integrated repair may supersede it. The repair still requires independent review before integration.`;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

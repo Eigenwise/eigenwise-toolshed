@@ -51,13 +51,24 @@ function expectedBindingRefusal(review, input) {
 function decisionRetryRefusal(review, source, input) {
   const history = (0, import_review_binding.reviewVerdictHistory)(review);
   const previous = history?.verdict;
-  const effective = history?.corrections?.at(-1)?.to ?? previous?.outcome ?? "planned";
-  const matching = [(review.reviewTarget?.outcome ?? "planned") === effective, (source.submission?.review?.outcome ?? "planned") === effective];
+  const effective = (0, import_review_binding.effectiveOracleVerdictOutcome)(history) ?? "planned";
+  const { reviewTarget = {} } = review;
+  const { submission = {} } = source;
+  const { review: mirror = {} } = submission;
+  const { outcome: targetOutcome = "planned" } = reviewTarget;
+  const { outcome: mirrorOutcome = "planned" } = mirror;
+  const matching = [targetOutcome === effective, mirrorOutcome === effective];
   if (matching.includes(false)) return refuse("binding_mismatch", "Both binding halves must match the recorded decision.");
-  if (previous && [
-    !history?.corrections?.length,
+  if (!previous) return;
+  return differentDecisionRefusal(history, input);
+}
+function differentDecisionRefusal(history, input) {
+  const { verdict: previous, corrections = [] } = history;
+  const matches = [
+    corrections.length === 0,
     JSON.stringify(previous) === JSON.stringify({ ...previous, outcome: input.outcome, text: input.text, evidence: input.evidence, authority: input.authority })
-  ].includes(false)) {
+  ];
+  if (matches.includes(false)) {
     return refuse("already_finalized", "A different decision already exists. Use the native accepted-to-rejected correction path for a mistaken approval; repair requires a fresh candidate.");
   }
 }

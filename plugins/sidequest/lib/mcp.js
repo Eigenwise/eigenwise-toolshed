@@ -254,8 +254,8 @@ async function runTool(tool, rawArgs) {
   return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
-const DELIVERY_REVISION_CONTRACT = "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.";
-const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.";
+const DELIVERY_REVISION_CONTRACT = "Target-reachable revision after base proving path bytes. Ignored if candidate reachable.";
+const RESOLVED_PATHS_CONTRACT = "Manual paths: deliveryRevision+reason; unreachable candidates only.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     limit: "UTF-8 bytes."
@@ -265,7 +265,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   update: {
     verify: ATTESTATION_VERIFY_CONTRACT,
     addFiles: "Appends, keeps rest. Refused with files. Applied before removeFiles.",
-    removeFiles: "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+    removeFiles: "Drop declared paths; conflicts with files. Isolated: now; shared: redispatch."
   },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
@@ -281,7 +281,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
-  board_config: { verifyEnvironment: "shared: the pinned command or suite verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)." },
+  board_config: { verifyEnvironment: "shared: verify at integration only. Frozen per dispatch; default isolated." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."
@@ -300,8 +300,8 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   verdict: {
     outcome: "Explicit candidate outcome, not reviewer prose.",
-    finalize: "Main-thread completed normal bound review decision; accepted/rejected/by/text/evidence, exact sourceRef and one commit or sourceRevision. Preserves original completion.",
-    correct: "Main-thread accepted-to-rejected correction; rejected/by/text/evidence. expectedVerdictAt: list({ref}).ticket.reviewDecision.verdict.at (oracle.verdict.at for oracle). One commit or sourceRevision."
+    finalize: "Main-only: done bound review, or never-dispatched with authority=main-attestation. by/text/evidence name review; accepted permits integration.",
+    correct: "Main-only accepted->rejected; by/text/evidence. expectedVerdictAt=list({ref}).ticket.(reviewDecision|oracle).verdict.at."
   },
   scopeRequest: {
     grant: "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."

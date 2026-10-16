@@ -54,7 +54,7 @@ function finalizeReviewVerdict(slug, args, sessionId) {
 }
 function finalizeValidatedRequest(slug, args, finalize, sessionId) {
   if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return { ok: false, reason: "invalid_finalization", message: "Finalization sourceRef and evidence must be nonempty text." };
-  if (finalize.authority !== void 0 && finalize.authority !== "main-attestation") return { ok: false, reason: "invalid_finalization", message: "External authority must explicitly be main-attestation." };
+  if (![void 0, "main-attestation"].some((authority) => authority === finalize.authority)) return { ok: false, reason: "invalid_finalization", message: "External authority must explicitly be main-attestation." };
   const candidate = correctionCandidate(finalize);
   if (!candidate) return { ok: false, reason: "invalid_finalization", message: "Finalization requires exactly one valid commit or sourceRevision." };
   return store.finalizeCompletedReview(slug, args.ref, {

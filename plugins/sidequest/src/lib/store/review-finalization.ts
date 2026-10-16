@@ -1,4 +1,4 @@
-import { reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
+import { effectiveOracleVerdictOutcome, reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
 import type { ReviewCandidate } from '../kernel/review-binding';
 import { undispatchedReviewRefusal, activeCorrectionTicket, correctionReviewCategory, completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
 import type { CorrectionTicket, CorrectionComment, Refusal, Relation } from './review-corrections';
@@ -65,11 +65,23 @@ function expectedBindingRefusal(review: FinalizationTicket, input: FinalizationI
 function decisionRetryRefusal(review: FinalizationTicket, source: CorrectionTicket, input: FinalizationInput): Refusal | undefined {
   const history = reviewVerdictHistory(review);
   const previous = history?.verdict;
-  const effective = history?.corrections?.at(-1)?.to ?? previous?.outcome ?? 'planned';
-  const matching = [(review.reviewTarget?.outcome ?? 'planned') === effective, (source.submission?.review?.outcome ?? 'planned') === effective];
+  const effective = effectiveOracleVerdictOutcome(history) ?? 'planned';
+  const { reviewTarget = {} } = review;
+  const { submission = {} } = source;
+  const { review: mirror = {} } = submission;
+  const { outcome: targetOutcome = 'planned' } = reviewTarget;
+  const { outcome: mirrorOutcome = 'planned' } = mirror;
+  const matching = [targetOutcome === effective, mirrorOutcome === effective];
   if (matching.includes(false)) return refuse('binding_mismatch', 'Both binding halves must match the recorded decision.');
-  if (previous && [!history?.corrections?.length,
-    JSON.stringify(previous) === JSON.stringify({ ...previous, outcome: input.outcome, text: input.text, evidence: input.evidence, authority: input.authority })].includes(false)) {
+  if (!previous) return;
+  return differentDecisionRefusal(history!, input);
+}
+
+function differentDecisionRefusal(history: NonNullable<CorrectionTicket['reviewDecision']>, input: FinalizationInput): Refusal | undefined {
+  const { verdict: previous, corrections = [] } = history;
+  const matches = [corrections.length === 0,
+    JSON.stringify(previous) === JSON.stringify({ ...previous, outcome: input.outcome, text: input.text, evidence: input.evidence, authority: input.authority })];
+  if (matches.includes(false)) {
     return refuse('already_finalized', 'A different decision already exists. Use the native accepted-to-rejected correction path for a mistaken approval; repair requires a fresh candidate.');
   }
 }
