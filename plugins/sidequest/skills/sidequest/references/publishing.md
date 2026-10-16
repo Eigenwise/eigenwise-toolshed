@@ -1,5 +1,7 @@
 # Publishing: the orchestrator control plane
 
+Before treating a completed normal review's positive report as accepted, record its explicit candidate decision through main-thread MCP `verdict.finalize` (never-dispatched bound reviews require explicit `authority: "main-attestation"` and by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance). Supply accepted/rejected, by/text/evidence and the original source/candidate from `reviewTarget`. Finalization updates both binding halves under source/review locks and preserves the original completion, report, roles and full candidate range. A rejected decision blocks delivery and follows the existing fresh repair, independent review and supersession flow. An accepted decision supplies no verification or delivery waiver. A mistaken approval uses `verdict.correct`; CLI, generic links, report prose and subagents cannot supply either grant.
+
 Executors never publish. A repo-changing executor ends at a verified LOCAL commit in its isolated
 worktree, pins it to a durable ref (`refs/sidequest/<SQ-n>`), and parks the ticket
 ready-for-integration with `sidequest submit` (claim released, status stays `doing` and out of

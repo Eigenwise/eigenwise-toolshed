@@ -5,7 +5,7 @@ import { isReviewCommit } from './kernel/review-binding';
 const store = require('./store');
 type Request = {
   ref: string; outcome: string; by: string; text: string; why?: string; constraint?: unknown;
-  correct: unknown;
+  correct?: unknown; finalize?: unknown;
 };
 
 function correctionObject(value: unknown): value is Record<string, unknown> {
@@ -34,6 +34,26 @@ function correctionCandidate(correct: Record<string, unknown>): ReviewCandidate 
   if (!Object.hasOwn(correct, 'commit')) return correctionRevision(correct.sourceRevision);
   if (typeof correct.commit !== 'string' || !isReviewCommit(correct.commit)) return null;
   return { source: 'git', value: correct.commit.trim().toLowerCase() };
+}
+
+export function finalizeReviewVerdict(slug: string, args: Request, sessionId: string | null) {
+  const outcomes = ['accepted', 'rejected'];
+  const valid = [outcomes.includes(args.outcome), args.correct === undefined, args.constraint === undefined, args.why === undefined];
+  if (valid.includes(false)) return { ok: false, reason: 'invalid_finalization', message: 'Finalization requires accepted or rejected and accepts finalize evidence, not correct, why or constraint.' };
+  const finalize = args.finalize;
+  if (!correctionObject(finalize)) return { ok: false, reason: 'invalid_finalization', message: 'Finalization requires its exact source/candidate and evidence.' };
+  return finalizeValidatedRequest(slug, args, finalize, sessionId);
+}
+
+function finalizeValidatedRequest(slug: string, args: Request, finalize: Record<string, unknown>, sessionId: string | null) {
+  if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return { ok: false, reason: 'invalid_finalization', message: 'Finalization sourceRef and evidence must be nonempty text.' };
+  if (![undefined, 'main-attestation'].some(authority => authority === finalize.authority)) return { ok: false, reason: 'invalid_finalization', message: 'External authority must explicitly be main-attestation.' };
+  const candidate = correctionCandidate(finalize);
+  if (!candidate) return { ok: false, reason: 'invalid_finalization', message: 'Finalization requires exactly one valid commit or sourceRevision.' };
+  return store.finalizeCompletedReview(slug, args.ref, {
+    by: args.by, sessionId: sessionId ?? '', text: args.text, outcome: args.outcome, evidence: finalize.evidence, authority: finalize.authority,
+    expected: { sourceRef: finalize.sourceRef, candidate },
+  }, { allowCompletedReviewFinalization: true });
 }
 
 export function correctReviewVerdict(slug: string, args: Request, sessionId: string | null) {

@@ -21,6 +21,7 @@ __export(review_binding_exports, {
   completedReviewAttempt: () => completedReviewAttempt,
   effectiveOracleVerdictOutcome: () => effectiveOracleVerdictOutcome,
   isReviewCommit: () => isReviewCommit,
+  mainAttestedReviewOutcome: () => mainAttestedReviewOutcome,
   reviewCandidateFromSubmission: () => reviewCandidateFromSubmission,
   reviewLockMessage: () => reviewLockMessage,
   reviewOutcomeFromOracleVerdict: () => reviewOutcomeFromOracleVerdict,
@@ -28,6 +29,7 @@ __export(review_binding_exports, {
   reviewRelationFor: () => reviewRelationFor,
   reviewRelationOutcome: () => reviewRelationOutcome,
   reviewRelationRef: () => reviewRelationRef,
+  reviewVerdictHistory: () => reviewVerdictHistory,
   sameReviewCandidate: () => sameReviewCandidate,
   submittedCandidateAttempt: () => submittedCandidateAttempt
 });
@@ -151,18 +153,52 @@ function effectiveOracleVerdictOutcome(oracle) {
   if (correction) return correction.to;
   return verdict?.outcome;
 }
+function reviewVerdictHistory(ticket) {
+  return ticket.reviewDecision ?? ticket.oracle;
+}
+function mainAttestedReviewOutcome(source, review) {
+  const decision = review.reviewDecision?.verdict;
+  if (decision?.authority !== "main-attestation") return;
+  const identity = [decision.by, decision.evidence, decision.sessionId];
+  if (!identity.every((value) => typeof value === "string" && Boolean(value.trim()))) return;
+  if (!mainAttestationMatchesSource(source, review)) return;
+  return effectiveOracleVerdictOutcome(review.reviewDecision);
+}
+function mainAttestationMatchesSource(source, review) {
+  const decision = review.reviewDecision.verdict;
+  const candidate = reviewCandidateFromSubmission(source.submission);
+  const matches = [
+    review.status === "todo",
+    !review.dispatch,
+    !review.completion,
+    !review.claim?.by,
+    !review.dispatchNonce,
+    !review.oracle,
+    decision.reviewerRuntimeProvenance === false,
+    decision.sourceRef === source.ref,
+    review.reviewTarget?.ticketId === source.id,
+    source.submission?.review?.ticketId === review.id,
+    sameReviewCandidate(candidate, decision.candidate),
+    sameReviewCandidate(candidate, review.reviewTarget?.candidate),
+    sameReviewCandidate(candidate, source.submission?.review?.candidate),
+    review.reviewTarget?.outcome === effectiveOracleVerdictOutcome(review.reviewDecision),
+    source.submission?.review?.outcome === effectiveOracleVerdictOutcome(review.reviewDecision)
+  ];
+  return matches.every(Boolean);
+}
 function reviewRelationOutcome(relation) {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || "planned");
 }
 function reviewLockMessage(operation, ticket, relation) {
   const candidate = relation.candidate?.value || "its candidate";
-  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A failed review records its evidence on the review ticket and releases it for an external oracle; Record outcome rejected when the candidate must not ship. A mistaken finalized accepted can be corrected by the main thread using MCP verdict with correct, original list verdict timestamp, exact source/candidate, and evidence; only an integrated repair may supersede it. The repair still requires independent review before integration.`;
+  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A completed normal review records its explicit outcome through main-thread MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation and by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle; Record outcome rejected when the candidate must not ship. A mistaken finalized accepted can be corrected by the main thread using MCP verdict with correct, original list verdict timestamp, exact source/candidate, and evidence; only an integrated repair may supersede it. The repair still requires independent review before integration.`;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   completedReviewAttempt,
   effectiveOracleVerdictOutcome,
   isReviewCommit,
+  mainAttestedReviewOutcome,
   reviewCandidateFromSubmission,
   reviewLockMessage,
   reviewOutcomeFromOracleVerdict,
@@ -170,6 +206,7 @@ function reviewLockMessage(operation, ticket, relation) {
   reviewRelationFor,
   reviewRelationOutcome,
   reviewRelationRef,
+  reviewVerdictHistory,
   sameReviewCandidate,
   submittedCandidateAttempt
 });
