@@ -1647,6 +1647,17 @@ function createDispatch(dependencies) {
       throw new Error(unretryableRecoveryMessage(t, current, recovery));
     }
   }
+  function checkpointSettlingRevisions(slug, projectPath, t, current) {
+    const delivered = String(t.submission?.integration?.resultingHead || "").trim();
+    return [integrationTipCommit(slug, projectPath, current), delivered].filter(Boolean);
+  }
+  function integrationTipCommit(slug, projectPath, current) {
+    try {
+      return integrationTargetCommit(projectPath, current.integrationTarget || integrationTarget(slug));
+    } catch (_) {
+      return "";
+    }
+  }
   function queueCheckoutReclaim(effects, decision) {
     if (decision?.reclaim) effects.checkoutReclaims.push(decision.reclaim);
   }
@@ -1654,7 +1665,8 @@ function createDispatch(dependencies) {
     if (!reclaimsRetiredCheckout(slug, projectPath, t, current)) return null;
     const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
     const recovery = retiredAttemptCheckoutReclaim(slug, projectPath, t, recoveryFacts.state, {
-      checkpointCommit: recoveryFacts.checkpointCommit
+      checkpointCommit: recoveryFacts.checkpointCommit,
+      settlingRevisions: checkpointSettlingRevisions(slug, projectPath, t, current)
     });
     queueCheckoutReclaim(effects, recovery);
     if (recovery?.reason === "cross_bound_worktree") {

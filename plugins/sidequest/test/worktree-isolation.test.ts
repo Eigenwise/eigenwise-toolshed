@@ -3196,6 +3196,66 @@ test('GH-532: a creation whose completion was lost is retired past the authority
   }
 });
 
+// GH-548. A delivered ticket whose merge was reverted is reopened, its next attempt dies before claiming, and every
+// later dispatch was refused because the ticket still carried its delivered checkpoint, which had already landed.
+function retiredAttemptWithCheckpoint(label: string, checkpoint: string) {
+  const ticket = store.createTicket(slug, { title: `GH-548 fixture ${label}`, category: 'codebase-exploration', files: ['README.md'] });
+  const earlier = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: `${label}-earlier` });
+  const worker = `${label}-earlier-worker`;
+  assert.equal(store.claimTicket(slug, ticket.ref, worker, { token: earlier.token, executor: earlier.ticket.dispatchExecutor }).ok, true);
+  assert.equal(store.checkpointTicket(slug, ticket.ref, worker, { commit: checkpoint, verify: 'The delivered attempt ran its gate.' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
+
+  const sessionId = `${label}-session`;
+  const reopened = store.prepareDispatch(slug, ticket.ref, { sharedTree: false, sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: reopened.token, executor: reopened.ticket.dispatchExecutor, sessionId, agentName: label,
+  }).ok, true);
+  const bound = store.bindDispatchWorktreeCreation(slug, sessionId, worktrees.namedWorktreePath(PROJECT, label));
+  assert.equal(bound.ok, true, JSON.stringify(bound));
+  execFileSync('git', ['worktree', 'add', '-b', `worktree-${label}`, bound.worktree, bound.baseline], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' });
+  completeCheckoutCreation(sessionId, bound.worktree);
+  assert.equal(store.bindDispatchAgent(sessionId, reopened.ticket.dispatchExecutor, label, label).ok, true);
+  assert.equal(store.markDispatchStopped(sessionId, reopened.ticket.dispatchExecutor, label, label).stopped, true);
+  const redispatch = () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${label}-retry` });
+  return { ticket, worktree: bound.worktree as string, redispatch };
+}
+
+function projectGit(args: string[]): string {
+  return execFileSync('git', args, { cwd: PROJECT, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+test('GH-548: a reopened ticket whose delivered checkpoint was reverted on the integration branch redispatches', () => {
+  const label = `gh548-landed-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(path.join(PROJECT, `${label}.txt`), 'delivered, then reverted\n');
+  projectGit(['add', `${label}.txt`]);
+  projectGit(['commit', '--quiet', '-m', `deliver ${label}`]);
+  const delivered = projectGit(['rev-parse', 'HEAD']);
+  projectGit(['revert', '--no-edit', delivered]);
+  const attempt = retiredAttemptWithCheckpoint(label, delivered);
+  try {
+    const next = attempt.redispatch();
+    assert.ok(next.token, 'the landed checkpoint no longer refuses the retry');
+    assert.equal(fs.existsSync(attempt.worktree), false, 'the retired attempt checkout is reclaimed');
+  } finally {
+    store.releaseTicket(slug, attempt.ticket.ref, 'gh548-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(attempt.worktree, `worktree-${label}`);
+  }
+});
+
+test('GH-548: a checkpoint the integration branch never received still refuses the retry and names what settles it', () => {
+  const label = `gh548-unlanded-${process.pid}-${Date.now()}`;
+  const unlanded = projectGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', `unlanded ${label}`]);
+  const attempt = retiredAttemptWithCheckpoint(label, unlanded);
+  try {
+    assert.throws(attempt.redispatch, new RegExp(`cannot retry because immutable recovery fact: .* has checkpoint ${unlanded}, which neither the integration branch nor a recorded delivery holds; it settles once one of them contains it`));
+    assert.equal(fs.existsSync(attempt.worktree), true, 'the checkout stays while its checkpoint is unlanded');
+  } finally {
+    store.releaseTicket(slug, attempt.ticket.ref, 'gh548-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(attempt.worktree, `worktree-${label}`);
+  }
+});
+
 // SQ-3139. Two reservations from one session whose launches cross: the first executor's WorktreeCreate binds the
 // second reservation, so each record names the other ticket's executor until a token claim settles it.
 function sq3139CrossedWave(label: string, roles = ['one', 'two']) {

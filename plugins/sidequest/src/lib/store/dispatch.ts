@@ -2142,6 +2142,21 @@ function assertRetainedRecoveryContinues(slug: string, t: StoredRecord, current:
   }
 }
 
+// The ticket's own refs/sidequest pin is left out: like ticket_closed_settled, a pin settles only a closed ticket,
+// and this ticket is being dispatched again.
+function checkpointSettlingRevisions(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): string[] {
+  const delivered = String(t.submission?.integration?.resultingHead || '').trim();
+  return [integrationTipCommit(slug, projectPath, current), delivered].filter(Boolean);
+}
+
+function integrationTipCommit(slug: string, projectPath: string, current: StoredRecord): string {
+  try {
+    return integrationTargetCommit(projectPath, current.integrationTarget || integrationTarget(slug));
+  } catch (_: unknown) {
+    return '';
+  }
+}
+
 function queueCheckoutReclaim(effects: DispatchPreparationEffects, decision: { reclaim?: () => CheckoutReclaimResult } | null): void {
   if (decision?.reclaim) effects.checkoutReclaims.push(decision.reclaim);
 }
@@ -2151,6 +2166,7 @@ function reclaimRetiredCheckout(slug: string, projectPath: string, t: StoredReco
   const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
   const recovery = retiredAttemptCheckoutReclaim(slug, projectPath, t, recoveryFacts.state, {
     checkpointCommit: recoveryFacts.checkpointCommit,
+    settlingRevisions: checkpointSettlingRevisions(slug, projectPath, t, current),
   });
   queueCheckoutReclaim(effects, recovery);
   if (recovery?.reason === 'cross_bound_worktree') {
