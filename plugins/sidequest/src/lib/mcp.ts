@@ -314,7 +314,7 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 // compactSchema strips property descriptions, so an authored one that is not repeated here reaches nobody: the
 // full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
 // refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
-const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+const ATTESTATION_VERIFY_CONTRACT = 'Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
 // A rebased or squash-merged candidate never byte-matches the working tree, and the
 // refusal only reaches an operator who already knows these two properties exist.
 const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
