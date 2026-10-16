@@ -160,15 +160,36 @@ function derivedGeneration(root: string, producer: ProvenanceProducer, generatio
   requireSourceFacts(derived.generation, input);
   return derived;
 }
-function sourceGeneration(producer: ProvenanceProducer, input: SourceOriginInput): ProducerDispatch {
+type AttemptHistory<Attempt> = Readonly<{
+  preparedAt?: string; terminalAt?: string; baseCommit?: string; declaredFiles?: readonly string[];
+  sanctionedCommits?: readonly string[]; verificationRequirement?: { command?: string }; attempts: readonly Attempt[];
+}>;
+export function retainedAttemptHistory<Attempt extends { preparedAt?: string }>(current: AttemptHistory<Attempt>): Attempt[] {
+  const attempts = structuredClone([...current.attempts]);
+  const terminalAttempt = attempts.find(attempt => attempt.preparedAt === current.preparedAt);
+  if (current.terminalAt && terminalAttempt) {
+    Object.assign(terminalAttempt, structuredClone({
+      baseCommit: current.baseCommit, declaredFiles: current.declaredFiles,
+      sanctionedCommits: current.sanctionedCommits, verificationRequirement: current.verificationRequirement,
+    }));
+  }
+  return attempts;
+}
+// A ticket citing its own earlier generation reads it from the archive its re-dispatch keeps, so admission and
+// every later submit judge the same record, and its live claim is the citing attempt's own (GH-549).
+function citedGenerations(producer: ProvenanceProducer, dispatch: ProducerDispatch & { attempts?: readonly ProducerDispatch[] }, consumerRef: string): ProducerDispatch[] {
+  const attempts = dispatch.attempts ?? [];
+  if (producer.ref === consumerRef) return retainedAttemptHistory({ ...dispatch, attempts }).reverse();
+  requireFact(!producer.claim?.by && !producer.dispatchNonce, 'producer is still active');
+  return [dispatch, ...attempts.slice().reverse()];
+}
+function sourceGeneration(producer: ProvenanceProducer, input: SourceOriginInput, consumerRef: string): ProducerDispatch {
   const dispatch = producer.dispatch;
   requireFact(dispatch !== undefined, 'producer has no native generation');
-  const { attempts = [] } = dispatch;
-  const generation = [dispatch, ...attempts.slice().reverse()].find(candidate => candidate.preparedAt === input.preparedAt);
+  const generation = citedGenerations(producer, dispatch, consumerRef).find(candidate => candidate.preparedAt === input.preparedAt);
   requireFact(generation !== undefined && Boolean(generation.terminalAt), 'producer generation mismatch');
   requireFact(generation === dispatch || generation.outcome !== 'submitted' || generation.commit === producer.submission?.commit,
     `historical submitted generation ${input.preparedAt} candidate ${generation.commit} differs from current submission ${producer.submission?.commit}`);
-  requireFact(!producer.claim?.by && !producer.dispatchNonce, 'producer is still active');
   requireFact(['released', 'submitted'].includes(generation.outcome), 'producer must be released preparation or submitted source');
   return generation;
 }
@@ -195,10 +216,10 @@ function compatibleSourceCapture(capture: CompletedVerificationCapture, generati
   const completed = Date.parse(capture.completedAt);
   requireFact(completed >= Date.parse(generation.preparedAt) && completed <= Date.parse(String(generation.terminalAt)), 'historical capture cannot be rebound to a different generation');
 }
-function observeSource(root: string, input: SourceOriginInput, lookup: ProducerLookup, integrationCommit: string, recordedTips?: readonly string[]): SourceOrigin {
+function observeSource(root: string, input: SourceOriginInput, lookup: ProducerLookup, integrationCommit: string, consumerRef: string, recordedTips?: readonly string[]): SourceOrigin {
   const producer = lookup(input.ref);
   requireFact(producer !== null, 'native producer is unavailable');
-  const { generation, derivedFacts } = derivedGeneration(root, producer, sourceGeneration(producer, input), input, integrationCommit);
+  const { generation, derivedFacts } = derivedGeneration(root, producer, sourceGeneration(producer, input, consumerRef), input, integrationCommit);
   const owned = ownedCommits(producer, generation);
   const { authored, inheritedTips } = sourceRange(root, generation, input, owned, recordedTips);
   sourceOwnership(producer, generation, input, authored, owned);
@@ -208,24 +229,24 @@ function observeSource(root: string, input: SourceOriginInput, lookup: ProducerL
     files: scope.paths.map(file => committedFile(root, input.commit, file)), capture: sourceCapture(producer, generation, input),
     ...(derivedFacts.length ? { derivedFacts } : {}) };
 }
-export function prepareWorkProvenance(root: string, declaration: WorkDeclaration | undefined, sessionId: string, lookup: ProducerLookup, integrationCommit = ''): WorkProvenance | undefined {
+export function prepareWorkProvenance(root: string, declaration: WorkDeclaration | undefined, sessionId: string, lookup: ProducerLookup, integrationCommit = '', consumerRef = ''): WorkProvenance | undefined {
   if (!declaration) return;
   return structuredClone({ kind: declaration.kind, authority: 'main-thread-attestation', sessionId,
     execution: 'UNVERIFIED', quality: 'UNVERIFIED', admission: 'UNVERIFIED',
-    sources: declaration.sources.map(input => observeSource(root, input, lookup, integrationCommit)) });
+    sources: declaration.sources.map(input => observeSource(root, input, lookup, integrationCommit, consumerRef)) });
 }
 function workingFile(root: string, file: FileIdentity): FileIdentity {
   const location = path.join(root, file.path);
   return { path: file.path, sha256: fs.existsSync(location) ? sha256(fs.readFileSync(location)) : null };
 }
-function unchangedSource(root: string, source: SourceOrigin, lookup: ProducerLookup): void {
+function unchangedSource(root: string, source: SourceOrigin, lookup: ProducerLookup, consumerRef: string): void {
   const derivedBase = source.derivedFacts?.find(fact => fact.fact === 'baseCommit');
-  requireFact(JSON.stringify(source) === JSON.stringify(observeSource(root, source.input, lookup, derivedBase?.integrationCommit ?? '', source.inheritedTips ?? [])), 'source generation or capture mutated');
+  requireFact(JSON.stringify(source) === JSON.stringify(observeSource(root, source.input, lookup, derivedBase?.integrationCommit ?? '', consumerRef, source.inheritedTips ?? [])), 'source generation or capture mutated');
   requireFact(source.files.every(file => workingFile(root, file).sha256 === file.sha256), 'source/test bytes are incompatible with frozen origin');
 }
-export function ownedWorkPaths(root: string, provenance: WorkProvenance | undefined, paths: readonly string[], lookup: ProducerLookup): string[] {
+export function ownedWorkPaths(root: string, provenance: WorkProvenance | undefined, paths: readonly string[], lookup: ProducerLookup, consumerRef = ''): string[] {
   if (!provenance) return [...paths];
-  provenance.sources.forEach(source => unchangedSource(root, source, lookup));
+  provenance.sources.forEach(source => unchangedSource(root, source, lookup, consumerRef));
   const inherited = new Set(provenance.sources.flatMap(source => source.files.map(file => file.path)));
   const owned = paths.filter(file => !inherited.has(file));
   requireFact(provenance.kind !== 'inherited-read-only' || owned.every(file => isInScope(file, ['.release/unreleased/'])), 'inherited-read-only declaration has new owned work');

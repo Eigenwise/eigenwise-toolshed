@@ -1199,7 +1199,7 @@ function completionWorkFacts(slug: string, ticket: ProvenanceCompletionTicket): 
   const changedPaths: string[] = Array.from(new Set<string>([...delta.working, ...delta.committed]))
     .filter(file => commitScope.isInScope(file, declaredFiles)).sort();
   try {
-    const ownedPaths = ownedWorkPaths(delta.workspace.root, state.workProvenance, changedPaths, ref => getTicket(slug, ref));
+    const ownedPaths = ownedWorkPaths(delta.workspace.root, state.workProvenance, changedPaths, ref => getTicket(slug, ref), ticket.ref);
     return { ok: true, applicable: true, declaredFiles, changedPaths, ownedPaths, delta, provenance: state.workProvenance };
   } catch (error) {
     return { ok: false, reason: 'work_provenance_mismatch', message: error instanceof Error ? error.message : String(error) };
