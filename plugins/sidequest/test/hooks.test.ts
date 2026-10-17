@@ -6036,6 +6036,7 @@ test('read-only shell guard: refuses write-shaped Bash and PowerShell inside the
     "sed -i 's/a/b/' a.txt",
     'echo x | tee sub/log.txt',
     `echo x > "${path.join(root, 'quoted path.txt')}"`,
+    "sed -i -e 's/a/b/' src/file.ts",
     ...(process.platform === 'win32' ? [`echo x > ${msysPath(path.join(root, 'msys.txt'))}`] : []),
   ];
   for (const command of writes) {
@@ -6054,7 +6055,10 @@ test('read-only shell guard: refuses write-shaped Bash and PowerShell inside the
     'npm test 2>&1 | tail -5',
     'cat a.txt > /dev/null',
     "sed -n '1,5p' a.txt",
+    `sed -i '' -e 's/p\\.provolatile||/p.provolatile::text||/' "${path.join(scratch, 'snapshot.sql')}"`,
+    `sed -i 's/a/b/' "${path.join(scratch, 'outside.txt')}"`,
     `echo x > "${scratch}/out.txt"`,
+    `echo a || echo b > "${scratch}/or-out.txt"`,
     `cd "${scratch}" && echo x > y.txt`,
     `cp a.txt "${scratch}/a.txt"`,
     'echo x > ~/sq-readonly-home-probe.txt',
