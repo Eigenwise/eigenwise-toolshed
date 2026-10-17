@@ -109,6 +109,22 @@ export function filesChangedSince(root, base, files) {
   return files.filter((file) => changed.has(file));
 }
 
+function pathSelected(root, file, sources) {
+  return sources.some((source) => {
+    const selected = path.relative(root, path.resolve(root, source)).replaceAll('\\', '/');
+    return selected === '' || file === selected || file.startsWith(selected + '/');
+  });
+}
+
+export function selectedDeletedFiles(root, base, settings) {
+  if (!base) return [];
+  return runGit(root, ['diff', '--name-only', '--no-renames', '--diff-filter=D', '-z', base]).split('\0')
+    .filter((file) => SOURCE.test(file))
+    .filter((file) => pathSelected(root, file, settings.sources))
+    .filter((file) => !settings.source || pathSelected(root, file, settings.source))
+    .filter((file) => !settings.exclude.some((pattern) => path.matchesGlob(file, pattern)));
+}
+
 export function sourceHashes(root, files) {
   return Object.fromEntries(files.map((file) => [file, crypto.createHash('sha256').update(fs.readFileSync(path.resolve(root, file))).digest('hex')]));
 }

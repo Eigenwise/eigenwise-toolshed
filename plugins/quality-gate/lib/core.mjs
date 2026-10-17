@@ -494,27 +494,28 @@ function classifyChange(metric, partner) {
   return metric.complexity > partner.complexity ? 'modified-raised' : LEGACY_UNCHANGED;
 }
 
-function changedFunctions(fileMetrics, baseline) {
+function changedFunctions(fileMetrics, baseline, relativePath, removedMetrics) {
   const partners = baseFunctionByIdentity(baseline, fileMetrics);
+  const retained = new Set(partners.values());
+  removedMetrics.push(...baseline.filter((metric) => !retained.has(metric)).map((metric) => ({ ...metric, relativePath })));
   return fileMetrics
     .filter((metric) => partners.get(metric.identity)?.fingerprint !== metric.fingerprint)
     .map((metric) => ({ ...metric, classification: classifyChange(metric, partners.get(metric.identity)) }));
 }
 
-export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline) {
+export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline, removedMetrics = []) {
   const baselinePathByPath = new Map(changedPaths.map(pathAndBaselinePath));
   const changedMetrics = [];
   const byPath = Map.groupBy(metrics, (metric) => metric.relativePath);
-  for (const [relativePath, fileMetrics] of byPath) {
-    if (!baselinePathByPath.has(relativePath)) continue;
-    const baselinePath = baselinePathByPath.get(relativePath);
+  for (const [relativePath, baselinePath] of baselinePathByPath) {
+    const fileMetrics = byPath.get(relativePath) ?? [];
     let baseline = [];
     try {
       baseline = await readBaseline(base, baselinePath);
     } catch (error) {
       if (!pathAbsentAtBase(error, baselinePath)) throw error;
     }
-    changedMetrics.push(...changedFunctions(fileMetrics, baseline));
+    changedMetrics.push(...changedFunctions(fileMetrics, baseline, relativePath, removedMetrics));
   }
   return changedMetrics;
 }
