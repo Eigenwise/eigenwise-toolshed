@@ -21,7 +21,9 @@ for retry. The range still has to satisfy the current ticket's declared scope an
 executor based on a feature branch, pass that branch as MCP dispatch `integrationBranch`. The dispatch
 records that ticket delivery target and its starting commit. Submit validation, wave assembly, and delivery
 keep using it even if the board default later changes. A wave can contain only tickets with the same recorded
-target identity, including local versus remote mode; mixed targets refuse before assembly or branch writes.
+branch. Local and remote forms of one branch (`local:main`, `remote:origin/main`) assemble as one wave on the
+local form while that branch is ahead of origin, the remote form otherwise. Different branches refuse
+`integration_target_mismatch` before assembly or branch writes, naming each ticket's target.
 A submitted range may contain merge commits; validate its reachable range and scope instead of treating a
 merge commit as an automatic refusal.
 
