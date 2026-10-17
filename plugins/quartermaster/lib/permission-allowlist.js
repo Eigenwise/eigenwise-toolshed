@@ -6,6 +6,7 @@ const path = require('node:path');
 const { resolveWindow } = require('./scan.js');
 const { appendDecision } = require('./state.js');
 const { streamTranscript } = require('./stream.js');
+const { readProjectSettings, writeProjectSettings } = require('./project-settings.js');
 
 const MIN_APPROVALS = 3;
 const ENABLED_SETTING = 'autoApprovePermissions';
@@ -271,78 +272,21 @@ async function collectPermissionDecisions(options = {}) {
   return { window, decisions: collector.entries() };
 }
 
-function arrayBounds(raw, start) {
-  let quoted = false;
-  let escaped = false;
-  let depth = 0;
-  for (let index = start; index < raw.length; index += 1) {
-    const character = raw[index];
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (character === '\\') escaped = true;
-      else if (character === '"') quoted = false;
-      continue;
-    }
-    if (character === '"') quoted = true;
-    else if (character === '[') depth += 1;
-    else if (character === ']') {
-      depth -= 1;
-      if (!depth) return { start, end: index };
-    }
-  }
-  return null;
-}
-
-function appendedArrayValues(raw, bounds, values) {
-  const existing = raw.slice(bounds.start + 1, bounds.end).trim();
-  const propertyIndent = /(?:^|\n)([ \t]*)[^\n]*$/.exec(raw.slice(0, bounds.start))?.[1] ?? '';
-  const closingIndent = /(?:^|\n)([ \t]*)$/.exec(raw.slice(0, bounds.end))?.[1] ?? propertyIndent;
-  const itemIndent = `${propertyIndent}  `;
-  const prefix = raw.slice(0, bounds.end);
-  const trailingWhitespace = /\s*$/.exec(prefix)?.[0] ?? '';
-  const comma = existing ? ',' : '';
-  const inserted = `\n${values.map((value) => `${itemIndent}${JSON.stringify(value)}`).join(`,\n`)}\n${closingIndent}`;
-  return `${prefix.slice(0, prefix.length - trailingWhitespace.length)}${comma}${inserted}${raw.slice(bounds.end)}`;
-}
-
 function appendRulesToSettings(projectDir, rules) {
-  const file = settingsFile(projectDir);
   const additions = [...new Set(rules)].filter(Boolean);
   if (!additions.length) return [];
-  if (!fs.existsSync(file)) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify({ permissions: { allow: additions } }, null, 2)}\n`, 'utf8');
-    return additions;
-  }
-  const raw = fs.readFileSync(file, 'utf8');
   let settings;
   try {
-    settings = JSON.parse(raw);
+    settings = readProjectSettings(projectDir);
   } catch {
-    throw new Error(`cannot update invalid JSON in ${file}`);
+    throw new Error(`cannot update invalid JSON in ${settingsFile(projectDir)}`);
   }
   const existing = Array.isArray(settings.permissions?.allow) ? settings.permissions.allow : [];
   const newRules = additions.filter((rule) => !existing.includes(rule));
   if (!newRules.length) return [];
 
-  const allowMatch = /"allow"\s*:\s*\[/.exec(raw);
-  if (allowMatch) {
-    const start = allowMatch.index + allowMatch[0].lastIndexOf('[');
-    const bounds = arrayBounds(raw, start);
-    if (bounds) {
-      fs.writeFileSync(file, appendedArrayValues(raw, bounds, newRules), 'utf8');
-      return newRules;
-    }
-  }
-
-  const rootEnd = raw.lastIndexOf('}');
-  if (rootEnd < 0) throw new Error(`cannot update invalid JSON in ${file}`);
-  const rootHasContent = raw.slice(0, rootEnd).replace(/[\s{]/g, '').length > 0;
-  const indent = /(?:^|\n)([ \t]*)\}/.exec(raw.slice(0, rootEnd + 1))?.[1] ?? '';
-  const propertyIndent = `${indent}  `;
-  const property = `"permissions": {\n${propertyIndent}  "allow": ${JSON.stringify(newRules)}\n${propertyIndent}}`;
-  const addition = `${rootHasContent ? ',' : ''}\n${propertyIndent}${property}\n${indent}`;
-  fs.writeFileSync(file, `${raw.slice(0, rootEnd)}${addition}${raw.slice(rootEnd)}`, 'utf8');
+  settings.permissions = { ...settings.permissions, allow: [...existing, ...newRules] };
+  writeProjectSettings(projectDir, settings);
   return newRules;
 }
 
