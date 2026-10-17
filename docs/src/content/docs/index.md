@@ -40,7 +40,7 @@ template: splash
     </article>
     <article class="shed-card card">
       <h2>Usage is hard to see</h2>
-      <p><a href="../observability/">Observability</a> records selected metadata locally, with per-project opt-in and optional sinks.</p>
+      <p><a href="../observability/">Observability</a> records selected metadata locally, with per-project opt-in and a local usage board.</p>
     </article>
   </div>
   <p>These plugins are independent. Quartermaster is the guided entry point, not a prerequisite. Install one plugin directly when you already know the job.</p>
