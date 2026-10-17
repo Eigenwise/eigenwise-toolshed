@@ -1,7 +1,7 @@
 'use strict';
 
 const { resolveSuite } = require('../suite-resolver.js');
-const { VERIFICATION_KINDS, classifyVerificationKind } = require('../kernel/verification.js');
+const { VERIFICATION_KINDS, classifyVerificationKind, environmentPrefix, verificationRequirement } = require('../kernel/verification.js');
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require('../worktrees.js');
 const { unscopedWriteCannotAutoApprove } = require('./dispatch.js');
 
@@ -153,8 +153,9 @@ function verifyCommandErrors(value?: any) {
   if (/^manual\b/i.test(command)) {
     return ['Manual verification must use the exact prefix `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.'];
   }
-  const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1]
-    || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2]
+  const runnable = command.slice(environmentPrefix(command).length);
+  const first = runnable.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1]
+    || runnable.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2]
     || '';
   const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase())
     || /^\(cd\s/.test(command)
@@ -932,6 +933,17 @@ function derivedVerifyCommand(ticket?: any, projectPath?: any) {
   return resolveSuite(projectPath, { name: path.basename(directory), dir: directory });
 }
 
+// GH-552: dispatch pins the plugin's generated suite command for a suite verify, so the author hears it at
+// add/update time instead of meeting an executor_verify_mismatch on a string they never saw.
+function suiteVerifyRewriteWarnings(ticket: any, projectPath?: any): string[] {
+  const recorded = String(ticket.executorVerify || '').trim();
+  const suite = String(ticket.executorVerifyKind).toLowerCase() === 'suite' && recorded ? derivedVerifyCommand(ticket, projectPath) : null;
+  if (!suite) return [];
+  return [verificationRequirement({ kind: 'suite', command: recorded, suite: { name: suite.plugin, cwd: suite.cwd, setup: suite.setup, command: suite.command } }).command]
+    .filter((generated) => generated !== recorded)
+    .map((generated) => `Planning-depth warning: verifyKind suite replaces the recorded verify ${JSON.stringify(recorded)} with the generated suite command ${JSON.stringify(generated)}, which runs from the checkout root and is what executors run and submit. Use verifyKind command to keep the recorded line as written.`);
+}
+
 function verifyCommandWarning(ticket?: any, projectPath?: any) {
   const issue = verifyCommandIssue(ticket, projectPath);
   return issue ? `Planning-depth warning: ${issue}` : null;
@@ -1311,6 +1323,7 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any, slug?: any) {
   if (browserReview) warnings.push(browserReview);
   const verify = verifyCommandWarning(ticket, projectPath);
   if (verify) warnings.push(verify);
+  warnings.push(...suiteVerifyRewriteWarnings(ticket, projectPath));
   warnings.push(...unquotedGlobPlanningWarnings(ticket));
   warnings.push(...executorAnchorWarnings(ticket, projectPath));
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;

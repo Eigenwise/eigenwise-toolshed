@@ -38,7 +38,7 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
-const { authenticatedControlRequest, controlRequestHeaders, ensureControlToken } = require('./control-auth.js');
+const { localRequestAllowed, authenticatedControlRequest, controlRequestHeaders, ensureControlToken } = require('./control-auth.js');
 const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
@@ -1989,10 +1989,24 @@ function createShimRelay({
     });
   }
 
-  async function relay(req, res) {
+  async function readRelayBody(req, res) {
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 64 * 1024 * 1024) {
+        res.writeHead(413, { 'connection': 'close', 'x-should-retry': 'false' });
+        res.end();
+        return null;
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  async function relay(req, res) {
+    const body = await readRelayBody(req, res);
+    if (body === null) return;
     try {
       const upstream = await requestWorker(req, body);
       // Once the worker's headers are out this can no longer become an HTTP
@@ -2308,8 +2322,7 @@ function runShim() {
   function controlRequestAllowed(req, compatibilityListener) {
     return !compatibilityListener
       && req.method === 'POST'
-      && req.headers.host === `127.0.0.1:${PUBLIC_SHIM_PORT}`
-      && req.headers.origin === undefined
+      && localRequestAllowed(req, [`127.0.0.1:${PUBLIC_SHIM_PORT}`])
       && req.headers['content-type'] === 'application/json'
       && requestHeader(req, RC_CONTROL_HEADER) === RC_CONTROL_VALUE;
   }
@@ -2391,7 +2404,19 @@ function runShim() {
     return sendControlResponse(res, { status: 'unknown' });
   }
 
+  function supervisorRequestAllowed(req, compatibilityListener) {
+    const port = req.socket.localPort;
+    const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+    if (compatibilityListener) hosts.push(COMPAT_HOST, `${COMPAT_HOST}:${port}`);
+    return localRequestAllowed(req, hosts);
+  }
+
   function handle(req, res, compatibilityListener = false) {
+    if (!supervisorRequestAllowed(req, compatibilityListener)) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
     const pathOnly = req.url.split('?')[0];
     if (pathOnly === '/restart' || pathOnly === '/drain') {
       if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compatibilityListener)) {
@@ -2409,7 +2434,7 @@ function runShim() {
       void handleCompatibilityControl(req, res);
       return;
     }
-    if (req.method === 'POST' && pathOnly === '/restart') {
+    if (pathOnly === '/restart') {
       const chunks = [];
       let size = 0;
       req.on('data', (chunk) => {

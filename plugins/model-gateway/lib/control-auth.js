@@ -38,16 +38,19 @@ function controlRequestHeaders(file = CONTROL_TOKEN_PATH) {
   return token ? { [CONTROL_HEADER]: token } : {};
 }
 
+function localRequestAllowed(req, hosts) {
+  return req.headers.origin === undefined && hosts.includes(req.headers.host);
+}
+
 function authenticatedControlRequest(req, token, ports, compatibilityListener = false) {
   const supplied = req.headers[CONTROL_HEADER];
   return !compatibilityListener
     && req.method === 'POST'
-    && ports.some((port) => Number.isInteger(port) && port > 0 && req.headers.host === `127.0.0.1:${port}`)
-    && req.headers.origin === undefined
+    && ports.some((port) => Number.isInteger(port) && port > 0 && localRequestAllowed(req, [`127.0.0.1:${port}`]))
     && req.headers['content-type'] === 'application/json'
     && typeof token === 'string' && TOKEN_PATTERN.test(token)
     && typeof supplied === 'string' && TOKEN_PATTERN.test(supplied)
     && crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(token));
 }
 
-module.exports = { CONTROL_HEADER, CONTROL_TOKEN_PATH, authenticatedControlRequest, controlRequestHeaders, ensureControlToken, readControlToken };
+module.exports = { CONTROL_HEADER, CONTROL_TOKEN_PATH, localRequestAllowed, authenticatedControlRequest, controlRequestHeaders, ensureControlToken, readControlToken };

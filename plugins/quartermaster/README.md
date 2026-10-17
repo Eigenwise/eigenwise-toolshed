@@ -69,33 +69,14 @@ node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
 node bin/quartermaster.js enable-auto-allowlist [--project <path>]
-node bin/quartermaster.js crap [--project <path>] [--max 6] [--base <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--cc-only] [--json]
+node bin/quartermaster.js crap [quality-gate crap arguments]
 ```
 
 Everything prints JSON except `crap`. Node standard library only, no dependencies, cross-platform.
 
-`crap` scores every function in the project with CRAP (Change Risk Anti-Patterns), `cc^2 * (1 - coverage)^3 + cc`, so a function is either simple or covered. Coverage comes from an lcov file, complexity from [lizard](https://github.com/terryyin/lizard), which reads C/C++, C#, Java, JavaScript, TypeScript, Python, Go, Rust, Ruby, PHP, Swift, Kotlin, Scala, Lua and more. It prints one line per offender plus a summary, or the whole report with `--json`.
+`crap` is retired. CRAP scoring lives in the [quality-gate](../quality-gate) plugin, and Quartermaster only sets it up. `crap` passes its arguments straight to the installed quality-gate's `crap` and exits with its code. Without quality-gate installed it scores nothing, prints `/plugin install quality-gate@eigenwise-toolshed` on stderr and exits 2, so nothing reads it as a pass. quality-gate reads `.claude/quality-gate/crap.json` and still falls back to an older `.claude/quartermaster/crap.json`. Its README has the config keys, the coverage-command contract and the exit codes; the setup skill's [CRAP gate reference](skills/setup/references/crap-gate.md) has the LCOV recipe per stack and the live rule.
 
-Settings come from `.claude/quartermaster/crap.json`, and flags override it:
-
-```json
-{
-  "coverageCommand": "npx c8 --reporter=lcov npm test",
-  "lcov": "coverage/lcov.info",
-  "sources": ["src"],
-  "exclude": ["**/*.test.*"],
-  "max": 6,
-  "base": "main"
-}
-```
-
-Every changed or new function has to stay under the ceiling (6; 6 fails), and unchanged functions are not gated. A function counts as changed when it differs from its copy at `git merge-base HEAD <base>`; `base` defaults to the local `develop`, `main`, or `master`. With no base (none of those branches exists, or `base` is `HEAD`) every function is gated. `--ratchet` and the config key `ratchet` still work as a deprecated alias for `--base`/`base`; using either prints a one-line warning.
-
-CRAP is never below cc, so a changed function with cc 6 or more fails at any coverage. The failure line says so (`cc 6 or more fails at any coverage`): split the function, because more tests cannot fix it. `--cc-only` checks exactly that and nothing else. It runs lizard only, with no coverage command and no lcov, applies the same changed-function selection and base, and fails each changed function with cc 6 or more (`cc=<n> fails at any coverage (CRAP is never below cc)`). It exits 1 on a failure and 2 on a missing prerequisite, like the full gate, and takes seconds. Use it while splitting functions, then run the full gate once. It rejects `--lcov` and `--coverage-command`.
-
-The default base is the local branch, never `origin/<branch>`, because a fork's origin can be stale. A local base that lags its upstream makes work already merged there read as changed, so when `git rev-list --count <base>..<base>@{upstream}` is above zero, `crap` prints a one-line warning on stderr naming how many commits the base is behind. Pass `--base <base>@{upstream}`, or fetch and fast-forward the base. The warning never fails the gate.
-
-Exit codes: 0 the gate passed, 1 the gate failed, 2 a prerequisite or measurement is missing (lizard is not resolvable, there is no lcov file, the coverage command failed, or a changed line lies in a function no lizard row of its own measures, a nested function lizard dropped included; the gate corrects the spans lizard misreads and fails closed on what it cannot place). Quartermaster looks for `lizard` on PATH, then `uvx lizard`, then `pipx run lizard`; it never installs it, it prints the install hint (`uv tool install lizard`, `pipx install lizard`, or `pip install lizard`).
+Learned rules are merged into `permissions.allow` in the project's `.claude/settings.local.json`. Existing deny rules, permission mode, and unrelated settings are kept; a write reformats the JSON with two-space indentation.
 
 ## Configuration
 

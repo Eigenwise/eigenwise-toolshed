@@ -1,5 +1,5 @@
 "use strict";
-const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
+const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
 const { readLockHolder } = require("./locks.js");
 const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capture.js");
@@ -677,8 +677,9 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
     }
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
     const project = String(opts?.cwd || "").trim() || readMeta(slug)?.path;
+    const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
     const verify = (environment) => runProcessVerification(requirement, {
-      cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
+      cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
       timeoutMilliseconds,
       logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
       outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,

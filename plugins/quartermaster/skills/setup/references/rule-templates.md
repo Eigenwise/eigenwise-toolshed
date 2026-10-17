@@ -124,7 +124,7 @@ priority: 85
 description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
-Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
+Before calling a change done, run `node "<quality-gate plugin root>/bin/quality-gate.js" crap`.
 Use the gate's threshold and report per-function rows honestly; unmeasured bodies stay unmeasured, no averages. Untouched legacy functions are out of scope.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

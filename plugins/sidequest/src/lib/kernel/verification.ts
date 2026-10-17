@@ -109,8 +109,22 @@ function suiteFrom(input: RequirementInput): VerificationSuite | undefined {
     : undefined;
 }
 
-function suiteCommand(suite: VerificationSuite): string {
-  return `cd ${suite.cwd} && ${[suite.setup, suite.command].filter(Boolean).join(' && ')}`;
+const ENVIRONMENT_ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)+/;
+
+export function environmentPrefix(command: unknown): string {
+  return ENVIRONMENT_ASSIGNMENTS.exec(nonEmpty(command))?.[0].trim() || '';
+}
+
+// GH-552: the generated command keeps the author's environment prefix on every step it runs.
+function suiteCommand(suite: VerificationSuite, environment: string): string {
+  const steps = [suite.setup, suite.command].filter(Boolean).map((step) => [environment, step].filter(Boolean).join(' '));
+  return `cd ${suite.cwd} && ${steps.join(' && ')}`;
+}
+
+// GH-552: a generated suite command opens with its own `cd`, so it runs from the checkout root and verifyCwd
+// applies only to a command the author wrote.
+export function verifyCwdForRequirement(requirement: Readonly<{ suite?: unknown }> | null | undefined, verifyCwd?: string): string {
+  return requirement?.suite ? '' : String(verifyCwd || '');
 }
 
 export function validationDiagnostic(code: string, message: string): Diagnostic {
@@ -119,7 +133,7 @@ export function validationDiagnostic(code: string, message: string): Diagnostic 
 
 function suiteVerificationRequirement(input: RequirementInput, command: string, evidence: string): VerificationRequirement {
   const suite = suiteFrom(input);
-  if (suite) return Object.freeze({ kind: 'suite', suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
+  if (suite) return Object.freeze({ kind: 'suite', suite, command: suiteCommand(suite, environmentPrefix(command)), evidenceContract: `suite ${suite.name} output` });
   return Object.freeze({ kind: 'suite', ...(command ? { command } : {}), evidenceContract: evidence || 'named suite output' });
 }
 

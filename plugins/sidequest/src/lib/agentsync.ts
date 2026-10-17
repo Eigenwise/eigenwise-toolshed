@@ -61,7 +61,7 @@ const { worktreeRoot, retainedWorktreeResumeDecision } = require('./worktrees.js
 const { spawnDescription } = store;
 const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
-const { verificationRequirement } = require('./kernel/verification.js');
+const { verificationRequirement, verifyCwdForRequirement } = require('./kernel/verification.js');
 const { scopeKey } = require('./scope-match.js');
 const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require('./sync-check.js');
 
@@ -896,10 +896,12 @@ function briefingCommentBody(comments?: any) {
 function configuredQualityGateBody(projectPath?: string, slug?: string) {
   const project = projectPath || store.readMeta(slug)?.path;
   if (!project) return 'Configured quality gate: none.';
-  const configPath = path.join(project, '.claude', 'quartermaster', 'crap.json');
+  const qualityGateConfig = path.join(project, '.claude', 'quality-gate', 'crap.json');
+  const quartermasterConfig = path.join(project, '.claude', 'quartermaster', 'crap.json');
+  const configPath = fs.existsSync(qualityGateConfig) ? qualityGateConfig : quartermasterConfig;
   if (!fs.existsSync(configPath)) return 'Configured quality gate: none.';
-  const { command = 'node "<quartermaster plugin root>/bin/quartermaster.js" crap', max = 'gate-owned', threshold = max, base = 'gate-selected default' } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}`;
+  const { command = 'node "<quality-gate plugin root>/bin/quality-gate.js" crap', max = 'gate-owned', threshold = max, base = 'gate-selected default' } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}. Legacy bodies whose complexity did not rise are informational and never fail.`;
 }
 
 function legacyVerificationText(value?: string | null): string {
@@ -979,7 +981,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join('\n\n'),
     verify,
-    executorVerificationDirectoryGuidance(ticket.executorVerifyCwd),
+    executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === 'shared'
       ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log."
       : verifierCommand

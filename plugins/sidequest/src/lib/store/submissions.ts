@@ -1,6 +1,6 @@
 'use strict';
 
-const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
+const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
 const { readLockHolder } = require('./locks.js');
 const { isFullSuiteCommand, runFullSuiteVerification } = require('../verify-capture.js');
@@ -838,8 +838,9 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   // verifier has to run there too, not in the registered checkout, or it certifies content
   // that worktree never held.
   const project = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
+  const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
   const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
-    cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
+    cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
     timeoutMilliseconds,
     logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
