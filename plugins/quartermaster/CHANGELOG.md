@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.2 (2026-10-17)
+
+Released in v3.599.0, up from 0.12.1.
+
+### Fixes
+
+- quality-gate expands $VAR, ${VAR} and %VAR% in coverageCommand before running it, so a POSIX-style command writes into QUALITY_GATE_COVERAGE_DIR on Windows too (GitHub #543); a command report already wins over config lcov (GitHub #519). quartermaster crap is retired: it runs the installed quality-gate crap with the same arguments, or prints the quality-gate install command and exits 2 (SQ-3712)
+- Learning permission allow rules preserves deny rules and the default mode, leaves sandbox allow arrays untouched, and avoids duplicate rules on later runs (SQ-3718)
+
 ## 0.12.1 (2026-10-12)
 
 Released in v3.595.0, up from 0.12.0.
