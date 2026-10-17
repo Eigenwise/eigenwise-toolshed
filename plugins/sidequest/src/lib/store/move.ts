@@ -61,13 +61,13 @@ function reserveMoveFlights(paths: string[], operation: () => void): void {
 function relocatedPath(value: unknown, oldPath: string, newPath: string): unknown {
   if (typeof value !== 'string' || !path.isAbsolute(value)) return value;
   const relative = path.relative(canonicalPath(oldPath), canonicalPath(value));
-  if ((relative === '..' || relative.startsWith(`..${path.sep}`)) || path.isAbsolute(relative)) return value;
+  if (relative.split(path.sep).includes('..') || path.isAbsolute(relative)) return value;
   return path.join(newPath, relative);
 }
 
 function relocateCheckout(dispatch: StoredObject, oldPath: string, newPath: string): StoredObject {
   const relocated = { ...dispatch };
-  for (const field of ['worktree', 'worktreeGitDirectory', 'worktreeCommonGitDirectory', 'sourceWorktree', 'boundWorktree', 'gitDirectory', 'commonGitDirectory', 'boundGitDirectory', 'boundCommonGitDirectory', 'repository', 'target']) {
+  for (const field of ['worktree', 'worktreeGitDirectory', 'worktreeCommonGitDirectory', 'sourceWorktree', 'observedWorktree', 'boundWorktree', 'gitDirectory', 'commonGitDirectory', 'boundGitDirectory', 'boundCommonGitDirectory', 'repository', 'target']) {
     if (field in relocated) relocated[field] = relocatedPath(relocated[field], oldPath, newPath);
   }
   relocateCheckoutChildren(relocated, oldPath, newPath);
@@ -124,7 +124,8 @@ function relocateStoredFiles(source: string, target: string, operation: () => vo
   fs.mkdirSync(target, { recursive: true });
   const moved: string[] = [];
   try {
-    const entries = fs.existsSync(source) ? fs.readdirSync(source) : [];
+    fs.mkdirSync(source, { recursive: true });
+    const entries = fs.readdirSync(source);
     for (const entry of entries.filter((name) => name !== 'verification')) {
       fs.renameSync(path.join(source, entry), path.join(target, entry));
       moved.push(entry);

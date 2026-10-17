@@ -540,6 +540,10 @@ Tickets and their images are stored centrally (default ~/.claude/sidequest), so
 one dashboard shows every project's board at once.`
   );
 }
+async function cmdBoard(opts, positional) {
+  if (positional[0] === "move") await cmdMoveBoard(opts, positional.slice(1));
+  else await cmdDashboard(opts);
+}
 async function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -560,8 +564,7 @@ async function main() {
   if (commandMutates(cmd, opts, positional)) assertMutationFreshness(opts);
   switch (cmd) {
     case "board":
-      if (positional[0] === "move") await cmdMoveBoard(opts, positional.slice(1));
-      else await cmdDashboard(opts);
+      await cmdBoard(opts, positional);
       break;
     case "add":
     case "new":

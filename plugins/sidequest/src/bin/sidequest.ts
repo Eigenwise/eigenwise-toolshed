@@ -497,6 +497,11 @@ one dashboard shows every project's board at once.`
 }
 
 
+async function cmdBoard(opts: { json?: boolean }, positional: string[]) {
+  if (positional[0] === 'move') await cmdMoveBoard(opts, positional.slice(1));
+  else await cmdDashboard(opts);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -520,8 +525,7 @@ async function main() {
 
   switch (cmd) {
     case 'board':
-      if (positional[0] === 'move') await cmdMoveBoard(opts, positional.slice(1));
-      else await cmdDashboard(opts);
+      await cmdBoard(opts, positional);
       break;
     case 'add':
     case 'new':

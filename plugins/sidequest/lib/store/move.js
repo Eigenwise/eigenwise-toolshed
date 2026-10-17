@@ -78,12 +78,12 @@ function reserveMoveFlights(paths, operation) {
 function relocatedPath(value, oldPath, newPath) {
   if (typeof value !== "string" || !import_node_path.default.isAbsolute(value)) return value;
   const relative = import_node_path.default.relative((0, import_worktree.canonicalPath)(oldPath), (0, import_worktree.canonicalPath)(value));
-  if (relative === ".." || relative.startsWith(`..${import_node_path.default.sep}`) || import_node_path.default.isAbsolute(relative)) return value;
+  if (relative.split(import_node_path.default.sep).includes("..") || import_node_path.default.isAbsolute(relative)) return value;
   return import_node_path.default.join(newPath, relative);
 }
 function relocateCheckout(dispatch, oldPath, newPath) {
   const relocated = { ...dispatch };
-  for (const field of ["worktree", "worktreeGitDirectory", "worktreeCommonGitDirectory", "sourceWorktree", "boundWorktree", "gitDirectory", "commonGitDirectory", "boundGitDirectory", "boundCommonGitDirectory", "repository", "target"]) {
+  for (const field of ["worktree", "worktreeGitDirectory", "worktreeCommonGitDirectory", "sourceWorktree", "observedWorktree", "boundWorktree", "gitDirectory", "commonGitDirectory", "boundGitDirectory", "boundCommonGitDirectory", "repository", "target"]) {
     if (field in relocated) relocated[field] = relocatedPath(relocated[field], oldPath, newPath);
   }
   relocateCheckoutChildren(relocated, oldPath, newPath);
@@ -134,7 +134,8 @@ function relocateStoredFiles(source, target, operation) {
   import_node_fs.default.mkdirSync(target, { recursive: true });
   const moved = [];
   try {
-    const entries = import_node_fs.default.existsSync(source) ? import_node_fs.default.readdirSync(source) : [];
+    import_node_fs.default.mkdirSync(source, { recursive: true });
+    const entries = import_node_fs.default.readdirSync(source);
     for (const entry of entries.filter((name) => name !== "verification")) {
       import_node_fs.default.renameSync(import_node_path.default.join(source, entry), import_node_path.default.join(target, entry));
       moved.push(entry);
