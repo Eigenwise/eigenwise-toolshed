@@ -1031,12 +1031,13 @@ function fileTestNames(root, change, file) {
 function mergeDiff(root, merge, file) {
   return gitOutput(root, ["diff-tree", "--cc", "--unified=0", "--no-commit-id", merge, "--", file]);
 }
-function mergeOwnedPaths(root, merge) {
-  return listedPaths(root, ["diff-tree", "--cc", "-r", "--name-only", "-z", "--no-commit-id", merge]).filter((file) => diffHunks(mergeDiff(root, merge, file)).some((hunk) => combinedChangedLines(hunk).length));
+function mergeOwnedPaths(root, merge, changed) {
+  return listedPaths(root, ["diff-tree", "--cc", "-r", "--name-only", "-z", "--no-commit-id", merge]).filter((file) => changed.has(file)).filter((file) => diffHunks(mergeDiff(root, merge, file)).some((hunk) => combinedChangedLines(hunk).length));
 }
-function changePaths(root, change, working) {
-  if ("merge" in change) return mergeOwnedPaths(root, change.merge);
-  return change.to ? listedPaths(root, ["diff", "--name-only", "--no-renames", "-z", change.from, change.to]) : working;
+function changePaths(root, change, working, changed) {
+  if ("merge" in change) return mergeOwnedPaths(root, change.merge, changed);
+  const paths = change.to ? listedPaths(root, ["diff", "--name-only", "--no-renames", "-z", change.from, change.to]) : working;
+  return paths.filter((file) => changed.has(file));
 }
 function changeTestNames(root, change, files) {
   const namesIn = "merge" in change ? (file) => diffTestNames(sourceAt(root, change.merge, file), mergeDiff(root, change.merge, file)) : (file) => fileTestNames(root, change, file);
@@ -1065,7 +1066,7 @@ function ownChangeAttribution(root, changes, working, changedPaths) {
   const owned = /* @__PURE__ */ new Set();
   const names = [];
   for (const change of changes) {
-    const files = changePaths(root, change, working).filter((file) => changed.has(file));
+    const files = changePaths(root, change, working, changed);
     files.forEach((file) => owned.add(file));
     names.push(...changeTestNames(root, change, files));
   }
@@ -1091,7 +1092,7 @@ function negativeControlChanges(slug, ticket, delta, changedPaths) {
 function mergeResolvedPaths(workspace) {
   if (!workspace?.base) return [];
   try {
-    return listedPaths(workspace.root, ["log", "--merges", "--format=", "--cc", "--name-only", "-z", `${workspace.base}..HEAD`]);
+    return listedPaths(workspace.root, ["log", "--merges", "--first-parent", "--format=", "--cc", "--name-only", "-z", `${workspace.base}..HEAD`]);
   } catch (_) {
     return [];
   }

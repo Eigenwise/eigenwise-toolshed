@@ -7,7 +7,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const childProcess = require('node:child_process');
+const { execFileSync } = childProcess;
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-negative-control-merge-home-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -328,4 +329,45 @@ test('SQ-176: tests merged in from a local-only branch or a pushed feature branc
     assert.match(refusal.message, /upstream develop test/);
     assert.match(refusal.message, /own change test/);
   }
+});
+
+test('GH-160 follow-up: a merge develop made internally is not the candidate\'s, so merging develop alone leaves an empty scope', () => {
+  const { git, write, commit, slug } = fixtureProject('sq-negative-control-inherited-merge-');
+  const by = 'inherited-merge-executor';
+  const ticket = claimSharedTree(slug, by);
+
+  git(['checkout', '-b', 'feature', 'develop']);
+  commit({ 'docs/feature.md': 'feature\n' }, 'feature outside scope');
+  git(['checkout', 'develop']);
+  commit({ 'docs/develop.md': 'develop\n' }, 'develop outside scope');
+  git(['merge', '--no-commit', '--no-ff', 'feature']);
+  write('lib/fixture.js', 'module.exports = 9;\n');
+  git(['add', '.']);
+  git(['commit', '--no-edit']);
+  git(['checkout', 'main']);
+  git(['merge', '--no-ff', '--no-edit', 'develop']);
+
+  const refusal = store.addComment(slug, ticket.ref, { by, body: verified, source: 'mcp' });
+  assert.equal(refusal.reason, 'empty_declared_scope', refusal.message);
+});
+
+test('GH-160 follow-up: a merge diffs only the in-scope paths it touched, never every path both sides changed', (t: any) => {
+  const { git, commit, land, slug } = fixtureProject('sq-negative-control-merge-spawns-');
+  const notes = (first: string, last: string) => `${first}\nb\nc\nd\n${last}\n`;
+  commit({ 'docs/notes.md': notes('a', 'e') }, 'notes');
+  git(['branch', '-f', 'develop']);
+  const by = 'merge-spawn-executor';
+  const ticket = claimSharedTree(slug, by);
+
+  commit({ 'docs/notes.md': notes('own', 'e'), 'test/fixture.test.js': "test('shared test', () => {\n  ownShared();\n});\n\ntest('resolution test', () => {\n  resolution();\n});\n" }, 'own work');
+  land({ 'docs/notes.md': notes('a', 'upstream'), 'test/fixture.test.js': "test('shared test', () => {\n  shared();\n});\n\ntest('resolution test', () => {\n  upstreamResolution();\n});\n" }, 'another ticket');
+  git(['merge', '--no-edit', 'develop']);
+
+  const spawns = t.mock.method(childProcess, 'execFileSync');
+  store.addComment(slug, ticket.ref, { by, body: verified, source: 'mcp' });
+  const perPathDiffs = spawns.mock.calls
+    .map((call: any) => call.arguments[1] as string[])
+    .filter((arguments_: string[]) => arguments_[0] === 'diff-tree' && arguments_.includes('--unified=0'))
+    .map((arguments_: string[]) => arguments_[arguments_.length - 1]);
+  assert.deepEqual([...new Set(perPathDiffs)], ['test/fixture.test.js']);
 });
