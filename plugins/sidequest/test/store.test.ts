@@ -262,7 +262,7 @@ const { execFileSync: moveGit } = require('node:child_process');
 
 function movableBoard(name: string) {
   const repository = directory(name);
-  moveGit('git', ['init', repository], { stdio: 'pipe' });
+  moveGit('git', ['init', '-b', 'main', repository], { stdio: 'pipe' });
   const board = store.ensureProject(repository, name);
   return { repository, board };
 }
@@ -330,7 +330,7 @@ test('board move refuses a non-Git destination', () => {
 test('board move names active claims and nonterminal dispatches before moving anything', () => {
   const source = movableBoard('move-live-source');
   const destination = directory('move-live-target');
-  moveGit('git', ['init', destination], { stdio: 'pipe' });
+  moveGit('git', ['init', '-b', 'main', destination], { stdio: 'pipe' });
   const ticket = seedMoveTicket(source.board.slug, { claim: { by: 'active-worker' }, dispatch: { preparedAt: new Date().toISOString() } });
   assert.throws(() => store.moveProject(source.repository, destination), /SQ-1 claimed by active-worker; SQ-1 has a nonterminal dispatch/);
   assert.strictEqual(store.getTicket(source.board.slug, ticket.ref).claim.by, 'active-worker');
@@ -339,7 +339,7 @@ test('board move names active claims and nonterminal dispatches before moving an
 test('board move refuses an extant sweep flight and leaves its owner untouched', () => {
   const source = movableBoard('move-flight-source');
   const destination = directory('move-flight-target');
-  moveGit('git', ['init', destination], { stdio: 'pipe' });
+  moveGit('git', ['init', '-b', 'main', destination], { stdio: 'pipe' });
   const flight = moveSweepReportFile(source.repository).replace(/\.json$/, '.flight');
   fs.mkdirSync(path.dirname(flight), { recursive: true });
   fs.writeFileSync(flight, 'an existing owner');
