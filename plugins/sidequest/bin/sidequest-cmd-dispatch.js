@@ -368,6 +368,12 @@ async function cmdUnarchiveBoard(opts, positional) {
   }
   console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
+async function cmdMoveBoard(opts, positional) {
+  if (positional.length !== 2) fail("board move: pass <old-path> <new-path>");
+  const result = store.moveProject(positional[0], positional[1]);
+  if (opts.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`Moved board ${result.from} to ${result.path}`);
+}
 function describeFindFailure(res, ref) {
   if (res.reason === "ambiguous") {
     return `matches ${res.matches.length} boards named "${ref}" — pass the path to disambiguate`;
@@ -401,4 +407,4 @@ async function cmdMerge(opts, positional) {
   if (!dryRun) console.log(`  removed board "${src.meta.name}".`);
   else console.log("  (dry run — nothing was changed)");
 }
-module.exports = { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge };
+module.exports = { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge, cmdMoveBoard };

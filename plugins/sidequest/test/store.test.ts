@@ -254,3 +254,104 @@ test('the dashboard API refuses a temp projectPath with the reason and still tak
   assert.strictEqual(unnamed.status, 400);
   assert.match(unnamed.body.error, /a project is required/);
 });
+
+const moveDatabase = require('../lib/db.js').openDb(store.homeRoot());
+const { reportFile: moveSweepReportFile } = require('../lib/sweep-state-path.js');
+const { canonicalPath: moveCanonicalPath } = require('../lib/kernel/worktree.js');
+const { execFileSync: moveGit } = require('node:child_process');
+
+function movableBoard(name: string) {
+  const repository = directory(name);
+  moveGit('git', ['init', repository], { stdio: 'pipe' });
+  const board = store.ensureProject(repository, name);
+  return { repository, board };
+}
+
+function seedMoveTicket(slug: string, fields: Record<string, unknown>) {
+  const ticket = store.createTicket(slug, { title: 'preserve me' });
+  const stored = { ...ticket, ...fields };
+  moveDatabase.prepare('UPDATE tickets SET data = ? WHERE id = ?').run(JSON.stringify(stored), ticket.id);
+  return stored;
+}
+
+test('board move preserves refs, comments, pending submissions, routing and checkout registrations', () => {
+  const { repository, board } = movableBoard('move-source');
+  const destination = path.join(fixtureRoot, 'move-destination');
+  moveGit('git', ['-C', repository, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture'], { stdio: 'pipe' });
+  const externalCheckout = path.join(fixtureRoot, 'move-external-checkout');
+  moveGit('git', ['-C', repository, 'worktree', 'add', '--detach', externalCheckout], { stdio: 'pipe' });
+  const story = store.createStory(board.slug, { title: 'keep the story' });
+  const submission = { state: 'pending', commit: 'abc123', worktree: repository, review: { immutable: true } };
+  const ticket = seedMoveTicket(board.slug, { submission, dispatch: { terminalAt: new Date().toISOString(), worktree: path.join(repository, 'checkout'), worktreeCommonGitDirectory: path.join(repository, '.git') } });
+  store.addComment(board.slug, ticket.ref, { by: 'fixture', body: 'keep the history' });
+  const before = store.getTicket(board.slug, ticket.ref);
+  const profile = moveDatabase.prepare('SELECT profile_id FROM project_routing_profiles WHERE project = ?').get(board.slug).profile_id;
+  const storage = store.projectDir(board.slug);
+  fs.mkdirSync(path.join(storage, 'assets', ticket.id), { recursive: true });
+  fs.writeFileSync(path.join(storage, 'assets', ticket.id, 'proof.txt'), 'asset');
+  fs.mkdirSync(path.join(storage, 'verification'), { recursive: true });
+  fs.writeFileSync(path.join(storage, 'verification', 'receipt'), 'immutable');
+  fs.renameSync(repository, destination);
+  const moved = store.moveProject(repository, destination);
+  const preserved = store.getTicket(moved.slug, ticket.ref);
+  assert.strictEqual(preserved.ref, ticket.ref);
+  assert.deepStrictEqual(preserved.comments, before.comments);
+  assert.strictEqual(JSON.stringify(preserved.submission), JSON.stringify(submission));
+  assert.strictEqual(moveCanonicalPath(preserved.dispatch.worktree), moveCanonicalPath(path.join(destination, 'checkout')));
+  assert.strictEqual(moveCanonicalPath(preserved.dispatch.worktreeCommonGitDirectory), moveCanonicalPath(path.join(destination, '.git')));
+  assert.strictEqual(store.getStory(moved.slug, story.ref).title, story.title);
+  assert.strictEqual(store.createStory(moved.slug, { title: 'next story' }).ref, 'US-2');
+  assert.strictEqual(moveGit('git', ['-C', externalCheckout, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim().replaceAll('\\', '/'), externalCheckout.replaceAll('\\', '/'));
+  assert.ok(moveGit('git', ['-C', destination, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).includes(externalCheckout.replaceAll('\\', '/')));
+  assert.strictEqual(moveDatabase.prepare('SELECT profile_id FROM project_routing_profiles WHERE project = ?').get(moved.slug).profile_id, profile);
+  assert.strictEqual(fs.readFileSync(path.join(store.projectDir(moved.slug), 'assets', ticket.id, 'proof.txt'), 'utf8'), 'asset');
+  assert.strictEqual(fs.readFileSync(path.join(storage, 'verification', 'receipt'), 'utf8'), 'immutable');
+  assert.strictEqual(store.findProject(repository).ok, false);
+  assert.strictEqual(store.findProject(destination).slug, moved.slug);
+  assert.strictEqual(store.createTicket(moved.slug, { title: 'next' }).ref, 'SQ-2');
+  assert.strictEqual(store.readMeta(moved.slug).moves[0].event, 'board.move');
+});
+
+test('board move refuses an occupied destination without changing either board', () => {
+  const source = movableBoard('move-occupied-source');
+  const destination = movableBoard('move-occupied-target');
+  assert.throws(() => store.moveProject(source.repository, destination.repository), /already has a board/);
+  assert.strictEqual(store.findProject(source.repository).slug, source.board.slug);
+  assert.strictEqual(store.findProject(destination.repository).slug, destination.board.slug);
+});
+
+test('board move refuses a non-Git destination', () => {
+  const source = movableBoard('move-no-git-source');
+  assert.throws(() => store.moveProject(source.repository, directory('move-no-git-target')), /git|repository/i);
+  assert.strictEqual(store.findProject(source.repository).slug, source.board.slug);
+});
+
+test('board move names active claims and nonterminal dispatches before moving anything', () => {
+  const source = movableBoard('move-live-source');
+  const destination = directory('move-live-target');
+  moveGit('git', ['init', destination], { stdio: 'pipe' });
+  const ticket = seedMoveTicket(source.board.slug, { claim: { by: 'active-worker' }, dispatch: { preparedAt: new Date().toISOString() } });
+  assert.throws(() => store.moveProject(source.repository, destination), /SQ-1 claimed by active-worker; SQ-1 has a nonterminal dispatch/);
+  assert.strictEqual(store.getTicket(source.board.slug, ticket.ref).claim.by, 'active-worker');
+});
+
+test('board move refuses an extant sweep flight and leaves its owner untouched', () => {
+  const source = movableBoard('move-flight-source');
+  const destination = directory('move-flight-target');
+  moveGit('git', ['init', destination], { stdio: 'pipe' });
+  const flight = moveSweepReportFile(source.repository).replace(/\.json$/, '.flight');
+  fs.mkdirSync(path.dirname(flight), { recursive: true });
+  fs.writeFileSync(flight, 'an existing owner');
+  assert.throws(() => store.moveProject(source.repository, destination), /sweep flight/);
+  assert.strictEqual(fs.readFileSync(flight, 'utf8'), 'an existing owner');
+  fs.rmSync(flight);
+});
+
+test('shipped board move CLI repoints the board without creating a destination board first', () => {
+  const source = movableBoard('move-cli-source');
+  const destination = path.join(fixtureRoot, 'move-cli-target');
+  fs.renameSync(source.repository, destination);
+  const result = spawnSync(process.execPath, [CLI, 'board', 'move', source.repository, destination, '--json'], { encoding: 'utf8' });
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.strictEqual(JSON.parse(result.stdout).slug, store.findProject(destination).slug);
+});

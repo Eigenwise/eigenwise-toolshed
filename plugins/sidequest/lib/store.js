@@ -172,6 +172,10 @@ function executionScope(slug, ticket) {
   }
   return effectiveScope(slug, ticket);
 }
+const boardMove = require("./store/move.js");
+function moveProject(oldPath, newPath) {
+  return boardMove.moveProject({ database, transaction, findProject, slugify, projectDir, invalidateStoreCaches }, oldPath, newPath);
+}
 let projectsLayer;
 function ensureProject(...args) {
   return projectsLayer.ensureProject(...args);
@@ -3945,6 +3949,7 @@ module.exports = {
   ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
+  moveProject,
   setProjectNotify,
   setProjectRouting,
   projectRoutingEnabled,
