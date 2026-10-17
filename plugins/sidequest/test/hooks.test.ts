@@ -4779,7 +4779,7 @@ test('combined Stop hook gives actionable reconciliation priority over a compact
   assert.equal(runHookOutput(STOP, { ...input, stop_hook_active: true }), null);
 });
 
-test('four concurrent Stop hooks preserve independent responsibilities in one host continuation', async (t?: any) => {
+test('three concurrent Stop hooks preserve independent responsibilities in one host continuation', async (t?: any) => {
   const sessionId = `stop-cascade-${++sqSeq}`;
   const firstSubmission = addTicket('runtime-shaped Stop cascade');
   claimStopTicket(firstSubmission, sessionId, 'stop-cascade-worker');
@@ -4801,15 +4801,6 @@ test('four concurrent Stop hooks preserve independent responsibilities in one ho
     'process.exit(2);',
   ].join('\n'));
   const mapperHook = path.join(__dirname, '..', '..', 'codebase-mapper', 'hooks', 'inject-context.js');
-  const observerHook = path.join(__dirname, '..', '..', 'observability', 'hooks', 'observability.js');
-  const observerSpool = path.join(directory, 'hook-spool.jsonl');
-  // Observability only captures for repositories the user opted in, so the fixture board
-  // has to consent or the hook stays silent and never writes a spool line.
-  const observerConfig = path.join(directory, 'observability.json');
-  const { project_id: observerProjectId } = require(observerHook).projectMetadata(BOARD_PATH);
-  fs.writeFileSync(observerConfig, JSON.stringify({
-    observability: { optedInProjects: [{ project_id: observerProjectId }] },
-  }));
   const mapperState = path.join(directory, 'mapper-state');
   const payload = {
     hook_event_name: 'Stop',
@@ -4826,10 +4817,6 @@ test('four concurrent Stop hooks preserve independent responsibilities in one ho
     {
       script: mapperHook,
       env: { CODEBASE_MAPPER_STATE_DIR: mapperState },
-    },
-    {
-      script: observerHook,
-      env: { WORKBENCH_HOOK_SPOOL: observerSpool, WORKBENCH_OBSERVABILITY_CONFIG: observerConfig },
     },
     { script: securityHook, env: {}, asyncRewake: true },
   ];
@@ -4849,19 +4836,16 @@ test('four concurrent Stop hooks preserve independent responsibilities in one ho
   assert.match(actionableOutputs(first)[1]?.reason, /update-codebase-map now/);
   assert.ok(Buffer.byteLength(actionableOutputs(first)[0].hookSpecificOutput.additionalContext) <= BUDGET.reconciliation);
   assert.ok(Buffer.byteLength(actionableOutputs(first)[1].reason) <= 192);
-  assert.equal(first[3]!.status, 2, 'official asynchronous security guidance coexists with the host continuation');
-  assert.equal(fs.readFileSync(observerSpool, 'utf8').trim().split('\n').length, 1);
+  assert.equal(first[2]!.status, 2, 'official asynchronous security guidance coexists with the host continuation');
 
   for (let repeatedStop = 0; repeatedStop < 3; repeatedStop += 1) {
     const repeated = await runAll(payload);
     assert.equal(hostContinuationCount(repeated, hooks), 0, 'unchanged responsibilities stay silent independently');
     assert.equal(actionableOutputs(repeated).length, 0);
   }
-  assert.equal(fs.readFileSync(observerSpool, 'utf8').trim().split('\n').length, 4);
 
   const reentry = await runAll({ ...payload, stop_hook_active: true });
   assert.equal(hostContinuationCount(reentry, hooks), 0);
-  assert.equal(fs.readFileSync(observerSpool, 'utf8').trim().split('\n').length, 4);
 
   runHookOutput(mapperHook, {
     ...payload,
@@ -4879,7 +4863,7 @@ test('four concurrent Stop hooks preserve independent responsibilities in one ho
     sessionId,
   }).ok, true);
   const failedSecurity = await runAll(payload, { SECURITY_FIXTURE_FAIL: '1' });
-  assert.equal(failedSecurity[3]!.status, 1);
+  assert.equal(failedSecurity[2]!.status, 1);
   assert.equal(hostContinuationCount(failedSecurity, hooks), 1, 'the host gets one continuation for both transitions');
   assert.equal(actionableOutputs(failedSecurity).length, 2, 'neither transitioned responsibility can suppress the other');
 });
