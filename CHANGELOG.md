@@ -8,6 +8,98 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.599.0 (2026-10-17)
+
+### model-gateway 0.54.3 → 0.54.4
+
+#### Fixes
+
+- Block browser requests and oversized uploads at the gateway supervisor (SQ-3717)
+  The supervisor now rejects Origin headers and foreign Host headers before relaying requests, preventing web pages from spending the local account's inference quota. Normal loopback requests and the RC-compatibility listener still work without an Origin header. Relayed bodies above 64 MiB return HTTP 413 before reaching a worker.
+
+### quality-gate 0.3.1 → 0.4.0
+
+#### Features
+
+- Add informational DUPLICATE? and CALLERS OPEN reuse signals to quality-gate crap text and JSON reports, including --cc-only, without changing scoring or receipts (SQ-3719)
+
+#### Fixes
+
+- quality-gate crap reuses one TypeScript parser process per run and waits for it to exit, and with --base parses only the files changed since the base (GitHub #554) (SQ-3711)
+- quality-gate expands $VAR, ${VAR} and %VAR% in coverageCommand before running it, so a POSIX-style command writes into QUALITY_GATE_COVERAGE_DIR on Windows too (GitHub #543); a command report already wins over config lcov (GitHub #519). quartermaster crap is retired: it runs the installed quality-gate crap with the same arguments, or prints the quality-gate install command and exits 2 (SQ-3712)
+
+### quartermaster 0.12.1 → 0.12.2
+
+#### Fixes
+
+- quality-gate expands $VAR, ${VAR} and %VAR% in coverageCommand before running it, so a POSIX-style command writes into QUALITY_GATE_COVERAGE_DIR on Windows too (GitHub #543); a command report already wins over config lcov (GitHub #519). quartermaster crap is retired: it runs the installed quality-gate crap with the same arguments, or prints the quality-gate install command and exits 2 (SQ-3712)
+- Learning permission allow rules preserves deny rules and the default mode, leaves sandbox allow arrays untouched, and avoids duplicate rules on later runs (SQ-3718)
+
+### sidequest 5.11.2 → 5.12.0
+
+#### Features
+
+- Move a Sidequest board after its repository folder moves, preserving numbering, history and pending submissions (GH-551) (SQ-3713)
+
+#### Fixes
+
+- The negative-control gate demands markers only for the tests a candidate changed itself, not the tests a merge brought in (GH-160)
+  A candidate that merged another branch, such as upstream develop into a fork PR tip or main into a ticket branch, was refused with `negative_control_test_required` for every test the merge carried in, because the gate diffed the whole range from the dispatch base (GH-160). Both the `[sidequest:verify-complete]` comment gate and `submit` now treat a commit as foreign only when a ref of the ticket's integration target reaches it, or a remote's copy of the board's integration branch (`refs/remotes/<remote>/<integrationBranch>`) that does not contain HEAD reaches it, and walk every other commit as the candidate's own, whichever parent it sits on. A branch that is only local, or that was merely pushed, is still the candidate's own. A merge the candidate made answers only for lines that no parent had, meaning its conflict resolution and hand edits. So keeping both sides of a union, or an upstream file the merge kept, demands nothing new. A test that only such a resolution changed still needs its `[sidequest:negative-control-test]` line, even when no other commit touched it. A test a later commit renamed or deleted is no longer demanded under its old name.
+
+  A shared tree commits on its integration branch, so there the whole range stays the candidate's, as before. A range with no commit from the integration branch keeps the paths and test names it had before. The one addition is a file that only a merge resolution changed. Submit attributes from the dispatch base whatever range base it is given. The recovery text now says that a merge answers only for the tests its conflict resolution changed, not the tests it brought in from the integration branch or from a remote's copy of it.
+- groomClose manual delivery no longer forces the integration branch onto the checkout (GH-312)
+  `groomClose` with `deliveryMethod: "manual"` (or CLI `groom-close --delivery-method
+  manual`) no longer requires the ticket's integration branch to be checked out in the
+  registered project checkout before it will record a delivery. It now admits the
+  checkout's `HEAD` once it already matches the branch's own current tip - by name, or a
+  detached scratch checkout at the same commit - so recording a batch of manual
+  deliveries no longer forces the orchestrator to check out each branch in its shared
+  main tree in turn. `groomClose` (MCP) and `sidequest groom-close` (CLI) also accept an
+  explicit `worktree` path, validated as a genuine worktree of the same repository, to
+  gate the branch check and re-run the merged-tree verifier there instead of the
+  registered checkout. A working-tree content proof for a candidate the branch does not
+  contain still needs that branch itself checked out: a detached checkout is refused
+  with `working_tree_requires_target_branch`, and must deliver a branch-reachable commit
+  or name a `deliveryRevision` instead. Fixes #312.
+- MCP add accepts dependsOn and either storyId form; glob file scopes no longer false-positive on the glob segment itself (GH-317)
+  Three Sidequest MCP tool friction points, found filing tickets on a real
+  board:
+
+  - `add` now accepts `dependsOn: string[]` (a bare string is coerced to a
+    single-element array). Each ref becomes a depends-on link to the new
+    ticket in the same call, so a dependent ticket no longer needs a
+    follow-up `link` call. A ref repeated in the list is linked once.
+  - `storyId` (on `add` and `update`) now accepts either the `US-n` story ref
+    or the internal story id (`st_...`) that `story` returns, instead of
+    refusing the id form.
+  - `update --files` (and `add --file`) no longer warns that a declared glob
+    scope "does not exist in the repo" for the glob segment itself — a glob
+    is a valid scope for files an executor will create, and the old check
+    couldn't tell that apart from a typo. The directory before the first `*`
+    is still checked, so a typo'd directory (`src/typo/**`) is still flagged.
+    A plain (non-glob) path that doesn't exist is still flagged too.
+- a live-claim update --files replace that drops declared scope is refused, and a granted scope request no longer prints an empty refusal (GH-403)
+  `update` with `files` still replaces the declared list, but on a live claim it now refuses a replacement that would drop a path the claim holds, including a path a `scopeRequest` grant added since the dispatch. The error names the dropped paths and points at `addFiles` (add without dropping), `removeFiles` (drop a path the checkout has not written) or releasing the claim first. A replacement that keeps every declared path, whether a superset, the same list or a reorder, and any replace on an unclaimed ticket behave as before.
+
+  `scopeRequest` no longer returns `Scope expansion refused: .` with an empty path list beside a granted state when the board auto-approved the whole request. The refusal text now appears only when an addition is actually refused, and names only those paths.
+- Finalize explicit outcomes for completed independent bound reviews (SQ-2945)
+  Record explicit candidate outcomes for completed bound reviews without restarting the reviewer. Fixes #553 and #542.
+- Let a re-dispatch cite its own earlier generation (GH-549) (SQ-3707)
+  A re-dispatch whose `workProvenance` names its own ticket can now comment and submit. Before, the board read the ticket's own live claim as an active producer and refused every submit and comment with "producer is still active". The cited generation is now read from the archive the re-dispatch keeps, so admission and submit judge the same record. A foreign producer with a live claim is still refused. Fixes GH-549.
+- A reopened ticket whose delivered checkpoint already landed on the integration branch can be redispatched again (GH-548) (SQ-3708)
+- A suite verify with verifyCwd changes directory once and keeps the author's environment prefix (SQ-3709)
+  A ticket with `verifyKind: suite` and `verifyCwd` could never pass: the generated suite command opens with `cd plugins/<name> &&`, and the capture wrapper and the integrate gate also ran it from `verifyCwd`, so the relative `cd` failed (GH-552). The generated command now owns its directory: when the pinned requirement is a generated suite, the wrapper, the integrate gate and the briefing run it from the checkout root, and `verifyCwd` applies only to a verify line the author wrote. Pinned suite strings on existing boards don't change.
+
+  The generated command also dropped the author's line silently, including an environment prefix like `NODE_PATH=lib` that the tests needed. A leading `NAME=value` prefix is now kept on every generated step, add and update warn with both strings when a `suite` verify will replace the recorded line, and the verify validation reads the first word after an environment prefix, so `FOO=1 npm test` is accepted. The configurable capture timeout from the same report is tracked separately.
+- Charge a comment above a new test to that test, not the one above it (GH-547) (SQ-3710)
+  Changed-test detection no longer asks for negative-control evidence for a test the diff never touched. Blank and comment lines that open a run of added lines now belong to the test the run goes on to define. Before, they went to the nearest earlier test, so inserting a commented test below an existing one made the completion gate demand a control for the existing test too. A comment added inside an existing test's body still charges that test. Fixes GH-547.
+- Explore, Plan and claude-code-guide can cite ticket refs in a read-only lookup (SQ-3714)
+  The Agent hook refused any generic spawn whose prompt, description or name mentioned an `SQ-` ref, so a read-only Explore doing duplicate triage got told to "use a native read-only agent", which it already was. Explore, Plan and claude-code-guide now get through when they only cite refs as context. They're still refused when the prompt has write intent (for example "edit SQ-1234") or carries a `[sidequest-route` marker. General-purpose and custom types still need a dispatch when they cite a ref, and when the ref is the only trigger the refusal now says so and names Explore, Plan and claude-code-guide as the read-only way to do it.
+- Merge attribution diffs only in-scope paths and ignores merges develop made internally (SQ-3715)
+  Follow-up to GH-160. The negative-control gate ran one `git diff-tree --cc` per path a candidate's merge touched before it filtered by declared scope, so merging a few weeks of develop spawned hundreds of git processes on every `[sidequest:verify-complete]` comment and `submit`. It now diffs only the in-scope changed paths. The merge-resolution scan also walked develop's own internal merges, so a candidate whose only act was merging develop could report an in-scope path a develop merge hand-edited and skip the `empty_declared_scope` refusal. It now reads only merges on the candidate's first-parent line.
+- Brief quality-gate config correctly (SQ-3720)
+  Executor briefings now read the quality-gate config first and explain the legacy complexity policy.
+
 ## v3.598.0 (2026-10-14)
 
 ### quality-gate 0.3.0 → 0.3.1
