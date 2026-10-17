@@ -6,6 +6,8 @@ Quality Gate owns AST complexity, stable function identities and per-function CR
 
 Invalid UTF-8, Python syntax errors and lone surrogates produce an informational UNVERIFIED row for that file. Other selected files are still measured.
 
+The CRAP report also prints informational reuse signals after scored rows, including with `--cc-only`. `DUPLICATE? name ≈ other (file:line)` means a new body shares a name (ignoring case, underscores and hyphens) with a top-level JS/TS/Python definition in another source file at HEAD. `CALLERS OPEN name: file:line` lists up to two remaining call sites outside a removed body's old file. Removal uses the existing baseline/body pairing, including deleted files within the selected scope. Tests, fixtures, vendored and generated paths are skipped. These are regex/name checks: nested definitions are missed, and a same-named call in another module can count. They never change the verdict, exit code or receipts. JSON reports put the rows under `signals`; the summary includes the reuse-signal count.
+
 ## Project CRAP gate
 
 ```text

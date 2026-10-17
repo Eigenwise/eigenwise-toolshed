@@ -39,6 +39,8 @@ Comments and formatting count; equal/lowered complexity legacy edits are informa
 Untouched bodies and independently edited nested bodies do not charge their parents.
 --base defaults to the local develop, main or master branch; HEAD means score all selected bodies.
 With a base, only selected files that differ from it or are untracked are parsed.
+DUPLICATE? and CALLERS OPEN are informational reuse signals (also in --json signals).
+They use JS/TS/Python name regexes, never affect the verdict, and also run with --cc-only.
 --cc-only checks the complexity floor without running coverage; it cannot prove a full CRAP pass.
 --lcov overrides both isolated command output and config lcov. Config lcov is a fallback
 behind fresh isolated command output, then coverage/lcov.info when unset.
@@ -80,7 +82,7 @@ async function capturedReport(values) {
     return await crapReport({ ...values, ccOnly: values['cc-only'], coverageCommand: values['coverage-command'], pythonPolicy: values['python-policy'] });
   } catch (error) {
     const unverified = [{ relativePath: '<gate>', line: 1, name: 'prerequisite', unverified: error.message }];
-    return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };
+    return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], signals: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };
   }
 }
 

@@ -337,3 +337,65 @@ test('missing lizard reports its installation remedy without attempting installa
   assert.equal(execution.status, 2);
   assert.match(execution.stdout, /Lizard is unavailable.*pipx install lizard/);
 });
+
+
+test('DUPLICATE? flags a new normalized name in another HEAD source file without changing verdict or exit code', async (context) => {
+  const root = await fixture(context, {
+    'existing.py': 'def format_price(value):\n    return value\n',
+    'new.js': '',
+    'tests/ignored.js': 'export function formatPrice(value) { return value; }\n',
+    'fixtures/ignored.js': 'export function formatPrice(value) { return value; }\n',
+    'generated/ignored.js': 'export function formatPrice(value) { return value; }\n',
+  });
+  await config(root, { sources: ['new.js'] });
+  const base = commitBaseline(root);
+  await fs.writeFile(path.join(root, 'new.js'), 'export function differentName(value) { return value; }\n');
+  const without = cli(root, ['--base', base, '--cc-only', '--json']);
+  await fs.writeFile(path.join(root, 'new.js'), 'export function formatPrice(value) { return value; }\n');
+  const execution = cli(root, ['--base', base, '--cc-only', '--json']);
+  const report = JSON.parse(execution.stdout);
+  assert.equal(execution.status, without.status, execution.stderr);
+  assert.equal(report.verdict, JSON.parse(without.stdout).verdict);
+  assert.deepEqual(report.signals, [{ kind: 'duplicate', name: 'formatPrice', file: 'new.js', line: 1, other: { name: 'format_price', file: 'existing.py', line: 1 } }]);
+  const text = cli(root, ['--base', base, '--cc-only']);
+  assert.match(text.stdout, /PASS[\s\S]*DUPLICATE\? formatPrice ≈ format_price \(existing.py:1\)[\s\S]*1 reuse signals/);
+  assert.equal(text.status, execution.status);
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(report.receipt, 'utf8')), 'signals'), false);
+  const full = cli(root, ['--base', base, '--json']);
+  await fs.writeFile(path.join(root, 'new.js'), 'export function differentName(value) { return value; }\n');
+  const fullWithout = cli(root, ['--base', base, '--json']);
+  assert.equal(full.status, fullWithout.status);
+  assert.equal(JSON.parse(full.stdout).verdict, JSON.parse(fullWithout.stdout).verdict);
+  assert.deepEqual(JSON.parse(fullWithout.stdout).signals, []);
+});
+
+test('CALLERS OPEN flags a removed paired body, is silent without callers, and preserves verdict and exit code', async (context) => {
+  const root = await fixture(context, {
+    'source.js': 'export function removed() { return 1; }\nexport function retained() { return 2; }\n',
+    'caller.js': 'removed();\n',
+    'tests/ignored.js': 'removed();\n',
+  });
+  await config(root, { sources: ['source.js'] });
+  const base = commitBaseline(root);
+  await fs.writeFile(path.join(root, 'source.js'), 'export function retained() { return 2; }\n');
+  const execution = cli(root, ['--base', base, '--cc-only', '--json']);
+  const report = JSON.parse(execution.stdout);
+  assert.deepEqual(report.changedMetrics, []);
+  assert.deepEqual(report.signals, [{ kind: 'callers-open', name: 'removed', file: 'source.js', line: 1, sites: [{ file: 'caller.js', line: 1 }] }]);
+  assert.match(formatCrapReport(report), /CALLERS OPEN removed: caller.js:1[\s\S]*1 reuse signals/);
+  await fs.writeFile(path.join(root, 'caller.js'), 'removed();\nremoved();\nremoved();\n');
+  const multiple = await crapReport({ project: root, base, ccOnly: true });
+  assert.deepEqual(multiple.signals[0].sites, [{ file: 'caller.js', line: 1 }, { file: 'caller.js', line: 2 }]);
+  await fs.writeFile(path.join(root, 'caller.js'), '');
+  const silent = cli(root, ['--base', base, '--cc-only', '--json']);
+  assert.deepEqual(JSON.parse(silent.stdout).signals, []);
+  assert.equal(silent.status, execution.status, silent.stderr);
+  assert.equal(JSON.parse(silent.stdout).verdict, report.verdict);
+  await fs.rm(path.join(root, 'source.js'));
+  await fs.writeFile(path.join(root, 'caller.js'), 'removed();\n');
+  const deleted = await crapReport({ project: root, base, ccOnly: true });
+  assert.equal(deleted.signals[0].name, 'removed');
+  assert.equal(deleted.exitCode, report.exitCode);
+  await config(root, { sources: ['source.js'], exclude: ['source.js'] });
+  assert.deepEqual((await crapReport({ project: root, base, ccOnly: true })).signals, []);
+});
