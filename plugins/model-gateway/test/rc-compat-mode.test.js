@@ -847,9 +847,11 @@ test('serve-shim binds a second RC-compatibility listener only when the hosts en
   assert.equal(compatHealth.compat.hostsDetected, true);
   assert.equal(compatHealth.compat.port80Bound, true);
 
-  const catalog = await request(compatPort, 'GET', '/v1/models');
-  assert.equal(catalog.status, 200);
-  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra[1m]'));
+  for (const host of ['api.anthropic.com', `api.anthropic.com:${compatPort}`]) {
+    const catalog = await request(compatPort, 'GET', '/v1/models', undefined, '127.0.0.1', { host });
+    assert.equal(catalog.status, 200);
+    assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra[1m]'));
+  }
 });
 
 test('serve-shim stays default-only when no hosts entry is present', async (t) => {
@@ -882,14 +884,14 @@ test('serve-shim exposes bounded RC control only through the main loopback liste
   const health = await waitForHealthz(shimPort);
   const body = JSON.stringify({ action: 'probe', expectedSupervisorPid: health.supervisorPid });
   const controlHeaders = { 'x-model-gateway-control': 'rc-compatibility' };
-  for (const headers of [
-    {},
-    { ...controlHeaders, origin: 'http://127.0.0.1' },
-    { ...controlHeaders, host: `localhost:${shimPort}` },
-    { ...controlHeaders, 'content-type': 'text/plain' },
+  for (const [headers, status] of [
+    [{}, 404],
+    [{ ...controlHeaders, origin: 'http://127.0.0.1' }, 403],
+    [{ ...controlHeaders, host: `localhost:${shimPort}` }, 404],
+    [{ ...controlHeaders, 'content-type': 'text/plain' }, 404],
   ]) {
     const response = await request(shimPort, 'POST', '/internal/rc-compatibility', body, '127.0.0.1', headers);
-    assert.equal(response.status, 404);
+    assert.equal(response.status, status);
   }
   const wrongMethod = await request(shimPort, 'GET', '/internal/rc-compatibility');
   assert.equal(wrongMethod.status, 404);
