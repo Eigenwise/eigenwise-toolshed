@@ -3142,6 +3142,22 @@ test('stop reminder reads only the current project instead of scanning every boa
   assert.match(reminder, /1 ticket in doing/);
 });
 
+test('stop reminder ignores archived tickets with pending submissions', () => {
+  const sessionId = `reconcile-archived-submission-${++sqSeq}`;
+  const ticket = addStopTicket('archived pending submission');
+  claimStopTicket(ticket, sessionId, 'reconcile-archived-submission');
+  assert.equal(store.submitTicket(slug, ticket.ref, 'reconcile-archived-submission', {
+    commit: 'abc9876',
+    sessionId,
+  }).ok, true);
+  assert.equal(store.archiveTicket(slug, ticket.ref).ok, true);
+
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.status, 'archived');
+  assert.equal(pulse.archived, true);
+  const output = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  assert.equal(output, null);
+});
 test('stop reminder: holds a pending submission only while a live claim may submit', () => {
   const sessionId = `reconcile-wave-hold-${++sqSeq}`;
   const story = store.createStory(slug, { title: 'integration wave hold' });
