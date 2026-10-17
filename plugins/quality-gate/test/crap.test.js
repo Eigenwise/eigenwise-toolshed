@@ -198,6 +198,27 @@ test('a TS function added on a branch is measured from complete LCOV (GH-563)', 
   assert.match(missingLine.stdout, /UNVERIFIED src\/a\.ts:5 g: Missing executable LCOV lines/);
 });
 
+test('the TS executable-line inventory skips decorators, blocks, empty, type-only and ambient statements', async () => {
+  const text = [
+    'export function g(a: number): number {',
+    '  type Local = number;',
+    '  interface Shape { x: number }',
+    '  declare const ambient: number;',
+    '  @sealed',
+    '  class Box {',
+    '    run() { return 1; }',
+    '  }',
+    '  if (a > 0) {',
+    '    ;',
+    '  }',
+    '  return -a;',
+    '}',
+  ].join('\n');
+  const rows = await analyzer.collectFunctions(text, 'g.ts');
+  assert.deepEqual(rows.map((row) => [row.name, row.executableLines]), [['g', [6, 9, 12]], ['run', [7]]]);
+  assert.ok(rows.every((row) => row.ownedLines === row.executableLines));
+});
+
 test('JS LCOV measures statement lines per owned body and refuses shared or missing lines', async (context) => {
   const text = 'function subject(value) {\n  const pick = (flag) =>\n    flag ? 1 : 0;\n  return pick(value);\n}\nfunction inline(items) {\n  return items.map((item) => item);\n}\n';
   const root = await fixture(context, { 'source.js': text });
