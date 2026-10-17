@@ -484,6 +484,18 @@ function candidatePaths(cwd, changedPaths, commit, upstreamCommit) {
 function rangeCandidatePaths(cwd, range, changedPaths) {
   return range.ok && typeof range.commit === "string" && typeof range.upstreamCommit === "string" ? candidatePaths(cwd, changedPaths, range.commit, range.upstreamCommit) : changedPaths;
 }
+function submittedScopeValidation(cwd, submission, range, changedPaths, scope, ticketRef) {
+  const currentFold = rangeCandidatePaths(cwd, range, changedPaths);
+  const recordedUpstreamCommit = String(submission.upstreamCommit || "").trim();
+  if (!recordedUpstreamCommit) return validatePaths(scope, currentFold);
+  const recordedUpstream = resolvedCommit(cwd, recordedUpstreamCommit);
+  if (recordedUpstream.ok) return validatePaths(scope, candidatePaths(cwd, currentFold, String(submission.commit), recordedUpstream.value));
+  const validation = validatePaths(scope, currentFold);
+  return validation.ok ? validation : Object.assign(validation, { message: unresolvedRecordedUpstreamRefusal(ticketRef, validation.outside, recordedUpstreamCommit) });
+}
+function unresolvedRecordedUpstreamRefusal(ticketRef, outside, recordedUpstreamCommit) {
+  return `${ticketRef || "submission"} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}. The submission's recorded upstream ${recordedUpstreamCommit} does not resolve in this repository, so paths a merge brought in could not be folded the way submit folded them. Fetch ${recordedUpstreamCommit} into this repository and retry.`;
+}
 function submissionLandedIntegrationRef(cwd, submission, integrationBranchOverride) {
   if (submission.noOp === true) return null;
   const commit = String(submission.commit || "").trim();
@@ -771,7 +783,7 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
     });
   }
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
-  const scopeValidation = validatePaths(submissionScope, rangeCandidatePaths(cwd, range, rangeChangedPaths));
+  const scopeValidation = submittedScopeValidation(cwd, submission, range, rangeChangedPaths, submissionScope, ticketRef);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, {
     ok: true,
