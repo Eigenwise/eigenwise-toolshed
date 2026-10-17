@@ -7,7 +7,6 @@ const os = require('node:os');
 const path = require('node:path');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
-const OBSERVABILITY_PLUGIN = 'observability@eigenwise-toolshed';
 const LEGACY_GATEWAY_PLUGIN = `codex-gateway@${GATEWAY_MARKETPLACE}`;
 const MODEL_GATEWAY_PLUGIN = `model-gateway@${GATEWAY_MARKETPLACE}`;
 const UPDATE_SCOPES = new Set(['user', 'project', 'local']);
@@ -143,63 +142,29 @@ function writeSettings(filePath, settings) {
   fs.writeFileSync(filePath, `${JSON.stringify(settings, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
-function healStatusline(settings, fallbackStatusLine, command) {
+// The Toolshed statusline was retired with observability 1.0, so a settings file still pinned
+// to the old workbench shim loses that entry; Claude Code then draws its own status line.
+function healStatusline(settings) {
   if (!workbenchStatuslinePin(settings?.statusLine?.command)) return { settings, healed: false, removed: false };
   const next = structuredClone(settings);
-  if (fallbackStatusLine?.command && !workbenchStatuslinePin(fallbackStatusLine.command)) {
-    delete next.statusLine;
-    return { settings: next, healed: true, removed: true };
-  }
-  next.statusLine = { ...next.statusLine, type: 'command', command };
-  return { settings: next, healed: true, removed: false };
+  delete next.statusLine;
+  return { settings: next, healed: true, removed: true };
 }
 
-function healStatuslineFile(filePath, fallbackStatusLine, command, dryRun) {
+function healStatuslineFile(filePath, dryRun) {
   const settings = readSettings(filePath);
   if (!settings) return { filePath, healed: false, removed: false };
-  const result = healStatusline(settings, fallbackStatusLine, command);
+  const result = healStatusline(settings);
   if (result.healed && !dryRun) writeSettings(filePath, result.settings);
   return { filePath, ...result };
 }
 
-// The statusline belongs to the observability plugin. Resolve its setup module from
-// the install registry rather than importing it, so Observability keeps working for the
-// people who never installed it directly.
-function observabilitySetup(home) {
-  const registryPath = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
-  let registry;
-  try { registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')); } catch { return null; }
-  const installs = registry?.plugins?.[OBSERVABILITY_PLUGIN];
-  if (!Array.isArray(installs)) return null;
-  for (const install of installs) {
-    if (!install?.installPath) continue;
-    const script = path.join(install.installPath, 'bin', 'setup-observability.js');
-    if (fs.existsSync(script)) {
-      try { return require(script); } catch { return null; }
-    }
-  }
-  return null;
-}
-
 function healStaleStatuslines(instances, options = {}) {
   const home = options.home || os.homedir();
-  const setup = options.observabilitySetup || observabilitySetup(home);
-  if (!setup) return [];
-  const { ensureStatuslineShim, statuslineCommand } = setup;
-  const command = statuslineCommand(home);
-  const userSettingsPath = path.join(home, '.claude', 'settings.json');
-  const user = healStatuslineFile(userSettingsPath, null, command, options.dryRun);
-  const userStatusLine = user.settings?.statusLine;
   const projects = [...new Set(instances.map((instance) => instance.projectPath).filter(Boolean))];
-  const results = [user];
-  for (const projectPath of projects) {
-    const claudeDir = path.join(projectPath, '.claude');
-    const legacy = healStatuslineFile(path.join(claudeDir, 'settings.json'), userStatusLine, command, options.dryRun);
-    const local = healStatuslineFile(path.join(claudeDir, 'settings.local.json'), legacy.settings?.statusLine || userStatusLine, command, options.dryRun);
-    results.push(legacy, local);
-  }
-  if (results.some((result) => result.healed) && !options.dryRun) ensureStatuslineShim(home);
-  return results.filter((result) => result.healed);
+  const files = [path.join(home, '.claude', 'settings.json')];
+  for (const projectPath of projects) files.push(path.join(projectPath, '.claude', 'settings.json'), path.join(projectPath, '.claude', 'settings.local.json'));
+  return files.map((file) => healStatuslineFile(file, options.dryRun)).filter((result) => result.healed);
 }
 
 function pluginIdParts(id) {
@@ -716,7 +681,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
 
   const healedStatuslines = options.check ? [] : healStaleStatuslines(instances, { home, dryRun: options.dryRun });
   if (healedStatuslines.length > 0) {
-    report(`Healed ${healedStatuslines.length} stale managed status-line shim setting(s).`);
+    report(`Removed ${healedStatuslines.length} stale status-line setting(s) that pointed at the retired Toolshed statusline.`);
   }
 
   if (updatedInstances.length > 0) {
