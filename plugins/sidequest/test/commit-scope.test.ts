@@ -37,6 +37,7 @@ interface RangeResult {
   gitRef?: string;
   reconciled?: boolean;
   divergedPath?: string;
+  outside?: string[];
   message?: string;
 }
 
@@ -48,7 +49,7 @@ const commitScope = require('../lib/commit-scope.js') as {
   isInScope(file: string, files: string[]): boolean;
   validateCommitRangeScope(cwd: string, commits: string[], files: string[]): ScopeResult;
   submissionRange(cwd: string, opts: Record<string, unknown>): RangeResult;
-  validateStoredSubmissionRange(cwd: string, submission: unknown): RangeResult;
+  validateStoredSubmissionRange(cwd: string, submission: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown, options?: unknown): RangeResult;
   scopedWorkPending(cwd: string, files: unknown, opts?: unknown): any;
   ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[];
   foreignReleaseFragmentRefusalMessage(operation: string, ticketRef: unknown, fragments: readonly string[]): string;
@@ -1411,6 +1412,63 @@ test('GH-139: paths whose bytes already equal upstream are not the candidate\'s,
   const edited = git(root, ['rev-parse', 'HEAD']);
   assert.deepEqual(commitScope.candidatePaths(root, ['plugins/other-plugin/sibling.js', 'plugins/sidequest/ticket.js'], edited, range.upstreamCommit!), ['plugins/other-plugin/sibling.js', 'plugins/sidequest/ticket.js'], 'bytes that differ from upstream stay the candidate\'s');
   assert.deepEqual(commitScope.candidatePaths(root, ['README.md'], dispatchBase, range.upstreamCommit!), ['README.md'], 'a candidate already on upstream folds nothing');
+});
+
+test('GH-559: a landed candidate keeps the scope answer submit gave, folded against the recorded upstream', () => {
+  const root = repo();
+  const main = branchOf(root);
+  const dispatchBase = git(root, ['rev-parse', 'HEAD']);
+  const upstreamAtSubmit = commitFile(root, 'plugins/other-plugin/upstream.js', 'upstream\n', 'main moves on');
+  git(root, ['checkout', '-q', '-b', 'ticket', dispatchBase]);
+  commitFile(root, 'plugins/sidequest/ticket.js', 'ticket\n', 'ticket work');
+  git(root, ['merge', '-q', '--no-ff', '-m', 'merge main into the ticket', main]);
+  const mergedTip = git(root, ['rev-parse', 'HEAD']);
+  const ownOutsideTip = commitFile(root, 'plugins/other-plugin/own.js', 'own\n', 'ticket strays outside scope');
+  pin(root, 'refs/sidequest/GH-559', mergedTip);
+  pin(root, 'refs/sidequest/GH-559-own', ownOutsideTip);
+
+  const range = commitScope.submissionRange(root, { commit: mergedTip, gitRef: 'refs/sidequest/GH-559', upstream: main, integrationBranch: main, base: dispatchBase });
+  assert.equal(range.ok, true, `range refused: ${range.reason}`);
+  assert.equal(range.upstreamCommit, upstreamAtSubmit);
+  assert.deepEqual(range.changedPaths, ['plugins/other-plugin/upstream.js', 'plugins/sidequest/ticket.js']);
+  assert.deepEqual(commitScope.candidatePaths(root, range.changedPaths!, mergedTip, upstreamAtSubmit), ['plugins/sidequest/ticket.js'], 'submit folds the merged-in path');
+  const stored = (tip: string, gitRef: string, upstreamCommit: string) => {
+    const tipRange = commitScope.submissionRange(root, { commit: tip, gitRef, upstream: main, integrationBranch: main, base: dispatchBase });
+    return {
+      commit: tip,
+      gitRef,
+      upstream: tipRange.upstream,
+      upstreamCommit,
+      base: tipRange.base,
+      commits: tipRange.commits,
+      changedPaths: tipRange.changedPaths,
+      admittedScope: ['plugins/sidequest/ticket.js'],
+    };
+  };
+  const mergedSubmission = stored(mergedTip, 'refs/sidequest/GH-559', upstreamAtSubmit);
+  const ownOutsideSubmission = stored(ownOutsideTip, 'refs/sidequest/GH-559-own', upstreamAtSubmit);
+  const unreachableUpstream = 'f'.repeat(40);
+  const unreachableSubmission = stored(mergedTip, 'refs/sidequest/GH-559', unreachableUpstream);
+
+  git(root, ['checkout', '-q', main]);
+  git(root, ['merge', '-q', '--ff-only', ownOutsideTip]);
+  commitFile(root, 'plugins/other-plugin/later.js', 'later\n', 'upstream after the landing');
+
+  for (const options of [undefined, { allowDivergedExpectedUpstream: true }]) {
+    const landed = commitScope.validateStoredSubmissionRange(root, mergedSubmission, 'GH-559', undefined, options);
+    assert.equal(landed.ok, true, `the landed candidate's merged-in path was refused: ${landed.reason} ${JSON.stringify(landed.outside)}`);
+
+    const ownOutside = commitScope.validateStoredSubmissionRange(root, ownOutsideSubmission, 'GH-559', undefined, options);
+    assert.equal(ownOutside.ok, false, 'a path the candidate itself changed outside scope stays refused');
+    assert.equal(ownOutside.reason, 'outside_scope');
+    assert.deepEqual(ownOutside.outside, ['plugins/other-plugin/own.js']);
+
+    const unreachable = commitScope.validateStoredSubmissionRange(root, unreachableSubmission, 'GH-559', undefined, options);
+    assert.equal(unreachable.ok, false);
+    assert.equal(unreachable.reason, 'outside_scope');
+    assert.match(String(unreachable.message), new RegExp(`recorded upstream ${unreachableUpstream} does not resolve`));
+    assert.match(String(unreachable.message), new RegExp(`Fetch ${unreachableUpstream} into this repository and retry`));
+  }
 });
 
 test('GH-195: a tip still at the recorded dispatch baseline is a no-op, never its own parent\'s commit', () => {

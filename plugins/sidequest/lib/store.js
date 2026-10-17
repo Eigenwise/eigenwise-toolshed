@@ -3267,7 +3267,7 @@ function deliveredReleasePaths(repo, delivery) {
   return [...commitPaths(repo, delivery.commit), ...delivery.integration?.changedPaths || []];
 }
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the fragment, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the file, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
 ---
 ref: ${ref}
 title: <short user-facing title>
@@ -3296,6 +3296,32 @@ function commitReachedRef(repo, commit, ref) {
 function ticketIntegrationTarget(slug, ticket) {
   return integrationTarget(slug, ticket?.dispatch?.integrationTarget || void 0);
 }
+function abandonmentFallbackTarget(slug) {
+  try {
+    return integrationTarget(slug);
+  } catch {
+    const upstream = execFileSync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
+      cwd: readMeta(slug).path,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: "pipe"
+    }).trim();
+    return integrationTarget(slug, { mode: "remote", branch: upstream.slice("origin/".length) });
+  }
+}
+function groomingIntegrationTarget(slug, ticket, abandonSubmission) {
+  try {
+    return ticketIntegrationTarget(slug, ticket);
+  } catch (error) {
+    if (!abandonSubmission) throw error;
+    const target = abandonmentFallbackTarget(slug);
+    const landed = commitScope.submissionLandedIntegrationRef(readMeta(slug).path, ticket.submission, commitScope.integrationTargetRefs(target));
+    if (landed) {
+      throw new Error("Candidate already landed on " + landed.ref + "; abandonment refused after the frozen integration target disappeared.");
+    }
+    return target;
+  }
+}
 function ticketIntegrationTargets(slug, tickets) {
   const participants = Array.isArray(tickets) ? tickets : [tickets];
   const resolved = participants.map((ticket) => ({
@@ -3303,15 +3329,21 @@ function ticketIntegrationTargets(slug, tickets) {
     target: ticketIntegrationTarget(slug, ticket)
   }));
   const first = resolved[0]?.target;
-  if (!first || resolved.some(({ target }) => target.mode !== first.mode || target.branch !== first.branch || target.upstream !== first.upstream)) {
+  if (!first || resolved.some(({ target }) => target.branch !== first.branch)) {
     return {
       ok: false,
       reason: "integration_target_mismatch",
       targets: resolved,
-      message: `Wave delivery requires one recorded ticket delivery target; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(", ")}. Split the refs by target before assembly or delivery.`
+      message: `Wave delivery requires one recorded ticket delivery branch; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(", ")}. Integrate each branch's refs as their own wave, or redispatch the refs on another branch with integrationBranch ${first?.branch || "<branch>"} so they share one.`
     };
   }
-  return { ok: true, target: first, targets: resolved };
+  return { ok: true, target: sameBranchWaveTarget(slug, resolved.map(({ target }) => target)), targets: resolved };
+}
+function sameBranchWaveTarget(slug, targets) {
+  const local = targets.find((target) => target.mode === "local");
+  const remote = targets.find((target) => target.mode === "remote");
+  if (!local || !remote) return targets[0];
+  return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
   const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
@@ -3535,7 +3567,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (purpose === "grooming" && pendingSubmission(ticket)) {
     let target;
     try {
-      target = ticketIntegrationTarget(slug, ticket);
+      target = groomingIntegrationTarget(slug, ticket, opts.abandonSubmission === true);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: String(error?.message || error) };
     }

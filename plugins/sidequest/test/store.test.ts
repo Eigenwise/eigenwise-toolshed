@@ -426,3 +426,82 @@ test('moved-board checkout resolution follows successive moves and preserves ext
   assert.strictEqual(currentBoardPath(meta, ''), '');
   assert.strictEqual(currentBoardPath({}, first), first);
 });
+
+function deletedIntegrationTargetFixture(name: string, landed: boolean, currentBranch: string) {
+  const { repository, board } = movableBoard(name);
+  const git = (argumentsList: string[]) => moveGit('git', argumentsList, { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim();
+  git(['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-m', 'base']);
+  const base = git(['rev-parse', 'HEAD']);
+  git(['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-m', 'candidate']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  git(['update-ref', 'refs/remotes/origin/main', landed ? candidate : base]);
+  git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+  git(['update-ref', 'refs/remotes/origin/deleted', base]);
+  git(['update-ref', '-d', 'refs/remotes/origin/deleted']);
+  git(['branch', 'deleted', base]);
+  git(['reset', '--hard', landed ? candidate : base]);
+  store.setBoardConfig(board.slug, { integrationMode: 'local', integrationBranch: currentBranch });
+  const ticket = seedMoveTicket(board.slug, {
+    status: 'todo',
+    dispatch: { integrationTarget: { mode: 'remote', branch: 'deleted', upstream: 'origin/deleted' }, terminalAt: new Date().toISOString() },
+    submission: { commit: candidate, base, integrationBranch: 'deleted' },
+  });
+  return { board, ticket };
+}
+
+for (const currentBranch of ['main', 'missing']) {
+  test(`GH-556: deleted frozen target abandons an unreachable candidate via ${currentBranch}`, () => {
+    const { board, ticket } = deletedIntegrationTargetFixture(`abandon-deleted-${currentBranch}`, false, currentBranch);
+    const options = { by: 'orchestrator', purpose: 'grooming', reason: 'The deleted branch candidate never landed.' };
+    const delivery = store.completeTicketAsControlPlane(board.slug, ticket.ref, options);
+    assert.strictEqual(delivery.reason, 'integration_target_unavailable', 'delivery retains the frozen-target refusal');
+    const abandoned = store.completeTicketAsControlPlane(board.slug, ticket.ref, { ...options, abandonSubmission: true });
+    assert.strictEqual(abandoned.ok, true, abandoned.message);
+    assert.strictEqual(abandoned.ticket.submission.integration.outcome, 'abandoned');
+    assert.strictEqual(abandoned.ticket.submission.integration.candidateState, 'unreachable');
+    assert.strictEqual(abandoned.ticket.submission.integration.evidence, options.reason);
+    assert.strictEqual(store.pendingSubmission(store.getTicket(board.slug, ticket.ref)), false);
+  });
+
+  test(`GH-556: deleted frozen target refuses abandonment of a candidate landed via ${currentBranch}`, () => {
+    const { board, ticket } = deletedIntegrationTargetFixture(`landed-deleted-${currentBranch}`, true, currentBranch);
+    const before = JSON.stringify(store.getTicket(board.slug, ticket.ref));
+    const refused = store.completeTicketAsControlPlane(board.slug, ticket.ref, {
+      by: 'orchestrator', purpose: 'grooming', abandonSubmission: true, reason: 'Check whether this candidate landed.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.match(refused.message, /Candidate already landed on refs\/(heads|remotes\/origin)\/main/);
+    assert.strictEqual(JSON.stringify(store.getTicket(board.slug, ticket.ref)), before, 'a landed candidate remains pending and unchanged');
+  });
+}
+
+test('GH-567: siblings frozen on remote:origin/main and local:main resolve to one wave target; different branches still refuse', () => {
+  const { repository, board } = movableBoard('gh-567-wave-target');
+  const git = (argumentsList: string[]) => moveGit('git', argumentsList, { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const commit = (message: string) => git(['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-m', message]);
+  commit('base');
+  git(['remote', 'add', 'origin', path.join(fixtureRoot, 'gh-567-unused-remote')]);
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  git(['config', 'branch.main.remote', 'origin']);
+  git(['config', 'branch.main.merge', 'refs/heads/main']);
+  git(['branch', 'other']);
+  const frozenOn = (ref: string, integrationTarget: object) => ({ ref, dispatch: { integrationTarget } });
+  const remoteSibling = frozenOn('SQ-1', { mode: 'remote', branch: 'main', upstream: 'origin/main' });
+  const localSibling = frozenOn('SQ-2', { mode: 'local', branch: 'main', upstream: 'main' });
+
+  const level = store.ticketIntegrationTargets(board.slug, [remoteSibling, localSibling]);
+  assert.strictEqual(level.ok, true, level.message);
+  assert.deepStrictEqual(level.target, { mode: 'remote', upstream: 'origin/main', branch: 'main' }, 'local main level with origin picks the remote form');
+
+  commit('unpushed local work');
+  const ahead = store.ticketIntegrationTargets(board.slug, [remoteSibling, localSibling]);
+  assert.strictEqual(ahead.ok, true, ahead.message);
+  assert.deepStrictEqual(ahead.target, { mode: 'local', upstream: 'main', branch: 'main' }, 'local main ahead of origin picks the local form');
+
+  const otherBranch = frozenOn('SQ-3', { mode: 'local', branch: 'other', upstream: 'other' });
+  const split = store.ticketIntegrationTargets(board.slug, [remoteSibling, otherBranch]);
+  assert.strictEqual(split.ok, false);
+  assert.strictEqual(split.reason, 'integration_target_mismatch');
+  assert.match(split.message, /SQ-1=remote:origin\/main, SQ-3=local:other/);
+  assert.match(split.message, /redispatch .* with integrationBranch main/);
+});
