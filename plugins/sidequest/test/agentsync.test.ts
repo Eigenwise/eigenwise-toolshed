@@ -39,15 +39,22 @@ test('briefing discovers the project gate and reports none without inventing a r
   assert.match(render(), /Configured quality gate: none\./);
   const configDirectory = path.join(project, '.claude', 'quartermaster');
   fs.mkdirSync(configDirectory, { recursive: true });
+  const qualityGateDirectory = path.join(project, '.claude', 'quality-gate');
+  fs.mkdirSync(qualityGateDirectory, { recursive: true });
   const gate = { command: 'node scripts/check-quality.js', threshold: 9, base: 'quality-baseline' };
   fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify(gate));
   assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(gate)));
+  assert.ok(render().includes('Legacy bodies whose complexity did not rise are informational and never fail.'));
   const store = require('../lib/store.js');
   const slug = store.ensureProject(project, 'quality gate discovery').slug;
   assert.ok(agentsync.renderTicketBriefing(ticket, 'gate-token', slug).includes('Configured quality gate: ' + JSON.stringify(gate)));
+  const preferredGate = { command: 'quality-gate config', threshold: 4, base: 'quality-gate-baseline' };
+  fs.writeFileSync(path.join(qualityGateDirectory, 'crap.json'), JSON.stringify(preferredGate));
+  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(preferredGate)));
+  fs.rmSync(path.join(qualityGateDirectory, 'crap.json'));
   fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ coverageCommand: 'npm test' }));
   assert.ok(render().includes('Configured quality gate: ' + JSON.stringify({
-    command: 'node "<quartermaster plugin root>/bin/quartermaster.js" crap',
+    command: 'node "<quality-gate plugin root>/bin/quality-gate.js" crap',
     threshold: 'gate-owned', base: 'gate-selected default',
   })));
   fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ max: 8, base: 'main' }));
