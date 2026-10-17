@@ -20,7 +20,7 @@ Reload Claude Code or start a new session after installing. Sidequest packages i
 
 Sidequest is local. The dashboard runs on your machine and ticket data stays in the local Sidequest store.
 
-Each board belongs to one project folder. When you work in a Git repository, Sidequest creates its board the first time Claude uses the board there. A folder that is not a Git repository, such as a notes vault, gets a board only when you name it: ask Claude to add it by its absolute path, or pass `--project <absolute path>` on the command line. Sidequest never makes a board for a missing folder, a folder in your system temp directory, or anything under `~/.claude` (including Sidequest's own storage), and it tells you which rule refused the path. If a registered project's folder is later moved or deleted, the board stays and the projects list marks it as missing so you can archive it yourself.
+Each board belongs to one project folder. When you work in a Git repository, Sidequest creates its board the first time Claude uses the board there. A folder that is not a Git repository, such as a notes vault, gets a board only when you name it: ask Claude to add it by its absolute path, or pass `--project <absolute path>` on the command line. Sidequest never makes a board for a missing folder, a folder in your system temp directory, or anything under `~/.claude` (including Sidequest's own storage), and it tells you which rule refused the path. If a registered project's folder is later moved or deleted, the board stays and the projects list marks it as missing. Repoint a moved repository with `board move`, or archive a deleted one.
 
 ## Check your first saved task
 
@@ -201,6 +201,12 @@ After compaction or in a new session, ask:
 > Check the active Sidequest tickets for this project and continue from their recorded next steps.
 
 The board persists independently of the conversation. Details that matter for resuming the task need to be recorded on the ticket. You can also open its detail view to read the saved fields and discussion yourself.
+
+## Moving a repository
+
+After moving or renaming the repository folder, run `sidequest board move <old-absolute-path> <new-absolute-path>`. The destination must be a Git repository root with no existing board. Finish or release every claim, let dispatches terminate, and wait for worktree sweeps to finish first. A refusal names the claim, dispatch or sweep flight still holding the board.
+
+The move keeps ticket and story numbering, comments, routing, assets and pending submissions. It repairs Git worktree registrations and relocates terminal checkout bindings under the old repository root. External worktree paths stay unchanged. Submission and review authorities stay unchanged; existing verification evidence remains at its original storage path. The board records the old path, new path and move time. This command repoints Sidequest after a filesystem move; it doesn't move the repository folder for you.
 
 ## Use the dashboard
 

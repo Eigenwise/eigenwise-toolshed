@@ -1,3 +1,4 @@
+const { currentBoardPath } = require('./move.js');
 'use strict';
 
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require('../kernel/verification.js');
@@ -3900,6 +3901,7 @@ function waveGateCheckout(slug: any, tickets: any[], wave: any) {
 }
 
 function existingGateCheckout(slug: any, isolatedWorktree: string) {
+  isolatedWorktree = currentBoardPath(readMeta(slug), isolatedWorktree);
   return { ok: true as const, cwd: isolatedWorktree || readMeta(slug).path, isolatedWorktree, tree: null, remove: () => {} };
 }
 

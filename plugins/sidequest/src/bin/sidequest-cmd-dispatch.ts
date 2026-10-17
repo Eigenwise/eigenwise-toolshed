@@ -414,6 +414,13 @@ async function cmdUnarchiveBoard(opts: any, positional: any) {
   console.log(`✓ ${res.wasArchived ? 'restored' : 'already active'} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 
+async function cmdMoveBoard(opts: { json?: boolean }, positional: string[]) {
+  if (positional.length !== 2) fail('board move: pass <old-path> <new-path>');
+  const result = store.moveProject(positional[0], positional[1]);
+  if (opts.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`Moved board ${result.from} to ${result.path}`);
+}
+
 // Turn a findProject failure into a one-line reason for the merge error text.
 function describeFindFailure(res: any, ref: any) {
   if (res.reason === 'ambiguous') {
@@ -459,4 +466,4 @@ async function cmdMerge(opts: any, positional: any) {
 
 // Count non-archived tickets that belong to a given story.
 
-module.exports = { cmdDispatch, cmdBriefing, cmdSyncCheck,cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge };
+module.exports = { cmdDispatch, cmdBriefing, cmdSyncCheck,cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge, cmdMoveBoard };
