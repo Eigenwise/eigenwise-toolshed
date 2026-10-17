@@ -8,6 +8,31 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.600.0 (2026-10-17)
+
+### quality-gate 0.4.0 → 0.4.1
+
+#### Fixes
+
+- quality-gate crap measures JS/TS functions from LCOV again, using a statement-line inventory from the TypeScript AST, so a JS/TS project can pass after quartermaster crap was retired (GitHub #563) (SQ-3724)
+
+### sidequest 5.12.0 → 5.12.1
+
+#### Fixes
+
+- Stop two Windows CI test flakes that waited on a clock (SQ-3668)
+  The session-end sweep test now waits for the detached sweep worker to release its lock before removing the fixture project, so a loaded Windows runner no longer hits EBUSY there. The full-suite capture slot test gives the capture process a 30-second wall-clock budget to start instead of 100 polls (about 2 seconds). Test-only change.
+- A wave whose siblings froze remote:origin/main and local:main now assembles as one target instead of refusing integration_target_mismatch; genuinely different branches still refuse and name each ticket's target (GitHub #567) (SQ-3725)
+- Read-only shell guards ignore quoted sed scripts when checking in-place write targets, and split shell operators only outside quotes (GitHub #566, #200) (SQ-3726)
+- groomClose keeps the scope answer submit gave for paths a merge brought in (GH-559) (SQ-3727)
+  Recording a manual delivery with groomClose no longer refuses `outside_scope` for paths a merge of the integration branch brought into the candidate. Submit folds those paths out because their bytes equal the upstream it recorded, but once the candidate landed it was an ancestor of the current upstream, so the stored-range check folded nothing and refused paths submit had admitted. The stored-range check now also folds against the upstream commit the submission recorded. A path the candidate itself changed outside scope is still refused, and if the recorded upstream commit does not resolve in the repository the refusal says so and tells you to fetch it and retry. Fixes GH-559.
+- Ignore archived submissions in the Stop reminder (GH-557) (SQ-3728)
+  Archived tickets with pending submissions no longer appear as pending integration in the Stop reminder. Fixes GH-557.
+- Allow abandoning candidates whose frozen integration branch was deleted (GH-556) (SQ-3729)
+  When the frozen integration target no longer resolves, groomClose with abandonSubmission checks the current board target or the remote default branch before recording discard. A candidate already reachable there refuses and names the surviving ref. Delivery keeps its frozen-target requirement. Fixes GH-556.
+- Clarify plugin release fragment closeout (SQ-3730)
+  Tell executors to write their implicit plugin release fragment before submitting.
+
 ## v3.599.0 (2026-10-17)
 
 ### model-gateway 0.54.3 → 0.54.4
