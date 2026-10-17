@@ -338,7 +338,7 @@ function reconciliationMessage(data, providedStore) {
       project: project.slug,
       claimLive: Boolean(ticket.claim?.by && !store.claimReclaimable(ticket))
     }));
-    const open = projectTickets.filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket) || pendingSubmission(ticket)));
+    const open = projectTickets.filter((ticket) => !ticket.archived && ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
     const submissionStoryIds = new Set(submissions.map((ticket) => ticket.storyId).filter(Boolean));

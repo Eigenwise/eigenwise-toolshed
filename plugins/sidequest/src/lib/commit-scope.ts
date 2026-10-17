@@ -527,6 +527,22 @@ function rangeCandidatePaths(cwd: string, range: { ok: boolean; commit?: unknown
     : changedPaths;
 }
 
+// A landed candidate is an ancestor of the current upstream, so that fold drops nothing; folding
+// again against the upstream submit recorded keeps the scope answer submit gave (GH-559).
+function submittedScopeValidation(cwd: string, submission: UnknownRecord, range: { ok: boolean; commit?: unknown; upstreamCommit?: unknown }, changedPaths: string[], scope: string[], ticketRef: unknown) {
+  const currentFold = rangeCandidatePaths(cwd, range, changedPaths);
+  const recordedUpstreamCommit = String(submission.upstreamCommit || '').trim();
+  if (!recordedUpstreamCommit) return validatePaths(scope, currentFold);
+  const recordedUpstream = resolvedCommit(cwd, recordedUpstreamCommit);
+  if (recordedUpstream.ok) return validatePaths(scope, candidatePaths(cwd, currentFold, String(submission.commit), recordedUpstream.value));
+  const validation = validatePaths(scope, currentFold);
+  return validation.ok ? validation : Object.assign(validation, { message: unresolvedRecordedUpstreamRefusal(ticketRef, validation.outside, recordedUpstreamCommit) });
+}
+
+function unresolvedRecordedUpstreamRefusal(ticketRef: unknown, outside: readonly string[], recordedUpstreamCommit: string): string {
+  return `${ticketRef || 'submission'} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(', ')}. The submission's recorded upstream ${recordedUpstreamCommit} does not resolve in this repository, so paths a merge brought in could not be folded the way submit folded them. Fetch ${recordedUpstreamCommit} into this repository and retry.`;
+}
+
 // Which ref proves the candidate landed, and at what commit. Callers record the
 // answer rather than a bare boolean: a revision labelled `git:origin/main` when only
 // the local branch contains it, or the reverse, is a false delivery record.
@@ -912,7 +928,7 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     });
   }
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
-  const scopeValidation = validatePaths(submissionScope, rangeCandidatePaths(cwd, range, rangeChangedPaths));
+  const scopeValidation = submittedScopeValidation(cwd, submission, range, rangeChangedPaths, submissionScope, ticketRef);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, {
     ok: true,

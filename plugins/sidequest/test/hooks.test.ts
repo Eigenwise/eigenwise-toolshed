@@ -3033,14 +3033,17 @@ test('session-end reclaims an unbound old patch-equivalent worktree and stays fa
 
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
   // The hook hands the sweep to a detached worker (GH-439), so the reclaim lands after it returns.
+  // The worker keeps running git in the project after the reclaim is visible and holds the sweep
+  // lock until it is done; removing the project before then hits EBUSY on a loaded Windows runner.
+  const sweepLock = path.join(SIDEQUEST_HOME, 'worktree-sweep.lock');
   const deadline = Date.now() + waitForPathDefaultBudgetMs() * 4;
-  while (Date.now() < deadline && (fs.existsSync(worktree) || projectGit(['branch', '--list', branch]) !== '')) {
+  while (Date.now() < deadline && (fs.existsSync(worktree) || projectGit(['branch', '--list', branch]) !== '' || fs.existsSync(sweepLock))) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(fs.existsSync(worktree), false);
   assert.equal(projectGit(['branch', '--list', branch]), '');
+  assert.equal(fs.existsSync(sweepLock), false, 'the session-end sweep finished before the project is removed');
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
-  // The detached worker can still be exiting after its reclaim is visible, holding a Windows handle on the project.
   fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -3142,6 +3145,22 @@ test('stop reminder reads only the current project instead of scanning every boa
   assert.match(reminder, /1 ticket in doing/);
 });
 
+test('stop reminder ignores archived tickets with pending submissions', () => {
+  const sessionId = `reconcile-archived-submission-${++sqSeq}`;
+  const ticket = addStopTicket('archived pending submission');
+  claimStopTicket(ticket, sessionId, 'reconcile-archived-submission');
+  assert.equal(store.submitTicket(slug, ticket.ref, 'reconcile-archived-submission', {
+    commit: 'abc9876',
+    sessionId,
+  }).ok, true);
+  assert.equal(store.archiveTicket(slug, ticket.ref).ok, true);
+
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.status, 'archived');
+  assert.equal(pulse.archived, true);
+  const output = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  assert.equal(output, null);
+});
 test('stop reminder: holds a pending submission only while a live claim may submit', () => {
   const sessionId = `reconcile-wave-hold-${++sqSeq}`;
   const story = store.createStory(slug, { title: 'integration wave hold' });
@@ -6036,6 +6055,7 @@ test('read-only shell guard: refuses write-shaped Bash and PowerShell inside the
     "sed -i 's/a/b/' a.txt",
     'echo x | tee sub/log.txt',
     `echo x > "${path.join(root, 'quoted path.txt')}"`,
+    "sed -i -e 's/a/b/' src/file.ts",
     ...(process.platform === 'win32' ? [`echo x > ${msysPath(path.join(root, 'msys.txt'))}`] : []),
   ];
   for (const command of writes) {
@@ -6054,7 +6074,10 @@ test('read-only shell guard: refuses write-shaped Bash and PowerShell inside the
     'npm test 2>&1 | tail -5',
     'cat a.txt > /dev/null',
     "sed -n '1,5p' a.txt",
+    `sed -i '' -e 's/p\\.provolatile||/p.provolatile::text||/' "${path.join(scratch, 'snapshot.sql')}"`,
+    `sed -i 's/a/b/' "${path.join(scratch, 'outside.txt')}"`,
     `echo x > "${scratch}/out.txt"`,
+    `echo a || echo b > "${scratch}/or-out.txt"`,
     `cd "${scratch}" && echo x > y.txt`,
     `cp a.txt "${scratch}/a.txt"`,
     'echo x > ~/sq-readonly-home-probe.txt',

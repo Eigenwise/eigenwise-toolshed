@@ -3296,6 +3296,32 @@ function commitReachedRef(repo, commit, ref) {
 function ticketIntegrationTarget(slug, ticket) {
   return integrationTarget(slug, ticket?.dispatch?.integrationTarget || void 0);
 }
+function abandonmentFallbackTarget(slug) {
+  try {
+    return integrationTarget(slug);
+  } catch {
+    const upstream = execFileSync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
+      cwd: readMeta(slug).path,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: "pipe"
+    }).trim();
+    return integrationTarget(slug, { mode: "remote", branch: upstream.slice("origin/".length) });
+  }
+}
+function groomingIntegrationTarget(slug, ticket, abandonSubmission) {
+  try {
+    return ticketIntegrationTarget(slug, ticket);
+  } catch (error) {
+    if (!abandonSubmission) throw error;
+    const target = abandonmentFallbackTarget(slug);
+    const landed = commitScope.submissionLandedIntegrationRef(readMeta(slug).path, ticket.submission, commitScope.integrationTargetRefs(target));
+    if (landed) {
+      throw new Error("Candidate already landed on " + landed.ref + "; abandonment refused after the frozen integration target disappeared.");
+    }
+    return target;
+  }
+}
 function ticketIntegrationTargets(slug, tickets) {
   const participants = Array.isArray(tickets) ? tickets : [tickets];
   const resolved = participants.map((ticket) => ({
@@ -3535,7 +3561,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (purpose === "grooming" && pendingSubmission(ticket)) {
     let target;
     try {
-      target = ticketIntegrationTarget(slug, ticket);
+      target = groomingIntegrationTarget(slug, ticket, opts.abandonSubmission === true);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: String(error?.message || error) };
     }

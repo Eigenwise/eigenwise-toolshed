@@ -11,7 +11,7 @@ type ShellToken = { operator: string } | { word: string };
 type ShellSegment = { words: string[]; redirects: string[] };
 type WriteTargetReader = (words: string[]) => string[];
 
-const SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*'|[^\s|;&<>"']+)/g;
+const SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
 const SEGMENT_OPERATORS = new Set(['&&', '||', '|', ';', '\n']);
 const NULL_SINKS = new Set(['/dev/null', 'nul', '$null']);
 const MUTATING_GIT = new Set([
@@ -30,8 +30,14 @@ function gitWriteTargets(words: string[]): string[] {
   return MUTATING_GIT.has(String(subcommand)) ? [directory || '.'] : [];
 }
 
+const SED_SCRIPT_FLAGS = new Set(['-e', '--expression', '-f', '--file']);
+
+// sed -i writes only its file operands: the script after -e/-f is data, and without -e the first
+// operand is the script (GH-566).
 function inPlaceEditTargets(words: string[]): string[] {
-  return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
+  if (!words.some((word) => /^-[a-z]*i/i.test(word))) return [];
+  const fileOperands = words.slice(1).filter((word, index, rest) => word && !word.startsWith('-') && !SED_SCRIPT_FLAGS.has(rest[index - 1] ?? ''));
+  return words.some((word) => SED_SCRIPT_FLAGS.has(word)) ? fileOperands : fileOperands.slice(1);
 }
 
 // A content cmdlet's other words (-Value text, -ItemType File, -Encoding utf8) are data, not paths:
@@ -71,7 +77,7 @@ function commandWriteTargets(words: string[]): string[] {
 
 function shellTokens(command: string): ShellToken[] {
   return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => (
-    match[1] ? { operator: match[1] } : { word: match[2]!.replace(/^(["'])([\s\S]*)\1$/, '$2') }
+    match[2] ? { operator: match[2] } : { word: (match[1] || match[3]!).replace(/^(["'])([\s\S]*)\1$/, '$2') }
   ));
 }
 
