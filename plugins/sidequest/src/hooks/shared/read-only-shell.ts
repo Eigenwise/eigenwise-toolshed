@@ -30,21 +30,14 @@ function gitWriteTargets(words: string[]): string[] {
   return MUTATING_GIT.has(String(subcommand)) ? [directory || '.'] : [];
 }
 
+const SED_SCRIPT_FLAGS = new Set(['-e', '--expression', '-f', '--file']);
+
+// sed -i writes only its file operands: the script after -e/-f is data, and without -e the first
+// operand is the script (GH-566).
 function inPlaceEditTargets(words: string[]): string[] {
   if (!words.some((word) => /^-[a-z]*i/i.test(word))) return [];
-  const targets: string[] = [];
-  let skipScript = true;
-  for (let index = 1; index < words.length; index += 1) {
-    const word = words[index]!;
-    if (['-e', '--expression', '-f', '--file'].includes(word)) {
-      index += 1;
-      skipScript = false;
-    } else if (word && !word.startsWith('-')) {
-      if (skipScript) skipScript = false;
-      else targets.push(word);
-    }
-  }
-  return targets;
+  const fileOperands = words.slice(1).filter((word, index, rest) => word && !word.startsWith('-') && !SED_SCRIPT_FLAGS.has(rest[index - 1] ?? ''));
+  return words.some((word) => SED_SCRIPT_FLAGS.has(word)) ? fileOperands : fileOperands.slice(1);
 }
 
 // A content cmdlet's other words (-Value text, -ItemType File, -Encoding utf8) are data, not paths:

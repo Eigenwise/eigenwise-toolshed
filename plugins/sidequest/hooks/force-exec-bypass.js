@@ -387,21 +387,11 @@ function gitWriteTargets(words) {
   const subcommand = operands(words).find((word) => word !== directory);
   return MUTATING_GIT.has(String(subcommand)) ? [directory || "."] : [];
 }
+var SED_SCRIPT_FLAGS = /* @__PURE__ */ new Set(["-e", "--expression", "-f", "--file"]);
 function inPlaceEditTargets(words) {
   if (!words.some((word) => /^-[a-z]*i/i.test(word))) return [];
-  const targets = [];
-  let skipScript = true;
-  for (let index = 1; index < words.length; index += 1) {
-    const word = words[index];
-    if (["-e", "--expression", "-f", "--file"].includes(word)) {
-      index += 1;
-      skipScript = false;
-    } else if (word && !word.startsWith("-")) {
-      if (skipScript) skipScript = false;
-      else targets.push(word);
-    }
-  }
-  return targets;
+  const fileOperands = words.slice(1).filter((word, index, rest) => word && !word.startsWith("-") && !SED_SCRIPT_FLAGS.has(rest[index - 1] ?? ""));
+  return words.some((word) => SED_SCRIPT_FLAGS.has(word)) ? fileOperands : fileOperands.slice(1);
 }
 function contentCmdletTargets(words) {
   const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
