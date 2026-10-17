@@ -742,6 +742,7 @@ function installRefusalMessage(check, projectPath) {
 var { canonicalPath: canonicalPath3 } = require(import_node_path8.default.join(__dirname, "..", "lib", "worktrees.js"));
 var { isInScope: scopeMatch } = require(import_node_path8.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "Plan", "statusline-setup"]);
+var READ_ONLY_NATIVE_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "Plan", "claude-code-guide"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
 var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -851,10 +852,25 @@ ${String(toolInput.description ?? "")}`;
   const instructions = work.replace(/\b(?:do not|don't|never|without)\s+(?:edit(?:ing)?|modify(?:ing)?|writ(?:e|ing)|implement(?:ing)?|chang(?:e|ing)|creat(?:e|ing)|delet(?:e|ing)|remov(?:e|ing)|commit(?:ting)?|push(?:ing)?|install(?:ing)?)\b/gi, "");
   return /(?:^|[.!?:;\n]|\b(?:and|then|please|must|should|to))\s*(?:edit(?:s|ing|ed)?|modif(?:y|ies|ying|ied)|writ(?:e|es|ing)|implement(?:s|ing|ed)?|chang(?:e|es|ing|ed)|creat(?:e|es|ing|ed)|delet(?:e|es|ing|ed)|remov(?:e|es|ing|ed)|commit(?:s|ting|ted)?|push(?:es|ing|ed)?|install(?:s|ing|ed)?|update|refactor|patch|rewrite)\b/i.test(instructions);
 }
-function namesTicketWork(toolInput) {
-  return /\bSQ-\d+\b|\[sidequest-route\b/i.test(`${String(toolInput.prompt ?? "")}
+function spawnText(toolInput) {
+  return `${String(toolInput.prompt ?? "")}
 ${String(toolInput.description ?? "")}
-${String(toolInput.name ?? "")}`);
+${String(toolInput.name ?? "")}`;
+}
+function citesTicketRef(toolInput) {
+  return /\bSQ-\d+\b/i.test(spawnText(toolInput));
+}
+function carriesRouteMarker(toolInput) {
+  return /\[sidequest-route\b/i.test(spawnText(toolInput));
+}
+function ticketRefOnlyDenyReason(type) {
+  return `sidequest: ${type} cites a ticket ref without a prepared dispatch, and ${type} can write. For a read-only lookup that cites ticket refs, spawn ${[...READ_ONLY_NATIVE_AGENT_TYPES].join(", ")} instead; for ticket work, dispatch the ticket and spawn its returned executor.`;
+}
+function ticketWorkDenyReason(toolInput, type) {
+  if (carriesRouteMarker(toolInput)) return genericAgentDenyReason(type);
+  if (!citesTicketRef(toolInput)) return null;
+  if (hasWriteIntent(toolInput)) return genericAgentDenyReason(type);
+  return READ_ONLY_NATIVE_AGENT_TYPES.has(type) ? null : ticketRefOnlyDenyReason(type);
 }
 function missingInstallDenyReason(input, type) {
   const project = registeredProjectPath(input);
@@ -926,8 +942,9 @@ function guardDeniedWrite(input, toolInput) {
   return true;
 }
 function guardNativeAgent(input, toolInput, type) {
-  if (namesTicketWork(toolInput)) {
-    writeDeny("PreToolUse", genericAgentDenyReason(type));
+  const ticketWorkDenial = ticketWorkDenyReason(toolInput, type);
+  if (ticketWorkDenial) {
+    writeDeny("PreToolUse", ticketWorkDenial);
     return true;
   }
   if (guardDeniedWrite(input, toolInput)) return true;
