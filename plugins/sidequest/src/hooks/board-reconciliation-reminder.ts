@@ -15,6 +15,7 @@ const stateLockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTE
 interface Ticket {
   ref?: string;
   status?: string;
+  archived?: boolean;
   storyId?: string | null;
   claim?: { by?: string; at?: string; generation?: string } | null;
   dispatch?: { sessionId?: string | null; terminalAt?: string | null; claimedAt?: string | null } | null;
@@ -247,7 +248,7 @@ function reconciliationMessage(data: HookInput, providedStore?: Store): Reminder
       project: project.slug,
       claimLive: Boolean(ticket.claim?.by && !store.claimReclaimable(ticket)),
     }));
-    const open = projectTickets.filter((ticket) => ticket.status !== 'done'
+    const open = projectTickets.filter((ticket) => !ticket.archived && ticket.status !== 'done'
       && touched(ticket)
       && ((!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket)) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === 'doing' && !pendingSubmission(ticket));
