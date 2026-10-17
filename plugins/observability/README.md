@@ -2,6 +2,17 @@
 
 Observability is a local Claude Code hooks module. It records one metadata row per completed main-thread turn, including aborted, refused, and failed turns. Recording is off until you enable it in each project.
 
+## Install
+
+Run these in Claude Code:
+
+```text
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install observability@eigenwise-toolshed --scope project
+```
+
+On Claude Code 2.1.275 or later one line does both: `/plugin install observability --marketplace Eigenwise/eigenwise-toolshed`. Reload plugins or start a new session, then run `/observability:track on` in each project you want recorded.
+
 ## Commands
 
 - `/observability:track on` enables recording for the current project.
