@@ -1,6 +1,6 @@
 "use strict";
 const { resolveSuite } = require("../suite-resolver.js");
-const { VERIFICATION_KINDS, classifyVerificationKind } = require("../kernel/verification.js");
+const { VERIFICATION_KINDS, classifyVerificationKind, environmentPrefix, verificationRequirement } = require("../kernel/verification.js");
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require("../worktrees.js");
 const { unscopedWriteCannotAutoApprove } = require("./dispatch.js");
 function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
@@ -168,7 +168,8 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
     if (/^manual\b/i.test(command)) {
       return ["Manual verification must use the exact prefix `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`."];
     }
-    const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1] || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2] || "";
+    const runnable = command.slice(environmentPrefix(command).length);
+    const first = runnable.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1] || runnable.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2] || "";
     const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase()) || /^\(cd\s/.test(command) || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first) || resolvableOnPath(first);
     const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
     const errors = [];
@@ -849,6 +850,12 @@ ${String(ticket?.description || "")}`;
     const directory = [...plugins][0];
     return resolveSuite(projectPath, { name: path.basename(directory), dir: directory });
   }
+  function suiteVerifyRewriteWarnings(ticket, projectPath) {
+    const recorded = String(ticket.executorVerify || "").trim();
+    const suite = String(ticket.executorVerifyKind).toLowerCase() === "suite" && recorded ? derivedVerifyCommand(ticket, projectPath) : null;
+    if (!suite) return [];
+    return [verificationRequirement({ kind: "suite", command: recorded, suite: { name: suite.plugin, cwd: suite.cwd, setup: suite.setup, command: suite.command } }).command].filter((generated) => generated !== recorded).map((generated) => `Planning-depth warning: verifyKind suite replaces the recorded verify ${JSON.stringify(recorded)} with the generated suite command ${JSON.stringify(generated)}, which runs from the checkout root and is what executors run and submit. Use verifyKind command to keep the recorded line as written.`);
+  }
   function verifyCommandWarning(ticket, projectPath) {
     const issue = verifyCommandIssue(ticket, projectPath);
     return issue ? `Planning-depth warning: ${issue}` : null;
@@ -1193,6 +1200,7 @@ ${String(ticket?.description || "")}`;
     if (browserReview) warnings.push(browserReview);
     const verify = verifyCommandWarning(ticket, projectPath);
     if (verify) warnings.push(verify);
+    warnings.push(...suiteVerifyRewriteWarnings(ticket, projectPath));
     warnings.push(...unquotedGlobPlanningWarnings(ticket));
     warnings.push(...executorAnchorWarnings(ticket, projectPath));
     if (!projectPath || !Array.isArray(ticket.files)) return warnings;
