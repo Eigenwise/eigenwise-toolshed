@@ -10,6 +10,7 @@
   "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
   "license": "MIT",
   "suiteTimeout": 300000,
+  "types": "./types/index.d.ts",
   "keywords": [
     "observability",
     "telemetry",
