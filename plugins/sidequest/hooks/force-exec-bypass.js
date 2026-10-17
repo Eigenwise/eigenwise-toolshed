@@ -355,7 +355,7 @@ function enclosingCheckout(start) {
 }
 
 // src/hooks/shared/read-only-shell.ts
-var SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*'|[^\s|;&<>"']+)/g;
+var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
 var MUTATING_GIT = /* @__PURE__ */ new Set([
@@ -388,7 +388,20 @@ function gitWriteTargets(words) {
   return MUTATING_GIT.has(String(subcommand)) ? [directory || "."] : [];
 }
 function inPlaceEditTargets(words) {
-  return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
+  if (!words.some((word) => /^-[a-z]*i/i.test(word))) return [];
+  const targets = [];
+  let skipScript = true;
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (["-e", "--expression", "-f", "--file"].includes(word)) {
+      index += 1;
+      skipScript = false;
+    } else if (word && !word.startsWith("-")) {
+      if (skipScript) skipScript = false;
+      else targets.push(word);
+    }
+  }
+  return targets;
 }
 function contentCmdletTargets(words) {
   const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
@@ -437,7 +450,7 @@ function commandWriteTargets(words) {
   return reader ? reader(words) : [];
 }
 function shellTokens(command) {
-  return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => match[1] ? { operator: match[1] } : { word: match[2].replace(/^(["'])([\s\S]*)\1$/, "$2") });
+  return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => match[2] ? { operator: match[2] } : { word: (match[1] || match[3]).replace(/^(["'])([\s\S]*)\1$/, "$2") });
 }
 function shellSegments(command) {
   const segments = [{ words: [], redirects: [] }];

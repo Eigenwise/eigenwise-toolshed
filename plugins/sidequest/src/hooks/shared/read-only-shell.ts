@@ -11,7 +11,7 @@ type ShellToken = { operator: string } | { word: string };
 type ShellSegment = { words: string[]; redirects: string[] };
 type WriteTargetReader = (words: string[]) => string[];
 
-const SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*'|[^\s|;&<>"']+)/g;
+const SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
 const SEGMENT_OPERATORS = new Set(['&&', '||', '|', ';', '\n']);
 const NULL_SINKS = new Set(['/dev/null', 'nul', '$null']);
 const MUTATING_GIT = new Set([
@@ -31,7 +31,20 @@ function gitWriteTargets(words: string[]): string[] {
 }
 
 function inPlaceEditTargets(words: string[]): string[] {
-  return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
+  if (!words.some((word) => /^-[a-z]*i/i.test(word))) return [];
+  const targets: string[] = [];
+  let skipScript = true;
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index]!;
+    if (['-e', '--expression', '-f', '--file'].includes(word)) {
+      index += 1;
+      skipScript = false;
+    } else if (word && !word.startsWith('-')) {
+      if (skipScript) skipScript = false;
+      else targets.push(word);
+    }
+  }
+  return targets;
 }
 
 // A content cmdlet's other words (-Value text, -ItemType File, -Encoding utf8) are data, not paths:
@@ -71,7 +84,7 @@ function commandWriteTargets(words: string[]): string[] {
 
 function shellTokens(command: string): ShellToken[] {
   return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => (
-    match[1] ? { operator: match[1] } : { word: match[2]!.replace(/^(["'])([\s\S]*)\1$/, '$2') }
+    match[2] ? { operator: match[2] } : { word: (match[1] || match[3]!).replace(/^(["'])([\s\S]*)\1$/, '$2') }
   ));
 }
 
