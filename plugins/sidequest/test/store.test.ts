@@ -474,3 +474,34 @@ for (const currentBranch of ['main', 'missing']) {
     assert.strictEqual(JSON.stringify(store.getTicket(board.slug, ticket.ref)), before, 'a landed candidate remains pending and unchanged');
   });
 }
+
+test('GH-567: siblings frozen on remote:origin/main and local:main resolve to one wave target; different branches still refuse', () => {
+  const { repository, board } = movableBoard('gh-567-wave-target');
+  const git = (argumentsList: string[]) => moveGit('git', argumentsList, { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const commit = (message: string) => git(['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-m', message]);
+  commit('base');
+  git(['remote', 'add', 'origin', path.join(fixtureRoot, 'gh-567-unused-remote')]);
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  git(['config', 'branch.main.remote', 'origin']);
+  git(['config', 'branch.main.merge', 'refs/heads/main']);
+  git(['branch', 'other']);
+  const frozenOn = (ref: string, integrationTarget: object) => ({ ref, dispatch: { integrationTarget } });
+  const remoteSibling = frozenOn('SQ-1', { mode: 'remote', branch: 'main', upstream: 'origin/main' });
+  const localSibling = frozenOn('SQ-2', { mode: 'local', branch: 'main', upstream: 'main' });
+
+  const level = store.ticketIntegrationTargets(board.slug, [remoteSibling, localSibling]);
+  assert.strictEqual(level.ok, true, level.message);
+  assert.deepStrictEqual(level.target, { mode: 'remote', upstream: 'origin/main', branch: 'main' }, 'local main level with origin picks the remote form');
+
+  commit('unpushed local work');
+  const ahead = store.ticketIntegrationTargets(board.slug, [remoteSibling, localSibling]);
+  assert.strictEqual(ahead.ok, true, ahead.message);
+  assert.deepStrictEqual(ahead.target, { mode: 'local', upstream: 'main', branch: 'main' }, 'local main ahead of origin picks the local form');
+
+  const otherBranch = frozenOn('SQ-3', { mode: 'local', branch: 'other', upstream: 'other' });
+  const split = store.ticketIntegrationTargets(board.slug, [remoteSibling, otherBranch]);
+  assert.strictEqual(split.ok, false);
+  assert.strictEqual(split.reason, 'integration_target_mismatch');
+  assert.match(split.message, /SQ-1=remote:origin\/main, SQ-3=local:other/);
+  assert.match(split.message, /redispatch .* with integrationBranch main/);
+});

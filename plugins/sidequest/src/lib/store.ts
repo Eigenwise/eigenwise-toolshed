@@ -3920,15 +3920,26 @@ function ticketIntegrationTargets(slug?: any, tickets?: any) {
     target: ticketIntegrationTarget(slug, ticket),
   }));
   const first = resolved[0]?.target;
-  if (!first || resolved.some(({ target }) => target.mode !== first.mode || target.branch !== first.branch || target.upstream !== first.upstream)) {
+  if (!first || resolved.some(({ target }) => target.branch !== first.branch)) {
     return {
       ok: false,
       reason: 'integration_target_mismatch',
       targets: resolved,
-      message: `Wave delivery requires one recorded ticket delivery target; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(', ')}. Split the refs by target before assembly or delivery.`,
+      message: `Wave delivery requires one recorded ticket delivery branch; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(', ')}. Integrate each branch's refs as their own wave, or redispatch the refs on another branch with integrationBranch ${first?.branch || '<branch>'} so they share one.`,
     };
   }
-  return { ok: true, target: first, targets: resolved };
+  return { ok: true, target: sameBranchWaveTarget(slug, resolved.map(({ target }) => target)), targets: resolved };
+}
+
+// GH-567: auto dispatch freezes local:<branch> only while the local branch is ahead of
+// origin/<branch>, so siblings dispatched minutes apart can record either form of one
+// branch. The wave takes the form dispatch would pick now: local while it is ahead, so
+// its tip contains every sibling's base, and the remote-tracking ref otherwise.
+function sameBranchWaveTarget(slug: any, targets: any[]) {
+  const local = targets.find((target) => target.mode === 'local');
+  const remote = targets.find((target) => target.mode === 'remote');
+  if (!local || !remote) return targets[0];
+  return localAheadOfUpstreamWarning(readMeta(slug)?.path || '', local.branch) ? local : remote;
 }
 
 // The dispatch-time branch stays the default target, but an integrator that has since

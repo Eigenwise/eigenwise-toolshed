@@ -3329,15 +3329,21 @@ function ticketIntegrationTargets(slug, tickets) {
     target: ticketIntegrationTarget(slug, ticket)
   }));
   const first = resolved[0]?.target;
-  if (!first || resolved.some(({ target }) => target.mode !== first.mode || target.branch !== first.branch || target.upstream !== first.upstream)) {
+  if (!first || resolved.some(({ target }) => target.branch !== first.branch)) {
     return {
       ok: false,
       reason: "integration_target_mismatch",
       targets: resolved,
-      message: `Wave delivery requires one recorded ticket delivery target; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(", ")}. Split the refs by target before assembly or delivery.`
+      message: `Wave delivery requires one recorded ticket delivery branch; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(", ")}. Integrate each branch's refs as their own wave, or redispatch the refs on another branch with integrationBranch ${first?.branch || "<branch>"} so they share one.`
     };
   }
-  return { ok: true, target: first, targets: resolved };
+  return { ok: true, target: sameBranchWaveTarget(slug, resolved.map(({ target }) => target)), targets: resolved };
+}
+function sameBranchWaveTarget(slug, targets) {
+  const local = targets.find((target) => target.mode === "local");
+  const remote = targets.find((target) => target.mode === "remote");
+  if (!local || !remote) return targets[0];
+  return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
   const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);

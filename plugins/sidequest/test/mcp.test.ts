@@ -2989,9 +2989,26 @@ test('SQ-2638: dispatch-recorded targets govern submit, waves, MCP delivery, and
   store.setBoardConfig(modeProject, { integrationMode: 'local', integrationBranch: 'branch-a' });
   const localTarget = await submittedTargetCandidate(modeRepository, modeProject, 'branch-a', 'local-mode.js');
   store.setBoardConfig(modeProject, { integrationMode: 'remote', integrationBranch: 'branch-a' });
+  store.setBoardConfig(modeProject, { integrationMode: 'local', integrationBranch: 'branch-b' });
+  const otherBranchTarget = await submittedTargetCandidate(modeRepository, modeProject, 'branch-b', 'other-branch.js');
+  store.setBoardConfig(modeProject, { integrationMode: 'remote', integrationBranch: 'branch-a' });
   const remoteTarget = await submittedTargetCandidate(modeRepository, modeProject, 'branch-a', 'remote-mode.js');
   const branchAHead = gitAt(modeRepository, ['rev-parse', 'branch-a']);
   const branchBHeadBeforeMixed = gitAt(modeRepository, ['rev-parse', 'branch-b']);
+  const splitRefs = `${remoteTarget.ticket.ref},${otherBranchTarget.ticket.ref}`;
+  const split = await callTool('integrate', {
+    project: modeProject,
+    ref: splitRefs,
+    by: 'target-integrator',
+    wave: waivedDelivery(splitRefs),
+  });
+  assert.equal(split.reason, 'integration_target_mismatch');
+  assert.match(split.message, new RegExp(`${remoteTarget.ticket.ref}=remote:origin/branch-a`));
+  assert.match(split.message, new RegExp(`${otherBranchTarget.ticket.ref}=local:branch-b`));
+  assert.equal(gitAt(modeRepository, ['rev-parse', 'branch-a']), branchAHead, 'split assembly does not move the local target');
+  assert.equal(gitAt(modeRepository, ['rev-parse', 'branch-b']), branchBHeadBeforeMixed, 'split assembly does not move another checkout');
+
+  // GH-567: local:branch-a and remote:origin/branch-a name one branch, so they assemble as one wave.
   const mixedRefs = `${localTarget.ticket.ref},${remoteTarget.ticket.ref}`;
   const mixed = await callTool('integrate', {
     project: modeProject,
@@ -2999,11 +3016,7 @@ test('SQ-2638: dispatch-recorded targets govern submit, waves, MCP delivery, and
     by: 'target-integrator',
     wave: waivedDelivery(mixedRefs),
   });
-  assert.equal(mixed.reason, 'integration_target_mismatch');
-  assert.match(mixed.message, new RegExp(`${localTarget.ticket.ref}=local:branch-a`));
-  assert.match(mixed.message, new RegExp(`${remoteTarget.ticket.ref}=remote:origin/branch-a`));
-  assert.equal(gitAt(modeRepository, ['rev-parse', 'branch-a']), branchAHead, 'mixed assembly does not move the local target');
-  assert.equal(gitAt(modeRepository, ['rev-parse', 'branch-b']), branchBHeadBeforeMixed, 'mixed assembly does not move another checkout');
+  assert.equal(mixed.ok, true, mixed.message || mixed.reason);
 });
 
 test('SQ-2434: MCP delivery closure accepts local main ahead of origin and records upstream reachability', async () => {
