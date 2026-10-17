@@ -71,6 +71,25 @@ export async function createAnalyzer(projectRoot) {
     return pieces.join('') + text.slice(cursor, functionNode.end);
   }
   
+  // LCOV only reports lines, so the denominator is the start line of each emitted statement the
+  // body owns: blocks, empty statements and type-only or ambient declarations emit no code.
+  const NON_EXECUTABLE_STATEMENTS = new Set([ast.SyntaxKind.Block, ast.SyntaxKind.EmptyStatement, ast.SyntaxKind.InterfaceDeclaration, ast.SyntaxKind.TypeAliasDeclaration]);
+
+  function isExecutableStatement(node) {
+    return ast.isStatement(node) && !NON_EXECUTABLE_STATEMENTS.has(node.kind) && !node.modifiers?.some((modifier) => modifier.kind === ast.SyntaxKind.DeclareKeyword);
+  }
+
+  function statementStartAfterDecorators(node, text) {
+    const lastDecorator = node.modifiers?.findLast(ast.isDecorator);
+    return lastDecorator ? ast.skipTrivia(text, lastDecorator.end) : node.getStart();
+  }
+
+  function executableLines(functionNode, sourceFile, text) {
+    const starts = ast.isBlock(functionNode.body) ? [] : [functionNode.body.getStart()];
+    forEachOwnNode(functionNode, (node) => { if (isExecutableStatement(node)) starts.push(statementStartAfterDecorators(node, text)); }, () => {});
+    return [...new Set(starts.map((start) => sourceFile.getLineAndCharacterOfPosition(start).line + 1))].sort((left, right) => left - right);
+  }
+
   function logicalOperatorBoundary(node) {
     if (!ast.isBinaryExpression(node) || !SHORT_CIRCUIT_OPERATORS.has(node.operatorToken.kind)) return null;
     return { kind: node.operatorToken.kind, start: node.operatorToken.getStart(), anchorStart: node.right.getStart(), anchorEnd: node.right.end };
@@ -114,7 +133,8 @@ export async function createAnalyzer(projectRoot) {
         const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
         const start = node.getStart();
         const end = node.end;
-        functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex') });
+        const lines = executableLines(node, sourceFile, text);
+        functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex'), ownedLines: lines, executableLines: lines });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }
