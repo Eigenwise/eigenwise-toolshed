@@ -102,16 +102,16 @@ export function coverageTrust(input, file, hash) {
 }
 
 export function functionLineCoverage(descriptor, descriptors, lines) {
-  if (descriptor.ownedLines) return pythonLineCoverage(descriptor, descriptors, lines);
-  return { unverified: 'LCOV executable-line completeness is unverified for this adapter. Source hashes and DA records alone cannot establish the denominator. For supported JS/TS bodies, use measure with a genuine same-session V8 capture.' };
+  if (descriptor.ownedLines) return inventoriedLineCoverage(descriptor, descriptors, lines);
+  return { unverified: 'LCOV executable-line completeness is unverified for this adapter. Source hashes and DA records alone cannot establish the denominator. Only the JS/TS and Python adapters inventory executable lines from exact source.' };
 }
 
-function pythonLineCoverage(descriptor, descriptors, lines) {
+function inventoriedLineCoverage(descriptor, descriptors, lines) {
   const shared = descriptors.some((candidate) => candidate.identity !== descriptor.identity && candidate.ownedLines?.some((line) => descriptor.ownedLines.includes(line)));
-  if (shared) return { unverified: 'Independently owned Python bodies share executable source lines. Put their bodies on separate lines to measure per-function LCOV coverage.' };
+  if (shared) return { unverified: 'Independently owned bodies share executable source lines. Put their bodies on separate lines to measure per-function LCOV coverage.' };
   const executable = descriptor.executableLines;
-  if (!executable) return { unverified: 'Python executable-line inventory is missing. Rerun the exact-source Python adapter and coverage capture.' };
+  if (!executable) return { unverified: 'Executable-line inventory is missing. Rerun the exact-source adapter and coverage capture.' };
   if (!executable.length) return { unverified: 'No executable LCOV lines in this function. Run coverage that includes this body, then rerun the gate.' };
-  if (executable.some((line) => !lines.has(line))) return { unverified: 'Missing executable LCOV lines from the exact-source Python bytecode inventory. Regenerate complete coverage; exclusions, skipped statements or ambiguous multiline mapping cannot prove per-body coverage.' };
+  if (executable.some((line) => !lines.has(line))) return { unverified: 'Missing executable LCOV lines from the exact-source executable-line inventory. Regenerate complete coverage; exclusions, skipped statements or ambiguous multiline mapping cannot prove per-body coverage.' };
   return { coverage: executable.filter((line) => lines.get(line) > 0).length / executable.length };
 }
