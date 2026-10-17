@@ -65,15 +65,47 @@ test('the retired mark-retro command stays unavailable', () => {
   assert.equal(JSON.parse(current.stdout).ok, true);
 });
 
-test('help documents the crap gate, its config file, and its exit codes', () => {
+function claudeConfigWithQualityGate(installs) {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-quality-gate-'));
+  fs.mkdirSync(path.join(configDir, 'plugins'));
+  const records = installs.map((installPath) => ({ scope: 'user', installPath }));
+  fs.writeFileSync(path.join(configDir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'quality-gate@eigenwise-toolshed': records } }));
+  return configDir;
+}
+
+test('crap hands its arguments to the installed quality-gate and exits with its code', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-quality-gate-install-'));
+  fs.mkdirSync(path.join(installPath, 'bin'));
+  fs.writeFileSync(path.join(installPath, 'bin', 'quality-gate.js'), "process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 1;\n");
+  const configDir = claudeConfigWithQualityGate([path.join(installPath, 'missing'), installPath]);
+
+  const result = run(['crap', '--cc-only', '--lcov', 'coverage/lcov.info', '--json'], projectPath, { CLAUDE_CONFIG_DIR: configDir });
+  assert.equal(result.status, 1, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), ['crap', '--cc-only', '--lcov', 'coverage/lcov.info', '--json', '--project', projectPath]);
+});
+
+test('crap without quality-gate installed scores nothing, names the install command, and exits 2', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  const configDir = claudeConfigWithQualityGate([]);
+
+  const result = run(['crap', '--json'], projectPath, { CLAUDE_CONFIG_DIR: configDir });
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'quartermaster crap is retired: CRAP scoring lives in quality-gate. Install it with /plugin install quality-gate@eigenwise-toolshed\n');
+
+  const noRegistry = run(['crap'], projectPath, { CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-empty-')) });
+  assert.equal(noRegistry.status, 2);
+  assert.match(noRegistry.stderr, /\/plugin install quality-gate@eigenwise-toolshed/);
+});
+
+test('help says crap is retired and runs quality-gate', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
 
   const result = run('help', projectPath);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /quartermaster crap \[--project <path>\] \[--lcov <path>\] \[--complexity <lizard\.csv>\]/);
-  assert.match(result.stdout, /fixed CRAP threshold 6/);
-  assert.match(result.stdout, /\.claude\/quartermaster\/crap\.json/);
-  assert.match(result.stdout, /2 unverified measurement/);
+  assert.match(result.stdout, /quartermaster crap \[quality-gate crap arguments\]/);
+  assert.match(result.stdout, /crap scores nothing itself: it passes its arguments to quality-gate crap/);
 });
 
 test('decline-resupply records the decline without clearing the current accumulation', () => {

@@ -57,39 +57,26 @@ it on. CRAP combines a function's branching complexity and test coverage, so a l
 little coverage gets a high score. The gate owns its threshold and checks new or modified functions;
 untouched legacy functions stay out of scope. Without a configured gate, run your tests and continue.
 
-When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
+The scoring itself belongs to the [Quality Gate](/getting-started/quality-gate/) plugin; Quartermaster
+only sets it up. When you approve it, setup installs quality-gate if it is missing, writes
+`.claude/quality-gate/crap.json`, and adds a live rule that runs:
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap
+node "<quality-gate plugin root>/bin/quality-gate.js" crap
 ```
 
-A function with complexity 6 or more fails at any coverage, so the failure line says to split it
-rather than add tests. Add `--cc-only` to check just that: it needs only lizard, runs no coverage
-command, and finishes in seconds. If your local `develop`, `main` or `master` is behind its upstream,
-the gate warns on stderr and suggests `--base <branch>@{upstream}`.
+It also shows the coverage command for your stack. A function with complexity 6 or more fails at any
+coverage, so the failure line says to split it rather than add tests. Exit 2 means a prerequisite or
+measurement input is missing. Follow the printed hint, then run the gate again.
 
-The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
-the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
-its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` into, so concurrent runs
-on one checkout do not read each other's coverage. A coverage command that exits 0 without writing
-fresh coverage exits 2 instead of scoring stale results.
+`quartermaster crap` is retired. It passes its arguments to the installed quality-gate and exits with
+its code; without quality-gate it scores nothing, prints the install command
+(`/plugin install quality-gate@eigenwise-toolshed`) and exits 2.
 
 The gate is something you run, locally or in CI. Quartermaster never installs a hook that blocks a
 turn until a receipt exists, and if resupply finds one in your settings it recommends removing it and
 names the file. The gate scores what the session changed since the merge base, so files that came in
 through a merge, rebase, or pull are never demanded.
-
-It also shows the coverage command for your stack. The gate needs
-[lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
-2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
-file that has function-like source tokens. It also covers a changed line inside a function lizard
-misread so badly that no row of its own measures it, a nested function lizard dropped included, even
-after the gate corrects lizard's spans from the source. Follow the printed hint, then run the gate again.
-
-React files get one extra step. lizard's TSX reader miscounts ordinary JSX badly enough to score a
-component for code that is not in it, so the gate measures `.tsx` and `.jsx` with lizard's TypeScript
-reader instead, from a byte-for-byte copy of your file. Every offender line for those files says which
-measurement produced it (`source=lizard-typescript`).
 
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 

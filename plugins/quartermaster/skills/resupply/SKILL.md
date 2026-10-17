@@ -154,7 +154,7 @@ nothing to build here. A project shipping small changes against a check that alr
 need an instrument invented for it, and proposing one anyway spends the user's attention on your
 guess instead of their evidence.
 
-For a codebase with tests but no `.claude/quartermaster/crap.json`, offer an optional CRAP gate when
+For a codebase with tests but no `.claude/quality-gate/crap.json` (or older `.claude/quartermaster/crap.json`), offer an optional CRAP gate when
 `decisions.rejected` does not include `rule:crap-gate`. This is a proposal, never a violation or a
 prerequisite for useful work. If a user-injected rule requires the gate, name that rule in one line
 before the proposal; never infer a requirement from Toolshed defaults.
@@ -168,8 +168,9 @@ changes. Show the detected stack's exact LCOV command, the config, and the deriv
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap
 ```
 
-The proposal names `lizard` as the prerequisite and its install choices, `uv tool install lizard`,
-`pipx install lizard`, or `pip install lizard`. Quartermaster never installs it. An exit 2 means a
+The proposal names the quality-gate plugin as the prerequisite (`/plugin install quality-gate@eigenwise-toolshed`):
+it does the scoring, and that command runs it. Without it the command scores nothing, prints that install
+line and exits 2. Quartermaster installs it only after approval. An exit 2 means a
 prerequisite or coverage input needs attention for an approved gate. A project without a gate
 runs its tests and continues; missing configuration never blocks the resupply round.
 
