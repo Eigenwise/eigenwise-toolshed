@@ -8,6 +8,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 
 const {
+  appendRulesToSettings,
   applyPermissionAllowlist,
   enablePermissionAutomation,
   fingerprintFor,
@@ -68,7 +69,10 @@ test('always-approved permission fingerprints append project-local allow rules',
 
   assert.equal(result.additions[0].fingerprint, 'permission:Bash:npm test');
   assert.match(after, /"allow": \[\n      "Read",\n      "Bash\(npm test:\*\)"\n    \]/);
-  assert.equal(after.replace(',\n      "Bash(npm test:*)"', ''), before);
+  assert.deepEqual(JSON.parse(after), {
+    ...JSON.parse(before),
+    permissions: { allow: ['Read', 'Bash(npm test:*)'] },
+  });
   const [decision] = readDecisions(environment);
   assert.deepEqual({
     fingerprint: decision.fingerprint,
@@ -109,7 +113,10 @@ test('PowerShell candidates are blocked before reports and settings writes', asy
   assert.equal(result.blocked[0].vetoReason, 'unsafe shell rule');
   assert.match(output, /blocked permission:PowerShell: vetoed as too broad a rule \(unsafe shell rule\) after 5 approvals/);
   assert.match(after, /"allow": \[\n      "Read",\n      "Bash\(npm test:\*\)"\n    \]/);
-  assert.equal(after.replace(',\n      "Bash(npm test:*)"', ''), before);
+  assert.deepEqual(JSON.parse(after), {
+    ...JSON.parse(before),
+    permissions: { allow: ['Read', 'Bash(npm test:*)'] },
+  });
 });
 
 test('without the opt-in marker the pass reports candidates and writes nothing', async () => {
@@ -326,4 +333,42 @@ test('a mixed-case command keeps its case so the written rule matches it on a ca
   assert.equal(result.additions[0].fingerprint, 'permission:Bash:NPM Test');
   assert.match(after, /"Bash\(NPM Test:\*\)"/);
   assert.doesNotMatch(after, /"Bash\(npm test:\*\)"/);
+});
+
+test('learned allow rules preserve deny rules and the default permission mode', () => {
+  const projectDir = temporaryProject();
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: ['Bash(rm:*)'], defaultMode: 'acceptEdits' } }));
+
+  assert.deepEqual(appendRulesToSettings(projectDir, ['Bash(git status:*)']), ['Bash(git status:*)']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), {
+    permissions: { deny: ['Bash(rm:*)'], defaultMode: 'acceptEdits', allow: ['Bash(git status:*)'] },
+  });
+});
+
+test('learned allow rules leave sandbox allow arrays untouched across repeated runs', () => {
+  const projectDir = temporaryProject();
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const settings = { sandbox: { network: { allow: ['x'] } }, permissions: { allow: ['Read'] } };
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+
+  assert.deepEqual(appendRulesToSettings(projectDir, ['Bash(git status:*)', 'Bash(git status:*)']), ['Bash(git status:*)']);
+  assert.deepEqual(appendRulesToSettings(projectDir, ['Bash(git status:*)']), []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), {
+    ...settings,
+    permissions: { allow: ['Read', 'Bash(git status:*)'] },
+  });
+});
+
+test('learning allow rules refuses invalid JSON without changing the settings file', () => {
+  const projectDir = temporaryProject();
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const before = '{"permissions":';
+  fs.writeFileSync(settingsFile, before);
+
+  assert.throws(() => appendRulesToSettings(projectDir, ['Bash(git status:*)']), /cannot update invalid JSON/);
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), before);
 });

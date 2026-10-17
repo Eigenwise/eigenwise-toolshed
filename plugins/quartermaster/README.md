@@ -76,6 +76,8 @@ Everything prints JSON except `crap`. Node standard library only, no dependencie
 
 `crap` is retired. CRAP scoring lives in the [quality-gate](../quality-gate) plugin, and Quartermaster only sets it up. `crap` passes its arguments straight to the installed quality-gate's `crap` and exits with its code. Without quality-gate installed it scores nothing, prints `/plugin install quality-gate@eigenwise-toolshed` on stderr and exits 2, so nothing reads it as a pass. quality-gate reads `.claude/quality-gate/crap.json` and still falls back to an older `.claude/quartermaster/crap.json`. Its README has the config keys, the coverage-command contract and the exit codes; the setup skill's [CRAP gate reference](skills/setup/references/crap-gate.md) has the LCOV recipe per stack and the live rule.
 
+Learned rules are merged into `permissions.allow` in the project's `.claude/settings.local.json`. Existing deny rules, permission mode, and unrelated settings are kept; a write reformats the JSON with two-space indentation.
+
 ## Configuration
 
 Environment variables are optional:
