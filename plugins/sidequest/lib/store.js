@@ -3267,7 +3267,7 @@ function deliveredReleasePaths(repo, delivery) {
   return [...commitPaths(repo, delivery.commit), ...delivery.integration?.changedPaths || []];
 }
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the fragment, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the file, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
 ---
 ref: ${ref}
 title: <short user-facing title>

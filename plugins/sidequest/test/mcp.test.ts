@@ -3282,7 +3282,7 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'missing_release_fragment');
   assert.match(refused.message, new RegExp(`so it rides along:\\n---\\nref: ${missing.ref}`));
-  assert.match(refused.message, /Write the fragment, then commit it, then submit again\./);
+  assert.match(refused.message, /Write the file, then commit it, then submit again\./);
   assert.doesNotMatch(refused.message, /Request scope/);
   assert.match(refused.message, /ref: .*\ntitle: <short user-facing title>\nbump: patch\nplugins:/);
   assert.ok(store.getTicket(missingProject, missing.ref).claim, 'fragment refusal keeps the claim');
@@ -3520,7 +3520,7 @@ test('MCP submit reports every independently fixable completion refusal together
     'missing_release_fragment',
   ]);
   const refusalMessages = refused.failures.map((failure: any) => failure.message).join('\n');
-  assert.match(refusalMessages, /Write the fragment, then commit it, then submit again\./);
+  assert.match(refusalMessages, /Write the file, then commit it, then submit again\./);
   assert.match(refusalMessages, /needs a claim-holder negative control/);
   assert.match(refusalMessages, /No completed passed verification capture exists/);
 });

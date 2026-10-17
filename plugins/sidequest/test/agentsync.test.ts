@@ -1462,7 +1462,7 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
     dispatch: { verificationRequirement: { kind: 'command', command: 'npm test' } },
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
-  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then put the full final report in submit\.body/);
+  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. If your change touches a plugin, write \.release\/unreleased\/<REF>\.md yourself \(frontmatter ref, title, bump, plugins\); submit refuses without it\. The path is already in your scope; do not add it to the ticket's files\./);
   assert.match(briefing, /verification execution evidence: changed behavior, named assertion, and empty-state proof/);
   assert.match(briefing, /clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after the pinned verify-capture wrapper records the current dispatch attempt and revision/);
   assert.match(briefing, /Submit writes the short terminal submission marker/);
