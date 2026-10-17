@@ -20,7 +20,7 @@ Reload Claude Code or start a new session after installing. Sidequest packages i
 
 Sidequest is local. The dashboard runs on your machine and ticket data stays in the local Sidequest store.
 
-Each board belongs to one project folder. When you work in a Git repository, Sidequest creates its board the first time Claude uses the board there. A folder that is not a Git repository, such as a notes vault, gets a board only when you name it: ask Claude to add it by its absolute path, or pass `--project <absolute path>` on the command line. Sidequest never makes a board for a missing folder, a folder in your system temp directory, or anything under `~/.claude` (including Sidequest's own storage), and it tells you which rule refused the path. If a registered project's folder is later moved or deleted, the board stays and the projects list marks it as missing so you can archive it yourself.
+Each board belongs to one project folder. When you work in a Git repository, Sidequest creates its board the first time Claude uses the board there. A folder that is not a Git repository, such as a notes vault, gets a board only when you name it: ask Claude to add it by its absolute path, or pass `--project <absolute path>` on the command line. Sidequest never makes a board for a missing folder, a folder in your system temp directory, or anything under `~/.claude` (including Sidequest's own storage), and it tells you which rule refused the path. If a registered project's folder is later moved or deleted, the board stays and the projects list marks it as missing. Repoint a moved repository with `board move`, or archive a deleted one.
 
 ## Check your first saved task
 
@@ -39,6 +39,30 @@ Replace `SQ-N` with the reference Claude gave you. Confirm the answer against th
 Once this save-and-read check works, use the story workflow below when the task needs planning or delegated implementation.
 
 When an executor hands back a clean committed checkpoint in a retained worktree, its replacement gets a Resume section first. It names the checkout, pinned commit, handback reason, and last recorded verification result and log. After claiming, the replacement confirms HEAD and runs the pinned verifier on that candidate before continuing (shared-environment checks still wait for delivery). It reads new instructions or missing evidence rather than starting over with the full thread. The complete description, contract, scope, and verifier remain in the briefing.
+
+## Completed review decisions
+
+A completed independent review can say ACCEPTED while its source submission still shows a planned review outcome. The orchestrator records that decision explicitly through the main-thread MCP `verdict` tool:
+
+```json
+{
+  "ref": "SQ-12",
+  "by": "orchestrator",
+  "outcome": "accepted",
+  "text": "The exact candidate passes the completed review.",
+  "finalize": {
+    "sourceRef": "SQ-11",
+    "commit": "<exact original reviewTarget candidate hash>",
+    "evidence": "Original terminal review report and inspected range"
+  }
+}
+```
+
+Copy the original review's source and candidate from `reviewTarget`. Finalization requires a genuinely done, unclaimed independent bound review and its exact pending source. It preserves the reviewer, original completion and evidence, and updates both review outcome records. Use `rejected` when that candidate must not ship. Exact retries write nothing; a mistaken acceptance uses the main-thread `verdict.correct` contract with the original decision timestamp and evidence. Repairs still need a fresh candidate and independent review.
+
+For a bound review that was never dispatched, add `"authority": "main-attestation"` inside `finalize`. The main thread must supply `by`, `text` and evidence naming where the external review happened. Accepted permits integration, rejected blocks it. Sidequest records `reviewerRuntimeProvenance: false` and preserves the absent dispatch/completion. An active, released or partially completed reviewer cannot use this path.
+
+CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
 
 ## Your first workflow
 
@@ -127,7 +151,7 @@ Larger work is split along cohesive boundaries. A Continuation checkpoint commit
 remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
 
 Quality gates are optional. Run `/quartermaster:setup` and approve the gate proposal to turn one on
-through `.claude/quartermaster/crap.json` and a project live rule. Sidequest discovers the configured
+through `.claude/quality-gate/crap.json` and a project live rule. Sidequest discovers the configured
 gate in the executor briefing; user-injected rules still apply. Without a gate, run the pinned verifier,
 state once "no quality gate is configured for this project; Quartermaster setup can add one", and continue.
 Gate absence never holds integration or marks work UNVERIFIED.
@@ -177,6 +201,12 @@ After compaction or in a new session, ask:
 > Check the active Sidequest tickets for this project and continue from their recorded next steps.
 
 The board persists independently of the conversation. Details that matter for resuming the task need to be recorded on the ticket. You can also open its detail view to read the saved fields and discussion yourself.
+
+## Moving a repository
+
+After moving or renaming the repository folder, run `sidequest board move <old-absolute-path> <new-absolute-path>`. The destination must be a Git repository root with no existing board. Finish or release every claim, let dispatches terminate, and wait for worktree sweeps to finish first. A refusal names the claim, dispatch or sweep flight still holding the board.
+
+The move keeps ticket and story numbering, comments, routing, assets and pending submissions. It repairs Git worktree registrations and relocates terminal checkout bindings under the old repository root. External worktree paths stay unchanged. Submission and review authorities stay unchanged; existing verification evidence remains at its original storage path. The board records the old path, new path and move time. This command repoints Sidequest after a filesystem move; it doesn't move the repository folder for you.
 
 ## Use the dashboard
 
@@ -415,7 +445,9 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 
 **A verify command needs to run from a subdirectory.** A nested workspace (its own `Cargo.toml`, `package.json`, or Nx root) only checks the right code when its gate runs from that directory. Set `verifyCwd` on the ticket (`--verify-cwd` on the CLI) to a path relative to the project root, like `plugins/app`. The verify-capture wrapper runs the command from that directory of the checkout, the integrate gate does the same, and the board checks npm scripts and paths in the command against it. Unset, the command runs from the project root as before. A `verifyCwd` that's absolute or climbs out with `..` is refused.
 
-**A verify command that can't run never counts as passed.** A command the shell can't find (exit 127) records `toolchain_missing`, and a shell that never started records `could_not_run` with the spawn error. When you add or update a ticket, the board refuses a verify whose first word isn't a known tool, a shell builtin, a path, or something on `PATH`.
+**A `suite` verify runs the plugin's generated suite command.** With `verifyKind: suite` on a ticket whose files sit in one plugin, dispatch pins a generated command like `cd plugins/app && npm ci && npm run test:full` in place of the line you wrote, and add/update warns with both strings. That command carries its own `cd`, so the wrapper and the integrate gate run it from the checkout root and `verifyCwd` isn't applied a second time. An environment prefix on your line (`NODE_PATH=lib npm test`) is kept on each generated step. Use `verifyKind: command` when the line should run exactly as written.
+
+**A verify command that can't run never counts as passed.** A command the shell can't find (exit 127) records `toolchain_missing`, and a shell that never started records `could_not_run` with the spawn error. When you add or update a ticket, the board refuses a verify whose first word (after any `NAME=value` environment prefix) isn't a known tool, a shell builtin, a path, or something on `PATH`.
 
 **The verify-capture wrapper refuses with `verification_capture_command_mismatch`.** The briefing's wrapper line only names the project and ticket, and the wrapper loads the pinned verify command from the ticket itself, so there's nothing to copy by hand. An older briefing still carries the command as a `--base64` blob. When that blob doesn't match the ticket's pinned command (one mistyped character is enough), the wrapper runs nothing and prints both commands. Rerun it without `--base64`.
 
@@ -457,7 +489,7 @@ Ask Claude to set `deniedTools` on the board (`board_config`) or on one category
 
 **A multi-commit candidate's release fragment sits in an earlier commit.** Closing it by its tip commit reads the fragment from the whole submitted range, the same range `submit` already accepted, so it no longer refuses `missing_release_fragment`.
 
-**A verdict approved a candidate you meant to reject.** A bound review's outcome describes the candidate: `accepted` approves it, `rejected` confirms it must not ship, and `inconclusive` approves nothing. Ask the main Claude thread to correct a mistaken finalized accepted with MCP `verdict.correct`. The review must be readonly and finalized, both review and source must be unclaimed and terminal, and the original source submission must still be pending. Delivered or superseded sources refuse correction.
+**A verdict approved a candidate you meant to reject.** A bound review's outcome describes the candidate: `accepted` approves it, `rejected` confirms it must not ship, and `inconclusive` approves nothing. Ask the main Claude thread to correct a mistaken finalized accepted with MCP `verdict.correct`. The review must have a finalized normal decision (including a writable reviewer or explicit external attestation), or a readonly oracle verdict. The source must be terminal, both tickets unclaimed, and the original submission still pending. Delivered or superseded sources refuse correction.
 
 Claude reads the original timestamp from `list({ref: reviewRef}).ticket.oracle.verdict.at` and supplies `outcome: "rejected"`, audit `by`, nonempty correction `text`, optional `why`, and `correct: {expectedOutcome: "accepted", expectedVerdictAt, sourceRef, evidence, commit}`. A non-Git candidate uses `sourceRevision: {source, value}` instead of `commit`; provide exactly one. `constraint` is not accepted for corrections. The timestamp is the original verdict's `at`, never a later comment or correction timestamp.
 

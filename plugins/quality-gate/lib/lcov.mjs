@@ -46,8 +46,16 @@ function existingHashes(lcovPath) {
   return JSON.parse(fs.readFileSync(hashPath, 'utf8'));
 }
 
+const COMMAND_VARIABLE = /\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/g;
+
+// cmd.exe never expands $VAR and sh never expands %VAR%, so without this one coverageCommand only works on one platform (GH-543).
+export function expandCommandVariables(command, env) {
+  return command.replace(COMMAND_VARIABLE, (match, braced, bare, percent) => env[braced ?? bare ?? percent] ?? match);
+}
+
 function runCoverage(command, root, reportsDirectory) {
-  const result = spawnSync(command, { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, QUALITY_GATE_COVERAGE_DIR: reportsDirectory, QUARTERMASTER_COVERAGE_DIR: reportsDirectory } });
+  const env = { ...process.env, QUALITY_GATE_COVERAGE_DIR: reportsDirectory, QUARTERMASTER_COVERAGE_DIR: reportsDirectory };
+  const result = spawnSync(expandCommandVariables(command, env), { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 64 * 1024 * 1024, env });
   if (result.status !== 0) throw new Error(`Coverage command failed: ${result.stderr || result.error?.message || result.status}. Fix coverageCommand, then rerun the gate.`);
 }
 

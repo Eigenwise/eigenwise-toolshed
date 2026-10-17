@@ -882,8 +882,11 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const foreignReleaseFragmentMessage = foreignReleaseFragments.length
       ? commitScope.foreignReleaseFragmentRefusalMessage('scopeRequest', t.ref, foreignReleaseFragments)
       : '';
-    const scopeExpansionRefusalMessage = additions.length
-      ? `Scope expansion refused: ${refused.join(', ')}.`
+    // Only a refused addition earns this text: an addition the board auto-approved leaves
+    // nothing to name, and a bare "refused: ." beside a granted state misleads the caller.
+    const refusedAdditions = additions.filter((file?: any) => !commitScope.isInScope(file, approved));
+    const scopeExpansionRefusalMessage = refusedAdditions.length
+      ? `Scope expansion refused: ${refusedAdditions.join(', ')}.`
       : '';
     const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(' ');
     const declaredGuidance = declaredScopeGuidance(t, refusedOutsideDeclaredFiles);
@@ -1289,6 +1292,15 @@ function assertLiveClaimRemoval(ticket?: any, next?: any[]) {
   }
 }
 
+// files replaces the list wholesale, so on a live claim it must not shed scope the claim
+// holds, including paths a scopeRequest grant added since the dispatch. An entry another
+// listed path still covers is not lost; addFiles/removeFiles are the adjusters.
+function assertLiveClaimReplace(ticket?: any, next?: any[]) {
+  const dropped = liveClaimDroppedFiles(ticket, next).filter((file: string) => !commitScope.isInScope(file, next));
+  if (!dropped.length) return;
+  throw new Error(`${ticket.ref}: update files would replace the live claim's declared scope and drop ${dropped.join(', ')}, which the claim still holds (including any path a scopeRequest granted). Use addFiles to add paths without dropping the rest, removeFiles to drop paths the bound checkout has not written, or release the claim first and then replace the list.`);
+}
+
 // The declared list this patch asks for, or undefined when it names no file scope at
 // all. files replaces the whole list while addFiles/removeFiles adjust it in place, so
 // a patch carrying both is ambiguous and is rejected here — before any field lands,
@@ -1395,6 +1407,9 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     // Resolved before the first field lands: a patch that mixes files with
     // addFiles/removeFiles throws here rather than after a title has been assigned.
     const filesPatch = patchedFileScope(t, patch);
+    // After the closeout refusal, so a claim holder still hears to use scopeRequest and
+    // only a control-plane caller that may change a live claim's scope meets this guard.
+    if (patch.files !== undefined) assertLiveClaimReplace(t, normalizeFiles(patch.files));
     if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
     if (patch.description != null) t.description = String(patch.description).trim();
     if (patch.status != null) t.status = nextStatus;

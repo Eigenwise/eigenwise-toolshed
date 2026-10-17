@@ -38,6 +38,9 @@ Every new or complexity-raised owned body must score strictly below 6 with measu
 Comments and formatting count; equal/lowered complexity legacy edits are informational.
 Untouched bodies and independently edited nested bodies do not charge their parents.
 --base defaults to the local develop, main or master branch; HEAD means score all selected bodies.
+With a base, only selected files that differ from it or are untracked are parsed.
+DUPLICATE? and CALLERS OPEN are informational reuse signals (also in --json signals).
+They use JS/TS/Python name regexes, never affect the verdict, and also run with --cc-only.
 --cc-only checks the complexity floor without running coverage; it cannot prove a full CRAP pass.
 --lcov overrides both isolated command output and config lcov. Config lcov is a fallback
 behind fresh isolated command output, then coverage/lcov.info when unset.
@@ -45,6 +48,7 @@ Without a command, existing LCOV requires a sibling <lcov>.sources.json SHA-256 
 from the same-byte coverage capture.
 --coverage-command captures source hashes and requires fresh LCOV. It sets QUALITY_GATE_COVERAGE_DIR
 and QUARTERMASTER_COVERAGE_DIR to an empty isolated directory; write lcov.info there.
+$VAR, \${VAR} and %VAR% in the command expand before it runs, on every platform.
 Existing explicit or fallback output must be rewritten during the command. Missing or
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
@@ -78,7 +82,7 @@ async function capturedReport(values) {
     return await crapReport({ ...values, ccOnly: values['cc-only'], coverageCommand: values['coverage-command'], pythonPolicy: values['python-policy'] });
   } catch (error) {
     const unverified = [{ relativePath: '<gate>', line: 1, name: 'prerequisite', unverified: error.message }];
-    return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };
+    return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], signals: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };
   }
 }
 

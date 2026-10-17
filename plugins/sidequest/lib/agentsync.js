@@ -11,7 +11,7 @@ const { worktreeRoot, retainedWorktreeResumeDecision } = require("./worktrees.js
 const { spawnDescription } = store;
 const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
-const { verificationRequirement } = require("./kernel/verification.js");
+const { verificationRequirement, verifyCwdForRequirement } = require("./kernel/verification.js");
 const { scopeKey } = require("./scope-match.js");
 const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require("./sync-check.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
@@ -641,10 +641,12 @@ function briefingCommentBody(comments) {
 function configuredQualityGateBody(projectPath, slug) {
   const project = projectPath || store.readMeta(slug)?.path;
   if (!project) return "Configured quality gate: none.";
-  const configPath = path.join(project, ".claude", "quartermaster", "crap.json");
+  const qualityGateConfig = path.join(project, ".claude", "quality-gate", "crap.json");
+  const quartermasterConfig = path.join(project, ".claude", "quartermaster", "crap.json");
+  const configPath = fs.existsSync(qualityGateConfig) ? qualityGateConfig : quartermasterConfig;
   if (!fs.existsSync(configPath)) return "Configured quality gate: none.";
-  const { command = 'node "<quartermaster plugin root>/bin/quartermaster.js" crap', max = "gate-owned", threshold = max, base = "gate-selected default" } = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}`;
+  const { command = 'node "<quality-gate plugin root>/bin/quality-gate.js" crap', max = "gate-owned", threshold = max, base = "gate-selected default" } = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}. Legacy bodies whose complexity did not rise are informational and never fail.`;
 }
 function legacyVerificationText(value) {
   return String(value || "").trim();
@@ -710,7 +712,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join("\n\n"),
     verify,
-    executorVerificationDirectoryGuidance(ticket.executorVerifyCwd),
+    executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === "shared" ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log." : verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
     evidenceGuidance,
     `Lifecycle reference: ${TEMPLATE_PATH} (Execution survival, board transport, and upstream-defect reporting). Follow the lifecycle rules already loaded in your executor definition.`,
@@ -728,6 +730,7 @@ function boundReviewGuidance(ticket) {
   const candidate = String(target.candidate?.value || "its bound candidate");
   return [
     "Bound review closeout:",
+    "A normal successful bound review closes with done and preserves its original report. The main thread then records the explicit candidate outcome using MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation and by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with the exact reviewTarget source/candidate and evidence. ACCEPTED prose alone records no outcome. Never restart a completed review, manufacture an oracle, or call finalization from a subagent.",
     `This ticket is bound to ${source} at candidate ${candidate}. You cannot reject that candidate, and no by, reviewRef, session, or publish-lock value changes that: rework, submit --clear, reclaim, and amendment all refuse with candidate_review_locked and write nothing on either half of the binding.`,
     `A pass closes normally with done. A confirmed defect records its exact evidence in a comment on this review ticket and then releases THIS ticket with kind oracle, naming what a human must decide. If the oracle accepts the defect conclusion, the binding records ${source}'s candidate as rejected; if it rejects the conclusion, the binding records it as accepted and closes this readonly review with verdict({ ref, outcome: "accepted", text, why }). Leave ${source} untouched until a fresh repair is integrated, then the control plane may supersede the rejected submission through that repair.`
   ].join("\n");

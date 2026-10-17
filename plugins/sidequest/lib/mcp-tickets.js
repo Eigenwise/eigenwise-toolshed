@@ -88,12 +88,30 @@ function sameBasenameSiblingDetails(project, ticket, projectPath, tool) {
     }
   };
 }
-const VERIFY_CWD_PROP = { type: "string", description: "Directory the verify command runs from, relative to the project root. The capture and the integrate gate both honour it; unset runs from the project root." };
+const VERIFY_CWD_PROP = { type: "string", description: "Directory a written verify runs from, relative to the project root, for capture and the integrate gate; a generated suite command runs from the root." };
 const VERIFY_ORACLE_PROP = {
   type: "string",
   maxLength: store.EXECUTOR_VERIFY_MAX,
   description: "Pin the required verifier in the prepared attempt. command, suite and typecheck use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry."
 };
+function normalizedDependsOnRefs(dependsOn) {
+  const coercedFromString = !Array.isArray(dependsOn);
+  const raw = coercedFromString ? [dependsOn] : dependsOn;
+  const refs = [...new Set(raw.map((dep) => String(dep || "").trim()).filter(Boolean))];
+  return { refs, coercedFromString };
+}
+function dependsOnAckFields(slug, ticket, dependsOn) {
+  if (dependsOn === void 0) return {};
+  const { refs, coercedFromString } = normalizedDependsOnRefs(dependsOn);
+  const linked = [];
+  const failed = [];
+  for (const depRef of refs) {
+    const res = store.linkTickets(slug, ticket.ref, "depends-on", depRef);
+    if (res.ok) linked.push(res.to.ref);
+    else failed.push({ ref: depRef, reason: res.reason });
+  }
+  return { dependsOn: Object.assign({ linked, failed }, coercedFromString ? { coercedFromString: true } : {}) };
+}
 function liveVerificationAmendment(ticket) {
   const amendment = Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments.at(-1) : null;
   if (!amendment || !ticket.dispatch || ticket.dispatch.terminalAt) return null;
@@ -157,7 +175,8 @@ const tools = [
         ...TICKET_FIELD_PROPS,
         workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence." },
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
-        storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
+        storyId: { type: "string", description: "A story ref (US-n) or the story id story returns (st_...) to file this ticket into." },
+        dependsOn: { type: "array", items: { type: "string" }, description: "Refs this ticket depends on. Recorded as depends-on links to the new ticket in this same call, so a dependent ticket needs no follow-up link call." },
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
         category: { type: "string", description: "Enabled category id from category_list." },
@@ -227,6 +246,7 @@ const tools = [
       const presentedWarnings = store.presentWarnings(ticket, warnings, sessionOf(args));
       return mutationAck(slug, { ok: true, ticket }, Object.assign(
         presentedWarnings.length ? { warnings: presentedWarnings } : {},
+        dependsOnAckFields(slug, ticket, args.dependsOn),
         sameBasenameSiblingDetails(slug, ticket, meta.path, "add")
       ));
     }
@@ -246,7 +266,7 @@ const tools = [
         by: { type: "string", description: "Human-readable update label. It cannot authorize closeout fields on a live claim." },
         workingTreeDelivery: { type: "boolean", description: "Orchestrator-only live-claim declaration for a shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths." },
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
-        storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
+        storyId: { anyOf: [{ type: "string" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string" },
         category: { type: "string", description: 'Enabled category id from category_list. Use "none" to clear. A bound reviewTarget pins its review-audit category.' },

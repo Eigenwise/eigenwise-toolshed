@@ -24,13 +24,15 @@ __export(verification_exports, {
   captureVerificationResult: () => captureVerificationResult,
   classifyVerificationKind: () => classifyVerificationKind,
   commandVerificationResult: () => commandVerificationResult,
+  environmentPrefix: () => environmentPrefix,
   validateVerificationWaiver: () => validateVerificationWaiver,
   validationDiagnostic: () => validationDiagnostic,
   verificationAccepted: () => verificationAccepted,
   verificationFailureDiagnostic: () => verificationFailureDiagnostic,
   verificationOutcome: () => verificationOutcome,
   verificationRequirement: () => verificationRequirement,
-  verificationWaiverDiagnostic: () => verificationWaiverDiagnostic
+  verificationWaiverDiagnostic: () => verificationWaiverDiagnostic,
+  verifyCwdForRequirement: () => verifyCwdForRequirement
 });
 module.exports = __toCommonJS(verification_exports);
 const VERIFICATION_KINDS = ["suite", "command", "typecheck", "document", "link", "schema", "manual", "attestation", "review", "custom"];
@@ -53,15 +55,23 @@ function suiteFrom(input) {
   const command = nonEmpty(input.suite.command);
   return name && cwd && command ? Object.freeze({ name, cwd, setup: input.suite.setup || null, command }) : void 0;
 }
-function suiteCommand(suite) {
-  return `cd ${suite.cwd} && ${[suite.setup, suite.command].filter(Boolean).join(" && ")}`;
+const ENVIRONMENT_ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)+/;
+function environmentPrefix(command) {
+  return ENVIRONMENT_ASSIGNMENTS.exec(nonEmpty(command))?.[0].trim() || "";
+}
+function suiteCommand(suite, environment) {
+  const steps = [suite.setup, suite.command].filter(Boolean).map((step) => [environment, step].filter(Boolean).join(" "));
+  return `cd ${suite.cwd} && ${steps.join(" && ")}`;
+}
+function verifyCwdForRequirement(requirement, verifyCwd) {
+  return requirement?.suite ? "" : String(verifyCwd || "");
 }
 function validationDiagnostic(code, message) {
   return Object.freeze({ code, message, actionable: true });
 }
 function suiteVerificationRequirement(input, command, evidence) {
   const suite = suiteFrom(input);
-  if (suite) return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
+  if (suite) return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite, environmentPrefix(command)), evidenceContract: `suite ${suite.name} output` });
   return Object.freeze({ kind: "suite", ...command ? { command } : {}, evidenceContract: evidence || "named suite output" });
 }
 function executableVerificationRequirement(input, kind, evidence) {
@@ -178,11 +188,13 @@ function captureVerificationResult(requirement, capture) {
   captureVerificationResult,
   classifyVerificationKind,
   commandVerificationResult,
+  environmentPrefix,
   validateVerificationWaiver,
   validationDiagnostic,
   verificationAccepted,
   verificationFailureDiagnostic,
   verificationOutcome,
   verificationRequirement,
-  verificationWaiverDiagnostic
+  verificationWaiverDiagnostic,
+  verifyCwdForRequirement
 });

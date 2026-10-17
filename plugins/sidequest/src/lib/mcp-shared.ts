@@ -297,20 +297,20 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   commit: '',
   add: '',
   update: '',
-  rework: 'repair unbound; bound needs oracle.',
+  rework: 'repair unbound; bound needs verdict.finalize or oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'clear/force need owner.',
-  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.',
+  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod or deliveryRevision; reviewed interaction.',
   comment: '',
-  comments: 'Read comments before work.',
+  comments: '',
   plan: '',
   link: '',
   remove: '',
-  claim: 'Claim before work; proceed only on ok:true.',
+  claim: 'Claim before work; proceed on ok:true.',
   dispatch: 'Tree. token and spawn spec; retireOnly.',
   done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason/kind required; oracle handoff.',
-  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.',
+  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in tree or at deliveryRevision; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',
   verdict: '',
   archive: '',
@@ -345,9 +345,14 @@ function conciseDescription(description?: any) {
   return firstSentence ? firstSentence[0].trim() : description;
 }
 
+// Accepts both the human ref (US-n) and the stable id `story` returns (st_...);
+// store.coerceStoryId already resolves either form via getStory, so this only
+// needs to reject shapes neither form produces.
 function validateStoryId(value: any, allowClear = false) {
   if (allowClear && String(value).toLowerCase() === 'none') return;
-  if (!/^US-\d+$/.test(String(value))) throw new Error('storyId must be a US-n story ref.');
+  if (/^US-\d+$/.test(String(value))) return;
+  if (/^st_[0-9a-z]+_[0-9a-f]+$/i.test(String(value))) return;
+  throw new Error('storyId must be a US-n story ref or the story id (st_...) that story returns.');
 }
 
 function compactSchema(schema?: any, propertyMap = false): any {

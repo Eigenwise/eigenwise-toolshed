@@ -79,19 +79,6 @@ function pinnedVerificationRequirement(ticket, projectPath, verifyEnvironment, s
   const deferred = !sharedTree && verifyEnvironment === "shared" && ["command", "suite", "typecheck"].includes(requirement.kind);
   return deferred ? Object.freeze({ ...requirement, environment: "shared" }) : requirement;
 }
-function retainedAttemptHistory(current) {
-  const attempts = structuredClone(current.attempts);
-  const terminalAttempt = attempts.find((attempt) => attempt.preparedAt === current.preparedAt);
-  if (current.terminalAt && terminalAttempt) {
-    Object.assign(terminalAttempt, structuredClone({
-      baseCommit: current.baseCommit,
-      declaredFiles: current.declaredFiles,
-      sanctionedCommits: current.sanctionedCommits,
-      verificationRequirement: current.verificationRequirement
-    }));
-  }
-  return attempts;
-}
 function createDispatch(dependencies) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree, withTicketLocks, withTicketFileLocks, guardedTransaction, ticketGenerations, changedTicketSince, unclaimedDispatchWorktreeReclaim } = dependencies;
   function boardVerificationRequirement(slug, ticket, sharedTree) {
@@ -1647,6 +1634,17 @@ function createDispatch(dependencies) {
       throw new Error(unretryableRecoveryMessage(t, current, recovery));
     }
   }
+  function checkpointSettlingRevisions(slug, projectPath, t, current) {
+    const delivered = String(t.submission?.integration?.resultingHead || "").trim();
+    return [integrationTipCommit(slug, projectPath, current), delivered].filter(Boolean);
+  }
+  function integrationTipCommit(slug, projectPath, current) {
+    try {
+      return integrationTargetCommit(projectPath, current.integrationTarget || integrationTarget(slug));
+    } catch (_) {
+      return "";
+    }
+  }
   function queueCheckoutReclaim(effects, decision) {
     if (decision?.reclaim) effects.checkoutReclaims.push(decision.reclaim);
   }
@@ -1654,7 +1652,8 @@ function createDispatch(dependencies) {
     if (!reclaimsRetiredCheckout(slug, projectPath, t, current)) return null;
     const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
     const recovery = retiredAttemptCheckoutReclaim(slug, projectPath, t, recoveryFacts.state, {
-      checkpointCommit: recoveryFacts.checkpointCommit
+      checkpointCommit: recoveryFacts.checkpointCommit,
+      settlingRevisions: checkpointSettlingRevisions(slug, projectPath, t, current)
     });
     queueCheckoutReclaim(effects, recovery);
     if (recovery?.reason === "cross_bound_worktree") {
@@ -1780,7 +1779,7 @@ function createDispatch(dependencies) {
   }
   function priorAttemptHistory(current) {
     return {
-      attempts: Array.isArray(current?.attempts) ? retainedAttemptHistory(current) : [],
+      attempts: Array.isArray(current?.attempts) ? (0, import_work_provenance.retainedAttemptHistory)(current) : [],
       supersededTokens: Array.isArray(current?.supersededTokens) ? current.supersededTokens.slice() : []
     };
   }
@@ -2194,7 +2193,7 @@ function createDispatch(dependencies) {
   function preparedDispatchRecord(slug, t, current, plan, opts, preflight) {
     const provenance = preparationProvenanceFields(plan, opts, preflight.preparedCompatibility);
     const integrationCommit = opts.workProvenance ? integrationBaseCommit(slug, plan.integrationTargetState) : "";
-    const workProvenance = (0, import_work_provenance.prepareWorkProvenance)(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ""), (ref) => getTicket(slug, ref), integrationCommit);
+    const workProvenance = (0, import_work_provenance.prepareWorkProvenance)(preflight.projectPath, opts.workProvenance, String(opts.sessionId || ""), (ref) => getTicket(slug, ref), integrationCommit, t.ref);
     return {
       ...provenance,
       lifecycleAttempt: { ...provenance.lifecycleAttempt, workProvenance },

@@ -1,13 +1,15 @@
+const { currentBoardPath } = require('./move.js');
 'use strict';
 
-const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
+const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
 const { readLockHolder } = require('./locks.js');
 const { isFullSuiteCommand, runFullSuiteVerification } = require('../verify-capture.js');
 const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
-const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
+import type { AttestedReviewTicket, ReviewRelation } from '../kernel/review-binding';
+const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance, mainAttestedReviewOutcome } = require('../kernel/review-binding');
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
@@ -246,9 +248,15 @@ function candidateReviewLocked(slug: any, ticket: any, operation: string) {
 
 // Both identities come from the immutable terminal attempt snapshots rather than
 // the live dispatch record, which a later prepared attempt rewrites in place.
+function completedBoundReview(ticket: AttestedReviewTicket, relation: ReviewRelation): boolean {
+  const review = relation.reviewTicket;
+  if (!review) return false;
+  return [!relation.conflict, review.status === 'done' || mainAttestedReviewOutcome(ticket, review) === 'accepted'].every(Boolean);
+}
+
 function terminalReviewFailure(ticket: any, relation: any) {
   const reviewTicket = relation.reviewTicket;
-  if (relation.conflict || !reviewTicket || reviewTicket.status !== 'done') {
+  if (!completedBoundReview(ticket, relation)) {
     return `${reviewRelationRef(relation)} has not terminally completed its bound review of ${ticket.ref}`;
   }
   const target = reviewTicket.reviewTarget;
@@ -256,6 +264,7 @@ function terminalReviewFailure(ticket: any, relation: any) {
   if (target?.ticketId !== ticket.id || target?.candidate?.source !== submitted?.source || target?.candidate?.value !== submitted?.value) {
     return `${reviewRelationRef(relation)} is not the review of this exact candidate`;
   }
+  if (mainAttestedReviewOutcome(ticket, reviewTicket) === 'accepted') return null;
   const provenance = reviewProvenance(ticket, reviewTicket);
   if (provenance.reason === 'source_attempt_missing') {
     return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`;
@@ -826,9 +835,13 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
     };
   }
   const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-  const project = readMeta(slug)?.path;
+  // A recorded delivery may name an alternate worktree to gate in (SQ-58); the merged-tree
+  // verifier has to run there too, not in the registered checkout, or it certifies content
+  // that worktree never held.
+  const project = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
+  const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
   const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
-    cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
+    cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
     timeoutMilliseconds,
     logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
@@ -1808,6 +1821,59 @@ function workingTreeDeliveryMethod(value: any) {
   return WORKING_TREE_DELIVERY_METHODS.has(method) ? method : null;
 }
 
+// A caller can point recordDeliveredSubmission at an existing worktree instead of the
+// registered project checkout, so a manual delivery's branch check and merged-tree gate
+// can run there (a detached scratch checkout of the delivered commit, or a worktree
+// already left on the target branch) without moving the orchestrator's shared main tree
+// onto every ticket's branch in turn (SQ-58). The trust boundary that matters is that it
+// is genuinely a worktree of this same repository, not an arbitrary directory the pinned
+// verifier would then run a real command inside - checked the same way worktree lease
+// matching already does, by comparing git's own `--git-common-dir` rather than the path.
+// git answers `--git-common-dir` in the spelling it resolved the checkout under, while the caller
+// may hold an 8.3 alias of the same directory (C:\Users\RUNNER~1\... on the hosted Windows runner),
+// so both sides are canonicalized, and compared case-insensitively on win32, before they are matched.
+function canonicalCommonDir(value: string): string {
+  let resolved = value;
+  try { resolved = fs.realpathSync.native(value); } catch (_) { /* a missing dir keeps its resolved spelling */ }
+  const normalized = path.normalize(resolved);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function resolveDeliveryWorktree(registeredRepo: string, requestedWorktree: string) {
+  const candidate = path.isAbsolute(requestedWorktree) ? requestedWorktree : path.resolve(registeredRepo, requestedWorktree);
+  let candidateCommonDir: string;
+  let registeredCommonDir: string;
+  try {
+    candidateCommonDir = canonicalCommonDir(path.resolve(candidate, integrationGit(candidate, ['rev-parse', '--git-common-dir'])));
+    registeredCommonDir = canonicalCommonDir(path.resolve(registeredRepo, integrationGit(registeredRepo, ['rev-parse', '--git-common-dir'])));
+  } catch (error: any) {
+    return { ok: false, message: `${candidate} could not be inspected as a Git worktree: ${integrationGitError(error)}` };
+  }
+  if (candidateCommonDir !== registeredCommonDir) {
+    return { ok: false, message: `${candidate} is not a worktree of the registered project at ${registeredRepo}.` };
+  }
+  return { ok: true, worktree: candidate };
+}
+
+// groomClose takes no integrationBranch (#391), so this refusal cannot reuse the shared
+// branchNotCheckedOutMessage, which ends by offering that argument. The recovery it can
+// honestly offer is the one recordDeliveredSubmission admits: HEAD at the target's current tip,
+// which is not necessarily the delivered commit.
+function recordedDeliveryNotAtTipMessage(targetBranch: string, currentBranch: string, givenWorktree: string) {
+  const checkedOut = currentBranch || 'detached HEAD';
+  const where = givenWorktree ? `the worktree given (${givenWorktree})` : 'this checkout';
+  return `${targetBranch} must be checked out before recording an external delivery; ${where} is on ${checkedOut}, not at the ${targetBranch} tip. Check out the observed ${targetBranch} tip (the branch itself, or a detached checkout of its current tip, which may be later than deliveryCommit), or give such a worktree via worktree:"<path>" (CLI: --worktree <path>).`;
+}
+
+function refTipEquals(repo: string, ref: string, commit: string): boolean {
+  try {
+    return integrationGit(repo, ['rev-parse', '--verify', `${ref}^{commit}`]).toLowerCase() === commit;
+  } catch (_) {
+    // A target ref this checkout has never fetched is simply not the tip; it must not fail the delivery.
+    return false;
+  }
+}
+
 function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   // A mistyped deliveryMethod previously reached the diverged-upstream preflight below
@@ -1849,22 +1915,47 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const requestedCommit = String(opts.deliveryCommit || '').trim();
   if (!reason) return { ok: false, reason: 'evidence_required', ticket, message: `${ticket.ref} reconciliation requires delivery evidence.` };
   if (!SUBMISSION_COMMIT_RE.test(requestedCommit)) return { ok: false, reason: 'delivery_commit_required', ticket, message: `${ticket.ref} reconciliation requires the delivery commit hash.` };
-  const repo = String(readMeta(slug)?.path || '').trim();
+  const registeredRepo = String(readMeta(slug)?.path || '').trim();
   const target = opts.target;
-  if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  if (!registeredRepo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  const requestedWorktree = String(opts.worktree || '').trim();
+  let repo = registeredRepo;
+  if (requestedWorktree) {
+    const resolvedWorktree = resolveDeliveryWorktree(registeredRepo, requestedWorktree);
+    if (!resolvedWorktree.ok) {
+      return { ok: false, reason: 'delivery_worktree_unavailable', ticket, message: `${ticket.ref} reconciliation refused: ${resolvedWorktree.message}` };
+    }
+    repo = resolvedWorktree.worktree;
+  }
   try {
     const currentBranch = integrationGit(repo, ['branch', '--show-current']);
-    if (currentBranch !== target.branch) {
-      return { ok: false, reason: 'branch_not_checked_out', ticket, message: branchNotCheckedOutMessage(target.branch, currentBranch, 'recording an external delivery') };
-    }
     const deliveryCommit = integrationGit(repo, ['rev-parse', '--verify', `${requestedCommit}^{commit}`]).toLowerCase();
     const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']).toLowerCase();
-    // resultingHead is this checkout's HEAD on the target branch, so the local branch
-    // is the ref that actually contains it. Labelling it `git:origin/<branch>` claimed
-    // a remote reachability nothing here checked, and origin routinely lacks the
-    // revision until the operator pushes.
+    // resultingHead only proves the target branch when it actually IS that branch's own
+    // tip. Checked out by name is the common case; a worktree left on a different branch,
+    // or a detached scratch checkout, is admitted only when its HEAD matches the tip of
+    // the target branch itself (local, or its frozen remote-tracking ref) - the same
+    // reachability set recordAbandonedSubmission already reads to decide whether a
+    // candidate landed. Forcing every manual delivery onto one shared checkout serialised
+    // every close in a batch on that single branch move; the branch's own tip already had
+    // the commit without it (SQ-58). Labelling a plain local checkout `git:origin/<branch>`
+    // would claim a remote reachability nothing here checked, and origin routinely lacks the
+    // revision until the operator pushes, so it stays `git:<branch>` unless matched otherwise.
+    let observedIntegrationRevisionSource = `git:${target.branch}`;
+    if (currentBranch !== target.branch) {
+      const matchedRef = commitScope.integrationTargetRefs(target).find((ref: string) => refTipEquals(repo, ref, resultingHead));
+      if (!matchedRef) {
+        return {
+          ok: false,
+          reason: 'branch_not_checked_out',
+          ticket,
+          message: recordedDeliveryNotAtTipMessage(target.branch, currentBranch, requestedWorktree ? repo : ''),
+        };
+      }
+      observedIntegrationRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;
+    }
     const observedIntegrationRevision = {
-      source: `git:${target.branch}`,
+      source: observedIntegrationRevisionSource,
       value: resultingHead,
       observedAt: new Date().toISOString(),
     };
@@ -1924,6 +2015,17 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     });
     if (revisionPreflight.refusal) return revisionPreflight.refusal;
     const revisionProof: any = revisionPreflight.revisionProof;
+    // The working-tree proof reads bytes no commit holds, so only the target branch's own
+    // checkout can stand for them; a detached HEAD at the tip would record a delivery the
+    // branch never contains.
+    if (workingTreeDelivery && !revisionProof && currentBranch !== target.branch) {
+      return {
+        ok: false,
+        reason: 'working_tree_requires_target_branch',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: a working-tree content proof needs ${target.branch} itself checked out, but ${requestedWorktree ? `the worktree given (${repo})` : 'this checkout'} is on ${currentBranch || 'detached HEAD'}. Check out ${target.branch}, or commit the content and deliver a ${target.branch}-reachable commit (or name a deliveryRevision).`,
+      };
+    }
     // apply squashes the whole range into the working tree, so the commit of that
     // tree carries no patch identity from any candidate commit. What it can prove is
     // the thing the delivery actually is: the same bytes as the reviewed candidate on
@@ -1964,7 +2066,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} delivery refused: verificationSupersession requires a runnable command or suite verifier.`,
       };
     }
-    const verify = verifyDeliveredSubmission(slug, ticket, replacementRequirement ? { requirement: replacementRequirement } : undefined);
+    const verify = verifyDeliveredSubmission(slug, ticket, { ...(replacementRequirement ? { requirement: replacementRequirement } : {}), cwd: repo });
     if (!verificationAccepted(verify)) {
       const failureReason = `${verificationOutcome(verify)}_recorded_delivery`;
       const failureMessage = `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;
@@ -3799,6 +3901,7 @@ function waveGateCheckout(slug: any, tickets: any[], wave: any) {
 }
 
 function existingGateCheckout(slug: any, isolatedWorktree: string) {
+  isolatedWorktree = currentBoardPath(readMeta(slug), isolatedWorktree);
   return { ok: true as const, cwd: isolatedWorktree || readMeta(slug).path, isolatedWorktree, tree: null, remove: () => {} };
 }
 

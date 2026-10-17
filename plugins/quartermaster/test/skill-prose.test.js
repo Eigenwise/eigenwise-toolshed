@@ -78,9 +78,33 @@ test('proposes and documents the CRAP gate', () => {
   assert.match(crapGate, /Exit 2 also covers a missing LCOV file/);
   assert.match(ruleTemplates, /description: Keep changed code within the CRAP ceiling/);
   assert.match(ruleTemplates, /priority: 85/);
-  assert.match(resupply, /no `\.claude\/quartermaster\/crap\.json`/);
+  assert.match(resupply, /no `\.claude\/quality-gate\/crap\.json`/);
+  assert.match(resupply, /\/plugin install quality-gate@eigenwise-toolshed/);
   assert.match(resupply, /`rule:crap-gate`/);
   assert.match(routing, /routes to the CRAP gate reference/);
+  assert.match(crapGate, /`quartermaster crap` is retired/);
+  assert.doesNotMatch(crapGate + ruleTemplates, /lizard|<quartermaster plugin root>/);
+});
+
+function collectFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(directory, entry.name);
+    return entry.isDirectory() ? collectFiles(fullPath) : [fullPath];
+  });
+}
+
+test('the generated live rule runs quality-gate, and nothing under skills/ hard-codes --project for the gate', () => {
+  const crapGate = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'crap-gate.md'), 'utf8');
+  const liveRule = crapGate.match(/```markdown\n([\s\S]*?)```/);
+  assert.ok(liveRule, 'the reference doc has a fenced live-rule template');
+  assert.match(liveRule[1], /quality-gate\.js" crap`/);
+  assert.doesNotMatch(liveRule[1], /--project/);
+
+  const skillsDirectory = path.join(__dirname, '..', 'skills');
+  const offenders = collectFiles(skillsDirectory)
+    .filter((filePath) => fs.readFileSync(filePath, 'utf8').includes('crap --project'))
+    .map((filePath) => path.relative(skillsDirectory, filePath));
+  assert.deepEqual(offenders, [], 'no file under skills/ may tell an agent to pass --project to the crap gate');
 });
 
 test('guides host-capability recommendations without assuming a universal catalog', () => {

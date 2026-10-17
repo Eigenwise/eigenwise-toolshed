@@ -6,6 +6,8 @@ Quality Gate owns AST complexity, stable function identities and per-function CR
 
 Invalid UTF-8, Python syntax errors and lone surrogates produce an informational UNVERIFIED row for that file. Other selected files are still measured.
 
+The CRAP report also prints informational reuse signals after scored rows, including with `--cc-only`. `DUPLICATE? name ≈ other (file:line)` means a new body shares a name (ignoring case, underscores and hyphens) with a top-level JS/TS/Python definition in another source file at HEAD. `CALLERS OPEN name: file:line` lists up to two remaining call sites outside a removed body's old file. Removal uses the existing baseline/body pairing, including deleted files within the selected scope. Tests, fixtures, vendored and generated paths are skipped. These are regex/name checks: nested definitions are missed, and a same-named call in another module can count. They never change the verdict, exit code or receipts. JSON reports put the rows under `signals`; the summary includes the reuse-signal count.
+
 ## Project CRAP gate
 
 ```text
@@ -25,7 +27,7 @@ node plugins/quality-gate/bin/quality-gate.js crap --project <root> --base <revi
 }
 ```
 
-Defaults: sources `.`, no exclusions, `coverage/lcov.info`, no coverage command, local `develop`, `main` or `master` as the base. If none exists, or `--base HEAD` is selected, all selected bodies are scored. `--base` uses the merge base with HEAD. `--ratchet` and config `ratchet` remain accepted with a deprecation notice. `max` is accepted only as 6. Directory scans skip `.git`, `node_modules` and `.claude`; explicitly named files still work.
+Defaults: sources `.`, no exclusions, `coverage/lcov.info`, no coverage command, local `develop`, `main` or `master` as the base. If none exists, or `--base HEAD` is selected, all selected bodies are scored. `--base` uses the merge base with HEAD, and only selected files that differ from it (or are untracked) are parsed, so unchanged files never cost a parse. One TypeScript parser process serves the whole run and has exited before the report returns. `--ratchet` and config `ratchet` remain accepted with a deprecation notice. `max` is accepted only as 6. Directory scans skip `.git`, `node_modules` and `.claude`; explicitly named files still work.
 
 Each changed body is `new`, `modified-raised` (complexity increased) or `legacy-unchanged` (complexity held or fell). New and complexity-raised bodies must score strictly below 6 with measured coverage. Legacy edits with equal or lower complexity are informational LEGACY rows, with their measured numbers; they never fail the gate. Exact owned source bytes determine change, so comments and formatting count. Nested owned bodies are excluded from their parent's fingerprint. Explicit user/project rules remain authoritative. Scores are compared before display rounding. Functions unchanged at the base don't enter the scoring scope; an empty scope says `nothing to score` and why.
 
@@ -75,7 +77,7 @@ Use locally installed `coverage.py` (for example `pipx install coverage`) to gen
 
 ## Same-byte coverage
 
-`--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
+`--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. `$VAR`, `${VAR}` and `%VAR%` in the command are expanded from its environment before it is spawned, so one command works under cmd.exe and sh alike; an unset name stays as written. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
 
 For pre-existing LCOV, supply a sibling `<lcov>.sources.json` containing SHA-256 hashes captured alongside that coverage, keyed by project-relative source path:
 

@@ -1027,6 +1027,43 @@ test('a ticket verifyCwd runs the captured command from that directory of the ch
   }
 });
 
+// GH-552: the generated suite command opens with its own `cd`, so a relative verifyCwd must not move it a
+// second time, and the author's environment prefix has to reach the suite it was written for.
+test('GH-552: a suite verify with a relative verifyCwd changes directory once and keeps the env prefix', async () => {
+  const project = initGitRepo('sq-verify-capture-suite-verify-cwd-');
+  const pluginTests = path.join(project, 'plugins', 'app', 'test');
+  fs.mkdirSync(pluginTests, { recursive: true });
+  fs.writeFileSync(path.join(pluginTests, 'marker.test.js'), "require('node:fs').accessSync('test/marker.test.js');\nif (process.env.GH552_PREFIX !== 'kept') process.exit(3);\n");
+  execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'plugin suite'], { cwd: project, windowsHide: true });
+  const { slug } = store.ensureProject(project);
+  const ticket = store.createTicket(slug, {
+    title: 'suite verify from verifyCwd',
+    category: 'codebase-exploration',
+    files: ['plugins/app/test/marker.test.js'],
+    executorVerifyKind: 'suite',
+    executorVerify: 'GH552_PREFIX=kept node --test',
+    executorVerifyCwd: 'plugins/app',
+  });
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-gh-552' });
+    assert.equal(prepared.ok, true, prepared.message);
+    const generated = 'cd plugins/app && GH552_PREFIX=kept node --test --test-timeout=120000 "test/*.test.js"';
+    const rewriteWarning = store.ticketPlanningWarnings(ticket, project).find((warning: string) => warning.includes('verifyKind suite replaces the recorded verify'));
+    assert.ok(rewriteWarning?.includes(JSON.stringify('GH552_PREFIX=kept node --test')) && rewriteWarning.includes(JSON.stringify(generated)), rewriteWarning);
+    const pinned = store.pinnedVerificationRequirement(store.getTicket(slug, ticket.ref));
+    assert.equal(pinned.command, generated);
+    const result = await runCapturedVerification(pinned.command, { project, ticket: ticket.ref }, project);
+    try {
+      assert.equal(result.capture.status, 'passed', result.capture.reason);
+    } finally {
+      deleteLog(result.capture);
+    }
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
 // GH-373: an executor retyped the briefing's base64 blob, got one character wrong, and ran a
 // different command. With --project/--ticket the wrapper loads the pinned command itself.
 function captureIdentity(capture: { command: string; status: string; candidate: unknown; dispatchNonce: string; cleanWorktree?: boolean }) {

@@ -1681,11 +1681,12 @@ function uncommittedContentRefusal(entry, dispatch) {
 function checkpointRefusal(entry, facts) {
   const checkpointCommit = String(facts.checkpointCommit || "").trim();
   if (!checkpointCommit) return null;
+  if ((facts.settlingRevisions || []).some((revision) => gitIsAncestor(entry.worktree, checkpointCommit, revision))) return null;
   return {
     worktree: entry.worktree,
     reclaimed: false,
     reason: "checkpointed_worktree",
-    message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}.`
+    message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}, which neither the integration branch nor a recorded delivery holds; it settles once one of them contains it.`
   };
 }
 function baseAncestryRefusal(entry, dispatch) {

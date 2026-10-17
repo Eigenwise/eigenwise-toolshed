@@ -430,7 +430,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
   assert.deepEqual(rework.inputSchema.required, ['ref', 'review', 'reason']);
   assert.match(rework.description, /repair unbound/);
-  assert.match(rework.description, /bound needs oracle/, 'rework advertises the bound-candidate oracle route');
+  assert.match(rework.description, /bound needs verdict.finalize or oracle/, 'rework advertises completed-review finalization and the separate oracle route');
   assert.ok(rework.inputSchema.properties.reviewRef, 'reviewRef stays accepted for compatibility');
   for (const tool of resp.result.tools) {
     assert.doesNotMatch(String(tool.description || ''), /permanent/i, `${tool.name} must not promise a permanent candidate rejection`);
@@ -745,7 +745,43 @@ test('add and update preserve descriptions and expose storyId explicitly', async
     assert.ok(properties.storyId, `${name} exposes storyId`);
     assert.equal(properties.story, undefined, `${name} does not overload story`);
   }
-  assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, '^US-\\d+$');
+  // No pattern is pinned any more: validateStoryId (not the JSON schema) is the enforced
+  // contract, and it now accepts both the US-n ref and the story id `story` returns.
+  assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, undefined);
+});
+
+test('add accepts the story id story returns, not just its US-n ref', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-id-'))).slug;
+  const story = store.createStory(project, { title: 'Story id acceptance' });
+  const added = await callTool('add', { project, title: 'filed by story id', storyId: story.id, unclassified: true });
+  assert.equal(store.getTicket(project, added.ref).storyId, story.id);
+});
+
+test('add records depends-on links to existing tickets in the same call', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-depends-on-'))).slug;
+  const blocker = await callTool('add', { project, title: 'blocker ticket', unclassified: true });
+  const dependent = await callTool('add', { project, title: 'dependent ticket', unclassified: true, dependsOn: [blocker.ref, 'SQ-9999'] });
+  assert.deepEqual(dependent.dependsOn.linked, [blocker.ref]);
+  assert.equal(dependent.dependsOn.failed.length, 1);
+  assert.equal(dependent.dependsOn.failed[0].ref, 'SQ-9999');
+  const dependentTicket = store.getTicket(project, dependent.ref);
+  assert.ok(dependentTicket.links.some((link: any) => link.type === 'blocked-by' && link.ref === blocker.ref));
+});
+
+test('add dedupes a repeated dependsOn ref instead of listing it twice', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-depends-on-dup-'))).slug;
+  const blocker = await callTool('add', { project, title: 'blocker ticket', unclassified: true });
+  const dependent = await callTool('add', { project, title: 'dependent ticket', unclassified: true, dependsOn: [blocker.ref, blocker.ref] });
+  assert.deepEqual(dependent.dependsOn.linked, [blocker.ref]);
+  assert.deepEqual(dependent.dependsOn.failed, []);
+});
+
+test('add coerces a bare dependsOn string to a single-element array and flags the coercion', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-depends-on-string-'))).slug;
+  const blocker = await callTool('add', { project, title: 'blocker ticket', unclassified: true });
+  const dependent = await callTool('add', { project, title: 'dependent ticket', unclassified: true, dependsOn: blocker.ref });
+  assert.deepEqual(dependent.dependsOn.linked, [blocker.ref]);
+  assert.equal(dependent.dependsOn.coercedFromString, true);
 });
 
 test('update amends a claimed dispatch verifier and its next capture uses the amended command', async () => {
@@ -4551,11 +4587,14 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
   });
   assert.ok(updatedCommit.commit, 'the normal commit gate admits a live shared dispatch scope update');
 
-  await callToolAsSession(MCP_SESSION_ID, 'update', {
+  const shed = await callToolRawAsSession(MCP_SESSION_ID, 'update', {
     project: updatedProject, ref: updatedTicket.ref, by: 'control-plane', files: ['lib/original.js'],
   });
+  assert.equal(shed.isError, true, 'a files replace cannot shed a path a live claim holds');
+  assert.match(shed.content[0].text, /drop lib\/updated\.js/);
   updated = store.getTicket(updatedProject, updatedTicket.ref);
-  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', updatedFragment, 'lib/updated.js'], 'shared-tree scope updates retain the submission binding when ticket scope sheds a path');
+  assert.deepEqual(updated.files, ['lib/original.js', 'lib/updated.js']);
+  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', updatedFragment, 'lib/updated.js'], 'a refused shed leaves the shared-tree submission binding untouched');
 
   const grantedWorktree = createGitWorktree();
   const grantedProject = store.ensureProject(grantedWorktree).slug;
@@ -4603,7 +4642,7 @@ test('MCP update refuses claim-holder live scope changes and admits a control-pl
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'screenshots']);
 
   await callToolAsSession(MCP_SESSION_ID, 'update', {
-    project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js'],
+    project, ref: ticket.ref, by: 'mcp-scope-control-plane', removeFiles: ['screenshots'],
   });
   const narrowed = store.getTicket(project, ticket.ref);
   assert.deepEqual(narrowed.files, ['lib/allowed.js']);
@@ -4630,7 +4669,7 @@ test('MCP update handler grants live scope changes without deriving authority fr
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'foreign/new.js']);
 
   await callToolAsSession(MCP_SESSION_ID, 'update', {
-    project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js'],
+    project, ref: ticket.ref, by: 'mcp-scope-control-plane', removeFiles: ['foreign/new.js'],
   });
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
 

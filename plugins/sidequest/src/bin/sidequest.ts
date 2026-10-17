@@ -15,7 +15,7 @@ const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require('./s
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require('./sidequest-cmd-configuration');
 const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require('./sidequest-cmd-execution');
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require('./sidequest-cmd-collaboration');
-const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require('./sidequest-cmd-dispatch');
+const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge, cmdMoveBoard } = require('./sidequest-cmd-dispatch');
 const { cmdStory } = require('./sidequest-cmd-story');
 
 const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'add-file', 'remove-file', 'resolved-path', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes', 'changed-surface', 'dependency']);
@@ -42,7 +42,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   reconcile: ['session', 'reason', 'ref'],
   work: ['ref'],
   drain: ['ref'],
-  'groom-close': ['by', 'reason', 'integration', 'abandon-submission', 'delivery-commit', 'delivery-interaction-commit', 'delivery-method', 'delivery-revision', 'resolved-path', 'recovery-evidence'],
+  'groom-close': ['by', 'reason', 'integration', 'abandon-submission', 'delivery-commit', 'delivery-interaction-commit', 'delivery-method', 'delivery-revision', 'resolved-path', 'recovery-evidence', 'worktree'],
   verdict: ['text', 'outcome', 'why', 'constraint'],
   release: ['by', 'reason', 'oracle', 'release-kind', 'command', 'exit-code', 'output-tail', 'candidate', 'deliverable', 'force', 'status'],
   'scope-request': ['by', 'file', 'force'],
@@ -73,6 +73,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   models: ['full'],
   route: ['ticket'],
   'board-config': ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
+  board: [],
   projects: ['archived'],
   routing: ['enabled', 'disabled'],
   'archive-board': [],
@@ -85,7 +86,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   serve: ['port', 'handoff-pid'],
   stop: [],
 };
-const COMMAND_ALIASES: Record<string, string> = { new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm', complete: 'done', finish: 'done', open: 'dashboard', board: 'dashboard' };
+const COMMAND_ALIASES: Record<string, string> = { new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm', complete: 'done', finish: 'done', open: 'dashboard' };
 const MUTATING_COMMANDS = new Set([
   'add', 'new', 'ticket', 'update', 'edit', 'set', 'rm', 'remove', 'delete', 'claim', 'take', 'checkpoint',
   'recover-shared', 'next', 'grab', 'reconcile', 'work', 'drain', 'groom-close', 'done', 'complete', 'finish',
@@ -110,6 +111,7 @@ function boardConfigOptionsMutate(_positional: any[], opts: any): boolean {
 }
 
 const SUBCOMMAND_MUTATES: Record<string, (positional: any[], opts: any) => boolean> = {
+  board: (positional) => positional[0] === 'move',
   claims: (positional) => positional[0] === 'sweep',
   'native-agent': nativeAgentSubcommandMutates,
   native_agent: nativeAgentSubcommandMutates,
@@ -257,7 +259,7 @@ const HELP_COMMANDS: any = {
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: 'sidequest work|drain',
-  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--delivery-revision <sha>] [--resolved-path <path>] [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]. --recovery-evidence retires an unclaimed attempt, bound or not, and closes the ticket in the same call: at once from the session that prepared the dispatch, otherwise only past the shared retirement deadline; inside it another session gets the same countdown `sidequest dispatch --recovery-evidence` prints. This flag and MCP groomClose recoveryEvidence run one shared retirement authority, so both surfaces print the same refusal and reach the same terminal state. Delivery uses the ticket\'s prepared integration target when one was recorded; changing the board target or checkout does not retarget that ticket. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use --delivery-commit <immutable-candidate> --delivery-method manual without --integration.',
+  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--delivery-revision <sha>] [--resolved-path <path>] [--worktree <path>] [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]. --recovery-evidence retires an unclaimed attempt, bound or not, and closes the ticket in the same call: at once from the session that prepared the dispatch, otherwise only past the shared retirement deadline; inside it another session gets the same countdown `sidequest dispatch --recovery-evidence` prints. This flag and MCP groomClose recoveryEvidence run one shared retirement authority, so both surfaces print the same refusal and reach the same terminal state. Delivery uses the ticket\'s prepared integration target when one was recorded; changing the board target or checkout does not retarget that ticket. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use --delivery-commit <immutable-candidate> --delivery-method manual without --integration. A recorded delivery does not require the integration branch checked out here: it is admitted once HEAD matches the target branch\'s own current tip (by name, or a detached checkout at that tip, which may be later than the delivery commit). --worktree <path> gates the delivery (and re-runs the merged-tree verifier) in a different existing worktree of this project instead of the registered checkout, so a batch of manual deliveries need not serialize on one checkout.',
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--verify "typed evidence"] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',
@@ -266,7 +268,7 @@ const HELP_COMMANDS: any = {
   integrate: 'sidequest integrate <id|SQ-n> [id|SQ-n...] --by who [--integration-branch <branch>] [--mode merge|replay|apply | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--delivery-revision <sha>] [--resolved-path <path>] --reason "evidence"] [--skip-verify --waiver-authority <human> --waiver-reason <why> --waiver-gate <gate> (--waiver-scope <bounded-scope> | --waiver-expires-at <future-ISO-time>)] [--json]. CLI groups use separate positional refs; MCP ref uses one comma-separated string and wave is an options object.',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
-  verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]  outcome is candidate-addressed: accepted approves the candidate (not the reviewer\'s prose), rejected confirms it must not ship, and a finalized accepted cannot be reversed by another verdict (an accepted readonly review released with kind oracle also closes as done)',
+  verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] ordinary oracle rounds only; an already-done normal bound review uses main-thread MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation plus by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with explicit accepted/rejected, by/text, exact source/candidate and evidence. CLI cannot grant finalize or correct authority. outcome is candidate-addressed: accepted approves the candidate (not the reviewer\'s prose), rejected confirms it must not ship, and a finalized accepted cannot be reversed by another verdict (an accepted readonly review released with kind oracle also closes as done)',
   'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]  request scope and receive an immediate ruling. Granting an outstanding refused request is main-thread-only: use MCP scopeRequest grant:true from the orchestrator.',
   assign: 'sidequest assign <id|SQ-n> [--to who=you]',
   unassign: 'sidequest unassign <id|SQ-n>',
@@ -287,6 +289,7 @@ const HELP_COMMANDS: any = {
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json',
+  board: 'sidequest board move <old-path> <new-path> [--json]. Refuses active claims, nonterminal dispatches, sweep flights, a non-Git target, or an occupied target.',
   'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment isolated|shared] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
@@ -352,16 +355,16 @@ Working the board safely (multi-agent):
   sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record an advisory checkpoint while claim and dispatch stay active; no final acceptance
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--verify "typed evidence"] [--body-file path]   close non-repo or active authorized artifact work
-  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-interaction-commit <sha>] [--delivery-method reset|working-tree|manual] [--delivery-revision <sha>] [--resolved-path <path>] [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish and requires a matching delivered wave. --recovery-evidence retires an unclaimed attempt, bound or not, and closes the ticket in the same call: at once from the session that prepared the dispatch, otherwise only past the shared retirement deadline; inside it another session gets the same countdown "sidequest dispatch --recovery-evidence" prints, naming the instant and the runtime signal it measured from. For overlapping reviewed candidates with different pinned verifiers, compose their exact candidate refs in the registered target, run every pinned verifier and the full composed gate, then use --delivery-commit <immutable-candidate> --delivery-method manual without --integration. A pending candidate with --delivery-commit is checked for its pinned content and merged-tree verification; otherwise use --abandon-submission to record its discard; a reviewed interaction must descend from the delivered source, stay inside submitted candidate paths (renaming a submitted path stays inside), and pass the merged-tree gate; a non-reachable submitted candidate needs --delivery-method plus matching content in the integration working tree, or --delivery-revision <landed sha> when it was rebased or squash-merged before landing, where every submitted path must be identical there, a candidate deletion absent there, or reverse-apply cleanly, and every remaining path must be named with a repeated --resolved-path; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-interaction-commit <sha>] [--delivery-method reset|working-tree|manual] [--delivery-revision <sha>] [--resolved-path <path>] [--worktree <path>] [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish and requires a matching delivered wave. --recovery-evidence retires an unclaimed attempt, bound or not, and closes the ticket in the same call: at once from the session that prepared the dispatch, otherwise only past the shared retirement deadline; inside it another session gets the same countdown "sidequest dispatch --recovery-evidence" prints, naming the instant and the runtime signal it measured from. For overlapping reviewed candidates with different pinned verifiers, compose their exact candidate refs in the registered target, run every pinned verifier and the full composed gate, then use --delivery-commit <immutable-candidate> --delivery-method manual without --integration. A pending candidate with --delivery-commit is checked for its pinned content and merged-tree verification; otherwise use --abandon-submission to record its discard; a reviewed interaction must descend from the delivered source, stay inside submitted candidate paths (renaming a submitted path stays inside), and pass the merged-tree gate; a non-reachable submitted candidate needs --delivery-method plus matching content in the integration working tree, or --delivery-revision <landed sha> when it was rebased or squash-merged before landing, where every submitted path must be identical there, a candidate deletion absent there, or reverse-apply cleanly, and every remaining path must be named with a repeated --resolved-path; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target. A recorded delivery does not require the integration branch checked out in this process: it is admitted once HEAD matches the target branch's own current tip (by name, or a detached checkout at that tip, which may be later than the delivery commit). --worktree <path> gates the delivery, and re-runs the merged-tree verifier, in a different existing worktree of this project instead of the registered checkout, so a batch of manual deliveries need not serialize on one checkout
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
-  sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] records an oracle verdict addressed to the CANDIDATE, not the reviewer's prose: for a bound review, rejected confirms the candidate must not ship, accepted approves the candidate, and a finalized accepted cannot be reversed by another verdict; accepting a readonly review released with kind oracle also closes it as done
+  sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] ordinary oracle rounds only; an already-done normal bound review uses main-thread MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation plus by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with explicit accepted/rejected, by/text, exact source/candidate and evidence. CLI cannot grant finalize or correct authority. Records an oracle verdict addressed to the CANDIDATE, not the reviewer's prose: for a bound review, rejected confirms the candidate must not ship, accepted approves the candidate, and a finalized accepted cannot be reversed by another verdict; accepting a readonly review released with kind oracle also closes it as done
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling
     Granting an outstanding refused request widens declared files without a redispatch, but it is main-thread-only:
     it is not a CLI surface, so an executor subagent can never widen its own live scope from Bash. Use MCP
     scopeRequest grant:true from the orchestrator's main thread instead.
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest rework <id|SQ-n> --by <submitter id> --review <review-ticket-or-evidence> --reason "what needs repair"  reject an UNBOUND ready submission for repair; by must match the submitter identity (\`sidequest pulse <id|SQ-n>\` -> submittedBy, e.g. sq-3174-exec-opus-m3x7), not a reviewer; retain its candidate and review evidence, then dispatch the same ticket for a normal replacement claim
-    a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record the failed review's evidence on the review ticket, release that review with --kind oracle, and repair through a fresh ticket, dispatch, commit, review, and candidate
+    a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record evidence on the review ticket and use main-thread MCP verdict.finalize (never-dispatched bound reviews require explicit authority=main-attestation plus by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) for a completed normal review with explicit outcome and exact source/candidate; active experimental reviews keep their oracle lifecycle. Repair through a fresh ticket, dispatch, commit, review, and candidate
   sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path] [--force]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
@@ -483,6 +486,7 @@ Project selection:
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.
     --verify-environment shared pins the command or suite verifier of each new isolated dispatch to run in the
     shared checkout at integrate instead of in the executor's worktree; in-flight dispatches keep their pin.
+  sidequest board move <old-path> <new-path>   move a board after its repository folder moves (wait for all claims, dispatches and sweeps to finish)
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.
@@ -492,6 +496,11 @@ one dashboard shows every project's board at once.`
   );
 }
 
+
+async function cmdBoard(opts: { json?: boolean }, positional: string[]) {
+  if (positional[0] === 'move') await cmdMoveBoard(opts, positional.slice(1));
+  else await cmdDashboard(opts);
+}
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -515,6 +524,9 @@ async function main() {
   if (commandMutates(cmd, opts, positional)) assertMutationFreshness(opts);
 
   switch (cmd) {
+    case 'board':
+      await cmdBoard(opts, positional);
+      break;
     case 'add':
     case 'new':
     case 'ticket':
@@ -706,7 +718,6 @@ async function main() {
       break;
     case 'dashboard':
     case 'open':
-    case 'board':
       await cmdDashboard(opts);
       break;
     case 'serve':

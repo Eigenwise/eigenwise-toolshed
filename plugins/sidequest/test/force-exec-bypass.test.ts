@@ -7,8 +7,8 @@ import path from 'node:path';
 test('correction host hook denies subagents including malformed correct and permits trusted main', () => {
   const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
   const cases = [
-    { agent_id: 'synthetic-subagent', tool_name: 'verdict', tool_input: { correct: {} }, denied: true, message: 'subagents cannot correct finalized review verdicts' },
-    { agent_id: 'synthetic-subagent', tool_name: 'verdict', tool_input: { correct: null }, denied: true, message: 'subagents cannot correct finalized review verdicts' },
+    { agent_id: 'synthetic-subagent', tool_name: 'verdict', tool_input: { correct: {} }, denied: true, message: 'subagents cannot finalize or correct completed review verdicts' },
+    { agent_id: 'synthetic-subagent', tool_name: 'verdict', tool_input: { correct: null }, denied: true, message: 'subagents cannot finalize or correct completed review verdicts' },
     { agent_id: '', tool_name: 'verdict', tool_input: { correct: {} }, denied: false, message: '' },
     { agent_id: 'synthetic-subagent', tool_name: 'verdict', tool_input: { outcome: 'accepted' }, denied: false, message: '' },
     { agent_id: 'synthetic-subagent', tool_name: 'update', tool_input: { files: ['synthetic.js'] }, denied: true, message: 'subagents cannot update closeout fields' },
@@ -82,13 +82,31 @@ test('native read-only agents need no ticket or board dispatch', () => {
   assert.equal(nativeAgentDecision({ subagent_type: 'general-purpose', prompt: 'Find the commit that changed the hook and report its hash.' }), '');
 });
 
-test('native ticket refs and route markers require dispatch even for Explore', () => {
+test('native route markers require dispatch even for Explore', () => {
   for (const subagent_type of ['general-purpose', 'Explore', 'Plan']) {
-    for (const prompt of ['Inspect SQ-3643.', '[sidequest-route model=sonnet effort=medium ticket=SQ-1] Read files.']) {
-      assert.match(nativeAgentDecision({ subagent_type, prompt }), /requests write or ticket work without a prepared dispatch/);
-    }
-    assert.match(nativeAgentDecision({ subagent_type, description: 'Inspect SQ-1', prompt: 'Read files.' }), /permissionDecision.*deny/);
+    assert.match(nativeAgentDecision({ subagent_type, prompt: '[sidequest-route model=sonnet effort=medium ticket=SQ-1] Read files.' }),
+      /requests write or ticket work without a prepared dispatch/);
   }
+});
+
+test('read-only native agents may cite ticket refs as lookup context but not to write them', () => {
+  const triage = 'Triage open GitHub issues. Flag duplicates of SQ-3502 and SQ-3043 and report links.';
+  for (const subagent_type of ['Explore', 'Plan', 'claude-code-guide']) {
+    assert.equal(nativeAgentDecision({ subagent_type, prompt: triage }), '', subagent_type);
+    assert.equal(nativeAgentDecision({ subagent_type, description: 'Inspect SQ-1', prompt: 'Read files.' }), '', subagent_type);
+    assert.match(nativeAgentDecision({ subagent_type, prompt: 'Edit SQ-1234 to fix the hook.' }),
+      /requests write or ticket work without a prepared dispatch/, subagent_type);
+  }
+});
+
+test('write-capable native agents citing only a ticket ref are refused with the read-only alternative', () => {
+  for (const subagent_type of ['general-purpose', 'custom-reader']) {
+    const decision = nativeAgentDecision({ subagent_type, prompt: 'Inspect SQ-3643.' });
+    assert.match(decision, /cites a ticket ref without a prepared dispatch/, subagent_type);
+    assert.match(decision, /spawn Explore, Plan, claude-code-guide instead/, subagent_type);
+  }
+  assert.match(nativeAgentDecision({ subagent_type: 'general-purpose', prompt: 'Edit SQ-1234.' }),
+    /requests write or ticket work without a prepared dispatch/);
 });
 
 test('native write intent and undispatched Sidequest executor remain refused', () => {

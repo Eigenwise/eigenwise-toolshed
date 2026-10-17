@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { stringField, type HookInput } from './input.js';
 import { pluginRoot } from './paths.js';
-import { canonicalPath } from '../../lib/kernel/worktree.js';
+import { reportFile, stateDirectory } from '../../lib/sweep-state-path.js';
+export { reportFile } from '../../lib/sweep-state-path.js';
 import { acquireSweepFlight, reclaimSweepFlight, sweepFlightNeedsRecovery, type SweepFlight } from './sweep-flight.js';
 
 // The sweep removes worktrees, backs up dirty ones and prunes branches: dozens of
@@ -49,16 +48,6 @@ export const HANDOFF_FAILED_NOTICE =
 export function deadlineMs(): number {
   const raw = Number(process.env.SIDEQUEST_SWEEP_DEADLINE_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_DEADLINE_MS;
-}
-
-function stateDirectory(): string {
-  const home = String(process.env.SIDEQUEST_HOME || '').trim() || path.join(os.homedir(), '.claude', 'sidequest');
-  return path.join(home, 'sweep-reports');
-}
-
-export function reportFile(cwd: string): string {
-  const key = crypto.createHash('sha1').update(canonicalPath(cwd || '.')).digest('hex').slice(0, 16);
-  return path.join(stateDirectory(), `${key}.json`);
 }
 
 function progressFile(cwd: string): string {

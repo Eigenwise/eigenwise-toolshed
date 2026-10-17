@@ -17,6 +17,7 @@ const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.j
 const { isInScope: scopeMatch } = require(path.join(__dirname, '..', 'lib', 'scope-match.js')) as { isInScope: (file: unknown, files: unknown) => boolean };
 
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'Plan', 'statusline-setup']);
+const READ_ONLY_NATIVE_AGENT_TYPES = new Set(['Explore', 'Plan', 'claude-code-guide']);
 const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']);
 const HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 
@@ -250,8 +251,28 @@ function hasWriteIntent(toolInput: Record<string, unknown>): boolean {
   return /(?:^|[.!?:;\n]|\b(?:and|then|please|must|should|to))\s*(?:edit(?:s|ing|ed)?|modif(?:y|ies|ying|ied)|writ(?:e|es|ing)|implement(?:s|ing|ed)?|chang(?:e|es|ing|ed)|creat(?:e|es|ing|ed)|delet(?:e|es|ing|ed)|remov(?:e|es|ing|ed)|commit(?:s|ting|ted)?|push(?:es|ing|ed)?|install(?:s|ing|ed)?|update|refactor|patch|rewrite)\b/i.test(instructions);
 }
 
-function namesTicketWork(toolInput: Record<string, unknown>): boolean {
-  return /\bSQ-\d+\b|\[sidequest-route\b/i.test(`${String(toolInput.prompt ?? '')}\n${String(toolInput.description ?? '')}\n${String(toolInput.name ?? '')}`);
+function spawnText(toolInput: Record<string, unknown>): string {
+  return `${String(toolInput.prompt ?? '')}\n${String(toolInput.description ?? '')}\n${String(toolInput.name ?? '')}`;
+}
+
+function citesTicketRef(toolInput: Record<string, unknown>): boolean {
+  return /\bSQ-\d+\b/i.test(spawnText(toolInput));
+}
+
+function carriesRouteMarker(toolInput: Record<string, unknown>): boolean {
+  return /\[sidequest-route\b/i.test(spawnText(toolInput));
+}
+
+function ticketRefOnlyDenyReason(type: string): string {
+  return `sidequest: ${type} cites a ticket ref without a prepared dispatch, and ${type} can write. For a read-only lookup that cites ticket refs, spawn ${[...READ_ONLY_NATIVE_AGENT_TYPES].join(', ')} instead; for ticket work, dispatch the ticket and spawn its returned executor.`;
+}
+
+// A read-only type may cite refs as lookup context; only write intent or a route marker makes it ticket work.
+function ticketWorkDenyReason(toolInput: Record<string, unknown>, type: string): string | null {
+  if (carriesRouteMarker(toolInput)) return genericAgentDenyReason(type);
+  if (!citesTicketRef(toolInput)) return null;
+  if (hasWriteIntent(toolInput)) return genericAgentDenyReason(type);
+  return READ_ONLY_NATIVE_AGENT_TYPES.has(type) ? null : ticketRefOnlyDenyReason(type);
 }
 
 // Dispatch refuses a project with no Sidequest install, and /mcp cannot fix that, so the install goes first (GH-158).
@@ -355,8 +376,9 @@ function guardDeniedWrite(input: HookInput, toolInput: Record<string, unknown>):
 }
 
 function guardNativeAgent(input: HookInput, toolInput: Record<string, unknown>, type: string): boolean {
-  if (namesTicketWork(toolInput)) {
-    writeDeny('PreToolUse', genericAgentDenyReason(type));
+  const ticketWorkDenial = ticketWorkDenyReason(toolInput, type);
+  if (ticketWorkDenial) {
+    writeDeny('PreToolUse', ticketWorkDenial);
     return true;
   }
   if (guardDeniedWrite(input, toolInput)) return true;
@@ -473,11 +495,8 @@ const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, un
     denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
   },
   mcp__plugin_sidequest_board__verdict: {
-    // verdict with correct appends an accepted-to-rejected correction to a finalized
-    // review verdict, which only the main thread may do. Ordinary verdict calls stay
-    // open to the review executor that closes its own readonly review.
-    matches: (input) => Object.hasOwn(input, 'correct'),
-    denial: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
+    matches: (input) => ['correct', 'finalize'].some(field => Object.hasOwn(input, field)),
+    denial: 'sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread.',
   },
 };
 

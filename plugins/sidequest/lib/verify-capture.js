@@ -7,6 +7,7 @@ const { execFileSync } = require("./git-process.js");
 const { runOwnedProcessVerification, shellCommand } = require("./ports/process.js");
 const { canonicalPath } = require("./kernel/worktree.js");
 const { crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
+const { verifyCwdForRequirement } = require("./kernel/verification.js");
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1e3;
 const captureSlotRetryMilliseconds = 50;
 const captureSlotOperationRetryLimit = 20;
@@ -464,7 +465,7 @@ function verifyCommandDirectory(target, captureCwd) {
   const project = captureProject(target);
   const store = require("./store.js");
   const ticket = project ? store.getTicket(project.slug, target.ticket) : null;
-  const directory = String(ticket?.executorVerifyCwd || "");
+  const directory = ticket ? verifyCwdForRequirement(store.pinnedVerificationRequirement(ticket), ticket.executorVerifyCwd) : "";
   return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
 }
 async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs, explicitWorktree) {

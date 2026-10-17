@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { Session } from 'node:inspector';
@@ -101,40 +102,100 @@ export async function createAnalyzer(projectRoot) {
     return node.getStart() + (text.slice(node.getStart()).match(/^export\s+(?:default\s+)?/)?.[0].length ?? 0);
   }
 
-  async function collectFunctions(text, fileName, { transport } = {}) {
-    const virtualFile = /\.(jsx|tsx)$/i.test(fileName) ? '/source' + path.extname(fileName).toLowerCase() : /\.[cm]?js$/.test(fileName) ? '/source.js' : '/source.ts';
-    const virtualFileSystem = createVirtualFileSystem({
-      '/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }),
-      [virtualFile]: text,
-    });
+  function functionsIn(sourceFile, text) {
+    const functions = [];
+    const childCounts = new Map();
+    function visit(node, parentId = '<root>') {
+      if (ast.isFunctionLikeDeclaration(node) && node.body) {
+        const name = functionName(node);
+        const countKey = `${parentId}\u0000${functionKind(node)}\u0000${name}`;
+        const ordinal = childCounts.get(countKey) ?? 0;
+        childCounts.set(countKey, ordinal + 1);
+        const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
+        const start = node.getStart();
+        const end = node.end;
+        functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex') });
+        node.forEachChild((child) => visit(child, identity));
+      } else node.forEachChild((child) => visit(child, parentId));
+    }
+    visit(sourceFile);
+    return functions;
+  }
+
+  function virtualExtension(fileName) {
+    if (/\.(jsx|tsx)$/i.test(fileName)) return path.extname(fileName).toLowerCase();
+    return /\.[cm]?js$/.test(fileName) ? '.js' : '.ts';
+  }
+
+  // One sync tsc --api child serves the whole run (GH-554): a child per file exhausted per-user
+  // process limits. Only the sync child is unref'd and dies with this process; an async child holds
+  // the event loop open until closed, so async parsers stay per call for callers that never close.
+  let sharedParser = null;
+  let parseQueue = Promise.resolve();
+
+  function openParser(ParserApi) {
+    const fileSystem = createVirtualFileSystem({});
+    return { fileSystem, api: new ParserApi({ cwd: '/', fs: fileSystem }), parsed: 0, deleted: [] };
+  }
+
+  async function withParser(transport, parse) {
     const ParserApi = parserTransport(transport);
-    const api = new ParserApi({ cwd: '/', fs: virtualFileSystem });
+    if (ParserApi !== SyncParserApi) {
+      const parser = openParser(ParserApi);
+      try {
+        return await parse(parser);
+      } finally {
+        await closeParserApi(parser.api);
+      }
+    }
+    sharedParser ??= openParser(ParserApi);
+    return parse(sharedParser);
+  }
+
+  // The server keeps a virtual file's first content even under invalidateAll, so every parse gets a
+  // fresh file name and names its changes explicitly.
+  async function parseFunctions(text, fileName, parser) {
+    const { fileSystem, api } = parser;
+    const virtualFile = `/source-${parser.parsed++}${virtualExtension(fileName)}`;
+    fileSystem.writeFile('/tsconfig.json', JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }));
+    fileSystem.writeFile(virtualFile, text);
+    const snapshot = await api.updateSnapshot({ openProject: '/tsconfig.json', fileChanges: { changed: ['/tsconfig.json'], created: [virtualFile], deleted: parser.deleted } });
     try {
-      const snapshot = await api.updateSnapshot({ openProject: '/tsconfig.json' });
       const sourceFile = await snapshot.getProject('/tsconfig.json').program.getSourceFile(virtualFile);
       if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}.`);
-      const functions = [];
-      const childCounts = new Map();
-      function visit(node, parentId = '<root>') {
-        if (ast.isFunctionLikeDeclaration(node) && node.body) {
-          const name = functionName(node);
-          const countKey = `${parentId}\u0000${functionKind(node)}\u0000${name}`;
-          const ordinal = childCounts.get(countKey) ?? 0;
-          childCounts.set(countKey, ordinal + 1);
-          const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
-          const start = node.getStart();
-          const end = node.end;
-          functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex') });
-          node.forEachChild((child) => visit(child, identity));
-        } else node.forEachChild((child) => visit(child, parentId));
-      }
-      visit(sourceFile);
-      return functions;
+      return functionsIn(sourceFile, text);
     } finally {
-      await api.close();
+      await snapshot.dispose();
+      fileSystem.removeFile(virtualFile);
+      parser.deleted = [virtualFile];
     }
   }
-  return { collectFunctions, cyclomaticComplexity, ownText, parserTransport };
+
+  // A parser holds one virtual file at a time, and at most one child may run, so parses queue.
+  function collectFunctions(text, fileName, { transport } = {}) {
+    const parsed = parseQueue.then(() => withParser(transport, (parser) => parseFunctions(text, fileName, parser)));
+    parseQueue = parsed.catch(() => {});
+    return parsed;
+  }
+
+  async function close() {
+    await parseQueue;
+    if (!sharedParser) return;
+    const { api } = sharedParser;
+    sharedParser = null;
+    await closeParserApi(api);
+  }
+  return { collectFunctions, close, cyclomaticComplexity, ownText, parserTransport };
+}
+
+// The TypeScript API's close() only signals the child (kill on sync, stdin EOF on async) and exposes
+// no exit handle, so wait on the internal child to know it is reaped before the run returns.
+async function closeParserApi(api) {
+  const child = api.client?.channel?.child ?? api.client?.process;
+  const exited = child?.exitCode === null && child.signalCode === null ? once(child, 'exit') : null;
+  child?.ref();
+  await api.close();
+  await exited;
 }
 
 export function normalizedPath(filePath) {
@@ -433,27 +494,28 @@ function classifyChange(metric, partner) {
   return metric.complexity > partner.complexity ? 'modified-raised' : LEGACY_UNCHANGED;
 }
 
-function changedFunctions(fileMetrics, baseline) {
+function changedFunctions(fileMetrics, baseline, relativePath, removedMetrics) {
   const partners = baseFunctionByIdentity(baseline, fileMetrics);
+  const retained = new Set(partners.values());
+  removedMetrics.push(...baseline.filter((metric) => !retained.has(metric)).map((metric) => ({ ...metric, relativePath })));
   return fileMetrics
     .filter((metric) => partners.get(metric.identity)?.fingerprint !== metric.fingerprint)
     .map((metric) => ({ ...metric, classification: classifyChange(metric, partners.get(metric.identity)) }));
 }
 
-export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline) {
+export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline, removedMetrics = []) {
   const baselinePathByPath = new Map(changedPaths.map(pathAndBaselinePath));
   const changedMetrics = [];
   const byPath = Map.groupBy(metrics, (metric) => metric.relativePath);
-  for (const [relativePath, fileMetrics] of byPath) {
-    if (!baselinePathByPath.has(relativePath)) continue;
-    const baselinePath = baselinePathByPath.get(relativePath);
+  for (const [relativePath, baselinePath] of baselinePathByPath) {
+    const fileMetrics = byPath.get(relativePath) ?? [];
     let baseline = [];
     try {
       baseline = await readBaseline(base, baselinePath);
     } catch (error) {
       if (!pathAbsentAtBase(error, baselinePath)) throw error;
     }
-    changedMetrics.push(...changedFunctions(fileMetrics, baseline));
+    changedMetrics.push(...changedFunctions(fileMetrics, baseline, relativePath, removedMetrics));
   }
   return changedMetrics;
 }

@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createAnalyzer, changedMetricsAgainstBase, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
 import { crapScore, enforcedMetrics, THRESHOLD } from './measure.mjs';
-import { JAVASCRIPT_SOURCE, projectRoot, readConfig, gateSettings, selectedFiles, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
+import { JAVASCRIPT_SOURCE, projectRoot, readConfig, gateSettings, selectedFiles, filesChangedSince, selectedDeletedFiles, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
 import { acquireCoverage, coverageByFile, coverageTrust, functionLineCoverage } from './lcov.mjs';
 import { lizardDescriptors } from './lizard.mjs';
 import { pythonDescriptors, verifyOracleOwnership } from './python.mjs';
+
+import { reuseSignals, formatReuseSignal } from './reuse-signals.mjs';
 
 export const GATE_VERSION = 'crap-1';
 
@@ -61,14 +63,14 @@ function verdict(report) {
   return report;
 }
 
-function emptyScopeReason(files, metrics, changed) {
-  if (!files.length) return 'No supported source files matched sources and exclude.';
-  if (!metrics.length) return 'Selected files contain no runtime function bodies (type-only declarations are excluded).';
+function emptyScopeReason(selected, files, metrics, changed) {
+  if (!selected.length) return 'No supported source files matched sources and exclude.';
+  if (files.length && !metrics.length) return 'Selected files contain no runtime function bodies (type-only declarations are excluded).';
   if (!changed.length) return 'No function bodies changed against the base revision.';
   return null;
 }
 
-async function changedAgainstBase(report, analyzer) {
+async function changedAgainstBase(report, analyzer, changedPaths, removedMetrics) {
   if (!report.base) return report.metrics.map((metric) => ({ ...metric, classification: 'new' }));
   const readBaseline = async (base, file) => {
     const text = runGit(report.root, ['show', `${base}:${file}`]);
@@ -80,7 +82,7 @@ async function changedAgainstBase(report, analyzer) {
     }
     return descriptors(text, file, analyzer, undefined, report.root, report.pythonPolicy, oracles);
   };
-  const changed = await changedMetricsAgainstBase(report.metrics, Object.keys(report.files), report.base, readBaseline);
+  const changed = await changedMetricsAgainstBase(report.metrics, changedPaths, report.base, readBaseline, removedMetrics);
   const changedIdentities = new Set(changed.map((metric) => metric.relativePath + ':' + metric.identity));
   return changed.concat(report.metrics.filter((metric) => metric.informational && !changedIdentities.has(metric.relativePath + ':' + metric.identity)));
 }
@@ -89,15 +91,24 @@ export async function crapReport(options = {}) {
   const root = projectRoot(options.project ?? process.cwd());
   const { config, warnings } = readConfig(root);
   const settings = gateSettings(options, config);
-  const files = selectedFiles(root, settings);
-  const analyzer = files.some((file) => JAVASCRIPT_SOURCE.test(file) || file.endsWith('.vue')) ? await createAnalyzer(root) : null;
-  const complexityCsv = options.complexity ? fs.readFileSync(path.resolve(root, options.complexity), 'utf8') : undefined;
   const baseline = baseRevision(root, settings.base);
-  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, metrics: await sourceMetrics(root, files, analyzer, complexityCsv, settings.pythonPolicy, settings.pythonOracles), ccOnly: Boolean(options.ccOnly), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
+  const selected = selectedFiles(root, settings);
+  const files = filesChangedSince(root, baseline.base, selected);
+  const changedPaths = files.concat(selectedDeletedFiles(root, baseline.base, settings));
+  const removedMetrics = [];
+  const analyzer = changedPaths.some((file) => JAVASCRIPT_SOURCE.test(file) || file.endsWith('.vue')) ? await createAnalyzer(root) : null;
+  const complexityCsv = options.complexity ? fs.readFileSync(path.resolve(root, options.complexity), 'utf8') : undefined;
+  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: Boolean(options.ccOnly), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
   if (settings.usedDeprecatedRatchet) report.warnings.push('--ratchet and config ratchet are deprecated. Use --base or config base instead.');
-  verifyOracleOwnership(report.metrics, settings.pythonOracles);
-  report.changedMetrics = await changedAgainstBase(report, analyzer);
-  report.nothingToScoreReason = emptyScopeReason(files, report.metrics, report.changedMetrics);
+  try {
+    report.metrics = await sourceMetrics(root, files, analyzer, complexityCsv, settings.pythonPolicy, settings.pythonOracles);
+    verifyOracleOwnership(report.metrics, settings.pythonOracles?.filter((entry) => files.includes(entry.file) || !selected.includes(entry.file)));
+    report.changedMetrics = await changedAgainstBase(report, analyzer, changedPaths, removedMetrics);
+  } finally {
+    await analyzer?.close();
+  }
+  report.signals = reuseSignals(root, report.changedMetrics, removedMetrics);
+  report.nothingToScoreReason = emptyScopeReason(selected, files, report.metrics, report.changedMetrics);
   return measureReport(report, settings);
 }
 
@@ -145,7 +156,9 @@ function metricLine(metric, ccOnly) {
 }
 
 export function formatCrapReport(report) {
-  if (report.nothingToScoreReason) return `CRAP gate: nothing to score. ${report.nothingToScoreReason}\n`;
+  const signals = report.signals ?? [];
+  const signalRows = signals.map(formatReuseSignal);
+  if (report.nothingToScoreReason) return [...signalRows, `CRAP gate: nothing to score. ${report.nothingToScoreReason} ${signals.length} reuse signals.`].join('\n') + '\n';
   const rows = report.changedMetrics.length ? report.changedMetrics : report.unverified;
-  return rows.map((metric) => metricLine(metric, report.ccOnly)).join('\n') + `\nCRAP gate ${report.verdict}: ${report.failures.length} failures, ${report.unverified.length} unverified; ${report.checked} new or complexity-raised functions checked (strictly below ${THRESHOLD}).\n`;
+  return [...rows.map((metric) => metricLine(metric, report.ccOnly)), ...signalRows].join('\n') + `\nCRAP gate ${report.verdict}: ${report.failures.length} failures, ${report.unverified.length} unverified; ${signals.length} reuse signals; ${report.checked} new or complexity-raised functions checked (strictly below ${THRESHOLD}).\n`;
 }

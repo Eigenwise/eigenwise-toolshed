@@ -38,6 +38,7 @@ const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
 const { createReviewCorrections } = require("./store/review-corrections.js");
+const { createReviewFinalization } = require("./store/review-finalization.js");
 const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
@@ -170,6 +171,10 @@ function executionScope(slug, ticket) {
     return Array.from(/* @__PURE__ */ new Set([...bound, ...effectiveScope(slug, { files: granted })]));
   }
   return effectiveScope(slug, ticket);
+}
+const boardMove = require("./store/move.js");
+function moveProject(oldPath, newPath) {
+  return boardMove.moveProject({ database, transaction, findProject, slugify, projectDir, invalidateStoreCaches }, oldPath, newPath);
 }
 let projectsLayer;
 function ensureProject(...args) {
@@ -937,89 +942,179 @@ function eachTableTestName(lines, startIndex) {
   }
   return null;
 }
-function testDefinitionName(lines, index) {
-  const line = lines[index];
-  const match = line.match(/(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-  return capturedTestName(match) ?? (/(?<![.\w$])(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+function testDefinitionName(line, modifiers = false) {
+  const call = modifiers ? /(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/ : /(?<![.\w$])(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/;
+  return capturedTestName(line.match(call) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/));
 }
-function testDefinitions(source) {
+function testDefinitionNameAt(lines, index, modifiers = false) {
+  const line = lines[index];
+  return testDefinitionName(line, modifiers) ?? (/(?<![.\w$])(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+}
+function testDefinitions(source, modifiers = false) {
   const lines = source.split(/\r?\n/);
   const definitions = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const name = testDefinitionName(lines, index);
+    const name = testDefinitionNameAt(lines, index, modifiers);
     if (name) definitions.push({ line: index + 1, name });
   }
   return definitions;
 }
-function changedTestNames(delta, changedPaths) {
-  if (!delta?.workspace) return [];
-  const names = /* @__PURE__ */ new Set();
-  for (const file of changedPaths || []) {
-    if (!isTestSidePath(file)) continue;
-    let source = "";
-    let diff = "";
-    try {
-      source = fs.readFileSync(path.join(delta.workspace.root, file), "utf8");
-    } catch (_) {
-      continue;
-    }
-    try {
-      diff = execFileSync("git", ["diff", "--no-ext-diff", "--unified=0", delta.workspace.base, "--", file], {
-        cwd: delta.workspace.root,
-        encoding: "utf8",
-        windowsHide: true
-      });
-    } catch (_) {
-      continue;
-    }
-    const definitions = testDefinitions(source);
-    try {
-      execFileSync("git", ["cat-file", "-e", `${delta.workspace.base}:${file}`], {
-        cwd: delta.workspace.root,
-        stdio: "ignore",
-        windowsHide: true
-      });
-    } catch (_) {
-      for (const definition of definitions) names.add(definition.name);
-      continue;
-    }
-    let newLine = 0;
-    let addedInHunk = false;
-    let removedInHunk = false;
-    const addNearestDefinition = (line) => {
-      const definition = definitions.filter((entry) => entry.line <= line).at(-1);
-      if (definition) names.add(definition.name);
-    };
-    const attributeRemovals = () => {
-      if (removedInHunk && !addedInHunk) addNearestDefinition(newLine);
-    };
-    for (const line of diff.split(/\r?\n/)) {
-      const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (hunk) {
-        attributeRemovals();
-        newLine = Number(hunk[1]);
-        addedInHunk = false;
-        removedInHunk = false;
-        continue;
-      }
-      if (line.startsWith("+") && !line.startsWith("+++")) {
-        addedInHunk = true;
-        const addedDefinition = line.match(/(?<![.\w$])(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-        const addedName = capturedTestName(addedDefinition);
-        if (addedName) names.add(addedName);
-        addNearestDefinition(newLine);
-        newLine += 1;
-        continue;
-      }
-      if (line.startsWith("-") && !line.startsWith("---")) {
-        removedInHunk = true;
-        continue;
-      }
-      if (line.startsWith(" ")) newLine += 1;
-    }
-    attributeRemovals();
+function diffHunks(diff) {
+  const hunks = [];
+  for (const line of diff.split(/\r?\n/)) {
+    const header = line.match(/^(@{2,}) (?:-\d+(?:,\d+)? )+\+(\d+)(?:,\d+)? \1/);
+    if (header) hunks.push({ width: header[1].length - 1, start: Number(header[2]), lines: [] });
+    else hunks.at(-1)?.lines.push(line);
   }
-  return Array.from(names);
+  return hunks;
+}
+function unifiedChangedLines(hunk) {
+  const changed = [];
+  let next = hunk.start;
+  let removed = false;
+  for (const line of hunk.lines) {
+    if (line.startsWith("-")) removed = true;
+    if (!line.startsWith("+")) continue;
+    changed.push({ line: next, text: line.slice(1) });
+    next += 1;
+  }
+  if (removed && !changed.length) changed.push({ line: next, text: "" });
+  return changed;
+}
+function combinedChangedLines(hunk) {
+  const own = /* @__PURE__ */ new Set(["+".repeat(hunk.width), "-".repeat(hunk.width)]);
+  const changed = [];
+  let next = hunk.start;
+  for (const line of hunk.lines) {
+    const marks = line.slice(0, hunk.width);
+    if (own.has(marks) && line.slice(hunk.width).trim()) changed.push({ line: next, text: line.slice(hunk.width) });
+    if (!marks.includes("-")) next += 1;
+  }
+  return changed;
+}
+function changedLines(hunk) {
+  return hunk.width > 1 ? combinedChangedLines(hunk) : unifiedChangedLines(hunk);
+}
+const BLANK_OR_COMMENT_LINE = /^\s*(?:$|\/\/|\/\*|\*|#)/;
+function definitionAheadInRun(changed, index, definedAt) {
+  for (let next = index; changed[next]?.line === changed[index].line + next - index; next += 1) {
+    const { line, text } = changed[next];
+    if (!BLANK_OR_COMMENT_LINE.test(text)) return definedAt.get(line) ?? testDefinitionName(text, true);
+  }
+  return null;
+}
+function diffTestNames(source, diff) {
+  const definitions = testDefinitions(source);
+  const definedAt = new Map(definitions.map((entry) => [entry.line, entry.name]));
+  const nearest = (line) => definitions.filter((entry) => entry.line <= line).at(-1)?.name;
+  return diffHunks(diff).flatMap((hunk) => {
+    const changed = changedLines(hunk);
+    return changed.flatMap((entry, index) => [
+      testDefinitionName(entry.text, true),
+      definitionAheadInRun(changed, index, definedAt) ?? nearest(entry.line)
+    ]);
+  });
+}
+function gitOutput(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+}
+function listedPaths(root, args) {
+  return gitOutput(root, args).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
+}
+function sourceAt(root, revision, file) {
+  try {
+    return revision ? gitOutput(root, ["cat-file", "blob", `${revision}:${file}`]) : fs.readFileSync(path.join(root, file), "utf8");
+  } catch (_) {
+    return "";
+  }
+}
+function revisionHasFile(root, revision, file) {
+  try {
+    gitOutput(root, ["cat-file", "-e", `${revision}:${file}`]);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+function fileTestNames(root, change, file) {
+  let diff = "";
+  try {
+    diff = gitOutput(root, ["diff", "--no-ext-diff", "--unified=0", ...[change.from, change.to].filter(Boolean), "--", file]);
+  } catch (_) {
+    return [];
+  }
+  const source = sourceAt(root, change.to, file);
+  return revisionHasFile(root, change.from, file) ? diffTestNames(source, diff) : testDefinitions(source).map((entry) => entry.name);
+}
+function mergeDiff(root, merge, file) {
+  return gitOutput(root, ["diff-tree", "--cc", "--unified=0", "--no-commit-id", merge, "--", file]);
+}
+function mergeOwnedPaths(root, merge, changed) {
+  return listedPaths(root, ["diff-tree", "--cc", "-r", "--name-only", "-z", "--no-commit-id", merge]).filter((file) => changed.has(file)).filter((file) => diffHunks(mergeDiff(root, merge, file)).some((hunk) => combinedChangedLines(hunk).length));
+}
+function changePaths(root, change, working, changed) {
+  if ("merge" in change) return mergeOwnedPaths(root, change.merge, changed);
+  const paths = change.to ? listedPaths(root, ["diff", "--name-only", "--no-renames", "-z", change.from, change.to]) : working;
+  return paths.filter((file) => changed.has(file));
+}
+function changeTestNames(root, change, files) {
+  const namesIn = "merge" in change ? (file) => diffTestNames(sourceAt(root, change.merge, file), mergeDiff(root, change.merge, file)) : (file) => fileTestNames(root, change, file);
+  return files.filter(isTestSidePath).flatMap(namesIn).filter((name) => Boolean(name));
+}
+function foreignTips(slug, ticket, root) {
+  const refs = commitScope.integrationTargetRefs(ticketIntegrationTarget(slug, ticket));
+  if (!refs.length) return [];
+  const branch = normalizeIntegrationBranch(readMeta(slug)?.integrationBranch);
+  const isForeign = (ref) => refs.includes(ref) || ref.startsWith("refs/remotes/") && ref.split("/").slice(3).join("/") === branch;
+  return gitOutput(root, ["for-each-ref", "--no-contains", "HEAD", "--format=%(objectname) %(refname)", ...refs, `refs/remotes/*/${branch}`]).split(/\r?\n/).map((line) => line.split(" ")).filter(([, ref]) => isForeign(String(ref))).map(([tip]) => String(tip));
+}
+function commitChange(line) {
+  const [commit = "", ...parents] = line.split(" ");
+  return parents.length > 1 ? { merge: commit } : { from: parents[0] || EMPTY_TREE, to: commit };
+}
+function ownChanges(slug, ticket, root, base) {
+  const tips = foreignTips(slug, ticket, root);
+  if (!tips.length) return null;
+  const own = gitOutput(root, ["rev-list", "--reverse", "--parents", `${base}..HEAD`, "--not", ...tips]).split(/\r?\n/).filter(Boolean);
+  if (own.length === Number(gitOutput(root, ["rev-list", "--count", `${base}..HEAD`]))) return null;
+  return [...own.map(commitChange), { from: "HEAD", to: null }];
+}
+function ownChangeAttribution(root, changes, working, changedPaths) {
+  const changed = new Set(changedPaths);
+  const owned = /* @__PURE__ */ new Set();
+  const names = [];
+  for (const change of changes) {
+    const files = changePaths(root, change, working, changed);
+    files.forEach((file) => owned.add(file));
+    names.push(...changeTestNames(root, change, files));
+  }
+  const current = new Set([...owned].filter(isTestSidePath).flatMap((file) => testDefinitions(sourceAt(root, null, file), true).map((entry) => entry.name)));
+  return {
+    paths: changedPaths.filter((file) => owned.has(file)),
+    testNames: [...new Set(names)].filter((name) => current.has(name))
+  };
+}
+function attributeOwnChanges(slug, ticket, workspace, working, changedPaths) {
+  try {
+    const changes = ownChanges(slug, ticket, workspace.root, workspace.base);
+    if (changes) return ownChangeAttribution(workspace.root, changes, working, changedPaths);
+  } catch (_) {
+  }
+  return { paths: changedPaths, testNames: [...new Set(changeTestNames(workspace.root, { from: workspace.base, to: null }, changedPaths))] };
+}
+function negativeControlChanges(slug, ticket, delta, changedPaths) {
+  const workspace = delta?.workspace;
+  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
+  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+}
+function mergeResolvedPaths(workspace) {
+  if (!workspace?.base) return [];
+  try {
+    return listedPaths(workspace.root, ["log", "--merges", "--first-parent", "--format=", "--cc", "--name-only", "-z", `${workspace.base}..HEAD`]);
+  } catch (_) {
+    return [];
+  }
 }
 function normalizedNegativeControlTestName(name) {
   return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1158,9 +1253,9 @@ function completionWorkFacts(slug, ticket) {
   if (!eligible.every(Boolean)) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
-  const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
+  const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed, ...mergeResolvedPaths(delta.workspace)])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
   try {
-    const ownedPaths = (0, import_work_provenance.ownedWorkPaths)(delta.workspace.root, state.workProvenance, changedPaths, (ref) => getTicket(slug, ref));
+    const ownedPaths = (0, import_work_provenance.ownedWorkPaths)(delta.workspace.root, state.workProvenance, changedPaths, (ref) => getTicket(slug, ref), ticket.ref);
     return { ok: true, applicable: true, declaredFiles, changedPaths, ownedPaths, delta, provenance: state.workProvenance };
   } catch (error) {
     return { ok: false, reason: "work_provenance_mismatch", message: error instanceof Error ? error.message : String(error) };
@@ -1178,12 +1273,15 @@ function isBehaviorSourcePath(file) {
   const normalized = file.replace(/\\/g, "/");
   return /\.(?:[cm]?[jt]sx?|py|php|rb|go|rs|java|cs|c|cpp|h|sh|vue|svelte)$/.test(normalized) && !/(?:^|\/)(?:fixtures?|docs?|examples?)(?:\/|$)|\.d\.[cm]?ts$/.test(normalized);
 }
-function ownedControlCheck(ticket, delta, ownedPaths) {
+function mixedChange(paths) {
+  return [paths.some(isTestSidePath), paths.filter((file) => !isTestSidePath(file)).some(isBehaviorSourcePath)].every(Boolean);
+}
+function ownedControlCheck(slug, ticket, delta, ownedPaths) {
   const kind = ticket.dispatch?.workProvenance?.kind;
   if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, negativeControl: "not_required(" + kind + ")" };
-  const mixed = [ownedPaths.some(isTestSidePath), ownedPaths.filter((file) => !isTestSidePath(file)).some(isBehaviorSourcePath)].every(Boolean);
-  if ([!kind, !mixed].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)" };
-  const control = negativeControlResult(ticket, changedTestNames(delta, ownedPaths));
+  const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
+  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)" };
+  const control = negativeControlResult(ticket, own.testNames);
   return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind } : negativeControlRefusal(ticket, control);
 }
 function completionTreeCheck(slug, ticket, opts) {
@@ -1192,7 +1290,7 @@ function completionTreeCheck(slug, ticket, opts) {
   if (!facts.applicable) return facts;
   const emptyWithoutDeclaration = [!facts.changedPaths.length, opts?.explicitNoOp !== true].every(Boolean);
   if ([emptyWithoutDeclaration, facts.provenance?.kind !== "inherited-read-only"].every(Boolean)) return emptyScopeCompletion(ticket, facts.declaredFiles);
-  const control = ownedControlCheck(ticket, facts.delta, facts.ownedPaths);
+  const control = ownedControlCheck(slug, ticket, facts.delta, facts.ownedPaths);
   if (!control.ok) return control;
   return {
     ok: true,
@@ -1390,6 +1488,17 @@ const { correctAcceptedReviewVerdict } = createReviewCorrections({
   getTicket,
   pendingSubmission: pendingSubmissionForTickets,
   isReadOnlyExecutor,
+  submissionReviewRelation,
+  withSourceTicketLock,
+  withTicketLock,
+  createComment,
+  recordBoundReviewOutcome,
+  putTicket,
+  invalidateStoreCaches
+});
+const { finalizeCompletedReview } = createReviewFinalization({
+  getTicket,
+  pendingSubmission: pendingSubmissionForTickets,
   submissionReviewRelation,
   withSourceTicketLock,
   withTicketLock,
@@ -3465,6 +3574,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       deliveryRevision: opts.deliveryRevision,
       resolvedPaths: opts.resolvedPaths,
       verificationSupersession: opts.verificationSupersession,
+      worktree: opts.worktree,
       completingApplyDelivery,
       by,
       reason
@@ -3855,6 +3965,7 @@ module.exports = {
   ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
+  moveProject,
   setProjectNotify,
   setProjectRouting,
   projectRoutingEnabled,
@@ -3868,6 +3979,7 @@ module.exports = {
   appendExperimentEntry,
   applyExperimentVerdict,
   correctAcceptedReviewVerdict,
+  finalizeCompletedReview,
   admitComposition,
   appendOverturnLine,
   experimentPacket,

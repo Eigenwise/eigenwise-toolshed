@@ -2347,7 +2347,7 @@ test('an executor subagent cannot mint a scope grant, force-remove, or correct a
   const cases = [
     { tool_name: 'mcp__plugin_sidequest_board__scopeRequest', tool_input: { ref: 'SQ-1', by: 'orchestrator', grant: true }, reason: /subagents cannot grant a refused scope request/i },
     { tool_name: 'mcp__plugin_sidequest_board__remove', tool_input: { ref: 'SQ-1', force: true }, reason: /subagents cannot force-remove/i },
-    { tool_name: 'mcp__plugin_sidequest_board__verdict', tool_input: { ref: 'SQ-1', correct: true }, reason: /subagents cannot correct finalized review verdicts/i },
+    { tool_name: 'mcp__plugin_sidequest_board__verdict', tool_input: { ref: 'SQ-1', correct: true }, reason: /subagents cannot finalize or correct completed review verdicts/i },
   ];
   for (const { tool_name, tool_input, reason } of cases) {
     const scripts = preToolUseScriptsFor(tool_name);

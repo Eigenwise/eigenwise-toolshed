@@ -390,7 +390,7 @@ function applyExperimentVerdict(slug?: any, idOrRef?: any, input?: any) {
       return {
         ok: false,
         reason: 'no_oracle',
-        message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict, or link a completed review-audit ticket for a high-stakes review pass.`,
+        message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict. For an already-done bound normal review, the main thread uses MCP verdict with finalize (explicit accepted/rejected, exact source/candidate and evidence); a high-stakes integration needs that decision or a linked completed review-audit ticket.`,
       };
     }
     const existing = readExperimentLog(slug, ticket);
