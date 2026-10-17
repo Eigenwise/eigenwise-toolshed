@@ -101,7 +101,7 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
-const VERIFY_CWD_PROP = { type: 'string', description: 'Directory the verify command runs from, relative to the project root. The capture and the integrate gate both honour it; unset runs from the project root.' };
+const VERIFY_CWD_PROP = { type: 'string', description: 'Directory a written verify runs from, relative to the project root, for capture and the integrate gate; a generated suite command runs from the root.' };
 
 const VERIFY_ORACLE_PROP = {
   type: 'string',

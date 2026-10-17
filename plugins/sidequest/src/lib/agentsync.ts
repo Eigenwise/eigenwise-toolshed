@@ -61,7 +61,7 @@ const { worktreeRoot, retainedWorktreeResumeDecision } = require('./worktrees.js
 const { spawnDescription } = store;
 const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
-const { verificationRequirement } = require('./kernel/verification.js');
+const { verificationRequirement, verifyCwdForRequirement } = require('./kernel/verification.js');
 const { scopeKey } = require('./scope-match.js');
 const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require('./sync-check.js');
 
@@ -979,7 +979,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join('\n\n'),
     verify,
-    executorVerificationDirectoryGuidance(ticket.executorVerifyCwd),
+    executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === 'shared'
       ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log."
       : verifierCommand

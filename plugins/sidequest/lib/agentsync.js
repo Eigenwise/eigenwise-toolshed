@@ -11,7 +11,7 @@ const { worktreeRoot, retainedWorktreeResumeDecision } = require("./worktrees.js
 const { spawnDescription } = store;
 const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
-const { verificationRequirement } = require("./kernel/verification.js");
+const { verificationRequirement, verifyCwdForRequirement } = require("./kernel/verification.js");
 const { scopeKey } = require("./scope-match.js");
 const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require("./sync-check.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
@@ -710,7 +710,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join("\n\n"),
     verify,
-    executorVerificationDirectoryGuidance(ticket.executorVerifyCwd),
+    executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === "shared" ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log." : verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
     evidenceGuidance,
     `Lifecycle reference: ${TEMPLATE_PATH} (Execution survival, board transport, and upstream-defect reporting). Follow the lifecycle rules already loaded in your executor definition.`,

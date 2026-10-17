@@ -10,6 +10,7 @@ const { execFileSync } = require('./git-process.js') as typeof import('./git-pro
 const { runOwnedProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
 const { canonicalPath } = require('./kernel/worktree.js') as { canonicalPath(value: string): string };
 const { crossedWorktreeRefusalMessage } = require('./refusal-guidance.js') as typeof import('./refusal-guidance.js');
+const { verifyCwdForRequirement } = require('./kernel/verification.js') as typeof import('./kernel/verification.js');
 
 type CaptureSlotFileSystem = Pick<typeof fs, 'existsSync' | 'mkdirSync' | 'readdirSync' | 'renameSync' | 'rmSync' | 'writeFileSync'>;
 
@@ -35,7 +36,7 @@ type VerificationCaptureStore = Readonly<{
   findProject(project: string): Readonly<{ ok: boolean; slug?: string; meta?: Readonly<{ path?: string }> }>;
   getTicket(slug: string, ticket: string): unknown;
   workingTreeDeliveryCandidate(slug: string, ticket: unknown): Readonly<{ candidate: Readonly<{ source: string; value: string }> }> | null;
-  pinnedVerificationRequirement(ticket: unknown): Readonly<{ command?: string; environment?: 'shared' }>;
+  pinnedVerificationRequirement(ticket: unknown): Readonly<{ command?: string; environment?: 'shared'; suite?: unknown }>;
   recordVerificationCapture(slug: string, ticket: string, capture: Readonly<Record<string, unknown>>): CaptureRecordResult;
   crossedWorktreeBinding(slug: string, ticket: unknown, actualWorktree: string): import('./refusal-guidance.js').CrossedWorktreeBinding | null;
 }>;
@@ -585,7 +586,7 @@ function verifyCommandDirectory(target: CaptureTarget, captureCwd: string): stri
   const project = captureProject(target);
   const store = require('./store.js') as VerificationCaptureStore;
   const ticket = project ? store.getTicket(project.slug, target.ticket) as { executorVerifyCwd?: string } | null : null;
-  const directory = String(ticket?.executorVerifyCwd || '');
+  const directory = ticket ? verifyCwdForRequirement(store.pinnedVerificationRequirement(ticket), ticket.executorVerifyCwd) : '';
   return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
 }
 
