@@ -151,7 +151,7 @@ Larger work is split along cohesive boundaries. A Continuation checkpoint commit
 remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
 
 Quality gates are optional. Run `/quartermaster:setup` and approve the gate proposal to turn one on
-through `.claude/quartermaster/crap.json` and a project live rule. Sidequest discovers the configured
+through `.claude/quality-gate/crap.json` and a project live rule. Sidequest discovers the configured
 gate in the executor briefing; user-injected rules still apply. Without a gate, run the pinned verifier,
 state once "no quality gate is configured for this project; Quartermaster setup can add one", and continue.
 Gate absence never holds integration or marks work UNVERIFIED.

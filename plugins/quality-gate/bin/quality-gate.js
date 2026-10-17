@@ -46,6 +46,7 @@ Without a command, existing LCOV requires a sibling <lcov>.sources.json SHA-256 
 from the same-byte coverage capture.
 --coverage-command captures source hashes and requires fresh LCOV. It sets QUALITY_GATE_COVERAGE_DIR
 and QUARTERMASTER_COVERAGE_DIR to an empty isolated directory; write lcov.info there.
+$VAR, \${VAR} and %VAR% in the command expand before it runs, on every platform.
 Existing explicit or fallback output must be rewritten during the command. Missing or
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.

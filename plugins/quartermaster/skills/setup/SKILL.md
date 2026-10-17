@@ -151,8 +151,9 @@ handing off implementation. Draw from three sources, in this order:
     function's branching complexity and test coverage together, so big untested functions stand out.
     The gate is opt-in; an unconfigured project runs its tests and continues. Show the detected
     stack's LCOV recipe from [references/crap-gate.md](references/crap-gate.md), the proposed
-    `.claude/quartermaster/crap.json`, the derived `.claude/live-rules/rules/crap-gate.md`, and the
-    exact gate command and its cost (the analyzer, LCOV setup, and coverage execution). Only write
+    `.claude/quality-gate/crap.json`, the derived `.claude/live-rules/rules/crap-gate.md`, and the
+    exact gate command and its cost (the quality-gate plugin, LCOV setup, and coverage execution).
+    quality-gate does the scoring; Quartermaster only sets it up. Only write
     the config and live rule after approval. The gate owns the threshold; keep numbers out of
     executor and orchestrator instructions.
     The gate is an on-demand command, never a per-turn blocking hook; see "What the gate is not" in
@@ -187,8 +188,8 @@ nothing that needs a plugin loaded happens until after the activation boundary.
 
 - Install approved plugins with `claude plugin install <name>@<marketplace> --scope project`.
 - Write the approved artifacts: live rules under `.claude/live-rules/rules/*.md` via live-rules'
-  documented atomic format (or its `add-rule` skill after reload), `.claude/quartermaster/crap.json`
-  and `.claude/live-rules/rules/crap-gate.md` when the CRAP gate is approved, `permissions.allow`
+  documented atomic format (or its `add-rule` skill after reload), `.claude/quality-gate/crap.json`
+  and `.claude/live-rules/rules/crap-gate.md` when the CRAP gate is approved (plus the quality-gate plugin install), `permissions.allow`
   entries in `.claude/settings.json`, a structure note for greenfield projects per
   [references/structure-notes.md](references/structure-notes.md), and optionally a lightweight
   CLAUDE.md seeded through the built-in `/init`.
@@ -203,7 +204,7 @@ enabled at its requested scope. Then verify each piece is actually usable, not j
 build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
 is visibly injected in your context, bring up the sidequest board if selected, and check each
 LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap`
-from `${CLAUDE_PROJECT_DIR}` once and report the real result: pass, fail with its offender
+(it runs the installed quality-gate) from `${CLAUDE_PROJECT_DIR}` once and report the real result: pass, fail with its offender
 count, or exit 2 with the missing prerequisite. Do not say the gate is live before that command ran.
 If model-gateway is installed but unwired, point at its skill rather than wiring it yourself. Fix what
 fails and re-verify; report what you confirmed, concretely.
