@@ -120,48 +120,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      # The cache key must track COLLECTOR_VERSION. A hardcoded version would keep
-      # hitting on a bump, find the old binary already present, skip the download,
-      # and silently validate our config against the wrong Collector.
-      - name: Resolve pinned Collector version
-        id: collector-version
-        if: matrix.name == 'observability' && matrix.affected
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./plugins/observability/bin/setup-observability.js').COLLECTOR_VERSION")"
-          [ -n "$version" ] && [ "$version" != undefined ] || { echo "COLLECTOR_VERSION is not exported" >&2; exit 1; }
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-      - name: Cache pinned OpenTelemetry Collector
-        if: matrix.name == 'observability' && matrix.affected
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/otelcol-contrib
-          key: otelcol-contrib-${{ steps.collector-version.outputs.version }}-${{ matrix.os }}-amd64
-      - name: Provision pinned OpenTelemetry Collector
-        if: matrix.name == 'observability' && matrix.affected
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v cygpath >/dev/null 2>&1; then
-            cache_dir="$(cygpath -u "$RUNNER_TEMP")/otelcol-contrib"
-            binary_path="$(cygpath -w "$cache_dir/collector/otelcol-contrib.exe")"
-          else
-            cache_dir="$RUNNER_TEMP/otelcol-contrib"
-            binary_path="$cache_dir/collector/otelcol-contrib"
-          fi
-          mkdir -p "$cache_dir"
-          if [ ! -f "$binary_path" ]; then
-            export COLLECTOR_CACHE_DIR="$cache_dir"
-            node --input-type=commonjs - <<'NODE'
-          const { downloadCollector } = require('./plugins/observability/bin/setup-observability.js');
-          downloadCollector({ dataDir: process.env.COLLECTOR_CACHE_DIR }).catch((error) => {
-            console.error(error);
-            process.exitCode = 1;
-          });
-          NODE
-          fi
-          printf 'WORKBENCH_OTELCOL_CONTRIB=%s\n' "$binary_path" >> "$GITHUB_ENV"
       - name: Test affected plugin
         shell: bash
         env:
