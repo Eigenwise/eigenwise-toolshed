@@ -1,4 +1,6 @@
 "use strict";
+const { currentBoardPath } = require("./move.js");
+"use strict";
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
 const { readLockHolder } = require("./locks.js");
@@ -3279,6 +3281,7 @@ ${parts.join("\n\n")}` });
     return existingGateCheckout(slug, "");
   }
   function existingGateCheckout(slug, isolatedWorktree) {
+    isolatedWorktree = currentBoardPath(readMeta(slug), isolatedWorktree);
     return { ok: true, cwd: isolatedWorktree || readMeta(slug).path, isolatedWorktree, tree: null, remove: () => {
     } };
   }

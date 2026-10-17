@@ -1,6 +1,6 @@
 # Directory structure
 
-Last Updated: 2026-10-08
+Last Updated: 2026-10-17
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
@@ -9,7 +9,7 @@ Last Updated: 2026-10-08
 - `plugins/model-gateway/`: local model gateway CLI, registry hook, skills, and tests; `lib/` holds the shim/worker runtime, the per-model policy table, process supervision, the Windows detached launcher, lifecycle diagnostics, cache-sibling identity checks, bounded owner resolution, and full-width POSIX process probes.
 - `plugins/live-rules/`: rule-management skills and prompt/edit/session hooks.
 - `plugins/codebase-mapper/`: map-generation/update skills and context injection hooks.
-- `plugins/quartermaster/`: workspace setup and resupply skills (`setup`, `resupply`), the `update-toolshed` and `toolshed-doctor` skills, updater and workspace-plugin installers under `bin/`, transcript miner CLI under `bin/quartermaster.js`, streaming signal collector under `lib/`, a language-agnostic CRAP (Change Risk Anti-Patterns) gate under `lib/crap.js` exposed as `bin/quartermaster.js crap` (`skills/setup/references/crap-gate.md`), a SessionEnd tally hook, and SessionStart hooks that inject the capability-capture charter every session (skipped where setup seeded the self-improvement live rule) plus a threshold-gated offer of a user-approved optimization round, a Stop hook that re-raises an overdue offer once per session at turn end, and a separate Stop freshness/update check plus compaction-window diagnostics and billing-path checks. Setup seeds an adapted reuse-first implementation baseline and self-improvement rule into each approved workspace.
+- `plugins/quartermaster/`: workspace setup and resupply skills (`setup`, `resupply`), the `update-toolshed` and `toolshed-doctor` skills, updater and workspace-plugin installers under `bin/`, transcript miner CLI under `bin/quartermaster.js`, streaming signal collector under `lib/`, a `crap` subcommand that delegates to the installed quality-gate plugin (`lib/quality-gate.js`; `lib/crap-core.cjs` remains for `scripts/quality`), a SessionEnd tally hook, and SessionStart hooks that inject the capability-capture charter every session (skipped where setup seeded the self-improvement live rule) plus a threshold-gated offer of a user-approved optimization round, a Stop hook that re-raises an overdue offer once per session at turn end, and a separate Stop freshness/update check plus compaction-window diagnostics and billing-path checks. Setup seeds an adapted reuse-first implementation baseline and self-improvement rule into each approved workspace.
 - `plugins/quality-gate/`: dedicated complexity/coverage CLI, shared TypeScript AST core, LCOV/source-hash validation, versioned stdlib Python adapter under `lib/python/`, and regression fixtures/tests. Receipts and measurement configuration are project-local, not committed tooling setup.
 - `plugins/test-support/`: JavaScript test scanner shared by Quartermaster, Observability, and Model Gateway tests.
 - `docs/`: Astro/Starlight prose, generated reference source, scripts, and synthetic screenshots.

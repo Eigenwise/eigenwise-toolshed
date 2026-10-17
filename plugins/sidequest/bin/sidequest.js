@@ -16,7 +16,7 @@ const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./s
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require("./sidequest-cmd-configuration");
 const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
-const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
+const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge, cmdMoveBoard } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "add-file", "remove-file", "resolved-path", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface", "dependency"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label", "add-files": "add-file", "remove-files": "remove-file" };
@@ -73,6 +73,7 @@ const COMMAND_FLAGS = {
   models: ["full"],
   route: ["ticket"],
   "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
+  board: [],
   projects: ["archived"],
   routing: ["enabled", "disabled"],
   "archive-board": [],
@@ -85,7 +86,7 @@ const COMMAND_FLAGS = {
   serve: ["port", "handoff-pid"],
   stop: []
 };
-const COMMAND_ALIASES = { new: "add", ticket: "add", ls: "list", edit: "update", set: "update", remove: "rm", delete: "rm", complete: "done", finish: "done", open: "dashboard", board: "dashboard" };
+const COMMAND_ALIASES = { new: "add", ticket: "add", ls: "list", edit: "update", set: "update", remove: "rm", delete: "rm", complete: "done", finish: "done", open: "dashboard" };
 const MUTATING_COMMANDS = /* @__PURE__ */ new Set([
   "add",
   "new",
@@ -150,6 +151,7 @@ function boardConfigOptionsMutate(_positional, opts) {
   return BOARD_CONFIG_MUTATING_OPTIONS.some((key) => Object.hasOwn(opts, key));
 }
 const SUBCOMMAND_MUTATES = {
+  board: (positional) => positional[0] === "move",
   claims: (positional) => positional[0] === "sweep",
   "native-agent": nativeAgentSubcommandMutates,
   native_agent: nativeAgentSubcommandMutates,
@@ -311,6 +313,7 @@ const HELP_COMMANDS = {
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json",
+  board: "sidequest board move <old-path> <new-path> [--json]. Refuses active claims, nonterminal dispatches, sweep flights, a non-Git target, or an occupied target.",
   "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment isolated|shared] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
@@ -528,6 +531,7 @@ Project selection:
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.
     --verify-environment shared pins the command or suite verifier of each new isolated dispatch to run in the
     shared checkout at integrate instead of in the executor's worktree; in-flight dispatches keep their pin.
+  sidequest board move <old-path> <new-path>   move a board after its repository folder moves (wait for all claims, dispatches and sweeps to finish)
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.
@@ -535,6 +539,10 @@ Project selection:
 Tickets and their images are stored centrally (default ~/.claude/sidequest), so
 one dashboard shows every project's board at once.`
   );
+}
+async function cmdBoard(opts, positional) {
+  if (positional[0] === "move") await cmdMoveBoard(opts, positional.slice(1));
+  else await cmdDashboard(opts);
 }
 async function main() {
   const argv = process.argv.slice(2);
@@ -555,6 +563,9 @@ async function main() {
   assertCommandFlags(cmd, opts);
   if (commandMutates(cmd, opts, positional)) assertMutationFreshness(opts);
   switch (cmd) {
+    case "board":
+      await cmdBoard(opts, positional);
+      break;
     case "add":
     case "new":
     case "ticket":
@@ -746,7 +757,6 @@ async function main() {
       break;
     case "dashboard":
     case "open":
-    case "board":
       await cmdDashboard(opts);
       break;
     case "serve":
