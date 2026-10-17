@@ -991,10 +991,25 @@ function combinedChangedLines(hunk) {
 function changedLines(hunk) {
   return hunk.width > 1 ? combinedChangedLines(hunk) : unifiedChangedLines(hunk);
 }
+const BLANK_OR_COMMENT_LINE = /^\s*(?:$|\/\/|\/\*|\*|#)/;
+function definitionAheadInRun(changed, index, definedAt) {
+  for (let next = index; changed[next]?.line === changed[index].line + next - index; next += 1) {
+    const { line, text } = changed[next];
+    if (!BLANK_OR_COMMENT_LINE.test(text)) return definedAt.get(line) ?? testDefinitionName(text, true);
+  }
+  return null;
+}
 function diffTestNames(source, diff) {
   const definitions = testDefinitions(source);
+  const definedAt = new Map(definitions.map((entry) => [entry.line, entry.name]));
   const nearest = (line) => definitions.filter((entry) => entry.line <= line).at(-1)?.name;
-  return diffHunks(diff).flatMap(changedLines).flatMap((changed) => [testDefinitionName(changed.text, true), nearest(changed.line)]);
+  return diffHunks(diff).flatMap((hunk) => {
+    const changed = changedLines(hunk);
+    return changed.flatMap((entry, index) => [
+      testDefinitionName(entry.text, true),
+      definitionAheadInRun(changed, index, definedAt) ?? nearest(entry.line)
+    ]);
+  });
 }
 function gitOutput(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });

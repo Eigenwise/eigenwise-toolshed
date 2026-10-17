@@ -128,3 +128,72 @@ test('negative controls ignore regex .test() calls with a string literal argumen
   assert.doesNotMatch(refusal.message, /runInherit/);
   assert.doesNotMatch(refusal.message, /not a declaration/);
 });
+
+const definition = 'test';
+const firstExistingTest = 'existing test above the insertion';
+const secondExistingTest = 'existing test below the insertion';
+const twoTestBaseline = [
+  `${definition}('${firstExistingTest}', () => {`,
+  '  assert.ok(true);',
+  '});',
+  '',
+  `${definition}('${secondExistingTest}', () => {`,
+  '  assert.ok(true);',
+  '});',
+  '',
+];
+
+function claimAgainstTwoTestBaseline(by: string) {
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), twoTestBaseline.join('\n'));
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '--allow-empty', '-m', `two-test baseline for ${by}`]);
+  const ticket = createClaimedMixedChangeTicket(by);
+  // A source value no earlier fixture ticket left keeps this ticket's change its own.
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = '${by}';\n`);
+  return ticket;
+}
+
+function writeFixtureTestWith(insertAfterLine: number, inserted: string[]) {
+  const lines = [...twoTestBaseline];
+  lines.splice(insertAfterLine, 0, ...inserted);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), lines.join('\n'));
+}
+
+function verifyComplete(ticketRef: string, by: string) {
+  return store.addComment(slug, ticketRef, { by, body: '[sidequest:verify-complete] passed: fixture verification passed.', source: 'mcp' });
+}
+
+test('GH-547: a comment above a newly inserted test belongs to the new test, not the test above it', () => {
+  const by = 'gh-547-leading-comment';
+  const ticket = claimAgainstTwoTestBaseline(by);
+  const insertedTestName = 'inserted test with a leading comment';
+  writeFixtureTestWith(3, [
+    '',
+    '// why the inserted test exists',
+    `${definition}('${insertedTestName}', () => {`,
+    '  assert.ok(true);',
+    '});',
+  ]);
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = verifyComplete(ticket.ref, by);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(insertedTestName));
+  assert.doesNotMatch(refusal.message, new RegExp(firstExistingTest));
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: `[sidequest:negative-control-test] failed ${insertedTestName}`, source: 'mcp' }).ok, true);
+  const accepted = verifyComplete(ticket.ref, by);
+  assert.equal(accepted.ok, true, accepted.message);
+});
+
+test('GH-547: a comment added inside an existing test body still charges that test', () => {
+  const by = 'gh-547-comment-in-body';
+  const ticket = claimAgainstTwoTestBaseline(by);
+  writeFixtureTestWith(6, ['  // why the extra assertion matters', '  assert.equal(1, 1);']);
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = verifyComplete(ticket.ref, by);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(secondExistingTest));
+  assert.doesNotMatch(refusal.message, new RegExp(firstExistingTest));
+});

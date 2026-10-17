@@ -980,14 +980,32 @@ function changedLines(hunk: DiffHunk) {
   return hunk.width > 1 ? combinedChangedLines(hunk) : unifiedChangedLines(hunk);
 }
 
-// The tests a diff added or modified: a definition on a changed line, and the definition nearest
-// above each changed line.
+const BLANK_OR_COMMENT_LINE = /^\s*(?:$|\/\/|\/\*|\*|#)/;
+
+// Blank and comment lines that open a run of added lines introduce the test the run goes on to define,
+// so they belong to it and not to the test above them (GH-547). Null when the run reaches code that
+// defines no test, which leaves the line to the test it was added inside.
+function definitionAheadInRun(changed: ChangedLine[], index: number, definedAt: Map<number, string>) {
+  for (let next = index; changed[next]?.line === changed[index]!.line + next - index; next += 1) {
+    const { line, text } = changed[next]!;
+    if (!BLANK_OR_COMMENT_LINE.test(text)) return definedAt.get(line) ?? testDefinitionName(text, true);
+  }
+  return null;
+}
+
+// The tests a diff added or modified: a definition on a changed line, the definition a leading
+// comment introduces, and otherwise the definition nearest above each changed line.
 function diffTestNames(source: string, diff: string) {
   const definitions = testDefinitions(source);
+  const definedAt = new Map(definitions.map((entry) => [entry.line, entry.name]));
   const nearest = (line: number) => definitions.filter((entry) => entry.line <= line).at(-1)?.name;
-  return diffHunks(diff)
-    .flatMap(changedLines)
-    .flatMap((changed) => [testDefinitionName(changed.text, true), nearest(changed.line)]);
+  return diffHunks(diff).flatMap((hunk) => {
+    const changed = changedLines(hunk);
+    return changed.flatMap((entry, index) => [
+      testDefinitionName(entry.text, true),
+      definitionAheadInRun(changed, index, definedAt) ?? nearest(entry.line),
+    ]);
+  });
 }
 
 function gitOutput(root: string, args: string[]): string {
