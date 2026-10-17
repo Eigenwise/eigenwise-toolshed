@@ -641,10 +641,12 @@ function briefingCommentBody(comments) {
 function configuredQualityGateBody(projectPath, slug) {
   const project = projectPath || store.readMeta(slug)?.path;
   if (!project) return "Configured quality gate: none.";
-  const configPath = path.join(project, ".claude", "quartermaster", "crap.json");
+  const qualityGateConfig = path.join(project, ".claude", "quality-gate", "crap.json");
+  const quartermasterConfig = path.join(project, ".claude", "quartermaster", "crap.json");
+  const configPath = fs.existsSync(qualityGateConfig) ? qualityGateConfig : quartermasterConfig;
   if (!fs.existsSync(configPath)) return "Configured quality gate: none.";
-  const { command = 'node "<quartermaster plugin root>/bin/quartermaster.js" crap', max = "gate-owned", threshold = max, base = "gate-selected default" } = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}`;
+  const { command = 'node "<quality-gate plugin root>/bin/quality-gate.js" crap', max = "gate-owned", threshold = max, base = "gate-selected default" } = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}. Legacy bodies whose complexity did not rise are informational and never fail.`;
 }
 function legacyVerificationText(value) {
   return String(value || "").trim();
