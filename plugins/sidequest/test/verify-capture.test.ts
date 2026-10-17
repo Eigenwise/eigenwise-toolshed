@@ -69,12 +69,15 @@ function runCaptureProcess(command: string | null, project: string, ticket: stri
   });
 }
 
-async function waitForFile(filePath: string): Promise<void> {
-  for (let attempts = 0; attempts < 100; attempts += 1) {
+// The capture has to start node, open the board, run git and spawn npm before its script writes
+// the file; on a loaded Windows runner that alone took more than the old 2 s poll budget.
+async function waitForFile(filePath: string, budgetMs = 30_000): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
     if (fs.existsSync(filePath)) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`Timed out waiting for ${filePath}`);
+  throw new Error(`Timed out waiting for ${filePath} after ${budgetMs}ms`);
 }
 
 // The blocker holds the slot until a second waiter has joined, then 700ms more, so the

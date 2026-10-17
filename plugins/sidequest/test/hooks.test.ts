@@ -3033,14 +3033,17 @@ test('session-end reclaims an unbound old patch-equivalent worktree and stays fa
 
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
   // The hook hands the sweep to a detached worker (GH-439), so the reclaim lands after it returns.
+  // The worker keeps running git in the project after the reclaim is visible and holds the sweep
+  // lock until it is done; removing the project before then hits EBUSY on a loaded Windows runner.
+  const sweepLock = path.join(SIDEQUEST_HOME, 'worktree-sweep.lock');
   const deadline = Date.now() + waitForPathDefaultBudgetMs() * 4;
-  while (Date.now() < deadline && (fs.existsSync(worktree) || projectGit(['branch', '--list', branch]) !== '')) {
+  while (Date.now() < deadline && (fs.existsSync(worktree) || projectGit(['branch', '--list', branch]) !== '' || fs.existsSync(sweepLock))) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(fs.existsSync(worktree), false);
   assert.equal(projectGit(['branch', '--list', branch]), '');
+  assert.equal(fs.existsSync(sweepLock), false, 'the session-end sweep finished before the project is removed');
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
-  // The detached worker can still be exiting after its reclaim is visible, holding a Windows handle on the project.
   fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
