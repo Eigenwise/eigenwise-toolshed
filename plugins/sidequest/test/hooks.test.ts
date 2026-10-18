@@ -4075,7 +4075,8 @@ test('pre-tool hooks: a plain user Bash call gets no output from any Sidequest g
   const bashHooks = groups
     .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test('Bash'))
     .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
-  assert.ok(bashHooks.length >= 4, `expected the Bash command-hook guard set, got ${bashHooks.length}`);
+  // The git and text guards run in the hooks module now; force-exec-bypass is the Bash command hook left.
+  assert.ok(bashHooks.length >= 1, `expected the Bash command-hook guard set, got ${bashHooks.length}`);
   for (const hook of bashHooks) {
     const out = runHookOutput(hook, { session_id: 'plain-user', cwd: project, tool_name: 'Bash', tool_input: { command: 'ls' } }, { SIDEQUEST_HOME: home });
     assert.equal(out, null, path.basename(hook));
