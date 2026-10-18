@@ -31,6 +31,6 @@ Model Gateway's `lib/tool-schema-compat.js` performs bounded Codex-only schema a
 
 The dashboard has a project rail, toolbar, board views, archive, ticket/settings/notification surfaces, a guided tour (`app/src/lib/components/tour/TourOverlay.svelte`, `app/src/lib/tour/steps.ts`, `app/src/lib/state/tour.svelte.ts`), and a polling state layer. It communicates with the local server through `app/src/lib/api.ts`; it does not access SQLite directly.
 
-- Sidequest guards:  owns PreToolUse registration and text, context, Git, admission, snapshot, and heredoc guards. Store modules persist dispatch snapshots and ticket external references.
+- Sidequest guards: `plugins/sidequest/hooks/guards/` is one hooks module that owns PreToolUse registration and the text, context, Git, admission, snapshot, and heredoc guards; `guard-worktree-isolation`, `bind-runtime-identity` and `quota-fallback` stay command hooks because they write to the store. Store modules persist dispatch snapshots and ticket external references.
 - Observability (): Claude Code hooks append opted-in per-project JSONL usage records under the Claude config directory;  generates a self-contained board.
 - Quartermaster (): setup, resupply, transcript mining, updater, and health checks. Scoring delegates to Quality Gate; no local scorer or CI checker remains.
