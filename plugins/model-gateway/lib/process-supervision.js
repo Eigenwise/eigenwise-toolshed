@@ -294,6 +294,12 @@ function processInfoSync(pid) {
     : commandResultSync('ps', ['-ww', '-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
   return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
 }
+function processTableParentPid(value) {
+  if (!Number.isSafeInteger(value)) return undefined;
+  if (value < 0) return undefined;
+  // Preserve a proven root separately from missing or malformed parent data.
+  return value === 0 ? null : value;
+}
 function processTableFromOutput(output) {
   if (WIN) {
     try {
@@ -302,7 +308,7 @@ function processTableFromOutput(output) {
         .filter((entry) => entry?.ProcessId)
         .map((entry) => [Number(entry.ProcessId), {
           command: entry.CommandLine || '',
-          parentPid: Number(entry.ParentProcessId) || null,
+          parentPid: processTableParentPid(entry.ParentProcessId),
           pid: Number(entry.ProcessId),
           startedAt: entry.CreationDate || null,
         }]));
@@ -310,7 +316,7 @@ function processTableFromOutput(output) {
   }
   return new Map(String(output).trim().split(/\r?\n/).map((line) => {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/);
-    return match ? [Number(match[1]), { command: match[4], parentPid: Number(match[2]) || null, pid: Number(match[1]), startedAt: match[3] }] : null;
+    return match ? [Number(match[1]), { command: match[4], parentPid: processTableParentPid(Number(match[2])), pid: Number(match[1]), startedAt: match[3] }] : null;
   }).filter(Boolean));
 }
 function processTableSync() {
@@ -617,15 +623,39 @@ async function killPidAsync(pid, { trusted = false, terminate = null, ...ownersh
   if (stillOwned !== true) return stillOwned;
   return forceTerminateProcess(pid);
 }
-function reapGatewayOrphans(supervisorPid = null) {
-  const reaped = [];
-  const processes = supervisorPid ? processTableSync() : null;
-  for (const name of ['guardian', 'shim', 'proxy']) {
-    const pid = recordedGatewayPid(name);
-    if (!pid || (processes && isDescendantInProcessTable(pid, supervisorPid, processes))) continue;
-    if (killPid(pid, { name, record: readPidRecord(name) })) reaped.push(pid);
+// Unlike the positive descendant check, orphan cleanup needs proof of absence:
+// a missing node or a cycle is unknown, not evidence that a process is unrelated.
+function isConfirmedOrphan(pid, supervisorPid, processes) {
+  const visited = new Set();
+  let currentPid = pid;
+  while (currentPid !== null) {
+    if (currentPid === supervisorPid) return false;
+    if (visited.has(currentPid)) return false;
+    const entry = processes.get(currentPid);
+    if (!entry) return false;
+    visited.add(currentPid);
+    currentPid = entry.parentPid;
   }
-  return reaped;
+  return true;
+}
+function orphanReapingFilter(supervisorPid) {
+  // Only explicit unprotected cleanup may proceed without an ancestry snapshot.
+  if (supervisorPid === null) return () => true;
+  const processes = processTableSync();
+  if (!processes?.has(supervisorPid)) return null;
+  return (pid) => isConfirmedOrphan(pid, supervisorPid, processes);
+}
+function reapRecordedOrphan(name, canReap) {
+  const pid = recordedGatewayPid(name);
+  if (!pid || !canReap(pid)) return null;
+  return killPid(pid, { name, record: readPidRecord(name) }) ? pid : null;
+}
+function reapGatewayOrphans(supervisorPid = null) {
+  const canReap = orphanReapingFilter(supervisorPid);
+  if (!canReap) return [];
+  return ['guardian', 'shim', 'proxy']
+    .map((name) => reapRecordedOrphan(name, canReap))
+    .filter((pid) => pid !== null);
 }
 async function stopAll({ report = console.log, resolveOwner = resolvePortOwner } = {}) {
   const owner = await resolveOwner(PUBLIC_SHIM_PORT);

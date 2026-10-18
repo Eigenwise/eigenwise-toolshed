@@ -241,6 +241,15 @@ or User-scope edits cannot be promised to win. Disabling stays available.
 `stopped`. `ensure` leaves `running-ours` at the installed version alone and succeeds, waits up to its startup
 window for `starting` before replacing anything, and refuses `running-foreign`.
 
+The keep-running startup path, selected after confirming a current-version healthy shim, does not reap
+processes or retire PID records. Concurrent SessionStart calls therefore do not trigger destructive cleanup
+from that path. This is not a read-only guarantee for all startup probes or the whole `ensure` command:
+ownership probes can still validate/retire records, settings/cache refresh and version reconciliation still
+run, and prolonged health failures can still lead to replacement. Protected orphan cleanup skips unusable
+process snapshots and candidates with missing or cyclic ancestry; it never treats uncertain ancestry as
+proof of an orphan. Explicit stop/restart cleanup remains available. These protections do not serialize
+concurrent upgrades or cold starts, or make PID-record updates transactional.
+
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
 date. It includes Codex, Grok, and native Claude pin rows. Its model-id check is useful for stale shim ids,

@@ -700,6 +700,95 @@ test('isolated ensure preserves a foreign serve-shim process and cleans its own 
   assert.equal(processIsRunning(guardianPid), false, 'sync fixture cleanup stopped its supervisor');
 });
 
+function openHeldGatewayStream(port) {
+  let client;
+  let receivedChunk;
+  const firstChunk = new Promise((resolve) => { receivedChunk = resolve; });
+  const completed = new Promise((resolve, reject) => {
+    client = http.request({ host: '127.0.0.1', port, path: '/v1/messages', method: 'POST', headers: { 'content-type': 'application/json' } }, (response) => {
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; receivedChunk(); });
+      response.once('end', () => resolve({ status: response.statusCode, body }));
+      response.once('error', reject);
+    });
+    client.once('error', reject);
+    client.setTimeout(60000, () => client.destroy(new Error('fixture stream timed out')));
+    client.end(JSON.stringify({ model: 'claude-native-fixture', stream: true, messages: [{ role: 'user', content: 'lifecycle fixture' }] }));
+  });
+  // Observe early failure even while the test is waiting for the first SSE chunk.
+  completed.catch(() => {});
+  return { client, completed, started: Promise.race([firstChunk, completed]) };
+}
+
+test('concurrent healthy CLI ensures preserve an open stream and leave stale PID records alone', async (t) => {
+  let heldResponse;
+  const upstream = http.createServer((request, response) => {
+    if (request.url === '/v1/models') return response.end(JSON.stringify({ data: [{ id: 'gpt-6-astra' }] }));
+    request.resume();
+    request.once('end', () => {
+      if (heldResponse) return response.end(JSON.stringify({ type: 'message', content: [] }));
+      heldResponse = response;
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+  const environment = gatewayTestEnvironment(t, {
+    CODEX_GATEWAY_PROXY_PORT: String(upstreamPort),
+    CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${upstreamPort}`,
+    CODEX_GATEWAY_USAGE_ENDPOINT: '0',
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+    CODEX_GATEWAY_PROBE_TIMEOUT_MS: '20000',
+  });
+  installNodeProxy(environment.HOME);
+  const supervisor = await startGateway(t, 'serve-shim', environment);
+  const state = path.join(environment.HOME, '.claude', 'model-gateway');
+  const workerPid = await waitForPidRecord(path.join(state, 'shim.pid'));
+  await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), workerPid);
+  const unrelated = spawnGatewayProcess(t, process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env: environment, stdio: 'ignore' });
+  const proxyPidFile = path.join(state, 'proxy.pid');
+  const proxyDetailsFile = path.join(state, 'proxy.pid.json');
+  const staleDetails = JSON.stringify({ pid: unrelated.pid, command: 'retired proxy fixture' });
+  fs.writeFileSync(proxyPidFile, String(unrelated.pid));
+  fs.writeFileSync(proxyDetailsFile, staleDetails);
+  const stream = openHeldGatewayStream(supervisor.port);
+  try {
+    await stream.started;
+    assert.ok(heldResponse, 'the synthetic upstream stream is open before ensure starts');
+    const cliEnvironment = {
+      ...environment,
+      CODEX_GATEWAY_PORT: String(supervisor.port),
+      CODEX_GATEWAY_WORKER_PORT: String(supervisor.port),
+    };
+    const results = await Promise.all(Array.from({ length: 5 }, () => runGatewayCli(CLI, 'ensure', cliEnvironment, {
+      arguments: ['--quiet'], cwd: environment.HOME,
+    })));
+    for (const result of results) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stdout + result.stderr, /could not start|still starting|pid record .*retired/);
+    }
+    heldResponse.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    const response = await stream.completed;
+    assert.equal(response.status, 200);
+    assert.match(response.body, /event: message_start/);
+    assert.match(response.body, /event: message_stop/);
+    assert.equal(supervisor.child.exitCode, null, 'the original supervisor remains alive');
+    assert.equal(Number(fs.readFileSync(path.join(state, 'shim.pid'), 'utf8')), workerPid, 'the original worker remains recorded');
+    assert.equal(processIsRunning(unrelated.pid), true, 'the stale record never authorizes stopping an unrelated process');
+    assert.equal(fs.existsSync(proxyPidFile), true, 'health-confirmed ensure does not retire stale records');
+    assert.equal(fs.readFileSync(proxyDetailsFile, 'utf8'), staleDetails);
+    assert.equal(fs.existsSync(path.join(state, 'shim-supervisor-failure.txt')), false);
+    assert.equal(await request(supervisor.port, codexMessage()), 200, 'the listener serves another request');
+  } finally {
+    stream.client.destroy();
+    heldResponse?.end();
+    // Fixture teardown must not interpret intentionally stale records as cleanup authority.
+    fs.rmSync(proxyPidFile, { force: true });
+    fs.rmSync(proxyDetailsFile, { force: true });
+  }
+});
+
 test('sibling ensure retires dead records without deleting replacement worker and proxy records', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-record-replacement-'));
   const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
@@ -1215,6 +1304,151 @@ test('supervisor shutdown reaps a timed probe child before fixture cleanup', asy
   await waitForExit(supervisor);
   await waitForProcessesToExit(probePids);
   assert.doesNotThrow(() => fs.rmSync(home, { recursive: true, force: true }));
+});
+
+function processProbeOutput(entries, single, windows) {
+  if (windows) {
+    const values = entries.map(({ pid, parentPid, command }) => ({
+      ProcessId: pid, ParentProcessId: parentPid, CommandLine: command, CreationDate: 'fixture-start',
+    }));
+    return JSON.stringify(single ? values[0] : values);
+  }
+  return entries.map(({ pid, parentPid, command }) => `${pid} ${parentPid ?? 0} Sun Oct 18 00:00:00 2026 ${command}`).join('\n');
+}
+
+function fixtureProcessProbePid(command, args) {
+  assert.ok(['ps', 'powershell.exe'].includes(command), command);
+  if (command === 'ps') return Number(args[args.indexOf('-p') + 1]);
+  return Number(args.at(-1).match(/ProcessId = (\d+)/)?.[1]);
+}
+
+function fixtureProcessTableResult(rows, live, windows) {
+  if (rows === null) return { status: 1, stdout: '' };
+  if (typeof rows === 'string') return { status: 0, stdout: rows };
+  const entries = rows.map(([pid, parentPid]) => ({
+    ...live.get(pid), pid, parentPid, command: live.get(pid)?.command || 'fixture-parent',
+  }));
+  return { status: 0, stdout: processProbeOutput(entries, false, windows) };
+}
+
+// Exercise the real reaper and process-table parser, but intercept every PID-file
+// operation, process probe and signal. Fake PIDs must never reach the OS.
+function orphanReaperHarness(t, rows, { foreignPid = null, failedSignalPid = null, windows = process.platform === 'win32' } = {}) {
+  const runtime = require('../lib/runtime.js');
+  const { STATE } = runtime;
+  const live = new Map([701, 702, 703].map((pid) => [pid, {
+    pid, parentPid: 1, command: `${process.execPath} "${CLI}" serve-worker`,
+  }]));
+  const records = new Map();
+  for (const [name, pid] of [['guardian', 701], ['shim', 702], ['proxy', 703]]) {
+    records.set(path.join(STATE, `${name}.pid`), String(pid));
+    records.set(path.join(STATE, `${name}.pid.json`), JSON.stringify({ pid, command: live.get(pid).command }));
+  }
+  if (foreignPid !== null) live.get(foreignPid).command = 'unrelated-fixture';
+  const pidReads = [];
+  const signals = [];
+  const inspections = [];
+  const readFile = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (file, ...options) => {
+    if (!records.has(file)) return readFile(file, ...options);
+    pidReads.push(path.basename(file));
+    return records.get(file);
+  });
+  t.mock.method(fs, 'rmSync', (file) => { assert.ok(records.has(file)); records.delete(file); });
+  t.mock.method(fs, 'writeFileSync', (file, value) => { assert.ok(records.has(file)); records.set(file, value); });
+  const signal = (pid) => { signals.push(pid); return pid !== failedSignalPid; };
+  t.mock.method(process, 'kill', (pid) => {
+    if (!signal(pid)) throw new Error('fixture signal refused');
+    return true;
+  });
+  t.mock.method(require('node:child_process'), 'spawnSync', (command, args) => {
+    if (command === 'taskkill') return { status: signal(Number(args[1])) ? 0 : 1 };
+    const pid = fixtureProcessProbePid(command, args);
+    if (pid) {
+      inspections.push(pid);
+      return { status: 0, stdout: processProbeOutput([live.get(pid)], true, windows) };
+    }
+    return fixtureProcessTableResult(rows, live, windows);
+  });
+  const modulePath = require.resolve('../lib/process-supervision.js');
+  const cached = require.cache[modulePath];
+  const originalWindows = runtime.WIN;
+  delete require.cache[modulePath];
+  try {
+    runtime.WIN = windows;
+    const { reapGatewayOrphans } = require(modulePath);
+    return { reap: reapGatewayOrphans, signals, pidReads, inspections, records };
+  } finally {
+    runtime.WIN = originalWindows;
+    require.cache[modulePath] = cached;
+  }
+}
+
+for (const [label, rows] of [
+  ['failed', null],
+  ['empty', []],
+  ['malformed', 'not a process table'],
+  ['missing protected supervisor', [[702, 701], [703, 701]]],
+]) {
+  test(`protected orphan cleanup leaves records and processes untouched with a ${label} snapshot`, (t) => {
+    const harness = orphanReaperHarness(t, rows);
+    assert.deepEqual(harness.reap(701), []);
+    assert.deepEqual(harness.signals, []);
+    assert.deepEqual(harness.inspections, []);
+    assert.deepEqual(harness.pidReads, [], 'unusable evidence must not even inspect or retire PID records');
+    assert.equal(harness.records.size, 6);
+  });
+}
+
+for (const [label, rows] of [
+  ['missing candidate', [[701, 1], [703, 701]]],
+  ['missing intermediate ancestor', [[701, 1], [702, 799], [703, 701]]],
+  ['cyclic ancestry', [[701, 1], [702, 799], [799, 702], [703, 701]]],
+  ['known descendants', [[701, 1], [702, 701], [703, 702]]],
+]) {
+  test(`protected orphan cleanup preserves the supervisor and ${label}`, (t) => {
+    const harness = orphanReaperHarness(t, rows);
+    assert.deepEqual(harness.reap(701), []);
+    assert.deepEqual(harness.signals, []);
+  });
+}
+
+test('protected orphan cleanup still stops a conclusively unrelated owned process', (t) => {
+  const harness = orphanReaperHarness(t, [[701, 1], [702, 799], [799, 0], [703, 701]]);
+  assert.deepEqual(harness.reap(701), [702]);
+  assert.deepEqual(harness.signals, [702]);
+});
+
+for (const parentPid of [undefined, null, '', 'invalid', -1, 1.5]) {
+  test(`protected orphan cleanup rejects an unknown Windows parent (${String(parentPid)})`, (t) => {
+    const harness = orphanReaperHarness(t, [[701, 1], [702, parentPid], [703, 701]], { windows: true });
+    assert.deepEqual(harness.reap(701), []);
+    assert.deepEqual(harness.signals, []);
+  });
+}
+
+test('protected orphan cleanup accepts an explicit Windows root for an owned orphan', (t) => {
+  const harness = orphanReaperHarness(t, [[701, 1], [702, 0], [703, 701]], { windows: true });
+  assert.deepEqual(harness.reap(701), [702]);
+  assert.deepEqual(harness.signals, [702]);
+});
+
+test('protected orphan cleanup does not signal a reused foreign PID', (t) => {
+  const harness = orphanReaperHarness(t, [[701, 1], [702, 0], [703, 701]], { foreignPid: 702 });
+  assert.deepEqual(harness.reap(701), []);
+  assert.deepEqual(harness.signals, []);
+});
+
+test('unprotected orphan cleanup retains deliberate stop behavior without a process table', (t) => {
+  const harness = orphanReaperHarness(t, null);
+  assert.deepEqual(harness.reap(null), [701, 702, 703]);
+  assert.deepEqual(harness.signals, [701, 702, 703]);
+});
+
+test('orphan cleanup reports only successful termination requests', (t) => {
+  const harness = orphanReaperHarness(t, null, { failedSignalPid: 702 });
+  assert.deepEqual(harness.reap(null), [701, 703]);
+  assert.deepEqual(harness.signals, [701, 702, 703]);
 });
 
 test('async parent ownership walk reads the process table once', async () => {
