@@ -157,3 +157,26 @@ Install with `/plugin install quality-gate --marketplace Eigenwise/eigenwise-too
 The switches persist across sessions. Organization-managed Claude Code runs prompt-compose hooks only for plugins allowed by managed settings.
 
 Ponytail’s persona contradicts this one on the test bar and the marker. Uninstall ponytail when both are installed.
+
+## Review
+
+Run `/quality-gate:review` for the diff (default), `/quality-gate:review repo` for a repository audit capped at 20 findings, or `/quality-gate:review debt` for shortcut markers and the latest receipt. The skill is auto-discovered from `skills/review/SKILL.md`. It reads callers and reuse signals, consumes existing LCOV only, and never runs tests unasked. Failed measurement is reported without a table. Debt mode reads the latest receipt and a live repo measurement; if measurement cannot run, it reports stored counts/reasons without reconstructing missing per-body rows.
+
+Example output (illustrative, complexity-only):
+
+```text
+Coverage: complexity only, no LCOV present
+Body (file:line)       CC  Coverage    CRAP        State
+src/cart.ts:12 total   2   UNVERIFIED  UNVERIFIED  UNVERIFIED
+
+Must
+1. What this is: total sums cart prices.
+   Problem: an empty cart calls reduce without an initial value and throws.
+   Fix: supply 0 as the initial value.
+   If we skip it: empty-cart checkout fails.
+Should: none
+Nice: none
+Verdict: fix empty-cart checkout before shipping.
+Lean: -0 lines
+Not checked: tests were not run; coverage is unavailable.
+```
