@@ -364,6 +364,7 @@ function boardConfig(slug?: any) {
   return {
     name: meta.name,
     jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
+    githubSync: normalizeGithubSync(meta.githubSync),
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
     deniedTools: normalizeDeniedTools(meta.deniedTools),
@@ -404,9 +405,15 @@ function normalizeJiraBaseUrl(value: unknown): string | null {
   return url.href.replace(/\/+$/, '');
 }
 
+function normalizeGithubSync(value: unknown = 'off'): 'off' | 'comment' | 'close' {
+  if (value === 'off' || value === 'comment' || value === 'close') return value;
+  throw new Error('githubSync must be off, comment or close. Enabling it authorizes GitHub comments, and close also authorizes closing issues after publication.');
+}
+
 const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any) => any> = {
   name: normalizeBoardName,
   jiraBaseUrl: normalizeJiraBaseUrl,
+  githubSync: normalizeGithubSync,
   alwaysInScope: normalizeAlwaysInScope,
   readOnlyDeniedTools: normalizeReadOnlyDeniedTools,
   deniedTools: normalizeDeniedTools,

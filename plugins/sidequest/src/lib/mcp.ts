@@ -118,7 +118,7 @@ const mutationTails = new Map<string, Promise<void>>();
 
 const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
   verdict: ['correct', 'finalize'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
-  board_config: ['jiraBaseUrl', 'name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
+  board_config: ['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
     'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
     'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
 };

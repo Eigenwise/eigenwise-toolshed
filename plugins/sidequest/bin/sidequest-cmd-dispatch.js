@@ -238,6 +238,7 @@ const BOARD_CONFIG_OPTION_PATCH_KEYS = {
   "not-integrated-salvage-age-hours": "notIntegratedSalvageAgeHours",
   "worktree-recovery-retention-age-hours": "worktreeRecoveryRetentionAgeHours",
   "jira-base-url": "jiraBaseUrl",
+  "github-sync": "githubSync",
   "auto-approve-test-scope": "autoApproveTestScope",
   "auto-approve-scope": "autoApproveScope",
   "worktree-setup": "worktreeSetup"
