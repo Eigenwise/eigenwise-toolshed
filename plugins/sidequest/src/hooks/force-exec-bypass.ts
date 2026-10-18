@@ -1405,8 +1405,10 @@ function main(): void {
   stampSpawnModel(spawn, correctedSpawnInput(spawn));
 }
 
+// The guards module runs this per decision and fails an Agent spawn closed on a non-zero exit.
 try {
   main();
-} catch (_) {
-  process.exit(0);
+} catch (error) {
+  process.stderr.write(String(error));
+  process.exit(1);
 }

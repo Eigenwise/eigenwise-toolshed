@@ -354,7 +354,7 @@ function enclosingCheckout(start) {
   }
 }
 
-// src/hooks/shared/read-only-shell.ts
+// src/hooks/shared/shell-writes.ts
 var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
@@ -429,14 +429,13 @@ var WRITE_TARGET_READERS = new Map([
   ["git", gitWriteTargets]
 ]);
 function commandName(words) {
-  return import_node_path4.default.basename(words[0] || "").toLowerCase().replace(/\.exe$/, "");
+  return (words[0] || "").split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
 }
 function isGitMutation(words) {
   return commandName(words) === "git" && gitWriteTargets(words).length > 0;
 }
 function commandWriteTargets(words) {
-  const name = commandName(words);
-  const reader = WRITE_TARGET_READERS.get(name);
+  const reader = WRITE_TARGET_READERS.get(commandName(words));
   return reader ? reader(words) : [];
 }
 function shellTokens(command) {
@@ -461,6 +460,8 @@ function shellSegments(command) {
 function ignoredTarget(word) {
   return !word || word.startsWith("$") || NULL_SINKS.has(word.toLowerCase());
 }
+
+// src/hooks/shared/read-only-shell.ts
 function nativePath(word) {
   if (word === "~" || word.startsWith("~/")) return import_node_path4.default.join(import_node_os2.default.homedir(), word.slice(1));
   return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
@@ -1805,6 +1806,7 @@ function main() {
 }
 try {
   main();
-} catch (_) {
-  process.exit(0);
+} catch (error) {
+  process.stderr.write(String(error));
+  process.exit(1);
 }
