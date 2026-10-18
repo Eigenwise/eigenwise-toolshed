@@ -123,10 +123,11 @@ test('notePrompt names the task once and takes the newest ticket', () => {
   assert.equal(third.ticket, 'SQ-2')
 })
 
-test('projectSlug is the basename with unsafe characters replaced', () => {
-  assert.equal(projectSlug('C:\\dev\\eigenwise-toolshed'), 'eigenwise-toolshed')
-  assert.equal(projectSlug('/home/me/my project/'), 'my_project')
-  assert.equal(projectSlug('/srv/app.v2_x'), 'app.v2_x')
+test('projectSlug is the basename plus a short hash of the whole path', () => {
+  assert.match(projectSlug('C:\\dev\\eigenwise-toolshed'), /^eigenwise-toolshed-[0-9a-f]{6}$/)
+  assert.match(projectSlug('/home/me/my project/'), /^my_project-[0-9a-f]{6}$/)
+  assert.notEqual(projectSlug('C:\\a\\app'), projectSlug('C:\\b\\app'))
+  assert.equal(projectSlug('C:\\dev\\App'), projectSlug('c:/dev/App/'))
 })
 
 test('appendLine adds one JSON line and rowsSince reads back recent rows, skipping broken lines', () => {

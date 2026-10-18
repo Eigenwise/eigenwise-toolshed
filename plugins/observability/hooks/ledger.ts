@@ -146,7 +146,19 @@ export function notePrompt(recording: Recording, text: string): Recording {
   return { ...recording, name: recording.name || firstLine(text), ...(ticket ? { ticket } : {}) }
 }
 
-export const projectSlug = (path: string): string => (path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '').replace(/[^\w.-]/g, '_')
+// FNV-1a over the whole path: two projects named `app` in different folders get different ledgers.
+// The module has no node:crypto, and six hex digits are plenty for one machine's projects.
+const pathHash = (path: string): string => {
+  let hash = 0x811c9dc5
+  for (const char of path.replace(/\\/g, '/').toLowerCase()) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0
+  return hash.toString(16).padStart(8, '0').slice(0, 6)
+}
+
+export const projectSlug = (path: string): string => {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const basename = (trimmed.split(/[\\/]/).pop() ?? '').replace(/[^\w.-]/g, '_')
+  return `${basename}-${pathHash(trimmed)}`
+}
 
 export const appendLine = (existing: string, row: TurnRow): string =>
   `${existing}${existing === '' || existing.endsWith('\n') ? '' : '\n'}${JSON.stringify(row)}\n`
