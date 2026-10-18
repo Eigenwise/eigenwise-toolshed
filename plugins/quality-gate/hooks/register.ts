@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code';
 import type { QualityGateStore } from '../types';
 import { registerMeasurement } from './measure.ts';
+import { registerBand } from './band.tsx';
 
 async function readSettings($: EngineInterface): Promise<QualityGateStore> {
   return {
@@ -25,6 +26,7 @@ async function status($: EngineInterface): Promise<string> {
 
 export const register: Register = (on) => {
   registerMeasurement(on);
+  registerBand(on);
   let reuseInventory = '';
   let inventoryStarted = false;
 

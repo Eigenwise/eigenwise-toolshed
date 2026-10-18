@@ -22,6 +22,7 @@ declare module 'claude-code' {
     'quality-gate': {
       turn: Record<string, TurnMeasurement>
       coverageNoticeShown: boolean
+      bandCoverageNoticeAt: string
     }
   }
 }
