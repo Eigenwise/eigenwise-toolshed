@@ -11,7 +11,7 @@ const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-refs-project-'));
 process.env.CLAUDE_PROJECT_DIR = project;
 const store = require('../lib/store');
 const slug = store.ensureProject(project).slug;
-execFileSync('git', ['init', project], { stdio: 'pipe' });
+execFileSync('git', ['init', '-b', 'main', project], { stdio: 'pipe' });
 execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:owner/repository.git'], { cwd: project });
 
 const { githubRepository } = require('../lib/external-refs');
