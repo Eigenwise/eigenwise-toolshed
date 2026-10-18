@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField } from './shared/input.js';
 import { writeContext, writeDeny } from './shared/output.js';
-import { hereDocAt, skipHereDocBodies, type HereDoc } from './shared/heredocs.js';
+import { hereDocAt, skipHereDocBodies, type HereDoc } from '../../hooks/guards/heredocs.js';
 
 type Quote = 'single' | 'double' | null;
 

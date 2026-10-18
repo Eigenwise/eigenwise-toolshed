@@ -145,7 +145,7 @@ function writeDeny(hookEventName, permissionDecisionReason) {
   });
 }
 
-// src/hooks/shared/heredocs.ts
+// hooks/guards/heredocs.ts
 function hereDocAt(command, index) {
   let cursor = index + 2;
   const stripTabs = command[cursor] === "-";
