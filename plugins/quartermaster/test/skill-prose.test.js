@@ -23,18 +23,20 @@ test('documents namespaced Quartermaster commands and Live Rules deduplication',
   assert.match(updateToolshed, /Normal\s+gateway mode is the verified inference path/);
 });
 
-test('names clean-code principles as the seeded baseline', () => {
+test('delegates quality guidance to quality-gate', () => {
   const setup = readSkill('setup');
 
-  assert.match(setup, /reuse-first implementation baseline from\s+\[references\/clean-code-principles\.md\]/);
+  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade/);
+  assert.doesNotMatch(setup, /clean-code-principles/);
 });
 
-test('seeds reuse-first implementation without auto-running resupply', () => {
+test('keeps quality guidance out of setup without auto-running resupply', () => {
   const templates = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'rule-templates.md'), 'utf8');
   const selfImprovement = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'self-improvement.md'), 'utf8');
 
-  assert.match(templates, /Reuse an existing code path first, then the standard library, a native platform capability/);
-  assert.match(templates, /One integration owner runs the full gate after merged changes/);
+  assert.match(templates, /Quality guidance comes from the quality-gate plugin/);
+  assert.doesNotMatch(templates, /Reuse-first implementation|House code conventions|clean-code-principles/);
+  assert.match(templates, /The integration owner runs the full gate once after merged changes/);
   assert.match(selfImprovement, /Offer\s+`\/quartermaster:resupply` only with current or standing user approval/);
   assert.match(selfImprovement, /Keep what works; do not\s+change the workspace for novelty/);
   assert.match(selfImprovement, /The orchestrator decides the benefit, approach, and boundaries before\s+implementation/);

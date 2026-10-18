@@ -25,3 +25,8 @@ declare module 'claude-code' {
     }
   }
 }
+
+export interface QualityGateStore {
+  enabled: boolean
+  markers: boolean
+}

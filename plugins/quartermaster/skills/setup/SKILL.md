@@ -134,10 +134,8 @@ handing off implementation. Draw from three sources, in this order:
     subject to the existing approval flow, never from a host policy label alone; starter live rules
     derived from recurring correction themes, using
     [references/rule-templates.md](references/rule-templates.md) as reference material to derive
-    from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
-    gets the reuse-first implementation baseline from
-    [references/clean-code-principles.md](references/clean-code-principles.md), the self-improvement
-    rule from [references/self-improvement.md](references/self-improvement.md), and, for every
+    from, never copy (byte-identical output means it was copied; rewrite or drop it). Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade.
+    Every workspace gets the self-improvement rule from [references/self-improvement.md](references/self-improvement.md), and, for every
     codebase, a proposed CRAP gate from [references/crap-gate.md](references/crap-gate.md). Adapt
     them to the project and include them in the approved write list. Skip the CRAP gate for a
     not-a-codebase.
@@ -247,8 +245,7 @@ what would make the user's current work easier and whether this setup is earning
 
 - `references/host-capabilities.md` - identify host capabilities before proposing an extension
 - `references/stack-plugins.md` - stack to plugins/marketplaces/LSP catalog
-- `references/rule-templates.md` - craft-baseline and stack rule reference material
+- `references/rule-templates.md` - workflow and stack rule reference material
 - `references/crap-gate.md` - CRAP threshold policy, LCOV recipes, config, and live-rule source
 - `references/self-improvement.md` - the self-improvement live rule every workspace gets
 - `references/structure-notes.md` - structure notes, mostly for greenfield
-- `references/clean-code-principles.md` - optional digest for the guidelines-pointer rule
