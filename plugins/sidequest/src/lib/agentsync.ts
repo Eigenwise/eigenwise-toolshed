@@ -1,3 +1,4 @@
+const { referenceHeader } = require('./external-refs');
 'use strict';
 
 import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
@@ -1111,6 +1112,7 @@ function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, unc
     '## This ticket',
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || '(Untitled ticket)'}`,
+    ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || '(No additional description was recorded.)'}`,
     'Implementation authority: the description and story contract are the orchestrator\'s selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.',

@@ -363,6 +363,7 @@ function boardConfig(slug?: any) {
   const byKind = Object.fromEntries(['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].map((kind?: any) => [kind, layer.rows.filter((row?: any) => row.kind === kind).length]));
   return {
     name: meta.name,
+    jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
     deniedTools: normalizeDeniedTools(meta.deniedTools),
@@ -396,8 +397,16 @@ function boardConfig(slug?: any) {
   };
 }
 
+function normalizeJiraBaseUrl(value: unknown): string | null {
+  if (value == null) return null;
+  const url = new URL(String(value));
+  if (!/^https?:$/.test(url.protocol) || [url.username, url.password, url.search, url.hash].some(Boolean)) throw new Error('jiraBaseUrl must be an HTTP(S) base URL without credentials, query or fragment.');
+  return url.href.replace(/\/+$/, '');
+}
+
 const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any) => any> = {
   name: normalizeBoardName,
+  jiraBaseUrl: normalizeJiraBaseUrl,
   alwaysInScope: normalizeAlwaysInScope,
   readOnlyDeniedTools: normalizeReadOnlyDeniedTools,
   deniedTools: normalizeDeniedTools,

@@ -16,8 +16,9 @@ const GROUPS = [
 // evidence that a ref shipped. Fragment bodies are always indented and titles are single-line, so
 // neither can forge one. The ref binds to the LAST parenthesised group, which is the one the
 // renderer appends, so a title containing "(SQ-999)" cannot mark SQ-999 as released.
-const RENDERED_ENTRY = /^- .* \(([A-Z][A-Z0-9]*-\d+)\)(?: \[`[0-9a-f]{7,40}`\]\([^\s)]*\))?$/;
-const RENDERED_ENTRY_DETAILS = /^- (.*) \(([A-Z][A-Z0-9]*-\d+)\)(?: \[`([0-9a-f]{7,40})`\]\([^\s)]*\))?$/;
+const EXTERNAL_LINKS = '(?: \\[[A-Z][A-Z0-9]+-\\d+\\](?:\\(https?:\\/\\/[^\\s)]+\\))?)*';
+const RENDERED_ENTRY = new RegExp('^- .* \\(([A-Z][A-Z0-9]*-\\d+)\\)(?: \\[`[0-9a-f]{7,40}`\\]\\([^\\s)]*\\))?' + EXTERNAL_LINKS + '$');
+const RENDERED_ENTRY_DETAILS = new RegExp('^- (.*) \\(([A-Z][A-Z0-9]*-\\d+)\\)(?: \\[`([0-9a-f]{7,40})`\\]\\([^\\s)]*\\))?(' + EXTERNAL_LINKS + ')$');
 
 export function repoChangelogHeader() {
   return [
@@ -50,8 +51,16 @@ function commitLink(entry, repository) {
   return ` [\`${short}\`](${repository}/commit/${entry.commit})`;
 }
 
+function externalLinks(refs = []) {
+  return refs.map((reference) => reference.url ? ' [' + reference.key + '](' + reference.url + ')' : ' [' + reference.key + ']').join('');
+}
+
+function readExternalLinks(suffix) {
+  return [...suffix.matchAll(/ \[([A-Z][A-Z0-9]+-\d+)\](?:\((https?:\/\/[^\s)]+)\))?/g)].map((match) => ({ key: match[1], url: match[2] ?? null }));
+}
+
 function renderEntry(entry, repository) {
-  const bullet = `- ${entry.title} (${entry.ref})${commitLink(entry, repository)}`;
+  const bullet = `- ${entry.title} (${entry.ref})${commitLink(entry, repository)}${externalLinks(entry.refs)}`;
   const parsed = RENDERED_ENTRY.exec(bullet);
   if (parsed?.[1] !== entry.ref) {
     throw new Error(`the changelog line for ${entry.ref} does not read back as ${entry.ref}; refusing to write an entry the ledger cannot parse: ${bullet}`);
@@ -171,7 +180,7 @@ export function releasedFragmentFingerprints(text) {
       else if (line.startsWith('  ')) body.push(line.slice(2));
       else break;
     }
-    fingerprints.add(fragmentFingerprint({ title: match[1], ref: match[2], commit: match[3] ?? null, body: body.join('\n') }));
+    fingerprints.add(fragmentFingerprint({ title: match[1], ref: match[2], commit: match[3] ?? null, refs: readExternalLinks(match[4]), body: body.join('\n') }));
   }
   return fingerprints;
 }

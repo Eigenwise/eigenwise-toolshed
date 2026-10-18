@@ -160,3 +160,17 @@ test('what note.mjs writes is exactly what the reader accepts', (t) => {
   assert.equal(reparsed.body, 'A detail line.');
   assert.throws(() => writeFragment(repo.root, source), /already exists/);
 });
+
+
+test('fragment refs parse, dedupe and survive frontmatter round trip', () => {
+  const text = '---\nref: SQ-1\ntitle: Linked change\nbump: minor\nplugins: [sidequest]\nrefs: https://github.com/owner/repo/issues/123, https://github.com/owner/repo/issues/123, https://team.atlassian.net/browse/ABC-2, XYZ-3\n---\n';
+  assert.doesNotThrow(() => parseFragment('.release/unreleased/SQ-1.md', text, { knownPlugins: KNOWN }));
+  const fragment = parseFragment('.release/unreleased/SQ-1.md', text, { knownPlugins: KNOWN });
+  assert.deepEqual(fragment.refs, [
+    { key: 'GH-123', url: 'https://github.com/owner/repo/issues/123' },
+    { key: 'ABC-2', url: 'https://team.atlassian.net/browse/ABC-2' },
+    { key: 'XYZ-3', url: null },
+  ]);
+  assert.deepEqual(parseFragment('.release/unreleased/SQ-1.md', renderFragment(fragment)).refs, fragment.refs);
+  assert.throws(() => parseFragment('.release/unreleased/SQ-1.md', text.replace('XYZ-3', 'javascript:alert(1)')), /refs must contain/);
+});

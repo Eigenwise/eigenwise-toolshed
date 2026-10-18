@@ -1,4 +1,6 @@
 "use strict";
+const { referenceHeader } = require("./external-refs");
+"use strict";
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -829,6 +831,7 @@ function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocu
     "## This ticket",
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || "(Untitled ticket)"}`,
+    ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || "(No additional description was recorded.)"}`,
     "Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.",

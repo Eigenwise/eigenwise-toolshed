@@ -1,3 +1,4 @@
+const { referenceKeys } = require('../external-refs');
 'use strict';
 
 function createReads(dependencies: any) {
@@ -43,6 +44,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
   return {
     ref: t.ref,
     title: t.title,
+    refs: referenceKeys(t.externalRefs),
     status: t.status,
     priority: t.priority,
     complexity: t.complexity || null,

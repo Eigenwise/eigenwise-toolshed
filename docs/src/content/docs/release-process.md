@@ -79,3 +79,5 @@ GitHub Releases publish at most once per UTC day. When several marketplace tags 
 Executors stop at a verified commit. Integration, release cutting, manifest versioning, and publishing happen after their submission.
 
 See [`scripts/release/README.md`](https://github.com/Eigenwise/eigenwise-toolshed/blob/main/scripts/release/README.md), [`.release/README.md`](https://github.com/Eigenwise/eigenwise-toolshed/blob/main/.release/README.md), and the [workflow docs](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/.github/workflows) for current safeguards.
+
+External issue links travel in a fragment’s optional `refs` field, a comma-separated list of GitHub issue/pull URLs, Jira browse URLs, or issue keys. Sidequest stores the normalized links in `externalRefs`; copy each URL (or its key when no URL is configured) into the fragment. Changelog bullets append linked keys such as `[GH-123](https://github.com/owner/repo/issues/123)`; keys without a URL stay unlinked. Changelog read-back keeps these links attached to their local release entry.

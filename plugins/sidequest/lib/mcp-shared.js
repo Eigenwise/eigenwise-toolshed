@@ -857,6 +857,7 @@ function compactPulse(pulse) {
   const wave = compactWave(pulse.submission?.wave);
   return {
     ref: pulse.ref,
+    refs: pulse.refs,
     status: pulse.status,
     claim: pulse.claim,
     working: pulse.working,
