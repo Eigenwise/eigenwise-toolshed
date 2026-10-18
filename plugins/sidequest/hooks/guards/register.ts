@@ -6,6 +6,7 @@ import {
 } from './context-guards.js'
 import type { InlineWork } from '../../types/index.js'
 import { destructiveGitDenial, sharedCheckoutGitDenial } from './git-guards.js'
+import { registerExecutorAdmission } from './executor-admission.js'
 import { boardExists, caller, machine, projectDirectory, readSnapshot, sessionRows, worktreeExists } from './snapshot.js'
 import { bashWindowsPathVerdict, homeDeleteDenial, powershellShimContext } from './text-guards.js'
 import type { GuardVerdict } from './text-guards.js'
@@ -93,6 +94,8 @@ async function inlineWorkGuard($: EngineInterface, e: { tool: string; agentId?: 
 }
 
 export const register: Register = on => {
+  registerExecutorAdmission(on)
+
   on('tool.call', { tool: /^(Bash|PowerShell)$/ }, async ($, e, next) => {
     try {
       const denial = homeDeleteDenial(textField(e, 'command'), await machine($))

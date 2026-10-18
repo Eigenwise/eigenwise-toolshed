@@ -2249,32 +2249,38 @@ test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-s
   assert.equal(mainThread, null, 'the orchestrator main thread may force-remove');
 });
 
-// The hook scripts are fed directly everywhere else in this file, which cannot see a
-// tool that hooks.json never routes to them. These read the registration the way the
-// host does: every PreToolUse group whose matcher matches the tool name, in order.
-function preToolUseScriptsFor(toolName: string): string[] {
-  const groups: Array<{ matcher: string; hooks: Array<{ command: string }> }> = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8')).hooks.PreToolUse;
-  return groups
-    .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test(toolName))
-    .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
+// force-exec-bypass.js is fed directly everywhere else in this file, which cannot see a tool the guards
+// module never hands to it. These read the module's routing the way a session reaches it: the tool.call
+// matcher, then the snapshot prefilter that decides whether the decision process runs at all.
+const executorAdmission = require('../hooks/guards/executor-admission.ts');
+const { MAIN_THREAD_MUTATIONS } = require('../src/hooks/shared/main-thread-mutations.ts');
+
+function mainThreadMutationTools(): string[] {
+  return Object.keys(MAIN_THREAD_MUTATIONS);
+}
+
+function routedToDecision(toolName: string, toolInput: Record<string, unknown>, agentId: string): boolean {
+  const caller = { agentId, type: agentId ? 'sidequest:sidequest-exec-high' : '', sessionId: 'routing-session', row: null, fresh: false };
+  return executorAdmission.GUARDED_TOOLS.test(toolName) && executorAdmission.needsDecision(toolName, toolInput, caller);
 }
 
 // SQ-3203: board__remove was never routed, so an executor's remove {force:true} reached the handler unblocked.
-test('hooks.json routes every live-claim mutation tool to force-exec-bypass for PreToolUse', () => {
-  const source = fs.readFileSync(FORCE_BYPASS, 'utf8');
-  const rules = source.slice(source.indexOf('MAIN_THREAD_MUTATIONS = {'));
-  const toolNames = [...rules.slice(0, rules.indexOf('\n};')).matchAll(/^  (mcp__[\w]+):/gm)].map((match) => match[1]);
+test('the guards module routes every live-claim mutation tool to the force-exec-bypass decision (SQ-3203)', () => {
+  const toolNames = mainThreadMutationTools();
   assert.deepEqual(
     [...toolNames].sort(),
     ['mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
-    'the rule table changed: route the new tool in hooks.json and list it here',
+    'the rule table changed: route the new tool in the guards module and list it here',
   );
   for (const toolName of toolNames) {
-    assert.ok(preToolUseScriptsFor(toolName).includes(FORCE_BYPASS), `${toolName} is never routed to force-exec-bypass.js`);
+    assert.equal(routedToDecision(toolName, { ref: 'SQ-1' }, 'routed-child'), true, `${toolName} from a subagent never reaches force-exec-bypass.js`);
+    assert.equal(routedToDecision(toolName, { ref: 'SQ-1' }, ''), false, `${toolName} from the main thread needs no decision process`);
+    assert.equal(routedToDecision(`${toolName}_other`, { ref: 'SQ-1' }, 'routed-child'), false, 'a different tool must not route');
   }
+  assert.doesNotMatch(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'), /force-exec-bypass/, 'force-exec-bypass runs from the guards module, not as a command hook');
 });
 
-test('an executor subagent cannot mint a scope grant, force-remove, or correct a verdict through the registered PreToolUse hooks', () => {
+test('an executor subagent cannot mint a scope grant, force-remove, or correct a verdict through the guards module', () => {
   const subagent = { agent_id: 'routed-grant-child', agent_type: 'sidequest:sidequest-exec-high', session_id: 'routed-grant-session' };
   const cases = [
     { tool_name: 'mcp__plugin_sidequest_board__scopeRequest', tool_input: { ref: 'SQ-1', by: 'orchestrator', grant: true }, reason: /subagents cannot grant a refused scope request/i },
@@ -2282,51 +2288,13 @@ test('an executor subagent cannot mint a scope grant, force-remove, or correct a
     { tool_name: 'mcp__plugin_sidequest_board__verdict', tool_input: { ref: 'SQ-1', correct: true }, reason: /subagents cannot finalize or correct completed review verdicts/i },
   ];
   for (const { tool_name, tool_input, reason } of cases) {
-    const scripts = preToolUseScriptsFor(tool_name);
-    const decisions = scripts
-      .map((script) => runHookOutput(script, { ...subagent, tool_name, tool_input }, { SIDEQUEST_AGENT: 'routed-grant-child' }))
-      .filter((output) => output?.hookSpecificOutput?.permissionDecision === 'deny');
-    assert.equal(decisions.length, 1, `${tool_name}: exactly one registered hook denies it (ran ${scripts.map((script) => path.basename(script)).join(', ')})`);
-    assert.match(decisions[0].hookSpecificOutput.permissionDecisionReason, reason);
+    assert.equal(routedToDecision(tool_name, tool_input, subagent.agent_id), true, `${tool_name} must reach the decision`);
+    const decision = runHookOutput(FORCE_BYPASS, { ...subagent, tool_name, tool_input }, { SIDEQUEST_AGENT: 'routed-grant-child' });
+    assert.equal(decision?.hookSpecificOutput?.permissionDecision, 'deny', tool_name);
+    assert.match(decision.hookSpecificOutput.permissionDecisionReason, reason);
   }
 });
 
-// The tests above feed force-exec-bypass.js directly, so they cannot see whether
-// Claude Code's hooks.json actually routes a tool name to it (SQ-3203: it never
-// did for board__remove, so an executor's remove {force:true} reached the MCP
-// handler unblocked). This walks the live-claim mutation rules out of the source
-// and checks each one against the real manifest, so a rule added without a route
-// fails here instead of silently reaching the handler.
-type HookRoutingEntry = { matcher: string; hooks: Array<{ command: string }> };
-
-function routesForceExecBypass(entries: HookRoutingEntry[], toolName: string): boolean {
-  return entries.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
-    && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
-}
-
-test('hook manifest routes force-exec-bypass for every live-claim mutation rule tool name (SQ-3203)', () => {
-  const source: string = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
-  const rules = source.match(/const MAIN_THREAD_MUTATIONS[^\n]* = \{([\s\S]*?)^\};/m);
-  assert.ok(rules, 'MAIN_THREAD_MUTATIONS must still define the main-thread-only rules');
-  const toolNames = [...rules![1]!.matchAll(/^  (mcp__plugin_sidequest_board__\w+):/gm)].map((match) => match[1]!);
-  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__update'), 'the update authority rule must be checked');
-  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__remove'), 'the remove authority rule must be checked');
-  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__verdict'), 'the verdict correction authority rule must be checked');
-
-  const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
-  const preToolUse: HookRoutingEntry[] = config.hooks.PreToolUse;
-  const command = 'node hooks/force-exec-bypass.js';
-  for (const toolName of toolNames) {
-    assert.ok(routesForceExecBypass(preToolUse, toolName), `${toolName} has an authority rule but no force-exec-bypass.js route`);
-    for (const matcher of ['*', toolNames.join('|'), 'mcp__plugin_sidequest_board__(?:dispatch|update|scopeRequest|remove|verdict)']) {
-      assert.ok(routesForceExecBypass([{ matcher, hooks: [{ command }] }], toolName), `${matcher} must route ${toolName}`);
-    }
-    assert.equal(routesForceExecBypass([{ matcher: `${toolName}_other`, hooks: [{ command }] }], toolName), false, 'a different tool must not route');
-    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [{ command: 'node hooks/other.js' }] }], toolName), false, 'a matching tool without the guard must not route');
-    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [] }], toolName), false, 'a matching tool without hooks must not route');
-    assert.equal(routesForceExecBypass([], toolName), false, 'an omitted tool route must fail');
-  }
-});
 
 test('pre-tool hook: stable dispatch executors require preparation even with a ref', () => {
   const t = fixtureTicket('SQ-232 dispatch passthrough fixture', 'codex-gpt-5-6-terra', 'high');
@@ -4075,8 +4043,10 @@ test('pre-tool hooks: a plain user Bash call gets no output from any Sidequest g
   const bashHooks = groups
     .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test('Bash'))
     .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
-  // The git and text guards run in the hooks module now; force-exec-bypass is the Bash command hook left.
-  assert.ok(bashHooks.length >= 1, `expected the Bash command-hook guard set, got ${bashHooks.length}`);
+  // Every Sidequest guard a plain Bash call reaches runs in the hooks module; no Bash command hook is left.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8')).modules, ['./guards/register.ts']);
+  const plainCaller = { agentId: '', type: '', sessionId: 'plain-user', row: null, fresh: false };
+  assert.equal(executorAdmission.needsDecision('Bash', { command: 'ls' }, plainCaller), false, 'the guards module runs no decision for a plain user');
   for (const hook of bashHooks) {
     const out = runHookOutput(hook, { session_id: 'plain-user', cwd: project, tool_name: 'Bash', tool_input: { command: 'ls' } }, { SIDEQUEST_HOME: home });
     assert.equal(out, null, path.basename(hook));
@@ -4819,21 +4789,13 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(stopCommands[0].command, /compaction-suggestion|board-reconciliation-reminder/);
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
   assert.deepEqual(config.modules, ['./guards/register.ts'], 'the PreToolUse guards, the inline-work reminder among them, run in the guards hooks module');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Agent'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__(update|scopeRequest|remove|verdict)'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the live-claim mutation guard must cover the update, scopeRequest, remove and verdict MCP tools');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__update')
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the closeout update guard must cover the update MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__remove')
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the force-remove guard must cover the remove MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover Sidequest CLI commands');
+  assert.doesNotMatch(JSON.stringify(config.hooks.PreToolUse), /force-exec-bypass/, 'the executor gate runs from the guards module');
+  const admissionSource = fs.readFileSync(path.join(HOOKS, 'guards', 'executor-admission.ts'), 'utf8');
+  assert.match(admissionSource, /on\('tool\.call', \{ tool: 'Agent' \}/, 'the Agent gate must be registered');
+  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'SendMessage', 'mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__verdict']) {
+    assert.ok(executorAdmission.GUARDED_TOOLS.test(tool), `the executor guard must cover ${tool}`);
+  }
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Edit|Write|MultiEdit|NotebookEdit'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the helper write guard must be registered');
   assert.equal(config.hooks.TeammateIdle, undefined, 'native terminal retirement must not wake completed executors');
 
   const readme = fs.readFileSync(path.join(pluginRoot, 'README.md'), 'utf8');

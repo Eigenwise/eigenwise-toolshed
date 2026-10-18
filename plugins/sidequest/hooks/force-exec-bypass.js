@@ -354,7 +354,7 @@ function enclosingCheckout(start) {
   }
 }
 
-// src/hooks/shared/read-only-shell.ts
+// src/hooks/shared/shell-writes.ts
 var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
@@ -429,14 +429,13 @@ var WRITE_TARGET_READERS = new Map([
   ["git", gitWriteTargets]
 ]);
 function commandName(words) {
-  return import_node_path4.default.basename(words[0] || "").toLowerCase().replace(/\.exe$/, "");
+  return (words[0] || "").split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
 }
 function isGitMutation(words) {
   return commandName(words) === "git" && gitWriteTargets(words).length > 0;
 }
 function commandWriteTargets(words) {
-  const name = commandName(words);
-  const reader = WRITE_TARGET_READERS.get(name);
+  const reader = WRITE_TARGET_READERS.get(commandName(words));
   return reader ? reader(words) : [];
 }
 function shellTokens(command) {
@@ -461,6 +460,8 @@ function shellSegments(command) {
 function ignoredTarget(word) {
   return !word || word.startsWith("$") || NULL_SINKS.has(word.toLowerCase());
 }
+
+// src/hooks/shared/read-only-shell.ts
 function nativePath(word) {
   if (word === "~" || word.startsWith("~/")) return import_node_path4.default.join(import_node_os2.default.homedir(), word.slice(1));
   return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
@@ -510,6 +511,62 @@ function readOnlyShellRefusal(command, cwd) {
   }
   const blocked = firstCheckoutWrite(command, cwd);
   return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Use scratch files outside the checkout, under ${import_node_os2.default.tmpdir()}, or the ticket's verification directory. For repository edits, comment the needed change and release the ticket.` : null;
+}
+
+// src/hooks/shared/main-thread-mutations.ts
+var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
+  "files",
+  "addFiles",
+  "removeFiles",
+  "status",
+  "readonly",
+  "readonlyOverride",
+  "workingTreeDelivery",
+  "externalDeliverable",
+  "verify",
+  "verifyKind",
+  "attestationArtifact",
+  "verifyCwd",
+  "admitComposition",
+  "executorVerify",
+  "executorVerifyKind",
+  "executorAttestationArtifact",
+  "executorVerifyCwd"
+]);
+var MAIN_THREAD_MUTATIONS = {
+  mcp__plugin_sidequest_board__dispatch: {
+    matches: (input) => Object.hasOwn(input, "workProvenance"),
+    denial: "sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing."
+  },
+  mcp__plugin_sidequest_board__update: {
+    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
+    denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
+  },
+  mcp__plugin_sidequest_board__scopeRequest: {
+    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
+    // already recorded, which is a live-claim mutation just like the update fields
+    // above. Without this, a subagent could pass by:'orchestrator' to mint the
+    // grant itself; the store's by-mismatch check only catches the claim holder's
+    // own by, not an impersonated one.
+    matches: (input) => input.grant === true,
+    denial: "sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread."
+  },
+  mcp__plugin_sidequest_board__remove: {
+    // force:true is the only path that deletes a live-claimed ticket, so it is the
+    // executor's escape hatch (delete the ticket to shed the claim). The store
+    // refuses ungranted live-claim deletion, but deny it here too so a subagent
+    // can never mint the main-thread grant by riding the MCP remove handler.
+    matches: (input) => input.force === true,
+    denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
+  },
+  mcp__plugin_sidequest_board__verdict: {
+    matches: (input) => ["correct", "finalize"].some((field) => Object.hasOwn(input, field)),
+    denial: "sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread."
+  }
+};
+function mainThreadMutationDenial(toolName, toolInput) {
+  const rule = MAIN_THREAD_MUTATIONS[toolName];
+  return rule?.matches(toolInput) ? rule.denial : null;
 }
 
 // src/lib/board-mcp-liveness.ts
@@ -1010,64 +1067,12 @@ function dispatchLaunches(prompt) {
 function toolInputOf(input) {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
-var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
-  "files",
-  "addFiles",
-  "removeFiles",
-  "status",
-  "readonly",
-  "readonlyOverride",
-  "workingTreeDelivery",
-  "externalDeliverable",
-  "verify",
-  "verifyKind",
-  "attestationArtifact",
-  "verifyCwd",
-  "admitComposition",
-  "executorVerify",
-  "executorVerifyKind",
-  "executorAttestationArtifact",
-  "executorVerifyCwd"
-]);
-var MAIN_THREAD_MUTATIONS = {
-  mcp__plugin_sidequest_board__dispatch: {
-    matches: (input) => Object.hasOwn(input, "workProvenance"),
-    denial: "sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing."
-  },
-  mcp__plugin_sidequest_board__update: {
-    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
-    denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
-  },
-  mcp__plugin_sidequest_board__scopeRequest: {
-    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
-    // already recorded, which is a live-claim mutation just like the update fields
-    // above. Without this, a subagent could pass by:'orchestrator' to mint the
-    // grant itself; the store's by-mismatch check only catches the claim holder's
-    // own by, not an impersonated one.
-    matches: (input) => input.grant === true,
-    denial: "sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread."
-  },
-  mcp__plugin_sidequest_board__remove: {
-    // force:true is the only path that deletes a live-claimed ticket, so it is the
-    // executor's escape hatch (delete the ticket to shed the claim). The store
-    // refuses ungranted live-claim deletion, but deny it here too so a subagent
-    // can never mint the main-thread grant by riding the MCP remove handler.
-    matches: (input) => input.force === true,
-    denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
-  },
-  mcp__plugin_sidequest_board__verdict: {
-    matches: (input) => ["correct", "finalize"].some((field) => Object.hasOwn(input, field)),
-    denial: "sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread."
-  }
-};
 function executorLiveClaimMutationRefusal(input) {
   if (!isSubagentCaller(input)) return false;
   const toolInput = toolInputOf(input);
-  if (!toolInput) return false;
-  const rule = MAIN_THREAD_MUTATIONS[stringField(input, "tool_name")];
-  if (!rule) return false;
-  if (!rule.matches(toolInput)) return false;
-  writeDeny("PreToolUse", rule.denial);
+  const denial = toolInput && mainThreadMutationDenial(stringField(input, "tool_name"), toolInput);
+  if (!denial) return false;
+  writeDeny("PreToolUse", denial);
   return true;
 }
 function dispatchAgentName(input) {
@@ -1805,6 +1810,7 @@ function main() {
 }
 try {
   main();
-} catch (_) {
-  process.exit(0);
+} catch (error) {
+  process.stderr.write(String(error));
+  process.exit(1);
 }
