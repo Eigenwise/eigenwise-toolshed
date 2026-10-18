@@ -8,7 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
+const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway, waitForFixtureProxy } = require('./support.js');
 const { commandIncludesFile, commandResultAsync, createProxyRecovery, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, processIsOwnedByThisInstall, probeTimeoutMs, recordedGatewayPid, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
 const { PLUGIN_VERSION, startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
@@ -796,7 +796,29 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid], 5000);
 });
 
-test('version-change restart leaves the replacement proxy under its live supervisor', async (t) => {
+function delayedProxyStartupArguments(home, delayMs) {
+  if (!delayMs) return [];
+  const preload = path.join(home, 'delay-proxy-startup.cjs');
+  fs.writeFileSync(preload, `
+    if (process.argv[2] === 'serve-shim') {
+      const supervision = require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))});
+      const createRecovery = supervision.createProxyRecovery;
+      supervision.createProxyRecovery = (options) => {
+        let first = true;
+        return createRecovery({ ...options, probe: async () => {
+          if (first) {
+            first = false;
+            await new Promise((resolve) => setTimeout(resolve, ${delayMs}));
+          }
+          return supervision.proxyModelsAnswering();
+        } });
+      };
+    }
+  `);
+  return ['--require', preload];
+}
+
+async function versionChangeRestartScenario(t, startupDelayMs = 0) {
   const shimReservation = net.createServer();
   const shimPort = await listen(shimReservation);
   await new Promise((resolve) => shimReservation.close(resolve));
@@ -820,15 +842,16 @@ test('version-change restart leaves the replacement proxy under its live supervi
   const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
   installNodeProxy(home);
   fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
-  supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+  const supervisorArguments = [...delayedProxyStartupArguments(home, startupDelayMs), CLI, 'serve-shim'];
+  const startedAt = Date.now();
+  supervisor = spawnGatewayProcess(t, process.execPath, supervisorArguments, {
     cwd: home,
     env: environment,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   supervisor.fixtureShutdown = true;
-  await waitForReady(supervisor);
   const state = path.join(home, '.claude', 'model-gateway');
-  const originalProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+  const originalProxyPid = await waitForFixtureProxy(supervisor, { home, port: proxyPort, startedAt });
   const proxyVersion = (spawnSync(proxyBinary, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout.match(/\d+\.\d+\.\d+/) || [])[0];
   assert.ok(proxyVersion, 'fixture proxy reports a semver version');
   fs.writeFileSync(path.join(state, 'proxy-serving-version.txt'), '0.0.0\n');
@@ -842,6 +865,14 @@ test('version-change restart leaves the replacement proxy under its live supervi
   supervisor.send({ type: 'fixture-shutdown' });
   await waitForExit(supervisor);
   await waitForProcessesToExit([supervisor.pid, replacementProxyPid], 5000);
+}
+
+test('version-change restart leaves the replacement proxy under its live supervisor', async (t) => {
+  await versionChangeRestartScenario(t);
+});
+
+test('version-change restart preserves its assertions after delayed initial proxy readiness', async (t) => {
+  await versionChangeRestartScenario(t, 5500);
 });
 
 test('older cache version cannot replace a newer sibling shim', (t) => {

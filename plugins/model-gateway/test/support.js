@@ -6,6 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { setTimeout: sleep } = require('node:timers/promises');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const START_TIMEOUT_MS = 5000;
@@ -226,6 +227,138 @@ function waitForHealth(port) {
   });
 }
 
+const FIXTURE_STARTUP_FILES = [
+  'shim-supervisor-failure.txt', 'logs/lifecycle.jsonl', 'logs/guardian.log', 'logs/proxy.log', 'logs/shim.log',
+  'guardian.pid', 'guardian.pid.json', 'shim.pid', 'shim.pid.json', 'proxy.pid', 'proxy.pid.json', 'proxy-serving-version.txt',
+];
+
+function fixtureFileExcerpt(file, maximumBytes = 2048) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, 'r');
+    const size = fs.fstatSync(descriptor).size;
+    const buffer = Buffer.alloc(Math.min(size, maximumBytes));
+    const length = fs.readSync(descriptor, buffer, 0, buffer.length, Math.max(0, size - buffer.length));
+    return buffer.subarray(0, length).toString('utf8');
+  } catch (error) {
+    return `<unavailable: ${error.code}>`;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function fixtureProxyPid(home) {
+  const value = Number(fixtureFileExcerpt(gatewayPidFile(home, 'proxy'), 64));
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function captureFixtureOutput(stream) {
+  let buffer = Buffer.alloc(0);
+  const append = (chunk) => {
+    const recent = Buffer.from(chunk).subarray(-4096);
+    buffer = Buffer.concat([buffer, recent]).subarray(-4096);
+  };
+  stream?.on('data', append);
+  return {
+    text: () => buffer.toString('utf8'),
+    dispose: () => stream?.off('data', append),
+  };
+}
+
+function fixtureSupervisorExited(child) {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+function observeFixtureExit(child) {
+  let rejectExit;
+  const exited = new Promise((_resolve, reject) => { rejectExit = reject; });
+  const onExit = (code, signal) => rejectExit(new Error(`supervisor exited: code=${code} signal=${signal}`));
+  const onError = (error) => rejectExit(error);
+  child.once('exit', onExit);
+  child.once('error', onError);
+  if (fixtureSupervisorExited(child)) onExit(child.exitCode, child.signalCode);
+  return {
+    exited,
+    dispose: () => { child.off('exit', onExit); child.off('error', onError); },
+  };
+}
+
+function fixtureStartupFailure(error, home, stdout, stderr) {
+  const state = path.join(home, '.claude', 'model-gateway');
+  const files = FIXTURE_STARTUP_FILES.map((file) => `[${file}]\n${fixtureFileExcerpt(path.join(state, file))}`);
+  return new Error([String(error.message).slice(0, 2048), `[supervisor stdout]\n${stdout.text()}`,
+    `[supervisor stderr]\n${stderr.text()}`, ...files].join('\n'));
+}
+
+function receiveFixtureModels(response, finish) {
+  response.resume();
+  response.once('end', () => finish(response.statusCode === 200));
+  response.once('error', () => finish(false));
+}
+
+function probeFixtureModels(port, timeout, signal) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let request;
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      request?.destroy();
+      resolve(ready);
+    };
+    // Wall-clock timer covers connection, headers and a response body that never ends.
+    const timer = setTimeout(() => finish(false), timeout);
+    request = http.get({ host: '127.0.0.1', port, path: '/v1/models', agent: false, signal },
+      (response) => receiveFixtureModels(response, finish));
+    request.once('error', () => finish(false));
+  });
+}
+
+async function fixtureProxyReady(pid, context) {
+  if (!pid || !context.isRunning(pid)) return false;
+  const budget = Math.min(500, context.deadline - context.now());
+  if (budget <= 0) return false;
+  const ready = await context.probe(context.port, budget, context.signal);
+  return ready && context.isRunning(pid);
+}
+
+function pauseFixtureStartup(milliseconds, signal) {
+  return sleep(milliseconds, null, { signal });
+}
+
+async function pollFixtureProxy(context) {
+  while (context.now() < context.deadline) {
+    context.signal.throwIfAborted();
+    const pid = context.readPid();
+    if (await fixtureProxyReady(pid, context) && context.now() < context.deadline) return pid;
+    await context.pause(Math.min(25, Math.max(0, context.deadline - context.now())), context.signal);
+  }
+  throw new Error(`fixture proxy not ready within ${context.timeout}ms of supervisor launch`);
+}
+
+async function waitForFixtureProxy(child, {
+  home, port, startedAt, timeout = 15000, now = Date.now, pause = pauseFixtureStartup,
+  readPid = () => fixtureProxyPid(home), isRunning = processIsRunning, probe = probeFixtureModels,
+}) {
+  if (!Number.isFinite(startedAt)) throw new TypeError('fixture supervisor launch time is required');
+  const stdout = captureFixtureOutput(child.stdout);
+  const stderr = captureFixtureOutput(child.stderr);
+  const exit = observeFixtureExit(child);
+  const controller = new AbortController();
+  const context = { port, timeout, deadline: startedAt + timeout, now, pause, readPid, isRunning, probe, signal: controller.signal };
+  try {
+    return await Promise.race([exit.exited, pollFixtureProxy(context)]);
+  } catch (error) {
+    throw fixtureStartupFailure(error, home, stdout, stderr);
+  } finally {
+    controller.abort();
+    exit.dispose();
+    stdout.dispose();
+    stderr.dispose();
+  }
+}
+
 const ISOLATED_GATEWAY_ENVIRONMENT_KEYS = [
   'HOME',
   'USERPROFILE',
@@ -424,4 +557,4 @@ async function startCountingProxy(t) {
   return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount, targets: () => [...targets] };
 }
 
-module.exports = { gatewayTestEnvironment, isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild };
+module.exports = { gatewayTestEnvironment, isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild, waitForFixtureProxy };
