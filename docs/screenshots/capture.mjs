@@ -12,12 +12,29 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import { chromium } from 'playwright';
+import { boardHtml } from '../../plugins/observability/lib/board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const docsDir = path.resolve(here, '..');
 const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
+const OBSERVABILITY_ROWS = path.join(repoDir, 'plugins', 'observability', 'test', 'fixtures', 'board-sample.json');
+const OBSERVABILITY_NOW = Date.parse('2026-10-18T12:00:00Z');
+const OBSERVABILITY_PROJECT_NAMES = { 'eigenwise-toolshed': 'acme-webshop', tesseron: 'acme-support-desk', 'kenny-site': 'acme-fulfillment' };
+const OBSERVABILITY_SESSION_NAMES = {
+  'Add a dark theme toggle': 'Add a dark theme toggle',
+  'Board page with KPIs and quota gauges': 'Order dashboard with KPI tiles',
+  'Fix the wave gate for remote branches': 'Fix the checkout retry for slow networks',
+  'Investigate flaky windows test': 'Investigate flaky payment test',
+  'Port the hooks module to TypeScript': 'Port the cart module to TypeScript',
+  'Refactor the price table out': 'Refactor the shipping table out',
+  'Rename the ledger fields': 'Rename the order fields',
+  'Speed up the board render': 'Speed up the catalog render',
+  'Tesseron: lazy-load the session list': 'Lazy-load the ticket list',
+  'Why does the recorder skip aborted turns': 'Why does the export skip cancelled orders',
+  'Write the release notes': 'Write the release notes',
+};
 const FIXTURE = Object.freeze({
   project: 'acme-webshop',
   projects: [
@@ -559,6 +576,23 @@ async function captureSidequest(browser, port) {
   await page.close();
 }
 
+async function captureObservability(browser) {
+  const rows = JSON.parse(await readFile(OBSERVABILITY_ROWS, 'utf8')).map((row) => {
+    assert.ok(OBSERVABILITY_PROJECT_NAMES[row.project] && OBSERVABILITY_SESSION_NAMES[row.name], 'Observability fixture row has no synthetic replacement');
+    return { ...row, project: OBSERVABILITY_PROJECT_NAMES[row.project], name: OBSERVABILITY_SESSION_NAMES[row.name] };
+  });
+  const html = boardHtml(rows, OBSERVABILITY_NOW);
+  for (const real of Object.keys(OBSERVABILITY_PROJECT_NAMES)) assert.equal(html.includes(real), false, `Observability board contains real name: ${real}`);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', reducedMotion: 'reduce', deviceScaleFactor: 1 });
+  await page.addInitScript(() => localStorage.setItem('observability-board-theme', 'dark'));
+  await page.setContent(html, { waitUntil: 'load' });
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(500);
+  const capture = (filename) => writeScreenshot(page, path.join(outputDir, filename), { clip: { x: 0, y: 0, width: 1400, height: 950 } });
+  await capture('observability-board.png');
+  await page.close();
+}
+
 async function main() {
   assertSyntheticFixture();
   await mkdir(outputDir, { recursive: true });
@@ -574,7 +608,8 @@ async function main() {
     await waitFor(`http://127.0.0.1:${sidequestPort}`, 'Synthetic Sidequest server');
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
-    console.log(`Generated 10 synthetic screenshots in ${outputDir}`);
+    await captureObservability(browser);
+    console.log(`Generated 11 synthetic screenshots in ${outputDir}`);
   } finally {
     await browser?.close();
     server?.kill();
