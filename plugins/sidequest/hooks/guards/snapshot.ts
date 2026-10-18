@@ -1,6 +1,7 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { Snapshot } from './context-guards.js'
+import { callerRow } from './context-guards.js'
+import type { Snapshot, SnapshotRow } from './context-guards.js'
 import { resolveAbsolute } from './text-guards.js'
 import type { Machine } from './text-guards.js'
 
@@ -58,7 +59,7 @@ export async function slugify(root: string, windows: boolean): Promise<string> {
   return `${base}-${hash}`
 }
 
-async function sidequestHome($: EngineInterface, host: Machine): Promise<string> {
+export async function sidequestHome($: EngineInterface, host: Machine): Promise<string> {
   const configured = (await $.env.get('SIDEQUEST_HOME'))?.trim()
   if (configured) return resolveAbsolute(configured, host)
   return resolveAbsolute(`${host.home}/.claude/sidequest`, host)
@@ -66,10 +67,20 @@ async function sidequestHome($: EngineInterface, host: Machine): Promise<string>
 
 const projectDirectories = new Map<string, Promise<string>>()
 
+// The registered root a cwd belongs to: a linked worktree's main checkout, else the enclosing repo.
+export async function projectRoot($: EngineInterface, cwd: string, host: Machine): Promise<string> {
+  return resolveAbsolute(await repoRoot($, cwd), host)
+}
+
 async function locateProjectDirectory($: EngineInterface, cwd: string): Promise<string> {
   const host = await machine($)
-  const root = resolveAbsolute(await repoRoot($, cwd), host)
-  return `${await sidequestHome($, host)}/projects/${await slugify(root, host.windows)}`
+  return `${await sidequestHome($, host)}/projects/${await slugify(await projectRoot($, cwd, host), host.windows)}`
+}
+
+// The store creates projects/<slug>/tickets when it registers a root, and the slug hashes that exact path,
+// so only the registered root itself has one, never a clone or a linked worktree of it.
+export async function registeredRoot($: EngineInterface, root: string, host: Machine): Promise<boolean> {
+  return $.fs.exists(`${await sidequestHome($, host)}/projects/${await slugify(root, host.windows)}/tickets`)
 }
 
 // The board folder of the session's project; cached per cwd because a session rarely moves.
@@ -91,4 +102,12 @@ export async function readSnapshot($: EngineInterface, directory: string): Promi
   if (text === null) return null
   const parsed = JSON.parse(text) as { v?: number } & Snapshot
   return parsed.v === 1 && Array.isArray(parsed.dispatches) ? parsed : null
+}
+
+export async function sessionRows($: EngineInterface): Promise<SnapshotRow[]> {
+  return (await readSnapshot($, await projectDirectory($, await $.session.cwd())))?.dispatches ?? []
+}
+
+export async function caller($: EngineInterface, agentId: string | undefined): Promise<SnapshotRow | null> {
+  return callerRow(await sessionRows($), agentId, await $.session.id())
 }
