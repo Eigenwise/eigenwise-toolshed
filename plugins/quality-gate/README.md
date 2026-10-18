@@ -8,6 +8,10 @@ Invalid UTF-8, Python syntax errors and lone surrogates produce an informational
 
 The CRAP report also prints informational reuse signals after scored rows, including with `--cc-only`. `DUPLICATE? name ≈ other (file:line)` means a new body shares a name (ignoring case, underscores and hyphens) with a top-level JS/TS/Python definition in another source file at HEAD. `CALLERS OPEN name: file:line` lists up to two remaining call sites outside a removed body's old file. Removal uses the existing baseline/body pairing, including deleted files within the selected scope. Tests, fixtures, vendored and generated paths are skipped. These are regex/name checks: nested definitions are missed, and a same-named call in another module can count. They never change the verdict, exit code or receipts. JSON reports put the rows under `signals`; the summary includes the reuse-signal count.
 
+## Live measurement
+
+The hooks module records edits and test-command results by working directory. After each turn with edits, it runs the plugin's CLI once per edited working directory to measure changed function complexity and reuse signals, then publishes the report with test pass/fail and stale status. Each CLI run has a 20-second timeout; tool calls never launch measurement. Subagent worktrees stay separate. Without coverage, it shows `quality-gate: complexity only, coverage not set up` once per session. Measurement failures leave the previous report untouched.
+
 ## Project CRAP gate
 
 ```text
@@ -97,7 +101,7 @@ Every completed Git gate run writes `.claude/quality-gate/receipts/<head-sha>.js
 
 Schema: `gateVersion` (`crap-1`), `pythonPolicy`, optional `pythonOracles`, `project` (measured root), `base`, `head`, `files` (relative path to SHA-256 map), `rowCounts` (`new`, `modified-raised`, `legacy-unchanged`, `unverified`), `verdict`, `timestamp`, `ccOnly` and `reasons`. Verdicts are `passed`, `failed`, `unverified` or `nothing to score`. Informational-unverified rows still produce an unverified receipt, even with exit 0. A prerequisite receipt has an empty file map and its reason.
 
-Hooks aren't installed here. A consumer must compare the receipt's root, HEAD and file hashes with the current tree; it must not accept `ccOnly`, `nothing to score`, failed or unverified as a full CRAP pass. The Q3 consumers report unverified receipts once per session, avoiding repeated blocking loops.
+The live measurement hook publishes informational turn reports, not acceptance receipts. A receipt consumer must compare the receipt's root, HEAD and file hashes with the current tree; it must not accept `ccOnly`, `nothing to score`, failed or unverified as a full CRAP pass. The Q3 consumers report unverified receipts once per session, avoiding repeated blocking loops.
 
 ## Existing V8 measurement entry
 
