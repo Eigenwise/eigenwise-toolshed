@@ -5,7 +5,7 @@ Last Updated: 2026-10-17
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
 - `plugins/sidequest/`: board engine, MCP server, CLI, hooks, dashboard, tests, committed build output, and bundled stable executor agents under `agents/`. Pure lifecycle and worktree decisions live in `src/lib/kernel/`; persistence is split under `src/lib/store/`, with matching compiled modules under `lib/`. `scripts/generate-bundled-agents.mjs` derives the packaged agent markdown from `lib/agentsync.js`. `plugins/sidequest/scripts/owned-process-tree.js` and `plugins/sidequest/scripts/owned-phase-supervisor.js` keep test and release subprocess ownership explicit through cleanup.
-- `plugins/observability/`: observer, statusline, Collector setup, and sinks under `observability/sinks/`, including Grafana model pricing and generated dashboard templates, plus the eight lifecycle hooks and the `enable-project-telemetry` skill.
+- `plugins/observability/`: the hooks module (`hooks/register.ts`, `hooks/ledger.ts`, `types/index.d.ts`), the board generator `lib/board.mjs`, the `track` skill, and node tests plus `*.test.ts` for `claude plugin test`.
 - `plugins/model-gateway/`: local model gateway CLI, registry hook, skills, and tests; `lib/` holds the shim/worker runtime, the per-model policy table, process supervision, the Windows detached launcher, lifecycle diagnostics, cache-sibling identity checks, bounded owner resolution, and full-width POSIX process probes.
 - `plugins/live-rules/`: rule-management skills and prompt/edit/session hooks.
 - `plugins/codebase-mapper/`: map-generation/update skills and context injection hooks.
