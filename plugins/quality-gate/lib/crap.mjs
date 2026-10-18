@@ -87,18 +87,24 @@ async function changedAgainstBase(report, analyzer, changedPaths, removedMetrics
   return changed.concat(report.metrics.filter((metric) => metric.informational && !changedIdentities.has(metric.relativePath + ':' + metric.identity)));
 }
 
+function complexityOnly(root, options, settings) {
+  if (options.ccOnly) return true;
+  if (settings.lcov || settings.fallbackLcov || settings.coverageCommand) return false;
+  return !fs.existsSync(path.join(root, 'coverage/lcov.info'));
+}
+
 export async function crapReport(options = {}) {
   const root = projectRoot(options.project ?? process.cwd());
   const { config, warnings } = readConfig(root);
   const settings = gateSettings(options, config);
   const baseline = baseRevision(root, settings.base);
-  const selected = selectedFiles(root, settings);
+  const selected = selectedFiles(root, settings, options.files);
   const files = filesChangedSince(root, baseline.base, selected);
   const changedPaths = files.concat(selectedDeletedFiles(root, baseline.base, settings));
   const removedMetrics = [];
   const analyzer = changedPaths.some((file) => JAVASCRIPT_SOURCE.test(file) || file.endsWith('.vue')) ? await createAnalyzer(root) : null;
   const complexityCsv = options.complexity ? fs.readFileSync(path.resolve(root, options.complexity), 'utf8') : undefined;
-  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: Boolean(options.ccOnly), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
+  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: complexityOnly(root, options, settings), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
   if (settings.usedDeprecatedRatchet) report.warnings.push('--ratchet and config ratchet are deprecated. Use --base or config base instead.');
   try {
     report.metrics = await sourceMetrics(root, files, analyzer, complexityCsv, settings.pythonPolicy, settings.pythonOracles);

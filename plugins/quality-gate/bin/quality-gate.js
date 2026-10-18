@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import path from 'node:path';
+import { turnReport, inventoryText } from '../lib/turn.mjs';
+import { provisionParser } from '../lib/provision.mjs';
+import { pluginRoot } from '../lib/compiler.mjs';
 import { parseArgs } from 'node:util';
 import { measureFiles } from '../lib/measure.mjs';
 import { crapReport, formatCrapReport, writeReceipt } from '../lib/crap.mjs';
@@ -10,6 +13,9 @@ const HELP = `Usage:
   quality-gate crap [--project <root>] [--base <revision>] [--lcov <path>]
                     [--coverage-command "<command>"] [--cc-only] [--json]
                     [--complexity <lizard.csv>] [--python-policy <policy>] [--source <path>]...
+  quality-gate provision
+  quality-gate turn --json [--project <root>] [--since <iso>]
+  quality-gate inventory [--project <root>] [--bytes <n>]
   quality-gate measure [--project <root>] [--base <revision>] --coverage <V8-directory>
                        [--new-external-file <absolute path>]... [files...]
 
@@ -22,7 +28,12 @@ In the inspected Claude Code 2.1.295, a direct worktree-isolated Bash startup as
 followed by a Node-family command is refused by the host guard (startup code cannot be shown not to be Git); no shipped
 capture-launch command supports that exact boundary. Stop after that actual refusal; missing measurements stay UNVERIFIED.
 
-crap reads .claude/quality-gate/crap.json (falls back to .claude/quartermaster/crap.json).
+crap optionally reads .claude/quality-gate/crap.json (legacy quartermaster config is a fallback).
+Without configured sources, it selects tracked JS/TS/Python, excluding dependencies, build output, coverage, vendor and test fixtures.
+Without LCOV or a coverage command it defaults to complexity only.
+The first run installs TypeScript 7 automatically; provision does only that step.
+turn measures working-tree edits (or file mtimes after --since), never runs coverage, and emits bodies/signals/unverified/lcov.
+inventory lists top-level definitions from HEAD within --bytes (default 2048), including the final omitted-count line.
 --project selects the tree measured, including a linked worktree; without it the cwd's Git root is used.
 --source <path> is repeatable and narrows configured/default sources to files or directories relative to --project; exclusions still apply.
 JS/TS runtime functions use the TypeScript AST, PHP/Vue use lizard. Python uses the versioned
@@ -58,7 +69,7 @@ Receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-s
 `;
 
 function argumentsForCommand() {
-  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'complexity', 'ratchet', 'max', 'python-policy'].map((name) => [name, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes'].map((name) => [name, { type: 'string' }]));
   Object.assign(options, Object.fromEntries(['cc-only', 'json', 'help'].map((name) => [name, { type: 'boolean' }])));
   options.source = { type: 'string', multiple: true };
   options['new-external-file'] = { type: 'string', multiple: true };
@@ -86,11 +97,16 @@ async function capturedReport(values) {
   }
 }
 
-async function runCrap(values, files) {
+function validateCrapArguments(values, files) {
   if (files.length) throw new Error('crap takes no positional files. Use --source <path> or set sources in .claude/quality-gate/crap.json.');
   if (values.coverage) throw new Error('crap consumes LCOV. Use --lcov, or use measure for a V8 coverage directory.');
+}
+
+async function runCrap(values, files) {
+  validateCrapArguments(values, files);
   const report = await capturedReport(values);
   report.receipt = writeReceipt(report);
+  if (report.ccOnly && !values['cc-only']) process.stderr.write('coverage: not set up (complexity only); add an LCOV producer or --lcov to prove CRAP\n');
   for (const warning of report.warnings) process.stderr.write(`quality-gate crap: ${warning}\n`);
   process.stderr.write(`quality-gate crap: measured ${report.root}\n`);
   process.stdout.write(values.json ? JSON.stringify(report) + '\n' : formatCrapReport(report));
@@ -101,9 +117,15 @@ async function main() {
   const { values, positionals } = argumentsForCommand();
   const [command, ...files] = positionals;
   if (values.help || command === 'help') return process.stdout.write(HELP);
-  if (command === 'measure') return runMeasure(values, files);
-  if (command === 'crap') return runCrap(values, files);
-  throw new Error('Choose crap or measure. Run quality-gate --help for usage.');
+  const commands = {
+    provision: () => provisionParser(pluginRoot),
+    turn: async () => process.stdout.write(JSON.stringify(await turnReport(values)) + '\n'),
+    inventory: () => process.stdout.write(inventoryText(values.project || process.cwd(), Number(values.bytes ?? 2048))),
+    measure: () => runMeasure(values, files),
+    crap: () => runCrap(values, files),
+  };
+  if (!Object.hasOwn(commands, command)) throw new Error('Choose crap, measure, turn, inventory or provision. Run quality-gate --help for usage.');
+  return commands[command]();
 }
 
 try {
