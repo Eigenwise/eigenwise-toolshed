@@ -1,5 +1,6 @@
 'use strict';
 
+const { githubRepository, referenceKeys } = require('../external-refs');
 const { execFileSync } = require('../git-process.js');
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
 const { stopOutlivesClaim } = require('./claims.js');
@@ -15,7 +16,7 @@ function createGitHubCiRunsProvider(projectPath: string, execute = execFileSync)
     const upstream = command('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
     const [remote, branch] = upstream.split('/', 2);
     const origin = command('git', ['remote', 'get-url', remote]);
-    if (!remote || !branch || !/github\.com(?::|\/)/i.test(origin)) return null;
+    if (!remote || !branch || !githubRepository(origin)) return null;
     command('gh', ['auth', 'status']);
     return () => {
       try {
@@ -309,6 +310,7 @@ function createPulse(dependencies: any) {
     return {
       ref: ticket.ref,
       title: ticket.title,
+      refs: referenceKeys(ticket.externalRefs),
       liveness: liveness.state,
       livenessEvidence: liveness.evidence,
       reclaimable: claim?.reclaimable || null,

@@ -13,6 +13,8 @@ const execNames = require('../lib/exec-names');
 const { claimRefusalMessage } = require('../lib/refusal-guidance');
 const { assertSidequestInstall, assertDispatchTransport } = require('../lib/dispatch-preflight');
 
+const { referenceKeys } = require('../lib/external-refs');
+const { importGitHubIssue } = require('../lib/github-import');
 const { bodyFromOpts, fail, resolveProject } = require('./sidequest-cmd-shared');
 const PRIORITY_MARK: any = { urgent: '!!', high: '!', normal: '', low: '·' };
 
@@ -132,6 +134,10 @@ function reviewTargetFromOpts(opts: any) {
   return { ref, ...(hasCommit ? { commit } : { sourceRevision: { source, value } }) };
 }
 
+function externalRefsFromOpts(opts: { refs?: string[] }): { refs?: string[] } {
+  return opts.refs === undefined ? {} : { refs: opts.refs };
+}
+
 function highStakesFromOpts(opts: any) {
   if (opts['high-stakes'] === undefined) return undefined;
   return String(opts['high-stakes']).toLowerCase() !== 'false';
@@ -165,6 +171,7 @@ async function addPreview(opts: any, category: any, complexity: any) {
     priority,
     highStakes: highStakesFromOpts(opts) || false,
     labels: opts.label || [],
+    refs: opts.refs,
     images: opts.image || [],
     files: opts.file ?? opts.files ?? [],
     contracts: contractsFromOpts(opts),
@@ -188,6 +195,7 @@ async function addPreview(opts: any, category: any, complexity: any) {
 }
 
 async function cmdAdd(opts: any) {
+  Object.assign(opts, importGitHubIssue(opts.github));
   if (opts.priority === 'medium') opts.priority = 'normal';
   const input = validatedAddInput(opts);
   if (opts['dry-run']) {
@@ -212,6 +220,7 @@ async function cmdAdd(opts: any) {
     status: opts.status,
     highStakes: highStakesFromOpts(opts),
     labels: opts.label,
+    refs: opts.refs,
     images: opts.image || [],
     files: opts.file ?? opts.files,
     contracts: contractsFromOpts(opts),
@@ -299,7 +308,7 @@ async function cmdList(opts: any) {
       const readonly = t.readonlyOverride === false ? '  readonly:false' : '';
       const oracle = store.oracleProjection(t);
       const awaitingOracle = oracle ? `  ${oracle.summary}` : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${awaitingOracle}`);
+      console.log(`    ${t.ref}${pr}  ${t.title}  ${referenceKeys(t.externalRefs).join(', ')}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${awaitingOracle}`);
     }
   }
 }
@@ -355,6 +364,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts.status != null) patch.status = opts.status;
   if (opts.priority != null) patch.priority = opts.priority === 'medium' ? 'normal' : opts.priority;
   if (opts['high-stakes'] !== undefined) patch.highStakes = highStakesFromOpts(opts);
+  Object.assign(patch, externalRefsFromOpts(opts));
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
   Object.assign(patch, fileScopeFlagsPatch(opts));

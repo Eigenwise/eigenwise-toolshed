@@ -1,4 +1,6 @@
 "use strict";
+const { referenceHeader } = require("./external-refs");
+"use strict";
 const store = require("./store");
 const { verificationRequirement } = require("./kernel/verification.js");
 const NATIVE_PROMPT_MAX = 7600;
@@ -10,6 +12,7 @@ function executorPrompt(ticket, taskPrompt) {
   const contract = [
     "Authoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):",
     `Title: ${ticket.title}`,
+    ...referenceHeader(ticket.externalRefs),
     ticket.description || "(No additional description was recorded.)"
   ].join("\n");
   const parts = [base, EXECUTOR_RUN_GUIDANCE, EXECUTOR_VERIFY_GUIDANCE, contract];

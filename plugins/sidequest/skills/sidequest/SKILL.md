@@ -19,6 +19,8 @@ matching MCP tools. Read references only when needed:
 - `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`, `references/invocation-contracts.md`.
 - `references/readonly-guidance.md` — candidate reviews, repository audits, shortcut debt, and measurement claims.
 
+Ticket fields include `refs: string[]` (CLI `--refs <ref>` repeated) for external issue links, stored as `externalRefs: [{ key, url }]`. `sidequest add --github <issue-or-pr-url>` imports the title and sanitized body through `gh`; classification and file scope still apply.
+
 ## Choose one owner before adding ceremony
 
 Before dispatching substantial or ambiguous work, pin a contract; see `user-story`. Check feasibility

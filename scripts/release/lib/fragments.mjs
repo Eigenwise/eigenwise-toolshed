@@ -13,7 +13,7 @@ export const HOLD_FILE = '.release/HOLD';
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
 const REF_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/;
-const KNOWN_KEYS = new Set(['ref', 'title', 'scope', 'plugins', 'bump', 'commit', 'hold', 'category', 'story']);
+const KNOWN_KEYS = new Set(['ref', 'title', 'scope', 'plugins', 'bump', 'commit', 'hold', 'category', 'story', 'refs']);
 
 export class FragmentError extends Error {
   constructor(file, message) {
@@ -34,9 +34,31 @@ export function compareRefs(a, b) {
   return a.localeCompare(b);
 }
 
-export function fragmentFingerprint({ ref, title, commit = null, body = '' }) {
-  const renderedContent = JSON.stringify({ ref, title, commit, body: (body ?? '').trim() });
+export function fragmentFingerprint({ ref, title, commit = null, body = '', refs = [] }) {
+  const renderedContent = JSON.stringify({ ref, title, commit, body: (body ?? '').trim(), ...referenceFingerprint(refs) });
   return createHash('sha256').update(renderedContent).digest('hex');
+}
+
+function referenceFingerprint(refs) {
+  return refs.length ? { refs } : {};
+}
+
+function releaseReference(file, value) {
+  const github = /^https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(issues|pull)\/(\d+)\/?$/.exec(value);
+  if (github) return { key: 'GH-' + Number(github[3]), url: 'https://github.com/' + github[1] + '/' + github[2] + '/' + Number(github[3]) };
+  if (/^[A-Z][A-Z0-9]+-\d+$/.test(value)) return { key: value, url: null };
+  const linked = /^(https?:\/\/[^\s()[\]]+)\/browse\/([A-Z][A-Z0-9]+-\d+)$/.exec(value);
+  if (linked) return { key: linked[2], url: value };
+  throw new FragmentError(file, 'refs must contain GitHub issue/pull URLs, Jira browse URLs, or issue keys');
+}
+
+function parseReleaseRefs(file, value) {
+  if (value === null) return [];
+  return [...new Map(value.split(',').map((reference) => releaseReference(file, reference.trim())).map((reference) => [reference.key, reference])).values()];
+}
+
+function releaseRefsFrontmatter(refs = []) {
+  return refs.length ? { refs: refs.map((reference) => reference.url ?? reference.key).join(', ') } : {};
 }
 
 function requireString(file, data, key, { optional = false } = {}) {
@@ -156,6 +178,7 @@ export function parseFragment(file, text, { knownPlugins = null } = {}) {
   return {
     ref,
     title,
+    refs: parseReleaseRefs(file, requireString(file, data, 'refs', { optional: true })),
     scope,
     plugins,
     bump: data.bump ?? null,
@@ -181,6 +204,7 @@ export function renderFragment(fragment) {
       : uniform
         ? { bump: uniform, plugins: fragment.plugins.map((entry) => entry.name) }
         : { plugins }),
+    ...releaseRefsFrontmatter(fragment.refs),
     ...(fragment.commit ? { commit: fragment.commit } : {}),
     ...(fragment.category ? { category: fragment.category } : {}),
     ...(fragment.story ? { story: fragment.story } : {}),

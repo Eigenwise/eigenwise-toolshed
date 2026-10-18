@@ -179,6 +179,7 @@ const TICKET_FIELD_PROPS = {
   priority: { type: 'string', enum: store.VALID_PRIORITY },
   highStakes: { type: 'boolean' },
   labels: LABELS_PROP,
+  refs: { type: 'array', items: { type: 'string' }, description: 'External issue or pull references.' },
   files: FILES_PROP,
   produces: CONTRACT_PROP('produces'),
   changes: CONTRACT_PROP('changes'),
@@ -252,6 +253,7 @@ const tools: ToolDefinition[] = [
         status: args.status,
         highStakes: args.highStakes,
         labels: args.labels,
+        refs: args.refs,
         files: args.files,
         contracts: { produces: args.produces, changes: args.changes, consumes: args.consumes },
         contractWaiver: args.contractWaiver,
@@ -348,7 +350,7 @@ const tools: ToolDefinition[] = [
         : null;
       if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch: any = { source: 'mcp', by: String(args.by || '').trim() || null };
-      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'addFiles', 'removeFiles', 'complexity']) {
+      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'refs', 'files', 'addFiles', 'removeFiles', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
       if (args.produces !== undefined || args.changes !== undefined || args.consumes !== undefined) {

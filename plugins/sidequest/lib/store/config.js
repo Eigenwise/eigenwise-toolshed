@@ -318,6 +318,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const byKind = Object.fromEntries(["ADD", "OVERRIDE", "DETACH", "DISABLE"].map((kind) => [kind, layer.rows.filter((row) => row.kind === kind).length]));
     return {
       name: meta.name,
+      jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
       alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
       readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
       deniedTools: normalizeDeniedTools(meta.deniedTools),
@@ -350,8 +351,15 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       warnings: [...selected.warnings, ...layer.warnings]
     };
   }
+  function normalizeJiraBaseUrl(value) {
+    if (value == null) return null;
+    const url = new URL(String(value));
+    if (!/^https?:$/.test(url.protocol) || [url.username, url.password, url.search, url.hash].some(Boolean)) throw new Error("jiraBaseUrl must be an HTTP(S) base URL without credentials, query or fragment.");
+    return url.href.replace(/\/+$/, "");
+  }
   const BOARD_CONFIG_NORMALIZERS = {
     name: normalizeBoardName,
+    jiraBaseUrl: normalizeJiraBaseUrl,
     alwaysInScope: normalizeAlwaysInScope,
     readOnlyDeniedTools: normalizeReadOnlyDeniedTools,
     deniedTools: normalizeDeniedTools,
