@@ -272,6 +272,18 @@ Settings covers routing profiles, model fallback, theme, notification preference
 
 *Synthetic demo data behind the Sidequest settings dialog.*
 
+## Link tickets to GitHub or Jira
+
+Tie a ticket to the issue it came from with `refs`:
+
+```text
+sidequest add -t "Fix the empty-cart total" --refs GH-123 --refs acme/shop#45 ...
+```
+
+Accepted forms are `GH-123` or `#123` (the repository needs a GitHub origin), `owner/repo#123`, a GitHub issue or pull request URL, and a Jira key such as `SHOP-123`. Jira keys only become links once you set the base URL with `sidequest board-config --jira-base-url https://team.atlassian.net`. Refs are deduplicated, `update` replaces the list, and `refs: []` clears it. Full ticket reads show the links, briefings show the keys, and a release fragment with `refs` puts `[GH-123](url)` in the changelog bullet.
+
+To start from an existing issue, run `sidequest add --github <issue-or-pr-url>`. It reads the issue through the `gh` CLI, drops HTML comments and images from the body, and records the URL as a ref. Run `gh auth login` first if that fails. Refs only link the ticket to the issue; Sidequest does not write back to GitHub or Jira.
+
 ## Daily use
 
 The shipped coding profile defaults to `medium` effort for `coding.hard`, `debugging`, `spike-investigation`, and `review-audit`. Their models are unchanged, and board-local routing overrides keep their configured values. The effective category route controls dispatch, including provider-specific fallbacks.

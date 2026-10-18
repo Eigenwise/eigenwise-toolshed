@@ -1,7 +1,61 @@
 ---
 title: Quality Gate
-description: Run a per-project CRAP gate with AST-backed JavaScript and TypeScript scoring.
+description: Install Quality Gate once and get a quality persona, a turn-end complexity line and a measured review, with no config.
 ---
+
+Quality Gate keeps new code small, reused and tested. It works the moment it is installed: no config file, no setup question.
+
+## Install
+
+```text
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install quality-gate@eigenwise-toolshed
+```
+
+Node 22.5+ and npm are required. The first run installs the TypeScript parser into the plugin by itself; offline, it stops with the one `npm install --prefix <plugin root>` command to run by hand.
+
+## What happens in the first session
+
+- **Persona.** Claude gets a short quality brief: intent-revealing names, no needless code, reuse before writing, and a CRAP score below 6 for new and raised functions. It also sees a list of the definitions already in your project so it can reuse them. The same text reaches executors and subagents.
+- **Band line.** Above the prompt, one line shows session cost, the highest function complexity this turn, and the last test result, for example `$0.42 · CC 4 ok · tests pass`. `SPLIT n` appears when `n` new or complexity-raised functions reached complexity 6 or more.
+- **Turn-end measurement.** After each turn that edited code, Quality Gate measures the changed functions once. It scores measured CRAP, not a regex over the text.
+- **One notice.** Without a coverage report it measures complexity only and says `quality-gate: complexity only, coverage not set up` once per session.
+
+## Review
+
+`/quality-gate:review` reviews your current diff. `/quality-gate:review repo` audits the repository, capped at 20 findings, and `/quality-gate:review debt` lists shortcut markers and the latest receipt. It reads callers and reuse signals, uses existing coverage only, and never runs your tests unasked.
+
+## Switches
+
+- `/quality-gate off` and `/quality-gate on` turn the persona off and on. On is the default.
+- `/quality-gate markers off` moves shortcut notes from source comments to the end of Claude's reply. `markers on` is the default.
+- `/quality-gate status` prints both.
+
+The choices persist across sessions.
+
+## Upgrade to measured coverage
+
+Complexity alone catches big functions. Coverage lets the gate tell a big, well-tested function from a big, untested one. Write an LCOV report to `coverage/lcov.info` and Quality Gate picks it up. Produce it with your stack's tool:
+
+| Stack | Command |
+| --- | --- |
+| JavaScript / TypeScript | `c8 --reporter=lcov npm test` |
+| Python | `coverage run -m pytest && coverage lcov -o coverage/lcov.info` |
+| Go | `go test -coverprofile=coverage.out ./... && gcov2lcov -infile coverage.out -outfile coverage/lcov.info` |
+| Rust | `cargo llvm-cov --lcov --output-path coverage/lcov.info` |
+| C / C++ | `gcovr --lcov coverage/lcov.info` |
+| PHP | `vendor/bin/phpunit --coverage-clover coverage/clover.xml && vendor/bin/clover-to-lcov coverage/clover.xml -o coverage/lcov.info` |
+| Ruby | `simplecov-lcov` with `single_report_path = 'coverage/lcov.info'`, then your normal test command |
+
+Java, Kotlin and C# need a conversion step. `/quartermaster:setup` knows those recipes and can wire a coverage command into the project for you.
+
+## If you use ponytail
+
+Quality Gate and ponytail each inject a persona, and the two disagree on the test bar and on where a known shortcut gets recorded. Pick one. Uninstall ponytail when you install Quality Gate.
+
+## Reference
+
+The sections below cover the `crap` command, its configuration and its receipts.
 
 Quality Gate scores runtime function bodies with their measured test coverage. Run its project command from an installed plugin:
 
