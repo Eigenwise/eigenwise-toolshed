@@ -33,7 +33,7 @@ not create an investigation by default.
 
 ### Solo-fit gate before decomposition
 
-A bounded fix the orchestrator can state defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets.
+A bounded fix the orchestrator can state defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore or general-purpose agents stay for tiny lookups or unrouted projects.
 
 A story or wave needs 3+ independently checkable pieces and a stated reason for separate owners. Pin shared interfaces and per-piece checks before dispatch. A review panel needs a named risk for each lens. Within an admitted wave, dispatch independent pieces together; shared runtime resources serialize their writes and live reproduction.
 

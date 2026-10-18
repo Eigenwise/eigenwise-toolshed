@@ -428,3 +428,52 @@ test('CLI groom-close threads --delivery-revision and --resolved-path through to
   assert.deepEqual(integration.contentProof.resolved.map((entry: any) => entry.path), [DRIFTED_FILE]);
   assert.equal(integration.contentProof.resolved[0].by, 'orchestrator');
 });
+
+
+const { stubGithub } = require('../../../scripts/release/test/gh-stub.mjs');
+const { emitPublishedExternalRefUpdates } = require('../../../scripts/release/lib/external-refs.mjs');
+const GITHUB_SYNC_REFS = ['https://github.com/owner/repo/issues/12', 'https://github.com/other/project/issues/34', 'EXAMPLE-123'];
+
+for (const mode of ['off', 'comment', 'close']) {
+  test('GitHub sync ' + mode + ' emits delivery comments only once and ships after publication', (testContext: import('node:test').TestContext) => {
+    const github = stubGithub(testContext);
+    const fixture = deliveryFixture('github-sync-' + mode);
+    assert.equal(store.boardConfig(fixture.slug).githubSync, 'off');
+    assert.throws(() => store.setBoardConfig(fixture.slug, { githubSync: 'automatic' }), /githubSync must be/);
+    assert.equal(store.setBoardConfig(fixture.slug, { githubSync: mode }).ok, true);
+    assert.equal(store.updateTicket(fixture.slug, fixture.ticket.ref, { refs: GITHUB_SYNC_REFS }).externalRefs.length, 3);
+    const delivered = record(fixture, { deliveryRevision: fixture.landed });
+    assert.equal(delivered.ok, true, delivered.message);
+    const body = 'Fixed on main in ' + fixture.laterHead + ' (' + fixture.ticket.ref + ')';
+    const comments = GITHUB_SYNC_REFS.slice(0, 2).map((url) => ['issue', 'comment', url, '--body', body]);
+    assert.deepEqual(github.calls(), mode === 'off' ? [] : comments, 'delivery comments use only the branch, delivered SHA and ticket ref');
+    assert.equal(record(fixture, { deliveryRevision: fixture.landed }).ok, true);
+    assert.deepEqual(github.calls(), mode === 'off' ? [] : comments, 're-recording the same delivery does not duplicate comments');
+    const ticket = store.getTicket(fixture.slug, fixture.ticket.ref);
+    emitPublishedExternalRefUpdates(fixture.repo, 'v1.2.3', () => [{ ref: ticket.ref, refs: ticket.externalRefs }]);
+    const shipped = GITHUB_SYNC_REFS.slice(0, 2).flatMap((url) => {
+      const updates = [['issue', 'comment', url, '--body', 'Shipped in v1.2.3']];
+      if (mode === 'close') updates.push(['issue', 'close', url]);
+      return updates;
+    });
+    assert.deepEqual(github.calls(), mode === 'off' ? [] : [...comments, ...shipped], 'close occurs after publication only');
+  });
+}
+
+test('GitHub sync failures leave ticket comments and never reject delivered work or publication', (testContext: import('node:test').TestContext) => {
+  const github = stubGithub(testContext);
+  process.env.GH_SYNC_FAIL = '1';
+  const fixture = deliveryFixture('github-sync-failure');
+  store.setBoardConfig(fixture.slug, { githubSync: 'close' });
+  store.updateTicket(fixture.slug, fixture.ticket.ref, { refs: GITHUB_SYNC_REFS });
+  const delivered = record(fixture, { deliveryRevision: fixture.landed });
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.equal(github.calls().length, 2, JSON.stringify(store.getTicket(fixture.slug, fixture.ticket.ref).comments));
+  let ticket = store.getTicket(fixture.slug, fixture.ticket.ref);
+  assert.equal(ticket.comments.filter((comment: { by: string }) => comment.by === 'github-sync').length, 2);
+  assert.match(ticket.comments.at(-1).body, /authentication required/);
+  assert.doesNotThrow(() => emitPublishedExternalRefUpdates(fixture.repo, 'v1.2.3', () => [{ ref: ticket.ref, refs: ticket.externalRefs }]));
+  ticket = store.getTicket(fixture.slug, fixture.ticket.ref);
+  assert.equal(ticket.comments.filter((comment: { by: string }) => comment.by === 'github-sync').length, 4);
+  assert.equal(github.calls().filter((call: string[]) => call[1] === 'close').length, 0, 'a failed shipped comment never closes the issue');
+});

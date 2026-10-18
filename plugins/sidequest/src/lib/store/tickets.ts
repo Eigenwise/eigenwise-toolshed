@@ -1,5 +1,6 @@
 'use strict';
 
+const { externalReference, originRepository } = require('../external-refs');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef } = require('../kernel/review-binding');
 
 function createTickets(dependencies: any) {
@@ -219,6 +220,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     status,
     priority: coercePriority(fields.priority, 'normal'),
     labels: boundedLabels(fields.labels),
+    externalRefs: normalizeExternalRefs(slug, fields.refs),
     highStakes: !!fields.highStakes,
     storyId, // the user story this ticket belongs to (null = none)
     storyLogSeenSeq: storyLogRevision(slug, storyId),
@@ -288,6 +290,19 @@ function asDataImages(list?: any) {
     }
   }
   return out;
+}
+
+function normalizeExternalRefs(slug: string, refs: unknown = []): { key: string; url: string | null }[] {
+  if (!Array.isArray(refs) || !refs.every((reference) => typeof reference === 'string')) throw new Error('refs must be an array of strings.');
+  if (refs.length === 0) return [];
+  const repository = originRepository(readMeta(slug).path);
+  const jiraBaseUrl = boardConfig(slug).jiraBaseUrl;
+  const references = refs.map((reference) => externalReference(reference.trim(), repository, jiraBaseUrl));
+  return [...new Map(references.map((reference) => [reference.key, reference])).values()];
+}
+
+function patchExternalRefs(slug: string, ticket: { externalRefs?: { key: string; url: string | null }[] }, patch: { refs?: unknown }) {
+  if (patch.refs !== undefined) ticket.externalRefs = normalizeExternalRefs(slug, patch.refs);
 }
 
 function normalizeLabels(labels?: any) {
@@ -1407,6 +1422,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     // Resolved before the first field lands: a patch that mixes files with
     // addFiles/removeFiles throws here rather than after a title has been assigned.
     const filesPatch = patchedFileScope(t, patch);
+    patchExternalRefs(slug, t, patch);
     // After the closeout refusal, so a claim holder still hears to use scopeRequest and
     // only a control-plane caller that may change a live claim's scope meets this guard.
     if (patch.files !== undefined) assertLiveClaimReplace(t, normalizeFiles(patch.files));

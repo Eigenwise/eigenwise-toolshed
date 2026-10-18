@@ -75,7 +75,7 @@ export function buildPlan({
       if (!byPlugin.has(name)) byPlugin.set(name, { levels: [], entries: [], plugin });
       const bucket = byPlugin.get(name);
       bucket.levels.push(level);
-      bucket.entries.push({ ref: fragment.ref, title: fragment.title, level, commit: fragment.commit, body: fragment.body });
+      bucket.entries.push({ ref: fragment.ref, title: fragment.title, level, commit: fragment.commit, body: fragment.body, refs: fragment.refs });
     }
   }
 
@@ -102,6 +102,7 @@ export function buildPlan({
       title: fragment.title,
       commit: fragment.commit,
       body: fragment.body,
+      refs: fragment.refs,
     }));
 
   const releasable = selected.length > 0;

@@ -3,7 +3,8 @@ name: user-story
 description: >-
   Plan and dispatch work with 3+ independently checkable pieces and a stated reason for a story or
   wave. Bounded fixes default to one owner; small fixes in a few known files may run inline without
-  tickets. Read-only investigations may use native Explore or general-purpose agents without tickets.
+  tickets. Read-only investigations need no ticket: prefer the route_recipe research spawn over native
+  Explore.
 ---
 
 # user-story
@@ -37,7 +38,7 @@ Sizing is a call you make and state in a line, not a question you ask the user. 
 - **Blast radius**: does existing behavior change for people already using this?
 - **Stakes**: data loss, auth, money, the release path itself.
 
-A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave needs 3+ independently checkable pieces and a stated reason. A review panel needs a named risk for each lens.
+A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore or general-purpose agents stay for tiny lookups or unrouted projects. A story or wave needs 3+ independently checkable pieces and a stated reason. A review panel needs a named risk for each lens.
 
 Three sizes, and what each dial does at each:
 

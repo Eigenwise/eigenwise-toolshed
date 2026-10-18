@@ -13,7 +13,7 @@ function boardMcpSessionId() {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 28800;
+const MCP_TOOLS_LIST_MAX_BYTES = 29100;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -76,6 +76,8 @@ const CONDITIONAL_MUTATION_FIELDS = {
   new_board_profile: ["profile"],
   global_fallback: ["model", "effort"],
   board_config: [
+    "githubSync",
+    "jiraBaseUrl",
     "name",
     "alwaysInScope",
     "deniedTools",
@@ -260,9 +262,10 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     limit: "UTF-8 bytes."
   },
-  add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
+  add: { refs: "External issue refs.", complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: "Operator-only." },
   update: {
+    refs: "External issue refs.",
     verify: ATTESTATION_VERIFY_CONTRACT,
     addFiles: "Appends, keeps rest. Refused with files. Applied before removeFiles.",
     removeFiles: "Drop declared paths; conflicts with files. Isolated: now; shared: redispatch."

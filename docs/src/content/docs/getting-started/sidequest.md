@@ -170,7 +170,7 @@ unsupported measurement stays visible.
 
 ### Choose the planning depth
 
-A bounded fix defaults to one owner and a focused check. Small fixes in a few known files may run inline without a ticket. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave needs 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
+A bounded fix defaults to one owner and a focused check. Small fixes in a few known files may run inline without a ticket. Read-only investigations need no ticket either: on a routed project, `route_recipe(category).research` gives one read-only spawn that runs on that category's model (so codebase research and UX research can use different models). Native Explore or general-purpose agents still cover tiny lookups and unrouted projects. A story or wave needs 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
 
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
 tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine
@@ -271,6 +271,18 @@ Settings covers routing profiles, model fallback, theme, notification preference
 ![Sidequest settings dialog showing routing, appearance, tour, and notification controls](../../../assets/screenshots/sidequest-settings.png)
 
 *Synthetic demo data behind the Sidequest settings dialog.*
+
+## Link tickets to GitHub or Jira
+
+Tie a ticket to the issue it came from with `refs`:
+
+```text
+sidequest add -t "Fix the empty-cart total" --refs GH-123 --refs acme/shop#45 ...
+```
+
+Accepted forms are `GH-123` or `#123` (the repository needs a GitHub origin), `owner/repo#123`, a GitHub issue or pull request URL, and a Jira key such as `SHOP-123`. Jira keys only become links once you set the base URL with `sidequest board-config --jira-base-url https://team.atlassian.net`. Refs are deduplicated, `update` replaces the list, and `refs: []` clears it. Full ticket reads show the links, briefings show the keys, and a release fragment with `refs` links the issue key in the changelog bullet.
+
+To start from an existing issue, run `sidequest add --github <issue-or-pr-url>`. It reads the issue through the `gh` CLI, drops HTML comments and images from the body, and records the URL as a ref. Run `gh auth login` first if that fails. Refs only link the ticket to the issue; Sidequest does not write back to GitHub or Jira.
 
 ## Daily use
 

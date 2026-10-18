@@ -8,9 +8,8 @@ const AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notifi
 // ponytail: keyword-and-length heuristic; a greeting or a short status question stays silent.
 const CHANGE_VERB = /\b(?:add|build|implement|fix|refactor|change|update|create|write|remove|delete|rename|move|migrate|rewrite|port|wire|improve|investigate|audit|debug|make)\b/i;
 const GREETING_LENGTH = 60;
-const INLINE_WORK_WINDOW_KEYS = ['boardInteraction', 'readActions', 'substantiveActions', 'soloChoiceSurfaced', 'investigationChoiceSurfaced'];
 
-const ROUTED_BOARD_REMINDER = 'sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations may use native agents without tickets.';
+const ROUTED_BOARD_REMINDER = 'sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations run without tickets through the route_recipe(category).research spawn.';
 const NEW_BOARD_HINT = 'sidequest: no board here yet. I can offer one-owner dispatch; the first add creates the board. Small bounded fixes and read-only investigations may stay ticket-free.';
 
 interface Store {
@@ -37,16 +36,6 @@ function looksLikeWorkRequest(prompt: string): boolean {
   return CHANGE_VERB.test(prompt) || prompt.length > GREETING_LENGTH;
 }
 
-// A board call silences the inline-work nudge only until the next prompt, so a later inline burst is still counted.
-// boardTouchedEarlier keeps the Explore fan-out cap lifted for the rest of the session.
-function reopenInlineWorkWindow(sessionId: string): void {
-  const file = sessionStateFile('inline-work', sessionId);
-  const state = readSessionState(file);
-  if (!state.boardInteraction) return;
-  for (const key of INLINE_WORK_WINDOW_KEYS) delete state[key];
-  writeSessionState(file, { ...state, boardTouchedEarlier: true });
-}
-
 function remindOnce(input: HookInput, sessionId: string, prompt: string): void {
   const file = sessionStateFile('board-first', sessionId);
   const state = readSessionState(file);
@@ -70,7 +59,6 @@ function main(): void {
   const sessionId = stringField(input, 'session_id', 'sessionId').trim();
   const prompt = humanPrompt(input);
   if (isSubagent(input) || !sessionId || !prompt) return;
-  reopenInlineWorkWindow(sessionId);
   remindOnce(input, sessionId, prompt);
 }
 

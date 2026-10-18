@@ -266,6 +266,13 @@
             "type": "string"
           }
         },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "External issue refs."
+        },
         "files": {
           "type": "array",
           "items": {
@@ -444,6 +451,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "External issue refs."
         },
         "files": {
           "type": "array",
@@ -2467,6 +2481,17 @@
         "worktreeRecoveryRetentionAgeHours": {
           "type": "integer",
           "minimum": 1
+        },
+        "jiraBaseUrl": {
+          "type": "string"
+        },
+        "githubSync": {
+          "type": "string",
+          "enum": [
+            "off",
+            "comment",
+            "close"
+          ]
         },
         "autoApproveTestScope": {
           "type": "boolean"

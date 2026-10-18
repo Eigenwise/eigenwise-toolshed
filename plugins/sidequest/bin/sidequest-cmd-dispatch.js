@@ -237,6 +237,8 @@ const BOARD_CONFIG_OPTION_PATCH_KEYS = {
   "worktree-base": "worktreeBase",
   "not-integrated-salvage-age-hours": "notIntegratedSalvageAgeHours",
   "worktree-recovery-retention-age-hours": "worktreeRecoveryRetentionAgeHours",
+  "jira-base-url": "jiraBaseUrl",
+  "github-sync": "githubSync",
   "auto-approve-test-scope": "autoApproveTestScope",
   "auto-approve-scope": "autoApproveScope",
   "worktree-setup": "worktreeSetup"
@@ -276,6 +278,7 @@ function dependencyPathLabel(dependency) {
 }
 function printBoardConfig(payload) {
   console.log(`board name: ${payload.name}`);
+  console.log(`Jira base URL: ${payload.jiraBaseUrl}`);
   console.log(`always in scope: ${listOrNone(payload.alwaysInScope)}`);
   console.log(`generated pairs: ${listOrNone(payload.generatedPairs.map(generatedPairLabel))}`);
   console.log(`integration mode: ${payload.integrationMode}`);

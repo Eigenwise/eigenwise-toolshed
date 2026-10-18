@@ -51,4 +51,6 @@ Quartermaster's updater covers every active Eigenwise Toolshed install in Claude
 
 Freshness hooks report cached availability and loaded-version mismatches. They do not install plugins or restart Claude Code. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace. After any plugin update, reload affected open sessions. Restart Claude Code when process-level gateway wiring or model discovery changed.
 
+Quality Gate is an optional extra install. Quality Gate measures the code Claude writes: it scores each new or changed function by complexity and test coverage (CRAP), not by pattern matching on text, and works the moment you install it. See the [Quality Gate guide](./quality-gate/).
+
 The [generated plugin reference](../reference/) lists the agent-facing skills, hooks, and commands. Maintainer material lives under [contributing](../contributing/), and the separate [support page](https://eigenwise.github.io/eigenwise-toolshed/support/) covers ways to help.

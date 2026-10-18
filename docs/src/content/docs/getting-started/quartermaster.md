@@ -22,7 +22,7 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Setup reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. Its starter rules teach agents to trace the real flow, question whether new code is needed, and reuse existing code, the standard library, native platform features, or installed dependencies before adding anything. Every workspace gets the clean-code baseline as a live rule. When a change is needed, they favor the smallest shared-root fix, preserve trust, data-loss, security, and accessibility safeguards, use focused regression checks, and leave the full gate to the integration owner.
+Setup reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. It no longer seeds clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
 
 Before it names a plugin in that plan, setup can check current sources for whether the plugin is still maintained, whether the description in the local catalog has gone stale, and whether something fits better, including something from a marketplace you have not added yet. Those lookups are bounded to the few candidates that would lead to an install, and searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. With `WebSearch` and `WebFetch` turned off, Claude skips the check and labels the proposals unresearched rather than implying they were verified. What it reads informs the proposal; your approval is still what authorizes the install.
 
@@ -52,8 +52,8 @@ Setup installs the approved plugins and writes the approved project files, then 
 
 ### Keep complex code tested
 
-The quality gate is optional. Run `/quartermaster:setup` and approve its CRAP gate proposal to turn
-it on. CRAP combines a function's branching complexity and test coverage, so a large function with
+Quality Gate works on install, with complexity alone. Setup offers one thing on top: the coverage upgrade, so the
+gate can score measured CRAP. CRAP combines a function's branching complexity and test coverage, so a large function with
 little coverage gets a high score. The gate owns its threshold and checks new or modified functions;
 untouched legacy functions stay out of scope. Without a configured gate, run your tests and continue.
 

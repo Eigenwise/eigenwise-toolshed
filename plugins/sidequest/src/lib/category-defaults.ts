@@ -91,7 +91,7 @@ export const DEFAULT_CATEGORIES = [
     description: 'Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. Adversarially checking interactions and tracing concrete impact requires high code-review capability. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review when the ticket calls for it.',
     route: { model: 'sonnet', effort: 'medium' },
     fallback: { model: 'sonnet', effort: 'medium' },
-    contract: 'Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.',
+    contract: 'Report concrete findings with evidence, confidence, and impact; do not edit unless asked. Report in the quality-gate review format: a CRAP table for changed bodies when quality-gate is installed, then numbered four-part findings grouped Must/Should/Nice, ending with Verdict, Lean and Not checked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.',
     artifactRoots: [],
     readonly: true,
     enabled: true,

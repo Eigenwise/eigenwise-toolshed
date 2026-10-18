@@ -181,6 +181,31 @@ test('preparing a ticket without a recorded verifier pins the legacy custom requ
   assert.equal(store.releaseTicket(slug, ticket.ref, 'no-verifier-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+test('US-84 D1: every dispatch write rewrites the project dispatch snapshot the guards module reads', () => {
+  const snapshotFile = path.join(SIDEQUEST_HOME, 'projects', slug, 'dispatch-snapshot.json');
+  const readRow = (ref: string) => JSON.parse(fs.readFileSync(snapshotFile, 'utf8')).dispatches.find((row: { ref: string }) => row.ref === ref);
+  store.setBoardConfig(slug, { deniedTools: ['WebFetch'] });
+  try {
+    const ticket = createFixture('dispatch snapshot rows');
+    store.prepareDispatch(slug, ticket.ref, { sessionId: 'snapshot-session' });
+
+    const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
+    assert.equal(snapshot.v, 1);
+    assert.ok(Date.parse(snapshot.at));
+    assert.equal(snapshot.routed, store.projectDispatchAdmission(slug).status === 'routed');
+    assert.deepEqual(fs.readdirSync(path.dirname(snapshotFile)).filter((name: string) => name.endsWith('.tmp')), []);
+    assert.deepEqual(
+      { ...readRow(ticket.ref), executor: typeof readRow(ticket.ref).executor },
+      { ref: ticket.ref, sessionId: 'snapshot-session', claimSessionId: null, agentId: null, agentName: readRow(ticket.ref).agentName, executor: 'string', worktree: readRow(ticket.ref).worktree, sharedTree: readRow(ticket.ref).sharedTree, readonly: false, state: 'prepared', deniedTools: ['WebFetch'] },
+    );
+
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'snapshot-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+    assert.notEqual(readRow(ticket.ref)?.state ?? 'gone', 'prepared');
+  } finally {
+    store.setBoardConfig(slug, { deniedTools: [] });
+  }
+});
+
 function commandVerifyFixture(title: string, extra: Record<string, unknown> = {}) {
   return store.createTicket(slug, { title, category: 'dispatch.lifecycle', files: ['tracked.js'], executorVerify: 'node -e 0', source: 'test', ...extra });
 }

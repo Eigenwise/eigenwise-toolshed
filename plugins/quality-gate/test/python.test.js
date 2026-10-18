@@ -270,6 +270,8 @@ test('repeatable CLI source selectors narrow configured scope and keep exclusion
   const defaults = await crapReport({ project: root, ccOnly: true, source: ['src'] });
   assert.deepEqual(Object.keys(defaults.files).sort(), ['src/first.py', 'src/second.py']);
   await fs.rm(configPath);
+  git(root, ['init', '-q']);
+  git(root, ['add', '.']);
   const selected = await crapReport({ project: root, ccOnly: true, source: ['src/second.py', 'subject.py'] });
   assert.deepEqual(Object.keys(selected.files).sort(), ['src/second.py', 'subject.py']);
 });

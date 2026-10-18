@@ -5,7 +5,7 @@
   "type": "module",
   "engines": { "node": ">=22.5.0" },
   "bin": { "quality-gate": "bin/quality-gate.js" },
-  "scripts": { "test": "node --test --test-timeout=120000 test/*.test.js" },
+  "scripts": { "test": "node --test --test-concurrency=2 --test-timeout=120000 test/*.test.js" },
   "dependencies": { "typescript": "7.0.2" },
   "devDependencies": { "esbuild": "0.28.1" }
 }

@@ -216,8 +216,7 @@ function writeSessionState(file, state) {
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 var CHANGE_VERB = /\b(?:add|build|implement|fix|refactor|change|update|create|write|remove|delete|rename|move|migrate|rewrite|port|wire|improve|investigate|audit|debug|make)\b/i;
 var GREETING_LENGTH = 60;
-var INLINE_WORK_WINDOW_KEYS = ["boardInteraction", "readActions", "substantiveActions", "soloChoiceSurfaced", "investigationChoiceSurfaced"];
-var ROUTED_BOARD_REMINDER = "sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations may use native agents without tickets.";
+var ROUTED_BOARD_REMINDER = "sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations run without tickets through the route_recipe(category).research spawn.";
 var NEW_BOARD_HINT = "sidequest: no board here yet. I can offer one-owner dispatch; the first add creates the board. Small bounded fixes and read-only investigations may stay ticket-free.";
 function projectRoot(input, store) {
   return store.nearestRepoRoot(stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd());
@@ -231,13 +230,6 @@ function boardReminder(input) {
 }
 function looksLikeWorkRequest(prompt) {
   return CHANGE_VERB.test(prompt) || prompt.length > GREETING_LENGTH;
-}
-function reopenInlineWorkWindow(sessionId2) {
-  const file = sessionStateFile("inline-work", sessionId2);
-  const state = readSessionState(file);
-  if (!state.boardInteraction) return;
-  for (const key of INLINE_WORK_WINDOW_KEYS) delete state[key];
-  writeSessionState(file, { ...state, boardTouchedEarlier: true });
 }
 function remindOnce(input, sessionId2, prompt) {
   const file = sessionStateFile("board-first", sessionId2);
@@ -260,7 +252,6 @@ function main() {
   const sessionId2 = stringField(input, "session_id", "sessionId").trim();
   const prompt = humanPrompt(input);
   if (isSubagent(input) || !sessionId2 || !prompt) return;
-  reopenInlineWorkWindow(sessionId2);
   remindOnce(input, sessionId2, prompt);
 }
 try {

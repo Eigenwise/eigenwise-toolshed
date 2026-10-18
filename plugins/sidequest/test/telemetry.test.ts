@@ -84,7 +84,7 @@ test('seed telemetry fixture', () => {
 
 test('CLI and MCP pulse return the compact liveness shape with git activity', async () => {
   const pulse = cliJson<Pulse>(['pulse', ref]);
-  assert.deepStrictEqual(Object.keys(pulse).sort(), ['archived', 'checkpoint', 'claim', 'claimHeld', 'comments', 'delivery', 'died', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastComment', 'liveness', 'livenessEvidence', 'project', 'projectName', 'reclaimable', 'ref', 'scope', 'status', 'submission', 'title']);
+  assert.deepStrictEqual(Object.keys(pulse).sort(), ['archived', 'checkpoint', 'claim', 'claimHeld', 'comments', 'delivery', 'died', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastComment', 'liveness', 'livenessEvidence', 'project', 'projectName', 'reclaimable', 'ref', 'refs', 'scope', 'status', 'submission', 'title']);
   assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'boardQuietMs', 'boardQuietNote', 'by', 'lastBoardActivityAt', 'reclaimable', 'stale', 'staleAfterMs', 'verifying']);
   assert.strictEqual(pulse.claim.verifying, false);
   assert.match(pulse.claim.boardQuietNote, /not process liveness/);

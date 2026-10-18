@@ -1,12 +1,35 @@
 # Quality Gate
 
-Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. It uses TypeScript 7 from the scored project first, then the plugin's installed dependency. Install the plugin's dependencies with `npm install` in this directory if neither has the supported parser API.
+```text
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install quality-gate@eigenwise-toolshed
+```
+
+The first run installs the parser; nothing to do by hand. Node 22.5+ and npm are required. Quality Gate keeps TypeScript 7 in the plugin, with a shared installation lock and a 180-second deadline. `quality-gate provision` installs only the parser, or exits 0 when it is present. Offline or missing npm exits 2 with `npm install --prefix <plugin root>` as the remedy.
+
+Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. No config is required. Without LCOV at `coverage/lcov.info`, `crap` checks complexity only and prints a coverage setup notice. Explicit LCOV and coverage commands still require authentic measured coverage.
 
 `--source <path>` narrows configured or default sources for one run without changing config. Repeat it for multiple files or directories, relative to the measured project root, for example `crap --project <root> --source src/changed.py --source src/other.py --cc-only`. Config exclusions still apply; selectors cannot widen configured sources.
 
 Invalid UTF-8, Python syntax errors and lone surrogates produce an informational UNVERIFIED row for that file. Other selected files are still measured.
 
 The CRAP report also prints informational reuse signals after scored rows, including with `--cc-only`. `DUPLICATE? name ≈ other (file:line)` means a new body shares a name (ignoring case, underscores and hyphens) with a top-level JS/TS/Python definition in another source file at HEAD. `CALLERS OPEN name: file:line` lists up to two remaining call sites outside a removed body's old file. Removal uses the existing baseline/body pairing, including deleted files within the selected scope. Tests, fixtures, vendored and generated paths are skipped. These are regex/name checks: nested definitions are missed, and a same-named call in another module can count. They never change the verdict, exit code or receipts. JSON reports put the rows under `signals`; the summary includes the reuse-signal count.
+
+## Live measurement
+
+The hooks module records edits and test-command results by working directory. After each turn with edits, it runs the plugin's CLI once per edited working directory to measure changed function complexity and reuse signals, then publishes the report with test pass/fail and stale status. Each CLI run has a 20-second timeout; tool calls never launch measurement. Subagent worktrees stay separate. Without coverage, it shows `quality-gate: complexity only, coverage not set up` once per session. Measurement failures leave the previous report untouched. Above the prompt, a single line stacks above other bands: `$<cost> · CC <max> <ok|SPLIT n> · tests <pass|fail|none>[ stale]`. SPLIT counts new or complexity-raised bodies at CC 6 or higher. The first unverified report adds `· coverage not set up`, then the status line keeps the reminder. The band yields to surveys and disappears with `/quality-gate off` or before the first report.
+
+## Turn measurement and inventory
+
+```text
+quality-gate turn --json --project <root>
+quality-gate turn --json --project <root> --since 2026-10-18T08:00:00Z
+quality-gate inventory --project <root> --bytes 2048
+```
+
+`turn` measures staged, unstaged and untracked JS/TS/Python edits against HEAD. `--since` selects tracked and untracked files by modification time instead. It returns `{bodies, signals, unverified, lcov}`; each body has `{file, name, cc, state, verdict}`. States are `new`, `modified-raised`, `legacy-unchanged`; verdicts are `pass`, `fail`, `unverified`. Signals have `{kind, file, name, detail}` with kinds `duplicate` or `open-callers`. Coverage is never run or claimed: `unverified` is true and `lcov` is the detected default path or null.
+
+`inventory` reuses the name-based top-level definition inventory at HEAD (JS/TS/Python, excluding tests and generated/vendor paths). Each line is `name file`; truncated output ends with `… N more`. The byte limit includes that line; budgets too small for the omission line produce no output.
 
 ## Project CRAP gate
 
@@ -27,7 +50,7 @@ node plugins/quality-gate/bin/quality-gate.js crap --project <root> --base <revi
 }
 ```
 
-Defaults: sources `.`, no exclusions, `coverage/lcov.info`, no coverage command, local `develop`, `main` or `master` as the base. If none exists, or `--base HEAD` is selected, all selected bodies are scored. `--base` uses the merge base with HEAD, and only selected files that differ from it (or are untracked) are parsed, so unchanged files never cost a parse. One TypeScript parser process serves the whole run and has exited before the report returns. `--ratchet` and config `ratchet` remain accepted with a deprecation notice. `max` is accepted only as 6. Directory scans skip `.git`, `node_modules` and `.claude`; explicitly named files still work.
+Defaults: tracked JS/TS/Python files from `git ls-files`, excluding node_modules, dist, build, coverage, vendor and `**/test/fixtures/**`, `coverage/lcov.info`, no coverage command, local `develop`, `main` or `master` as the base. If none exists, or `--base HEAD` is selected, all selected bodies are scored. `--base` uses the merge base with HEAD, and only selected files that differ from it (or are untracked) are parsed, so unchanged files never cost a parse. One TypeScript parser process serves the whole run and has exited before the report returns. `--ratchet` and config `ratchet` remain accepted with a deprecation notice. `max` is accepted only as 6. Directory scans skip `.git`, `node_modules` and `.claude`; explicitly named files still work.
 
 Each changed body is `new`, `modified-raised` (complexity increased) or `legacy-unchanged` (complexity held or fell). New and complexity-raised bodies must score strictly below 6 with measured coverage. Legacy edits with equal or lower complexity are informational LEGACY rows, with their measured numbers; they never fail the gate. Exact owned source bytes determine change, so comments and formatting count. Nested owned bodies are excluded from their parent's fingerprint. Explicit user/project rules remain authoritative. Scores are compared before display rounding. Functions unchanged at the base don't enter the scoring scope; an empty scope says `nothing to score` and why.
 
@@ -75,7 +98,7 @@ Python compiles the exact parsed source with optimization disabled to inventory 
 
 Use locally installed `coverage.py` (for example `pipx install coverage`) to generate LCOV with `coverage run script.py` then `coverage lcov -o <path>`. A coverageCommand can write its data file and LCOV into `QUALITY_GATE_COVERAGE_DIR`. The live regression skips with an explicit UNVERIFIED reason when coverage.py is absent; the adapter itself needs only Python.
 
-## Same-byte coverage
+## Upgrade to measured coverage
 
 `--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. `$VAR`, `${VAR}` and `%VAR%` in the command are expanded from its environment before it is spawned, so one command works under cmd.exe and sh alike; an unset name stays as written. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
 
@@ -97,7 +120,7 @@ Every completed Git gate run writes `.claude/quality-gate/receipts/<head-sha>.js
 
 Schema: `gateVersion` (`crap-1`), `pythonPolicy`, optional `pythonOracles`, `project` (measured root), `base`, `head`, `files` (relative path to SHA-256 map), `rowCounts` (`new`, `modified-raised`, `legacy-unchanged`, `unverified`), `verdict`, `timestamp`, `ccOnly` and `reasons`. Verdicts are `passed`, `failed`, `unverified` or `nothing to score`. Informational-unverified rows still produce an unverified receipt, even with exit 0. A prerequisite receipt has an empty file map and its reason.
 
-Hooks aren't installed here. A consumer must compare the receipt's root, HEAD and file hashes with the current tree; it must not accept `ccOnly`, `nothing to score`, failed or unverified as a full CRAP pass. The Q3 consumers report unverified receipts once per session, avoiding repeated blocking loops.
+The live measurement hook publishes informational turn reports, not acceptance receipts. A receipt consumer must compare the receipt's root, HEAD and file hashes with the current tree; it must not accept `ccOnly`, `nothing to score`, failed or unverified as a full CRAP pass. The Q3 consumers report unverified receipts once per session, avoiding repeated blocking loops.
 
 ## Existing V8 measurement entry
 
@@ -120,3 +143,40 @@ Declarations must name normalized absolute canonical regular `.js`, `.cjs` or `.
 Ordinary CommonJS exports, nested callbacks, object/getter/async and instance methods use the existing exact AST/runtime ranges. Static methods without an exact runtime twin stay UNVERIFIED. Patched wrappers and unsupported or ambiguous compiler maps also stay UNVERIFIED. Exact uncalled records measure zero; absent bodies and interrupted or unpreloaded child captures stay UNVERIFIED. Complexity 2 at zero coverage scores 6 and fails the strict threshold.
 
 Function names never establish runtime ownership. Exact runtime function ranges are matched to the AST of the captured executable bytes. Direct-source text must match the scored text. Transformed text needs its own embedded single-source compiler map naming the scored file with matching `sourcesContent` and exact body/boundary correspondence. A runtime body needs exactly one AST twin with an exact closing-token end plus one of three start anchors: the exact body opening, the exact runtime declaration start after the export prefix, or an exact compiler segment joining the generated and original whole AST declaration starts. Native TypeScript return annotations can erase the body-opening mapping. CommonJS emission can also erase the export prefix, so the generated function start maps to the original AST start before export. That whole-declaration anchor must be a compiler segment at exactly the generated start, with no nearest-segment interpolation; its original coordinate must be the scored AST declaration start. The matching closing token and unique runtime twin are still required. Body-opening matching stays supported for TypeScript-only public/private/override modifiers whose declaration start is unmapped. All supported start anchors missing, ambiguous twins and later unmapped coverage boundaries stay UNVERIFIED. Re-indented logical-operator starts and finally keywords can also bind through their own AST syntax inside the unique owned runtime twin. A logical operator needs the same token kind and exact compiler-mapped first and last bytes of its right operand; finally needs its actual TryStatement keyword and exact mapped block braces. Both directions require a unique correspondence. Missing, shifted, duplicate or wrong-owner syntax stays UNVERIFIED; this never joins nearest tokens or changes owned-text denominators. names and nearby tokens never supply a fallback. Compilers re-indent the whitespace before a closing token, so a coverage block end whose last byte has no exact correspondence binds through the compiler-mapped token at that end instead, and only when that token's own byte matches the source. Missing or ambiguous correspondence is UNVERIFIED. Generated export getters and functions with duplicate names keep separate ranges; an exact recorded body with zero hits stays at zero. An absent owned runtime range stays UNVERIFIED; other sessions can supply a present exact record. Coverage intervals are clipped to each body's owned text, excluding nested functions. No proportional source/output scaling or sibling-order fallback is used. The installed tsx emits maps with null source content; those captures stay UNVERIFIED. Read-only parser probes can run without capture; a capture process needs write access to its output directory. The Toolshed repository gate uses this shared core and its existing CLI/report format.
+
+## What the model is told
+
+The only persona text is [`skills/quality/PERSONA.md`](skills/quality/PERSONA.md). The hooks module reads that file into the last session-scoped system-prompt section, including teammate renders. It appends the reuse inventory once at session start when the CLI succeeds. Parser provisioning starts in the background; a missing CLI or failed inventory is silently skipped.
+
+Install with `/plugin install quality-gate --marketplace Eigenwise/eigenwise-toolshed`.
+
+- `/quality-gate on` or `/quality-gate off` switches persona injection (on by default).
+- `/quality-gate markers on` or `/quality-gate markers off` switches source shortcut comments to reply-end shortcut limits (markers on by default).
+- `/quality-gate status` prints both switches on one line.
+
+The switches persist across sessions. Organization-managed Claude Code runs prompt-compose hooks only for plugins allowed by managed settings.
+
+Ponytail’s persona contradicts this one on the test bar and the marker. Uninstall ponytail when both are installed.
+
+## Review
+
+Run `/quality-gate:review` for the diff (default), `/quality-gate:review repo` for a repository audit capped at 20 findings, or `/quality-gate:review debt` for shortcut markers and the latest receipt. The skill is auto-discovered from `skills/review/SKILL.md`. It reads callers and reuse signals, consumes existing LCOV only, and never runs tests unasked. Failed measurement is reported without a table. Debt mode reads the latest receipt and a live repo measurement; if measurement cannot run, it reports stored counts/reasons without reconstructing missing per-body rows.
+
+Example output (illustrative, complexity-only):
+
+```text
+Coverage: complexity only, no LCOV present
+Body (file:line)       CC  Coverage    CRAP        State
+src/cart.ts:12 total   2   UNVERIFIED  UNVERIFIED  UNVERIFIED
+
+Must
+1. What this is: total sums cart prices.
+   Problem: an empty cart calls reduce without an initial value and throws.
+   Fix: supply 0 as the initial value.
+   If we skip it: empty-cart checkout fails.
+Should: none
+Nice: none
+Verdict: fix empty-cart checkout before shipping.
+Lean: -0 lines
+Not checked: tests were not run; coverage is unavailable.
+```
