@@ -65,7 +65,6 @@ const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
 const STOP = path.join(HOOKS, 'stop.js');
 const POST_COMPACT = path.join(HOOKS, 'post-compact.js');
-const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
 const WORKTREE_CREATE = path.join(HOOKS, 'worktree-create.js');
 
 // The PreToolUse guards run in the hooks module (hooks/guards/register.ts). These tests drive the pure decisions it
@@ -768,47 +767,6 @@ test('pre-tool hook: an executor cannot redispatch its own active ticket', () =>
     tool_input: { command: `sidequest dispatch ${ticket.ref}` },
   });
   assert.equal(shellBlocked.hookSpecificOutput.permissionDecision, 'deny');
-});
-
-test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
-  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-commit-'));
-  gitFixture(['init', '-b', 'main', '--quiet'], projectPath);
-  gitFixture(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], projectPath);
-  const project = store.ensureProject(projectPath).slug;
-  const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', files: ['src/shared.ts'], source: 'cli' });
-  const sessionId = `shared-commit-${++sqSeq}`;
-  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
-  const agentId = `shared-commit-agent-${sqSeq}`;
-  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
-    sessionId,
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
-    agentName: agentId,
-  }).ok, true);
-  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
-  assert.equal(store.claimTicket(project, ticket.ref, 'shared-commit-worker', {
-    sessionId,
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
-  }).ok, true);
-
-  const payload = {
-    session_id: sessionId,
-    agent_type: prepared.ticket.dispatchExecutor,
-    agent_id: agentId,
-    cwd: projectPath,
-    tool_name: 'Bash',
-    tool_input: { command: 'git commit -m "bypass"' },
-  };
-  const blocked = runHookOutput(GUARD_SHARED_TREE_COMMIT, payload);
-  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
-  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /mcp__plugin_sidequest_board__commit/);
-
-  assert.equal(runHookOutput(GUARD_SHARED_TREE_COMMIT, { ...payload, agent_id: 'unrelated-agent' }), null);
-  assert.equal(runHookOutput(GUARD_SHARED_TREE_COMMIT, payload, {
-    CLAUDE_PLUGIN_ROOT: path.join(os.tmpdir(), 'missing-sidequest-plugin'),
-  }), null);
 });
 
 test('pre-tool hook: readonly Claude executors inherit the session mode while dispatch executors require preparation', () => {
