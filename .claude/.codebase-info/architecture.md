@@ -1,10 +1,10 @@
 # Architecture
 
-Last Updated: 2026-10-17
+Last Updated: 2026-10-18
 
 ## Repository shape
 
-The repository is a plugin marketplace. Six plugins are registered in `.claude-plugin/marketplace.json`: `plugins/sidequest`, `plugins/observability`, `plugins/model-gateway`, `plugins/live-rules`, `plugins/codebase-mapper`, and `plugins/quartermaster`. `plugins/test-support` is shared test support, not a plugin.
+The repository is a plugin marketplace. Seven plugins are registered in `.claude-plugin/marketplace.json`: `plugins/sidequest`, `plugins/observability`, `plugins/model-gateway`, `plugins/live-rules`, `plugins/codebase-mapper`, `plugins/quartermaster`, and `plugins/quality-gate`. `plugins/test-support` is shared test support, not a plugin.
 
 ## Runtime flow
 

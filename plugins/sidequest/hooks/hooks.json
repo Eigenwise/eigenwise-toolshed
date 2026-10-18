@@ -28,46 +28,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "SendMessage",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__plugin_sidequest_board__dispatch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__plugin_sidequest_board__(update|scopeRequest|remove|verdict)",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "mcp__plugin_sidequest_board__.*",
         "hooks": [
           {
@@ -78,53 +38,8 @@
         ]
       },
       {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-shared-checkout-git.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive-git.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-shared-tree-commit.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-worktree-isolation.js\"",

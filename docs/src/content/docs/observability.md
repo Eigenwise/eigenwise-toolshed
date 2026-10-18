@@ -16,7 +16,7 @@ Installing the plugin does not opt any project in.
 
 ## What the board shows
 
-![Observability board in dark mode with cost, agent time, token and session tiles, quota gauges, and a per-project cost chart, rendered from synthetic fixture rows](../../../assets/screenshots/observability-board.png)
+![Observability board in dark mode with cost, agent time, token and session tiles, quota gauges, and a per-project cost chart, rendered from synthetic fixture rows](../../assets/screenshots/observability-board.png)
 
 The board shows cost, agent time, tokens, sessions, quota usage, project activity, model mix, tool calls and failures, ticket totals, session outcomes, and activity streaks. Filter by project, period, or session name. Cost uses the engine's own /cost figure, with per-turn differences from its session total. There are no price tables or estimates. Agent time sums turn durations; it can exceed elapsed wall time when sessions overlap.
 

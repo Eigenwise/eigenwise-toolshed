@@ -17,7 +17,7 @@ export type SnapshotRow = {
   deniedTools: string[];
 };
 
-export type Snapshot = { routed: boolean; dispatches: SnapshotRow[] };
+export type Snapshot = { at: string; routed: boolean; dispatches: SnapshotRow[] };
 
 const LIVE_STATES = new Set(['prepared', 'launched', 'bound', 'claimed']);
 

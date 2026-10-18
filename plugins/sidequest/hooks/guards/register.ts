@@ -1,12 +1,13 @@
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import {
-  callerRow, deniedToolsDenial, heredocDenial, inlineWorkNudge, inlineWorkStep, isolatedPeerRow, missingWorktreeDenial,
+  deniedToolsDenial, heredocDenial, inlineWorkNudge, inlineWorkStep, isolatedPeerRow, missingWorktreeDenial,
   repeatedCommandStep, REPEATED_COMMAND_WARNING, taskOutputDenial, terminalPeerDenial, terminalPeerRow,
 } from './context-guards.js'
-import type { SnapshotRow } from './context-guards.js'
 import type { InlineWork } from '../../types/index.js'
-import { boardExists, machine, projectDirectory, readSnapshot, worktreeExists } from './snapshot.js'
+import { destructiveGitDenial, sharedCheckoutGitDenial } from './git-guards.js'
+import { registerExecutorAdmission } from './executor-admission.js'
+import { boardExists, caller, machine, projectDirectory, readSnapshot, sessionRows, worktreeExists } from './snapshot.js'
 import { bashWindowsPathVerdict, homeDeleteDenial, powershellShimContext } from './text-guards.js'
 import type { GuardVerdict } from './text-guards.js'
 
@@ -25,14 +26,6 @@ function textField(e: object, name: string): string {
 function withContext(ran: ToolCallResult, context: string | null): ToolCallResult {
   if (!context || ran.deny !== undefined) return ran
   return { ...ran, context: [...(ran.context ?? []), context] }
-}
-
-async function sessionRows($: EngineInterface): Promise<SnapshotRow[]> {
-  return (await readSnapshot($, await projectDirectory($, await $.session.cwd())))?.dispatches ?? []
-}
-
-async function caller($: EngineInterface, agentId: string | undefined): Promise<SnapshotRow | null> {
-  return callerRow(await sessionRows($), agentId, await $.session.id())
 }
 
 function contextOf(verdict: GuardVerdict): string | null {
@@ -101,12 +94,36 @@ async function inlineWorkGuard($: EngineInterface, e: { tool: string; agentId?: 
 }
 
 export const register: Register = on => {
+  registerExecutorAdmission(on)
+
   on('tool.call', { tool: /^(Bash|PowerShell)$/ }, async ($, e, next) => {
     try {
       const denial = homeDeleteDenial(textField(e, 'command'), await machine($))
       if (denial) return { deny: denial }
     } catch {
       $.ui.status('sidequest: guard-home-delete skipped')
+    }
+    return next(e)
+  })
+
+  // The one guard that fails closed: a reset or push it could not check may destroy or publish work.
+  on('tool.call', { tool: /^(Bash|PowerShell)$/ }, async ($, e, next) => {
+    const command = textField(e, 'command')
+    let denial: string | null
+    try {
+      denial = await destructiveGitDenial($, command)
+    } catch {
+      denial = `sidequest: destructive git guard could not run; refusing ${command.slice(0, 300)}`
+    }
+    return denial ? { deny: denial } : next(e)
+  })
+
+  on('tool.call', { tool: /^(Bash|PowerShell)$/ }, async ($, e, next) => {
+    try {
+      const denial = await sharedCheckoutGitDenial($, textField(e, 'command'), e.agentId)
+      if (denial) return { deny: denial }
+    } catch {
+      $.ui.status('sidequest: guard-shared-checkout-git skipped')
     }
     return next(e)
   })
