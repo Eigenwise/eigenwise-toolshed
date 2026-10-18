@@ -28,21 +28,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inline-work-nudge.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-denied-tools.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "Agent",
         "hooks": [
           {
@@ -53,23 +38,8 @@
         ]
       },
       {
-        "matcher": "TaskOutput",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-task-output.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "SendMessage",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-peer-message.js\"",
-            "timeout": 10
-          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
@@ -113,41 +83,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-home-delete.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/repeated-command-warn.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-bash-windows-paths.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-heredoc-isolated.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-powershell-cmd-shims.js\"",
             "timeout": 10
           }
         ]

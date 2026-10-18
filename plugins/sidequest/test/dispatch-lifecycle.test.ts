@@ -192,10 +192,11 @@ test('US-84 D1: every dispatch write rewrites the project dispatch snapshot the 
     const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
     assert.equal(snapshot.v, 1);
     assert.ok(Date.parse(snapshot.at));
+    assert.equal(snapshot.routed, store.projectDispatchAdmission(slug).status === 'routed');
     assert.deepEqual(fs.readdirSync(path.dirname(snapshotFile)).filter((name: string) => name.endsWith('.tmp')), []);
     assert.deepEqual(
       { ...readRow(ticket.ref), executor: typeof readRow(ticket.ref).executor },
-      { ref: ticket.ref, sessionId: 'snapshot-session', agentId: null, agentName: readRow(ticket.ref).agentName, executor: 'string', worktree: readRow(ticket.ref).worktree, sharedTree: readRow(ticket.ref).sharedTree, readonly: false, state: 'prepared', deniedTools: ['WebFetch'] },
+      { ref: ticket.ref, sessionId: 'snapshot-session', claimSessionId: null, agentId: null, agentName: readRow(ticket.ref).agentName, executor: 'string', worktree: readRow(ticket.ref).worktree, sharedTree: readRow(ticket.ref).sharedTree, readonly: false, state: 'prepared', deniedTools: ['WebFetch'] },
     );
 
     assert.equal(store.releaseTicket(slug, ticket.ref, 'snapshot-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);

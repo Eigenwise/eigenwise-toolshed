@@ -49,8 +49,10 @@ function isProtectedPath(argumentsAfterDelete: string, machine: Machine): boolea
   return targets
     .filter((target) => target !== '\\' && isAbsolute(target, machine))
     .some((target) => {
-      const normalized = normalizePath(resolveAbsolute(target, { ...machine, home }));
-      if (normalized === normalizePath(root)) return true;
+      const resolved = resolveAbsolute(target, { ...machine, home });
+      // Any drive root, not only the home drive's: resolveAbsolute ends in the separator only for a root.
+      if (resolved.endsWith(separator)) return true;
+      const normalized = normalizePath(resolved);
       return protectedRoots.some((protectedRoot) => protectedRoot === normalized || protectedRoot.startsWith(`${normalized}${separator}`));
     });
 }

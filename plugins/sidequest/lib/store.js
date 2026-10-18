@@ -1839,6 +1839,13 @@ function scheduleDispatchSnapshot(slug) {
     }
   });
 }
+function refreshingDispatchSnapshot(write) {
+  return (slug, ...rest) => {
+    const result = write(slug, ...rest);
+    scheduleDispatchSnapshot(slug);
+    return result;
+  };
+}
 function putTicket(slug, ticket) {
   putCachedRow(database(), "tickets", ticketStorageRow(slug, ticket));
   if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
@@ -3951,7 +3958,7 @@ module.exports = {
   promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
-  setProjectRoutingProfile,
+  setProjectRoutingProfile: refreshingDispatchSnapshot(setProjectRoutingProfile),
   setNewProjectRoutingProfile,
   routingProfileEntries,
   routingProfileCategory,
@@ -3961,9 +3968,9 @@ module.exports = {
   getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
-  setProjectCategory,
+  setProjectCategory: refreshingDispatchSnapshot(setProjectCategory),
   detachCategory,
-  removeProjectCategory,
+  removeProjectCategory: refreshingDispatchSnapshot(removeProjectCategory),
   setCategory,
   removeCategory,
   homeRoot,
@@ -3979,7 +3986,7 @@ module.exports = {
   sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
-  setBoardConfig,
+  setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
@@ -4016,7 +4023,7 @@ module.exports = {
   mergeProject,
   moveProject,
   setProjectNotify,
-  setProjectRouting,
+  setProjectRouting: refreshingDispatchSnapshot(setProjectRouting),
   projectRoutingEnabled,
   copyAsset,
   saveAssetData,

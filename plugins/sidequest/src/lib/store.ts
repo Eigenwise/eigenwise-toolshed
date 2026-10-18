@@ -1980,6 +1980,15 @@ function scheduleDispatchSnapshot(slug: string) {
   });
 }
 
+// Routing and denied-tools settings are snapshot fields too, so the writes that change them refresh it.
+function refreshingDispatchSnapshot(write: (slug: string, ...rest: any[]) => any) {
+  return (slug: string, ...rest: any[]) => {
+    const result = write(slug, ...rest);
+    scheduleDispatchSnapshot(slug);
+    return result;
+  };
+}
+
 function putTicket(slug?: any, ticket?: any) {
   putCachedRow(database(), 'tickets', ticketStorageRow(slug, ticket));
   if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
@@ -4676,7 +4685,7 @@ module.exports = {
   promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
-  setProjectRoutingProfile,
+  setProjectRoutingProfile: refreshingDispatchSnapshot(setProjectRoutingProfile),
   setNewProjectRoutingProfile,
   routingProfileEntries,
   routingProfileCategory,
@@ -4686,9 +4695,9 @@ module.exports = {
   getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
-  setProjectCategory,
+  setProjectCategory: refreshingDispatchSnapshot(setProjectCategory),
   detachCategory,
-  removeProjectCategory,
+  removeProjectCategory: refreshingDispatchSnapshot(removeProjectCategory),
   setCategory,
   removeCategory,
   homeRoot,
@@ -4704,7 +4713,7 @@ module.exports = {
   sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
-  setBoardConfig,
+  setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
@@ -4741,7 +4750,7 @@ module.exports = {
   mergeProject,
   moveProject,
   setProjectNotify,
-  setProjectRouting,
+  setProjectRouting: refreshingDispatchSnapshot(setProjectRouting),
   projectRoutingEnabled,
   copyAsset,
   saveAssetData,

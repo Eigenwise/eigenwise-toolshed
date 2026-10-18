@@ -2474,8 +2474,13 @@ test('the sync-check commands the briefing prints pass every Bash guard for an i
   ].flatMap((briefing: string) => [...briefing.matchAll(/`(node "[^"]*sidequest-launcher\.js" sync-check [^`]*)`/g)].map((match) => match[1]));
   assert.equal(commands.length, 3, 'one sync-check command per briefing variant');
 
-  const guards = ['guard-shared-checkout-git.js', 'guard-destructive-git.js', 'guard-shared-tree-commit.js', 'guard-home-delete.js', 'guard-heredoc-isolated.js', 'guard-bash-windows-paths.js', 'repeated-command-warn.js'];
+  const guards = ['guard-shared-checkout-git.js', 'guard-destructive-git.js', 'guard-shared-tree-commit.js'];
+  const { bashWindowsPathVerdict, homeDeleteDenial } = require('../hooks/guards/text-guards.ts');
+  const { hasHereDoc } = require('../hooks/guards/context-guards.ts');
   for (const command of commands) {
+    assert.equal(bashWindowsPathVerdict(command), null, `the Windows-path guard must not refuse: ${command}`);
+    assert.equal(homeDeleteDenial(command, { home: os.homedir(), windows: true }), null, `the home-delete guard must not refuse: ${command}`);
+    assert.equal(hasHereDoc(command), false, `the heredoc guard must not refuse: ${command}`);
     for (const guard of guards) {
       const out = runHook(path.join(HOOKS, guard), {
         session_id: sessionId,
