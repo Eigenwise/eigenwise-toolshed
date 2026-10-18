@@ -1,4 +1,5 @@
 "use strict";
+const { emitExternalRefUpdates } = require("./external-ref-updates.js");
 const { currentBoardPath } = require("./move.js");
 "use strict";
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require("../kernel/verification.js");
@@ -16,7 +17,7 @@ const worktrees = require("../worktrees.js");
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require("./composition-admission.js");
 const { stillSpawnsInsideItsWrite } = require("../db");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, afterCommit, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   let heldCompositionDelivery = null;
   function withTicketLock(slug, id, callback) {
@@ -894,9 +895,31 @@ ${verify.outputTail}` : null
       ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
       if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "integration");
+      persistSubmissionIntegration(slug, ticket);
       return { ok: true, ticket };
+    });
+  }
+  function persistSubmissionIntegration(slug, ticket) {
+    const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+    putTicket(slug, ticket);
+    if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
+    queueEventNotification(slug, ticket, "status", "integration");
+  }
+  function emitDeliveryExternalRefs(slug, ticket) {
+    const integration = ticket.submission.integration;
+    const revision = integration.sourceRevision;
+    const sha = integration.resultingHead || (revision?.source === "git" ? revision.value : null);
+    if (!sha) return;
+    emitExternalRefUpdates(ticket, {
+      kind: "delivered",
+      mode: boardConfig(slug).githubSync,
+      cwd: readMeta(slug).path,
+      branch: integration.targetBranch || boardConfig(slug).integrationBranch,
+      sha,
+      onFailure: (body) => {
+        ticket.comments.push(createComment({ by: "github-sync", kind: "comment", source: "integration", body }));
+        putTicket(slug, ticket);
+      }
     });
   }
   function integrationFailure(slug, ticket, patch) {
@@ -1778,8 +1801,7 @@ ${verify.outputTail}` : null
       });
       ticket.submission.integratedAt = now;
       ticket.updatedAt = now;
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "integration");
+      persistSubmissionIntegration(slug, ticket);
       return { ok: true, ticket, integration: ticket.submission.integration };
     });
   }
@@ -1847,8 +1869,7 @@ ${verify.outputTail}` : null
       });
       ticket.submission.integratedAt = now;
       ticket.updatedAt = now;
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "integration");
+      persistSubmissionIntegration(slug, ticket);
       return { ok: true, ticket, integration: ticket.submission.integration };
     });
   }

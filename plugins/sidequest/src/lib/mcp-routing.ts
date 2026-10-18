@@ -1,6 +1,6 @@
 'use strict';
 
-const BOARD_CONFIG_PATCH_KEYS = new Set(['name', 'alwaysInScope', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
+const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
 // These settings read null as "leave it alone"; the others hand null to their normalizer (worktreeSetup: null clears the command).
 const BOARD_CONFIG_NULL_LEAVES_ALONE = new Set(['alwaysInScope', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'verifyEnvironment']);
 
@@ -441,6 +441,8 @@ const tools: ToolDefinition[] = [
         worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Isolated-worktree base.' },
         notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Default 168 hours.' },
         worktreeRecoveryRetentionAgeHours: { type: 'integer', minimum: 1, description: 'Hours, default 336.' },
+        jiraBaseUrl: { type: 'string', description: 'Jira base URL for ticket refs.' },
+        githubSync: { type: 'string', enum: ['off', 'comment', 'close'], description: 'Default off. Enabling authorizes GitHub comments on delivery and published releases; close also authorizes closing linked issues after publication. Requires existing user/team authority and gh authentication.' },
         autoApproveTestScope: { type: 'boolean', description: 'Auto-approve reachable test directories (default true).' },
         autoApproveScope: { type: 'array', items: { type: 'string' }, description: 'Repo-relative auto-approved globs.' },
         worktreeSetup: { type: ['string', 'null'], description: 'One-line command Sidequest runs after creating an isolated worktree; null clears it.' },

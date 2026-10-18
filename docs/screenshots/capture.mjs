@@ -4,7 +4,6 @@
  * temporary paths, ports, and container names are lifecycle-only and never rendered.
  */
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
@@ -13,26 +12,29 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import { chromium } from 'playwright';
+import { boardHtml } from '../../plugins/observability/lib/board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const docsDir = path.resolve(here, '..');
 const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
-const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
-const SYNTHETIC_NOW = Date.UTC(2026, 7, 20, 12, 0, 0);
-const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
-const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
-const SYNTHETIC_QUERY_START = SYNTHETIC_START - (60 * 1_000);
-const SYNTHETIC_BUCKETS = Math.floor((SYNTHETIC_NOW - SYNTHETIC_START) / SYNTHETIC_INTERVAL) + 1;
-const FIXTURE_WORKLOAD_START_HOUR = 13;
-const { generatedDashboards } = createRequire(import.meta.url)(
-  path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'dashboard-generator.js'),
-);
-const { MODEL_PRICES_PER_MILLION, gatewayModelCostTargets, gatewayTotalCostExpression } = createRequire(import.meta.url)(
-  path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'model-prices.js'),
-);
-
+const OBSERVABILITY_ROWS = path.join(repoDir, 'plugins', 'observability', 'test', 'fixtures', 'board-sample.json');
+const OBSERVABILITY_NOW = Date.parse('2026-10-18T12:00:00Z');
+const OBSERVABILITY_PROJECT_NAMES = { 'eigenwise-toolshed': 'acme-webshop', tesseron: 'acme-support-desk', 'kenny-site': 'acme-fulfillment' };
+const OBSERVABILITY_SESSION_NAMES = {
+  'Add a dark theme toggle': 'Add a dark theme toggle',
+  'Board page with KPIs and quota gauges': 'Order dashboard with KPI tiles',
+  'Fix the wave gate for remote branches': 'Fix the checkout retry for slow networks',
+  'Investigate flaky windows test': 'Investigate flaky payment test',
+  'Port the hooks module to TypeScript': 'Port the cart module to TypeScript',
+  'Refactor the price table out': 'Refactor the shipping table out',
+  'Rename the ledger fields': 'Rename the order fields',
+  'Speed up the board render': 'Speed up the catalog render',
+  'Tesseron: lazy-load the session list': 'Lazy-load the ticket list',
+  'Why does the recorder skip aborted turns': 'Why does the export skip cancelled orders',
+  'Write the release notes': 'Write the release notes',
+};
 const FIXTURE = Object.freeze({
   project: 'acme-webshop',
   projects: [
@@ -370,481 +372,6 @@ function startSidequest(tempHome, fakeProject, port) {
   return child;
 }
 
-function otlpValue(value) {
-  if (typeof value === 'boolean') return { boolValue: value };
-  if (typeof value === 'number') return Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value };
-  return { stringValue: String(value) };
-}
-
-function otlpAttributes(attributes) {
-  return Object.entries(attributes).map(([key, value]) => ({ key, value: otlpValue(value) }));
-}
-
-function syntheticLog(serviceName, eventName, attributes, timestamp) {
-  return {
-    serviceName,
-    record: {
-      timeUnixNano: String(BigInt(timestamp) * 1_000_000n),
-      body: { stringValue: eventName },
-      attributes: otlpAttributes(attributes),
-    },
-  };
-}
-
-function groupedLogs(records) {
-  const byService = new Map();
-  for (const { serviceName, record } of records) {
-    const serviceRecords = byService.get(serviceName) || [];
-    serviceRecords.push(record);
-    byService.set(serviceName, serviceRecords);
-  }
-  return {
-    resourceLogs: [...byService].map(([serviceName, logRecords]) => ({
-      resource: { attributes: [{ key: 'service.name', value: { stringValue: serviceName } }] },
-      scopeLogs: [{ scope: { name: 'toolshed-docs-fixture' }, logRecords }],
-    })),
-  };
-}
-
-async function postOtlp(otlpPort, signal, payload) {
-  const response = await fetch(`http://127.0.0.1:${otlpPort}/v1/${signal}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  assert.equal(response.ok, true, `Synthetic OTLP ${signal} export failed: ${response.status} ${response.statusText}`);
-}
-
-function recordAttribute(record, key) {
-  const attribute = record.attributes.find((candidate) => candidate.key === key);
-  assert.ok(attribute, `Synthetic gateway record is missing ${key}`);
-  return Object.values(attribute.value)[0];
-}
-
-function expectedGatewayCosts(records) {
-  const costs = new Map();
-  for (const { record } of records) {
-    if (record.body.stringValue !== 'gateway.token.usage') continue;
-    const model = String(recordAttribute(record, 'workbench.attribute.model'));
-    const prices = MODEL_PRICES_PER_MILLION[model];
-    assert.ok(prices, `Synthetic gateway model ${model} is not priced`);
-    const cost = (
-      (recordAttribute(record, 'workbench.measurement.input_tokens.value') * prices.input)
-      + (recordAttribute(record, 'workbench.measurement.output_tokens.value') * prices.output)
-      + (recordAttribute(record, 'workbench.measurement.cache_read_tokens.value') * prices.cacheRead)
-    ) / 1_000_000;
-    costs.set(model, (costs.get(model) ?? 0) + cost);
-  }
-  return costs;
-}
-
-function numericSeries(queryResult) {
-  const result = queryResult.data?.result;
-  assert.ok(Array.isArray(result), `Grafana datasource query failed: ${JSON.stringify(queryResult)}`);
-  return result.map(({ metric, values, value }) => ({
-    labels: metric ?? {},
-    values: (values ?? [value]).map(([, sample]) => Number(sample)),
-  }));
-}
-
-function syntheticBucketCounts(queryResult) {
-  const result = queryResult.data?.result;
-  assert.ok(Array.isArray(result), `Grafana datasource query failed: ${JSON.stringify(queryResult)}`);
-  const counts = Array(SYNTHETIC_BUCKETS).fill(0);
-  for (const { values = [] } of result) {
-    for (const [timestamp] of values) {
-      const recordTime = Number(BigInt(timestamp) / 1_000_000n);
-      const index = Math.floor((recordTime - SYNTHETIC_START) / SYNTHETIC_INTERVAL);
-      if (index >= 0 && index < SYNTHETIC_BUCKETS) counts[index] += 1;
-    }
-  }
-  return counts;
-}
-
-async function queryGrafana(grafanaPort, expression, from, to, instant = false) {
-  const params = new URLSearchParams({
-    query: expression,
-    start: String(from / 1_000),
-    end: String(to / 1_000),
-    step: String(SYNTHETIC_INTERVAL / 1_000),
-    limit: '5000',
-    direction: 'forward',
-  });
-  if (instant) params.set('time', String(to / 1_000));
-  const endpoint = instant ? 'query' : 'query_range';
-  const response = await fetch(`http://127.0.0.1:${grafanaPort}/api/datasources/proxy/uid/loki/loki/api/v1/${endpoint}?${params}`);
-  if (!response.ok) throw new Error(`Grafana datasource query failed: ${response.status} ${response.statusText}: ${await response.text()}`);
-  return response.json();
-}
-
-function singleSeriesValue(series, description) {
-  const values = series.values.filter((value) => value !== null);
-  assert.equal(values.length, 1, `${description} returned ${values.length} values instead of one`);
-  return values[0];
-}
-
-async function verifyGrafanaSeed(grafanaPort, expectedCosts) {
-  const bucketExpression = '{service_name="workbench-observer"} |= "gateway.token.usage"';
-  const totalExpression = gatewayTotalCostExpression('23h2m1ms');
-  const modelExpression = gatewayModelCostTargets()[0].expr.replaceAll('$bucket', '23h2m1ms');
-  let failure;
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    try {
-      const [bucketResult, totalResult, modelResult] = await Promise.all([
-        queryGrafana(grafanaPort, bucketExpression, SYNTHETIC_QUERY_START, SYNTHETIC_NOW + 60_000),
-        queryGrafana(grafanaPort, totalExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
-        queryGrafana(grafanaPort, modelExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
-      ]);
-      const bucketValues = syntheticBucketCounts(bucketResult);
-      assert.equal(bucketValues.length, SYNTHETIC_BUCKETS, `Grafana returned ${bucketValues.length} synthetic buckets instead of ${SYNTHETIC_BUCKETS}`);
-      for (const [index, value] of bucketValues.entries()) assert.ok(value >= 1, `Synthetic bucket ${index + 1} has no gateway records`);
-      const total = singleSeriesValue(numericSeries(totalResult)[0], 'Total spend');
-      const expectedTotal = [...expectedCosts.values()].reduce((sum, cost) => sum + cost, 0);
-      const actualCosts = new Map(numericSeries(modelResult).map((series) => [series.labels.workbench_attribute_model, singleSeriesValue(series, `Cost for ${series.labels.workbench_attribute_model}`)]));
-      assert.equal(actualCosts.size, expectedCosts.size, `Grafana returned ${actualCosts.size} model totals instead of ${expectedCosts.size}`);
-      for (const [model, expectedCost] of expectedCosts) {
-        const actualCost = actualCosts.get(model);
-        assert.ok(actualCost !== undefined, `Grafana did not return a total for ${model}`);
-        assert.ok(Math.abs(actualCost - expectedCost) < 0.000001, `Cost for ${model} was $${actualCost.toFixed(6)} instead of $${expectedCost.toFixed(6)}`);
-      }
-      assert.ok(Math.abs(total - expectedTotal) < 0.000001, `Total spend was $${total.toFixed(6)} instead of $${expectedTotal.toFixed(6)}`);
-      console.log(`Verified Grafana seed: Total spend $${total.toFixed(2)}; ${[...expectedCosts].map(([model, cost]) => `${model} $${cost.toFixed(2)}`).join(', ')}`);
-      return;
-    } catch (error) {
-      failure = error;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-  throw failure;
-}
-
-async function seedGrafana(otlpPort, grafanaPort) {
-  const projects = [
-    { name: 'acme-webshop', factor: 1 },
-    { name: 'acme-fulfillment', factor: 0.58 },
-    { name: 'acme-support-desk', factor: 0.34 },
-  ];
-  const models = [
-    { name: 'claude-sonnet-5', role: 'orchestrator', input: 80_000, output: 9_000, cacheRead: 24_000, context: 115_000 },
-    { name: 'claude-opus-5', role: 'orchestrator', input: 45_000, output: 6_000, cacheRead: 15_000, context: 90_000 },
-    { name: 'gpt-5.6-terra', role: 'executor', input: 100_000, output: 10_000, cacheRead: 30_000, context: 130_000 },
-  ];
-  const timestamps = Array.from({ length: SYNTHETIC_BUCKETS }, (_, index) => SYNTHETIC_START + (index * SYNTHETIC_INTERVAL));
-  const hookFailuresByBucket = new Map([[6, 1], [29, 2], [30, 1], [70, 1], [73, 2], [98, 1], [117, 2], [133, 1]]);
-  const gatewayFailuresByBucket = new Map([[12, 1], [46, 2], [47, 1], [83, 1], [84, 2], [85, 1], [125, 2], [133, 1]]);
-  const droppedBucket = process.env.SYNTHETIC_GRAFANA_DROP_BUCKET;
-  const droppedBucketIndex = droppedBucket === undefined ? null : Number(droppedBucket);
-  assert.ok(droppedBucketIndex === null || (Number.isInteger(droppedBucketIndex) && droppedBucketIndex >= 0 && droppedBucketIndex < SYNTHETIC_BUCKETS), `SYNTHETIC_GRAFANA_DROP_BUCKET must be an index from 0 to ${SYNTHETIC_BUCKETS - 1}`);
-  const workloadAt = (index) => {
-    const hour = (FIXTURE_WORKLOAD_START_HOUR + Math.floor((index * SYNTHETIC_INTERVAL) / (60 * 60 * 1_000))) % 24;
-    const workingHours = hour >= 7 && hour < 19;
-    const wave = 0.78 + ((Math.sin(index * 0.83) + 1) * 0.36);
-    const peak = index % 37 === 11 ? 1.7 : index % 53 === 29 ? 1.4 : 1;
-    return (workingHours ? 1.45 : 0.24) * wave * peak;
-  };
-  const records = [];
-  for (const [index, timestamp] of timestamps.entries()) {
-    let eventOffset = 0;
-    const eventTimestamp = () => timestamp + (eventOffset++ * 1_000);
-    const workload = workloadAt(index);
-    for (const project of projects) {
-      for (const model of models) {
-        const scale = workload * project.factor;
-        records.push(syntheticLog('workbench-observer', 'gateway.token.usage', {
-          'workbench.attribute.project_name': project.name,
-          'workbench.attribute.model': model.name,
-          'workbench.attribute.agent_role': model.role,
-          'workbench.attribute.session_id': `synthetic-session-${index + 1}`,
-          'workbench.measurement.input_tokens.value': Math.round(model.input * scale),
-          'workbench.measurement.output_tokens.value': Math.round(model.output * scale),
-          'workbench.measurement.cache_read_tokens.value': Math.round(model.cacheRead * scale),
-          'workbench.measurement.context_tokens.value': Math.round(model.context * scale),
-        }, eventTimestamp()));
-      }
-    }
-    const primaryAttributes = { 'workbench.attribute.project_name': FIXTURE.project };
-    const toolCalls = Math.max(2, Math.round(workload * 4));
-    for (let call = 0; call < toolCalls; call += 1) {
-      const failed = call === 0 && index % 17 === 3;
-      records.push(syntheticLog('workbench-observer', 'hook.post_tool_use', {
-        ...primaryAttributes,
-        'workbench.attribute.status': failed ? 'error' : 'success',
-        'workbench.attribute.tool_name': ['Read', 'Search', 'Terminal', 'Browser'][call % 4],
-      }, eventTimestamp()));
-    }
-    for (let failure = 0; failure < (hookFailuresByBucket.get(index) ?? 0); failure += 1) {
-      records.push(syntheticLog('workbench-observer', 'claude_code.hook_execution_complete', {
-        ...primaryAttributes,
-        'workbench.attribute.status': 'failed',
-        'workbench.attribute.hook_name': 'post_tool_use',
-      }, eventTimestamp()));
-    }
-    for (let failure = 0; failure < (gatewayFailuresByBucket.get(index) ?? 0); failure += 1) {
-      records.push(syntheticLog('codex-gateway', 'gateway request throttled briefly', {}, eventTimestamp()));
-    }
-    if (!gatewayFailuresByBucket.has(index)) {
-      records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, eventTimestamp()));
-    }
-    const rechargeTools = [
-      ['all', Math.max(1, Math.round(workload * 3)), 0, 0],
-      ['Read', 0, 18_000, 44_000],
-      ['Search', 0, 11_000, 27_000],
-      ['Terminal', 0, 8_000, 20_000],
-      ['Browser', 0, 6_000, 15_000],
-    ];
-    for (const [toolName, assistantTurns, resultBytes, weightedResultBytes] of rechargeTools) {
-      const scale = workload * (toolName === 'all' ? 1 : 0.75);
-      records.push(syntheticLog('workbench-observer', 'workbench.recharge_rollup', {
-        ...primaryAttributes,
-        'workbench.attribute.tool_name': toolName,
-        'workbench.measurement.assistant_turns.value': assistantTurns,
-        'workbench.measurement.tool_result_bytes.value': Math.round(resultBytes * scale),
-        'workbench.measurement.recharge_weighted_tool_result_bytes.value': Math.round(weightedResultBytes * scale),
-      }, eventTimestamp()));
-    }
-  }
-  const historicalRecordCount = records.length;
-  const healthTimestamp = SYNTHETIC_NOW + (30 * 1_000);
-  let healthOffset = 0;
-  const healthEventTimestamp = () => healthTimestamp + (healthOffset++ * 1_000);
-  const healthAttributes = { 'workbench.attribute.project_name': FIXTURE.project };
-  for (const model of models) {
-    records.push(syntheticLog('workbench-observer', 'gateway.token.usage', {
-      ...healthAttributes,
-      'workbench.attribute.model': model.name,
-      'workbench.attribute.agent_role': model.role,
-      'workbench.attribute.session_id': 'synthetic-session-current',
-      'workbench.measurement.input_tokens.value': Math.round(model.input * 1.2),
-      'workbench.measurement.output_tokens.value': Math.round(model.output * 1.2),
-      'workbench.measurement.cache_read_tokens.value': Math.round(model.cacheRead * 1.2),
-      'workbench.measurement.context_tokens.value': Math.round(model.context * 1.2),
-    }, healthEventTimestamp()));
-  }
-  for (let call = 0; call < 5; call += 1) {
-    records.push(syntheticLog('workbench-observer', 'hook.post_tool_use', {
-      ...healthAttributes,
-      'workbench.attribute.status': call === 0 ? 'error' : 'success',
-      'workbench.attribute.tool_name': ['Read', 'Search', 'Terminal', 'Browser', 'Read'][call],
-    }, healthEventTimestamp()));
-  }
-  for (let request = 0; request < 10; request += 1) {
-    records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, healthEventTimestamp()));
-  }
-  const healthRecharge = [
-    ['all', 4, 0, 0],
-    ['Read', 0, 20_000, 50_000],
-    ['Search', 0, 12_000, 30_000],
-    ['Terminal', 0, 9_000, 22_000],
-    ['Browser', 0, 7_000, 17_000],
-  ];
-  for (const [toolName, assistantTurns, resultBytes, weightedResultBytes] of healthRecharge) {
-    records.push(syntheticLog('workbench-observer', 'workbench.recharge_rollup', {
-      ...healthAttributes,
-      'workbench.attribute.tool_name': toolName,
-      'workbench.measurement.assistant_turns.value': assistantTurns,
-      'workbench.measurement.tool_result_bytes.value': resultBytes,
-      'workbench.measurement.recharge_weighted_tool_result_bytes.value': weightedResultBytes,
-    }, healthEventTimestamp()));
-  }
-  const historicalRecords = records.slice(0, historicalRecordCount).filter(({ record }) => {
-    const recordTimestamp = Number(BigInt(record.timeUnixNano) / 1_000_000n);
-    const index = Math.floor((recordTimestamp - SYNTHETIC_START) / SYNTHETIC_INTERVAL);
-    return index !== droppedBucketIndex;
-  });
-  await postOtlp(otlpPort, 'logs', groupedLogs(historicalRecords));
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  const healthRecords = records.slice(historicalRecordCount);
-  await postOtlp(otlpPort, 'logs', groupedLogs(healthRecords));
-  const metricSampleNow = SYNTHETIC_NOW;
-  const metricDataPoints = Array.from({ length: 10 }, (_, index) => ({
-    asInt: String((index + 1) * 25_000),
-    startTimeUnixNano: String(BigInt(metricSampleNow - (5 * 60 * 1_000)) * 1_000_000n),
-    timeUnixNano: String(BigInt(metricSampleNow - ((4 - (index * 0.4)) * 60 * 1_000)) * 1_000_000n),
-    attributes: otlpAttributes({
-      model: models[index % models.length].name,
-      type: ['input', 'output', 'cache_read', 'context'][index % 4],
-      project_id: FIXTURE.project,
-    }),
-  }));
-  await postOtlp(otlpPort, 'metrics', {
-    resourceMetrics: [{
-      resource: {
-        attributes: [
-          { key: 'service.name', value: { stringValue: 'claude-code' } },
-          { key: 'project.id', value: { stringValue: FIXTURE.project } },
-        ],
-      },
-      scopeMetrics: [{
-        scope: { name: 'toolshed-docs-fixture' },
-        metrics: [{
-          name: 'claude_code.token.usage',
-          unit: 'tokens',
-          sum: {
-            aggregationTemporality: 2,
-            isMonotonic: true,
-            dataPoints: metricDataPoints,
-          },
-        }],
-      }],
-    }],
-  });
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  await verifyGrafanaSeed(grafanaPort, expectedGatewayCosts(records));
-}
-
-async function writeOtelCollectorConfig(tempRoot) {
-  const collectorConfig = path.join(tempRoot, 'otelcol-config.yaml');
-  await writeFile(collectorConfig, `receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-      http:
-        endpoint: 0.0.0.0:4318
-  prometheus/collector:
-    config:
-      scrape_configs:
-        - job_name: "opentelemetry-collector"
-          scrape_interval: 1s
-          static_configs:
-            - targets: ["localhost:8888"]
-
-processors:
-  batch:
-  batch/logs:
-    timeout: 50ms
-
-exporters:
-  otlphttp/metrics:
-    endpoint: http://localhost:9090/api/v1/otlp
-    tls:
-      insecure: true
-  otlphttp/traces:
-    endpoint: http://localhost:4418
-    tls:
-      insecure: true
-  otlphttp/logs:
-    endpoint: http://localhost:3100/otlp
-    tls:
-      insecure: true
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 5s
-      max_elapsed_time: 30s
-    sending_queue:
-      enabled: true
-      num_consumers: 1
-      queue_size: 10000
-  otlp/profiles:
-    endpoint: http://localhost:4040
-    tls:
-      insecure: true
-
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [otlphttp/traces]
-    metrics:
-      receivers: [otlp, prometheus/collector]
-      processors: [batch]
-      exporters: [otlphttp/metrics]
-    logs:
-      receivers: [otlp]
-      processors: [batch/logs]
-      exporters: [otlphttp/logs]
-    profiles:
-      receivers: [otlp]
-      exporters: [otlp/profiles]
-`);
-  return collectorConfig;
-}
-
-async function writeGrafanaDashboards(tempRoot) {
-  const dashboardDirectory = path.join(tempRoot, 'workbench-dashboards');
-  await mkdir(dashboardDirectory, { recursive: true });
-  const projects = [
-    { project_id: 'a'.repeat(64), project_name: 'acme-webshop' },
-    { project_id: 'b'.repeat(64), project_name: 'acme-fulfillment' },
-    { project_id: 'c'.repeat(64), project_name: 'acme-support-desk' },
-  ];
-  const statSeriesNames = new Map([
-    ['Claude metric samples, 5m', 'Claude metric samples'],
-    ['Observer records, 5m', 'Observer records'],
-    ['Gateway records, 5m', 'Gateway records'],
-  ]);
-  const failurePanelWithoutZeroFallback = 'Hook failures over time';
-  for (const { fileName, dashboard } of generatedDashboards(projects)) {
-    for (const panel of dashboard.panels) {
-      if (panel.title === failurePanelWithoutZeroFallback) {
-        for (const target of panel.targets || []) target.expr = target.expr?.replace(' or vector(0)', '');
-      }
-      if (panel.title === 'Claude metric samples, 5m') {
-        // Prometheus drops old OTLP timestamps, so keep this documentation stat independent of wall-clock time.
-        for (const target of panel.targets || []) target.expr = 'vector(10)';
-      }
-      const seriesName = statSeriesNames.get(panel.title);
-      if (!seriesName) continue;
-      panel.fieldConfig.defaults.displayName = seriesName;
-      for (const target of panel.targets || []) target.legendFormat = seriesName;
-    }
-    await writeFile(path.join(dashboardDirectory, fileName), `${JSON.stringify(dashboard, null, 2)}\n`);
-  }
-  return dashboardDirectory;
-}
-
-async function dashboardRowBounds(page, title) {
-  const titleButton = page.getByTestId(`data-testid dashboard-row-title-${title}`);
-  await titleButton.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(500);
-  const rowHeaders = await page.locator('[data-testid^="data-testid dashboard-row-title-"]').evaluateAll((elements) => elements.map((element) => {
-    const row = element.closest('.react-grid-item');
-    const bounds = row?.getBoundingClientRect();
-    return bounds ? { top: bounds.top, bottom: bounds.bottom } : null;
-  }).filter(Boolean));
-  const currentHeader = await titleButton.locator('xpath=ancestor::*[contains(@class, "react-grid-item")][1]').boundingBox();
-  assert.ok(currentHeader, `Could not measure Grafana row header ${title}`);
-  const nextTop = rowHeaders.find(({ top }) => top > currentHeader.y + 1)?.top ?? null;
-  const items = await page.locator('.react-grid-item').evaluateAll((elements) => elements.map((element) => {
-    const bounds = element.getBoundingClientRect();
-    return { x: bounds.x, y: bounds.y, right: bounds.right, bottom: bounds.bottom, text: element.innerText };
-  }));
-  const rowItems = items.filter(({ y }) => y >= currentHeader.y - 1 && (nextTop === null || y < nextTop - 1));
-  assert.ok(rowItems.length > 0, `Could not find panels in Grafana row ${title}`);
-  const left = Math.floor(Math.min(...rowItems.map(({ x }) => x)));
-  const top = Math.floor(Math.min(...rowItems.map(({ y }) => y)));
-  const right = Math.ceil(Math.max(...rowItems.map(({ right }) => right)));
-  const bottom = Math.ceil(Math.max(...rowItems.map(({ bottom }) => bottom)));
-  return {
-    bounds: { x: left, y: top, width: right - left, height: bottom - top },
-    text: rowItems.map(({ text }) => text).join('\n'),
-  };
-}
-
-async function captureGrafana(browser, grafanaPort) {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', deviceScaleFactor: 1 });
-  const from = encodeURIComponent(new Date(SYNTHETIC_QUERY_START).toISOString());
-  const to = encodeURIComponent(new Date(SYNTHETIC_NOW + 60_000).toISOString());
-  await page.goto(`http://127.0.0.1:${grafanaPort}/d/claude-code-usage?from=${from}&to=${to}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(3_000);
-  await page.evaluate(() => document.fonts.ready);
-  const captures = [
-    ['observability-at-a-glance.png', 'At a glance'],
-    ['observability-where-the-spend-goes.png', 'Where the spend goes'],
-    ['observability-failures-and-source-activity.png', 'Failures and source activity'],
-    ['observability-context-recharge.png', 'Context recharge'],
-  ];
-  for (const [file, title] of captures) {
-    const { bounds, text } = await dashboardRowBounds(page, title);
-    assert.doesNotMatch(text, /No data|No samples in|Query failed/i, `Grafana row ${title} did not render data: ${text}`);
-    const screenshotPath = path.join(outputDir, file);
-    await writeScreenshot(page, screenshotPath, { clip: bounds });
-  }
-  await page.close();
-}
-
 async function maskGeneratedBoardText(page) {
   const masks = {
     projectSlugs: FIXTURE.projects.map((project) => project.slug),
@@ -1049,48 +576,43 @@ async function captureSidequest(browser, port) {
   await page.close();
 }
 
+async function captureObservability(browser) {
+  const rows = JSON.parse(await readFile(OBSERVABILITY_ROWS, 'utf8')).map((row) => {
+    assert.ok(OBSERVABILITY_PROJECT_NAMES[row.project] && OBSERVABILITY_SESSION_NAMES[row.name], 'Observability fixture row has no synthetic replacement');
+    return { ...row, project: OBSERVABILITY_PROJECT_NAMES[row.project], name: OBSERVABILITY_SESSION_NAMES[row.name] };
+  });
+  const html = boardHtml(rows, OBSERVABILITY_NOW);
+  for (const real of Object.keys(OBSERVABILITY_PROJECT_NAMES)) assert.equal(html.includes(real), false, `Observability board contains real name: ${real}`);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', reducedMotion: 'reduce', deviceScaleFactor: 1 });
+  await page.addInitScript(() => localStorage.setItem('observability-board-theme', 'dark'));
+  await page.setContent(html, { waitUntil: 'load' });
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(500);
+  const capture = (filename) => writeScreenshot(page, path.join(outputDir, filename), { clip: { x: 0, y: 0, width: 1400, height: 950 } });
+  await capture('observability-board.png');
+  await page.close();
+}
+
 async function main() {
   assertSyntheticFixture();
   await mkdir(outputDir, { recursive: true });
-  for (const file of [
-    'observability-tokens-models.png',
-    'observability-mcp.png',
-    'observability-who-is-burning.png',
-    'observability-board-costs.png',
-  ]) await rm(path.join(outputDir, file), { force: true });
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'toolshed-docs-screenshots-'));
   const tempHome = path.join(tempRoot, 'sidequest-home');
   const fakeProject = path.join(tempRoot, FIXTURE.project);
-  const dashboardDirectory = await writeGrafanaDashboards(tempRoot);
-  const collectorConfig = await writeOtelCollectorConfig(tempRoot);
   const sidequestPort = await freePort();
-  const grafanaPort = await freePort();
-  const otlpPort = await freePort();
-  const container = `toolshed-docs-${process.pid}`;
-  const volume = `${container}-data`;
   let server;
   let browser;
   try {
     await seedSidequest(tempHome, tempRoot);
     server = startSidequest(tempHome, fakeProject, sidequestPort);
     await waitFor(`http://127.0.0.1:${sidequestPort}`, 'Synthetic Sidequest server');
-    command('docker', ['create', '--name', container, '--publish', `127.0.0.1:${grafanaPort}:3000`, '--publish', `127.0.0.1:${otlpPort}:4318`, '--volume', `${volume}:/data`, '--env', 'GF_AUTH_ANONYMOUS_ENABLED=true', '--env', 'GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer', 'grafana/otel-lgtm:0.11.0']);
-    command('docker', ['cp', `${grafanaProvisioning}/.`, `${container}:/otel-lgtm/grafana/conf/provisioning/dashboards`]);
-    command('docker', ['cp', collectorConfig, `${container}:/otel-lgtm/otelcol-config.yaml`]);
-    command('docker', ['cp', dashboardDirectory, `${container}:/otel-lgtm/grafana/conf/provisioning`]);
-    command('docker', ['start', container]);
-    await waitFor(`http://127.0.0.1:${grafanaPort}/api/health`, 'Isolated Grafana');
-    await waitFor(`http://127.0.0.1:${grafanaPort}/api/dashboards/uid/claude-code-usage`, 'Synthetic Grafana dashboard');
-    await seedGrafana(otlpPort, grafanaPort);
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
-    await captureGrafana(browser, grafanaPort);
-    console.log(`Generated 14 synthetic screenshots in ${outputDir}`);
+    await captureObservability(browser);
+    console.log(`Generated 11 synthetic screenshots in ${outputDir}`);
   } finally {
     await browser?.close();
     server?.kill();
-    try { command('docker', ['rm', '--force', container], { stdio: 'ignore' }); } catch {}
-    try { command('docker', ['volume', 'rm', volume], { stdio: 'ignore' }); } catch {}
     await rm(tempRoot, { recursive: true, force: true });
   }
 }

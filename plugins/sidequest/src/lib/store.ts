@@ -58,6 +58,7 @@ const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
 const { createAssets } = require('./store/assets.js');
+const { createDispatchSnapshot } = require('./store/dispatch-snapshot.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
@@ -1697,6 +1698,7 @@ const {
   recordSubmissionWaveDelivery,
   submissionsPayload,
 } = createSubmissions({
+  afterCommit,
   EXECUTOR_VERIFY_MAX,
   INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
   MANUAL_VERIFY_PREFIX,
@@ -1962,8 +1964,35 @@ function ticketStorageRow(slug?: any, ticket?: any) {
   };
 }
 
+const { writeDispatchSnapshot } = createDispatchSnapshot({
+  listTickets: (slug: string) => listTickets(slug),
+  projectDir: (slug: string) => projectDir(slug),
+  boardConfig: (slug: string) => boardConfig(slug),
+  getCategory: (id: string, options: { project: string }) => getCategory(id, options),
+  routed: (slug: string) => projectDispatchAdmission(slug).status === 'routed',
+});
+
+// Every dispatch prepare, bind, claim, release, submit, done and remove writes its ticket here, so this is
+// the one seam that keeps the hooks module's dispatch snapshot current. A failed side write leaves the
+// guards reading an older snapshot; they fail open, so it must never fail the board write that caused it.
+function scheduleDispatchSnapshot(slug: string) {
+  afterCommit(() => {
+    try { writeDispatchSnapshot(slug); } catch {}
+  });
+}
+
+// Routing and denied-tools settings are snapshot fields too, so the writes that change them refresh it.
+function refreshingDispatchSnapshot(write: (slug: string, ...rest: any[]) => any) {
+  return (slug: string, ...rest: any[]) => {
+    const result = write(slug, ...rest);
+    scheduleDispatchSnapshot(slug);
+    return result;
+  };
+}
+
 function putTicket(slug?: any, ticket?: any) {
   putCachedRow(database(), 'tickets', ticketStorageRow(slug, ticket));
+  if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
   const project = readMeta(slug);
   telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
@@ -4657,7 +4686,7 @@ module.exports = {
   promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
-  setProjectRoutingProfile,
+  setProjectRoutingProfile: refreshingDispatchSnapshot(setProjectRoutingProfile),
   setNewProjectRoutingProfile,
   routingProfileEntries,
   routingProfileCategory,
@@ -4667,9 +4696,9 @@ module.exports = {
   getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
-  setProjectCategory,
+  setProjectCategory: refreshingDispatchSnapshot(setProjectCategory),
   detachCategory,
-  removeProjectCategory,
+  removeProjectCategory: refreshingDispatchSnapshot(removeProjectCategory),
   setCategory,
   removeCategory,
   homeRoot,
@@ -4685,7 +4714,7 @@ module.exports = {
   sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
-  setBoardConfig,
+  setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
@@ -4722,7 +4751,7 @@ module.exports = {
   mergeProject,
   moveProject,
   setProjectNotify,
-  setProjectRouting,
+  setProjectRouting: refreshingDispatchSnapshot(setProjectRouting),
   projectRoutingEnabled,
   copyAsset,
   saveAssetData,

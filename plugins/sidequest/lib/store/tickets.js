@@ -1,4 +1,5 @@
 "use strict";
+const { externalReference, originRepository } = require("../external-refs");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef } = require("../kernel/review-binding");
 function createTickets(dependencies) {
   const {
@@ -226,6 +227,7 @@ function createTickets(dependencies) {
       status,
       priority: coercePriority(fields.priority, "normal"),
       labels: boundedLabels(fields.labels),
+      externalRefs: normalizeExternalRefs(slug, fields.refs),
       highStakes: !!fields.highStakes,
       storyId,
       // the user story this ticket belongs to (null = none)
@@ -301,6 +303,17 @@ function createTickets(dependencies) {
       }
     }
     return out;
+  }
+  function normalizeExternalRefs(slug, refs = []) {
+    if (!Array.isArray(refs) || !refs.every((reference) => typeof reference === "string")) throw new Error("refs must be an array of strings.");
+    if (refs.length === 0) return [];
+    const repository = originRepository(readMeta(slug).path);
+    const jiraBaseUrl = boardConfig(slug).jiraBaseUrl;
+    const references = refs.map((reference) => externalReference(reference.trim(), repository, jiraBaseUrl));
+    return [...new Map(references.map((reference) => [reference.key, reference])).values()];
+  }
+  function patchExternalRefs(slug, ticket, patch) {
+    if (patch.refs !== void 0) ticket.externalRefs = normalizeExternalRefs(slug, patch.refs);
   }
   function normalizeLabels(labels) {
     if (!labels) return [];
@@ -1193,6 +1206,7 @@ function createTickets(dependencies) {
       }
       const prevStatus = t.status;
       const filesPatch = patchedFileScope(t, patch);
+      patchExternalRefs(slug, t, patch);
       if (patch.files !== void 0) assertLiveClaimReplace(t, normalizeFiles(patch.files));
       if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
       if (patch.description != null) t.description = String(patch.description).trim();

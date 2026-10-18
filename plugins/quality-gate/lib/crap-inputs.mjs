@@ -71,7 +71,8 @@ export function gateSettings(options, config) {
   const policy = pythonPolicy(firstDefined([options.pythonPolicy, config.pythonPolicy]));
   return {
     pythonPolicy: policy, pythonOracles: pythonOracles(Object.hasOwn(options, "pythonOracles") ? options.pythonOracles : config.pythonOracles, policy),
-    source: options.source, sources: config.sources?.length ? config.sources : ['.'], exclude: firstDefined([config.exclude, []]),
+    source: options.source, sources: firstDefined([config.sources, ['.']]), trackedOnly: !config.sources?.length,
+    exclude: config.exclude ?? ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/vendor/**', '**/test/fixtures/**'],
     base: firstDefined([options.base, config.base, options.ratchet, config.ratchet]),
     lcov: options.lcov, fallbackLcov: config.lcov, coverageCommand: firstDefined([options.coverageCommand, config.coverageCommand]),
     usedDeprecatedRatchet: !firstDefined([options.base, config.base]) && Boolean(firstDefined([options.ratchet, config.ratchet])),
@@ -91,9 +92,19 @@ function filesAt(target) {
   return fs.statSync(target).isDirectory() ? directoryFiles(target) : [target];
 }
 
-export function selectedFiles(root, settings) {
+export function trackedSources(root, extraArguments = []) {
+  return runGit(root, ['ls-files', '-z', ...extraArguments]).split('\0')
+    .filter((file) => /\.(?:[cm]?[jt]s|[jt]sx|py)$/i.test(file))
+    .filter((file) => fs.existsSync(path.resolve(root, file)));
+}
+
+export function selectedFiles(root, settings, explicitFiles) {
+  if (explicitFiles) return explicitFiles;
   const requested = settings.source && new Set(settings.source.flatMap((source) => filesAt(path.resolve(root, source))));
-  return [...new Set(settings.sources.flatMap((source) => filesAt(path.resolve(root, source))))]
+  const candidates = settings.trackedOnly
+    ? trackedSources(root).map((file) => path.resolve(root, file))
+    : settings.sources.flatMap((source) => filesAt(path.resolve(root, source)));
+  return [...new Set(candidates)]
     .filter((file) => SOURCE.test(file))
     .filter((file) => !requested || requested.has(file))
     .map((file) => path.relative(root, file).replaceAll('\\', '/'))

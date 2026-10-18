@@ -8,6 +8,79 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.601.0 (2026-10-18)
+
+### observability 0.8.2 → 1.0.0
+
+#### Breaking changes
+
+- observability records each turn through a Claude Code hooks module into a per-project JSONL ledger (SQ-3733)
+  The recorder is now a hooks module (`hooks/register.ts`). Once `/observability:track on` was run in a project, every main-thread turn appends one row to `~/.claude/observability/ledger/<project>.jsonl` with the engine's own cost, tokens per model, tool calls, subagent spawns, context fill and rate limits. `/observability:board` builds `~/.claude/observability/board.html` from the last 90 days of every ledger and opens it. The command hooks are gone from `hooks/hooks.json`.
+- Observability becomes a local turn ledger and usage board (SQ-3735)
+  Removed the OpenTelemetry Collector, SQLite observer, Docker/Grafana dashboards, remote sinks, price estimates, and statusline. The replacement records exact engine usage in per-project JSONL ledgers and opens a self-contained local board with `/observability:board`. Recording stays off until `/observability:track on` in each project.
+
+  Old SQLite data is not migrated or deleted. It remains at `%LOCALAPPDATA%\Eigenwise\Workbench\observability.db`, or `~/.local/share/Eigenwise/Workbench/observability.db` when `LOCALAPPDATA` was not set.
+
+#### Fixes
+
+- Self-contained observability board page (SQ-3734)
+  The board page generator renders cost, agent time, tokens and sessions with deltas, plan-usage gauges, a per-project stream, model mix, tools, tickets, a searchable sessions table and a 12-week activity honeycomb from the ledger rows. One local HTML file, no network.
+
+### quality-gate 0.4.1 → 1.0.0
+
+#### Breaking changes
+
+- quality-gate starts without config and installs its parser on first use (SQ-3746)
+  Quality Gate installs TypeScript 7 on first use, with a shared lock and a bounded install. `crap` defaults to tracked JS/TS/Python and complexity-only checks when coverage is absent. Config stays optional. `turn --json` reports edited bodies and reuse signals; `inventory --bytes` supplies a bounded definition list. `provision` installs only the parser for session startup.
+
+#### Features
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+- measure edited functions once at turn end per working directory (SQ-3742)
+  Record edits and test results by working directory, then publish turn-end complexity and reuse signals. Coverage setup notices appear once per session; measurement failures leave the previous report intact.
+- measured review skill and shared Sidequest findings format (SQ-3748)
+  Add `/quality-gate:review [diff|repo|debt]` with existing-coverage-only measurement, caller inspection, concrete four-part findings and honest measurement limits. Sidequest read-only reviews use the same CRAP table and Must/Should/Nice format.
+- show session cost and turn quality above the prompt (SQ-3749)
+  Stack a one-line quality band above existing drawings with session cost, changed-function complexity and test freshness. Yield to surveys and the persona off switch; show the coverage reminder on the first unverified report.
+
+### quartermaster 0.12.2 → 1.0.0
+
+#### Breaking changes
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+
+#### Fixes
+
+- update-toolshed removes a settings statusLine that still points at the retired Toolshed statusline shim (SQ-3738)
+  The Toolshed statusline left with observability 1.0, so the updater no longer repoints a stale `workbench-statusline.js` pin at a shim. It deletes that `statusLine` entry and says so; Claude Code then draws its own status line. A status line that is not the Toolshed shim is left alone.
+- delete the retired CRAP core and CI checker (SQ-3747)
+  Quartermaster's `crap-core.cjs` scoring module and `check-ci.js` are gone with their tests; quality scoring belongs to quality-gate, and CI watching is outside Quartermaster's role. The repository CRAP script now imports `crapScore` from quality-gate and the suite-resolution rule from the sidequest build instead of carrying copies.
+
+### sidequest 5.12.1 → 5.13.0
+
+#### Features
+
+- Read-only research runs on its category route without a ticket (SQ-3739)
+  `route_recipe` now returns a `research` spawn next to `agent`: `subagentType`, `model` on a Claude route, and a `promptPrefix` that carries the route marker plus a "no ticket" line. Spawn it and the Agent hook admits the read-only executor without a dispatch, as long as the prefix matches a live route of an enabled category. So codebase research can run on one model and UX research on another, with no ticket ceremony. Stale or unknown markers, writable executors, and generic agents carrying a marker are still refused. The read-only executor definitions skip the briefing and ticket lifecycle for these runs and answer with findings. `research` is null for discovered-model routes.
+- sidequest runs its pure-text PreToolUse guards in one hooks module, reading a per-project dispatch snapshot (SQ-3743)
+  Nine PreToolUse command hooks are gone from `hooks/hooks.json`: home-delete, Bash Windows paths, heredoc in an isolated worktree, PowerShell cmd shims, the repeated-command warning, the inline-work nudge, denied tools, TaskOutput and peer-message. They now run inside the hooks module `hooks/guards/register.ts` on `tool.call`, so a tool call no longer starts a node process per guard. Deny and warning text is unchanged. A guard that throws skips itself and lets the call through.
+
+  The board writes `<sidequest home>/projects/<slug>/dispatch-snapshot.json` after every dispatch write (prepare, bind, claim, release, submit, done, remove) and after routing, category and board-config changes. The module reads that file to tell who is calling, instead of loading the store. Each row carries the executor's resolved `deniedTools`.
+
+  The quota fallback stays a command hook: it only runs on a failed Agent call and its work is board writes. The git guards and the executor admission guard move in later releases.
+- Track external issue references and import GitHub tickets (SQ-3744)
+  Normalize external issue links across ticket authoring, compact reads and executor briefings, and carry fragment refs into changelog bullets.
+- Add opt-in GitHub delivery and published-release updates (SQ-3752)
+
+#### Fixes
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+- measured review skill and shared Sidequest findings format (SQ-3748)
+  Add `/quality-gate:review [diff|repo|debt]` with existing-coverage-only measurement, caller inspection, concrete four-part findings and honest measurement limits. Sidequest read-only reviews use the same CRAP table and Must/Should/Nice format.
+
 ## v3.600.0 (2026-10-17)
 
 ### quality-gate 0.4.0 → 0.4.1

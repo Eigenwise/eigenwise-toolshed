@@ -1,4 +1,6 @@
 "use strict";
+const { referenceHeader } = require("./external-refs");
+"use strict";
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -66,6 +68,20 @@ function recipeAgentWiring(exec, effort) {
   }
   return { agent: { model: exec.model, promptPrefix: "" }, effortCarrier: "none" };
 }
+const RESEARCH_RUN_LINE = "Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.";
+function researchSpawn(exec, effort) {
+  if (exec.backend === "codex") {
+    return { subagentType: bundledAgentType(stableReadOnlyDispatchName()), promptPrefix: `${routeMarker(exec.dispatchModel, effort)}
+${RESEARCH_RUN_LINE}
+
+` };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) return null;
+  return { subagentType: bundledAgentType(stableReadOnlyClaudeName(effort)), model: exec.model, promptPrefix: `${routeMarker(exec.model, effort)}
+${RESEARCH_RUN_LINE}
+
+` };
+}
 function workflowRecipe(category, resolved) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error("A resolved category route is required.");
@@ -77,6 +93,7 @@ function workflowRecipe(category, resolved) {
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
     ...recipeAgentWiring(exec, resolved.effort),
+    research: researchSpawn(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : []
   };
 }
@@ -154,6 +171,11 @@ function renderDispatchAgent(_effort) {
 function withoutPermissionMode(source) {
   return source.replace(/^permissionMode: bypassPermissions\n/m, "");
 }
+function researchRunNote() {
+  return `
+
+**Research runs:** A prompt whose second line is \`${RESEARCH_RUN_LINE}\` has no ticket. Skip the briefing FIRST action, the claim, comments and every other ticket lifecycle step. Investigate read-only and answer with your findings as your final message.`;
+}
 function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return withoutPermissionMode(collapseEffortProse(renderExecAgent({
@@ -161,7 +183,7 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
     effort: "high",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: `${dispatchNote()}${readOnlyNote()}`,
+    extraNote: `${dispatchNote()}${readOnlyNote()}${researchRunNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
   })));
@@ -172,7 +194,7 @@ function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
-    extraNote: readOnlyNote(),
+    extraNote: `${readOnlyNote()}${researchRunNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
   }));
@@ -809,6 +831,7 @@ function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocu
     "## This ticket",
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || "(Untitled ticket)"}`,
+    ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || "(No additional description was recorded.)"}`,
     "Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.",
@@ -1393,6 +1416,7 @@ module.exports = {
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
+  researchSpawn,
   workflowRecipe,
   renderDispatchAgent,
   renderReadOnlyDispatchAgent,

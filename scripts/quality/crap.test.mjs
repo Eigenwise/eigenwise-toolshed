@@ -5,11 +5,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import crapCore from './crap-core.cjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { crapScore } from '../../plugins/quality-gate/lib/measure.mjs';
 import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, changedPathContext, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, noAnalyzerMetric, parserTransport, readCoverage, remapRecords, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
-const { crapScore } = crapCore;
 const corePreload = new URL('../../plugins/quality-gate/lib/core.mjs', import.meta.url).href;
 const tsxPreload = new URL('../../plugins/sidequest/node_modules/tsx/dist/loader.mjs', import.meta.url).href;
 
@@ -414,7 +413,7 @@ test('a changed plugin script or test file runs that plugin suite', async () => 
 test('a gateway plus observability diff runs both suites and nothing else', async () => {
   const { suites, suiteSummary } = await suitesRunFor(['plugins/model-gateway/lib/commands.js', 'plugins/observability/lib/store.js', 'plugins/model-gateway/lib/settings-wiring.js']);
   assert.deepEqual(suites.map((suite) => suite.name), ['model-gateway', 'observability']);
-  assert.deepEqual(suites[0].args, ['run', 'test']);
+  assert.deepEqual(suites[0].args, ['test']);
   assert.deepEqual(suites[1].args.slice(0, 1), ['--test']);
   assert.equal(suiteSummary, 'model-gateway, observability');
 });
@@ -614,14 +613,13 @@ async function createCliFixture() {
   const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-cli-fixture-'));
   const qualityFixtureDirectory = path.join(fixtureRoot, 'scripts', 'quality');
   const pluginRoot = path.join(fixtureRoot, 'plugins', 'sidequest');
-  await Promise.all(['src', 'scripts', 'test'].map((directory) => fs.mkdir(path.join(pluginRoot, directory), { recursive: true })));
-  await fs.mkdir(path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib'), { recursive: true });
+  await Promise.all(['src', 'scripts', 'test', 'lib'].map((directory) => fs.mkdir(path.join(pluginRoot, directory), { recursive: true })));
   await fs.mkdir(qualityFixtureDirectory, { recursive: true });
   await fs.cp(path.join(process.cwd(), 'plugins', 'quality-gate'), path.join(fixtureRoot, 'plugins', 'quality-gate'), { recursive: true, filter: (sourcePath) => !sourcePath.includes('node_modules') });
   await Promise.all([
     fs.copyFile(path.join(qualityDirectory, 'crap.mjs'), path.join(qualityFixtureDirectory, 'crap.mjs')),
-    fs.copyFile(path.join(qualityDirectory, 'crap-core.cjs'), path.join(qualityFixtureDirectory, 'crap-core.cjs')),
-    fs.copyFile(path.join(process.cwd(), 'plugins', 'quartermaster', 'lib', 'crap-core.cjs'), path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib', 'crap-core.cjs')),
+    fs.copyFile(path.join(process.cwd(), 'plugins', 'sidequest', 'lib', 'suite-resolver.js'), path.join(pluginRoot, 'lib', 'suite-resolver.js')),
+    fs.writeFile(path.join(pluginRoot, 'lib', 'package.json'), JSON.stringify({ type: 'commonjs' })),
     fs.writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ type: 'module', scripts: { 'test:full': 'node --test test/subject.test.mjs' } })),
     fs.writeFile(path.join(pluginRoot, 'src', 'subject.js'), 'export function subject(value) {\n  return value;\n}\n'),
     fs.writeFile(path.join(pluginRoot, 'src', 'retired.js'), 'export function retired() {\n  return 0;\n}\n'),

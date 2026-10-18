@@ -813,6 +813,18 @@ test('a newly registered board tool needs no agentsync change to reach read-only
     `agentsync names ${named.size} board tools; read-only is a deny list, so it must not enumerate grants: ${[...named].join(', ')}`);
 });
 
+test('SQ-3739: read-only executors, and only they, recognise a ticketless research run', () => {
+  const researchParagraph = /\*\*Research runs:\*\* A prompt whose second line is `Read-only research run, no ticket: [^`]+` has no ticket\. Skip the briefing FIRST action, the claim, comments and every other ticket lifecycle step\./;
+  assert.match(agentsync.renderReadOnlyDispatchAgent(), researchParagraph);
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.match(agentsync.renderReadOnlyClaudeAgent(effort), researchParagraph, effort);
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'agents', `sidequest-exec-readonly-${effort}.md`), 'utf8'), researchParagraph, `generated ${effort} definition`);
+  }
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'agents', 'sidequest-exec-dispatch-readonly.md'), 'utf8'), researchParagraph);
+  assert.doesNotMatch(agentsync.renderDispatchAgent(), /Research runs/, 'a writable executor never skips its briefing');
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'agents', 'sidequest-exec-high.md'), 'utf8'), /Research runs/);
+});
+
 test('read-only executor denylists add configured MCP tools without dropping the writers', () => {
   const body = agentsync.renderReadOnlyDispatchAgent('high', ['mcp__notion__search']);
   assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'tools'), false);
@@ -1586,6 +1598,10 @@ test('workflow recipes use the dispatch pin and normalized catalog marker for Co
       promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n',
     },
     effortCarrier: 'marker',
+    research: {
+      subagentType: 'sidequest:sidequest-exec-dispatch-readonly',
+      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n',
+    },
     warnings: [],
   });
 });
@@ -1619,6 +1635,11 @@ test('workflow recipes use the Claude runtime alias without a prompt prefix', ()
     runsLabel: 'Claude Opus',
     agent: { model: 'opus', promptPrefix: '' },
     effortCarrier: 'none',
+    research: {
+      subagentType: 'sidequest:sidequest-exec-readonly-high',
+      model: 'opus',
+      promptPrefix: '[sidequest-route model=opus effort=high]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n',
+    },
     warnings: [],
   });
 });

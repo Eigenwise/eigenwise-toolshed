@@ -1636,11 +1636,56 @@ function refusedGenericAgent({ input, type, classification }) {
   writeDeny("PreToolUse", agentDenyReason(input, type, classification));
   return true;
 }
+var RESEARCH_KINDS = /* @__PURE__ */ new Set(["read_only_codex_dispatch", "read_only_claude_builtin"]);
+function categoryResearchSpawn(store, researchSpawnFor, category) {
+  const route = store.resolveCategoryRoute(category);
+  return route?.exec ? researchSpawnFor(route.exec, route.effort) : null;
+}
+function liveResearchSpawns(input) {
+  try {
+    const store = require(runtimeModule("store"));
+    const { researchSpawn } = require(runtimeModule("agentsync"));
+    const found = store.findProject(requestedProject(input));
+    if (!found.ok || !found.slug) return [];
+    return store.getCategories({ project: found.slug }).filter((category) => category.enabled).map((category) => categoryResearchSpawn(store, researchSpawn, category)).filter((spawn) => spawn !== null);
+  } catch (_) {
+    return [];
+  }
+}
+function matchingResearchSpawn({ input, toolInput, type }) {
+  const prompt = String(toolInput.prompt ?? "");
+  if (dispatchRouteMarkers(input).length !== 1) return void 0;
+  return liveResearchSpawns(input).find((spawn) => canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
+}
+function researchSpawnInput(toolInput, research) {
+  const updatedInput = { ...toolInput };
+  delete updatedInput.mode;
+  delete updatedInput.isolation;
+  delete updatedInput.model;
+  if (research.model) updatedInput.model = research.model;
+  return updatedInput;
+}
+function isResearchAttempt({ toolInput, classification }, dispatchValidation) {
+  return dispatchValidation.status === "none" && RESEARCH_KINDS.has(classification.kind) && String(toolInput.prompt ?? "").startsWith("[sidequest-route ");
+}
+function decidedResearchSpawn(request, dispatchValidation) {
+  if (!isResearchAttempt(request, dispatchValidation)) return false;
+  const research = matchingResearchSpawn(request);
+  if (!research) {
+    writeDeny("PreToolUse", `sidequest: ${request.type} research prompt does not open with the live research prefix of an enabled category route. Re-fetch route_recipe(category).research and spawn its subagentType, model and promptPrefix unchanged.`);
+    return true;
+  }
+  if (!refusedSubagentModelOverride()) writeToolUpdate(researchSpawnInput(request.toolInput, research));
+  return true;
+}
+function decidedBeforeExecutorLaunch(request, dispatchValidation) {
+  return decidedResearchSpawn(request, dispatchValidation) || refusedPreparedDispatch(request, dispatchValidation) || refusedGenericAgent(request) || refusedSubagentModelOverride();
+}
 function routedExecutorSpawn(request) {
   const admission = dispatchAdmission(request.input);
   if (refusedForMissingExecutorRoute(request.type, request.classification, admission)) return null;
   const dispatchValidation = preparedDispatchValidation(request.input);
-  if (refusedPreparedDispatch(request, dispatchValidation) || refusedGenericAgent(request) || refusedSubagentModelOverride()) return null;
+  if (decidedBeforeExecutorLaunch(request, dispatchValidation)) return null;
   return { ...request, admission, preparedSpawn: dispatchValidation.spawn };
 }
 function admittedExecutorSpawn(input) {

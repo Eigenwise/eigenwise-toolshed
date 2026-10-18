@@ -31,11 +31,11 @@ function git(project, argumentsList) {
   return result.stdout.trim();
 }
 
-test('resolves the scored project compiler before the plugin dependency', async () => {
+test('resolves the provisioned plugin compiler before a project dependency', async () => {
   const { root, project } = await isolatedPlugin();
   try {
     await fs.cp(path.join(pluginRoot, 'node_modules'), path.join(project, 'node_modules'), { recursive: true });
-    assert.ok(resolveCompiler(project).resolve('typescript/unstable/ast').startsWith(project));
+    assert.ok(resolveCompiler(project).resolve('typescript/unstable/ast').startsWith(pluginRoot));
     const analyzer = await createAnalyzer(project);
     const descriptors = await analyzer.collectFunctions('const double = (value) => value * 2;', 'subject.js');
     await analyzer.close();
@@ -45,14 +45,14 @@ test('resolves the scored project compiler before the plugin dependency', async 
   }
 });
 
-test('an isolated plugin uses its own compiler and refuses plainly when neither location has one', async () => {
+test('an isolated plugin reports the manual remedy without npm and uses its own installed compiler', async () => {
   const { root, plugin, project } = await isolatedPlugin();
   try {
     const entry = pathToFileURL(path.join(plugin, 'lib/core.mjs')).href;
     const script = `const { createAnalyzer } = await import(${JSON.stringify(entry)}); const analyzer = await createAnalyzer(${JSON.stringify(project)}); console.log(JSON.stringify(await analyzer.collectFunctions('function subject() { return 1; }', 'subject.js')));`;
-    const missing = runNode(['--input-type=module', '-e', script], { cwd: project });
+    const missing = runNode(['--input-type=module', '-e', script], { cwd: project, env: { ...process.env, PATH: '' } });
     assert.equal(missing.status, 1);
-    assert.match(missing.stderr, /No supported typescript dependency was found in the scored project .* or in the quality-gate plugin/);
+    assert.match(missing.stderr, /TypeScript parser unavailable:.*npm install --prefix/);
     await fs.cp(path.join(pluginRoot, 'node_modules'), path.join(plugin, 'node_modules'), { recursive: true });
     const fallback = runNode(['--input-type=module', '-e', script], { cwd: project });
     assert.equal(fallback.status, 0, fallback.stderr);

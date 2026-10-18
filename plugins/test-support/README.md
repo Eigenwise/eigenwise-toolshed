@@ -26,7 +26,6 @@ text for a process call.
 Plugin test suites import this helper with a relative path. Current consumers include:
 
 - `plugins/model-gateway/test/windows-hide.test.js`
-- `plugins/observability/test/windows-hide.test.js`
 - `plugins/sidequest/test/windows-hide.test.ts`
 - `plugins/quartermaster/test/windows-hide.test.js`
 

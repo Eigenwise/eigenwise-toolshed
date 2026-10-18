@@ -124,7 +124,7 @@
       "model": "sonnet",
       "effort": "medium"
     },
-    "contract": "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
+    "contract": "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. Report in the quality-gate review format: a CRAP table for changed bodies when quality-gate is installed, then numbered four-part findings grouped Must/Should/Nice, ending with Verdict, Lean and Not checked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
     "artifactRoots": [],
     "readonly": true,
     "enabled": true

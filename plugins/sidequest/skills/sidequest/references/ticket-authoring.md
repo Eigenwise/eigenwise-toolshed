@@ -2,7 +2,7 @@
 
 Declare scope by the surfaces a change reaches, not just the first file you found. For a cross-cutting change inside one plugin, declare its `src/lib`, `test`, and, where relevant, `hooks` directories. Use file-granular scope for surgical work where blast-radius control is the point. Scope requests also grant tracked `lib`, `bin`, and top-level `hooks` JavaScript outputs paired with an already declared or granted `plugins/<name>/src` TypeScript source, with reason `build output of <source>`. Foreign release fragments stay refused; the refusal names their owning ticket when it exists on this board.
 
-A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave requires 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens.
+A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore or general-purpose agents stay for tiny lookups or unrouted projects. A story or wave requires 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens.
 
 ## Pinned planning contract
 

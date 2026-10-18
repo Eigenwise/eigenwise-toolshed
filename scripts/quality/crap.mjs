@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAnalyzer, baseFunctionByIdentity, changedMetricsAgainstBase as changedMetrics, functionCoverage, readCoverage, remapRecords, originalOffsetMapper, LEGACY_UNCHANGED } from '../../plugins/quality-gate/lib/core.mjs';
 import { crapScore, formatMetric, gateVerdict, measureSource, readOutput, THRESHOLD } from '../../plugins/quality-gate/lib/measure.mjs';
+import suiteResolver from '../../plugins/sidequest/lib/suite-resolver.js';
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sidequestRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
@@ -130,12 +131,13 @@ const REPOSITORY_SUITES = [
 ];
 
 async function suiteFor(plugin) {
-  const pluginRoot = path.join(repositoryRoot, 'plugins', plugin);
-  const { scripts = {} } = await optionalJson(path.join(pluginRoot, 'package.json'));
-  const script = ['test:full', 'test'].find((name) => scripts[name]);
-  if (script) return { name: plugin, cwd: pluginRoot, command: NPM_COMMAND, args: ['run', script] };
-  const testFiles = await fs.readdir(path.join(pluginRoot, 'test')).catch(() => []);
-  return testFiles.some((file) => file.endsWith('.test.js')) ? { name: plugin, cwd: pluginRoot, command: process.execPath, args: NODE_TEST_ARGUMENTS } : null;
+  const suite = suiteResolver.resolveSuite(repositoryRoot, { name: plugin, dir: `plugins/${plugin}` });
+  if (!suite) return null;
+  const pluginRoot = path.join(repositoryRoot, suite.cwd);
+  const [runner, ...npmArguments] = suite.command.split(' ');
+  return runner === 'npm'
+    ? { name: plugin, cwd: pluginRoot, command: NPM_COMMAND, args: npmArguments }
+    : { name: plugin, cwd: pluginRoot, command: process.execPath, args: NODE_TEST_ARGUMENTS };
 }
 
 function repositorySuites(changedPaths) {

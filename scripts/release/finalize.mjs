@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { emitConfirmedReleaseExternalRefs, publicationFragments } from './lib/external-refs.mjs';
 import { createGit } from './lib/git.mjs';
 import { assertGitHubReleasePublished, assertParentCiPassed, isGitHubRemote } from './lib/github.mjs';
 import { checkManifest, readManifest } from './lib/manifests.mjs';
@@ -227,6 +228,7 @@ export async function finalize(options = {}) {
             ?? ((root, tag, releaseCommit) => assertGitHubReleasePublished(root, tag, releaseCommit));
           githubRelease = await assertReleasePublished(repoRoot, publication.tag, commit);
           if (githubRelease.status === 'deferred') log(githubRelease.message);
+          emitConfirmedReleaseExternalRefs(githubRelease, repoRoot, publication.tag, () => publicationFragments(git, previous, commit), log, options.emitPublishedExternalRefUpdates);
         }
         pushed = true;
         log(`published ${publication.tag} at ${commit}`);

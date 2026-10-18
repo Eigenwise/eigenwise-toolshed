@@ -93,18 +93,12 @@ handing off implementation. Draw from three sources, in this order:
     spanning every project. Recommend it where work is recurring and delegable; a project that
     just wants a list of TODOs does not need any of this. Non-Claude routes (GPT, Grok) need
     `model-gateway`, and without it routing still works across Claude models.
-  - `observability` is local, metadata-only telemetry: a bundled observer records session, tool,
-    and subagent lifecycle events into SQLite on the machine, an optional statusline shows live
-    context and usage, and an OpenTelemetry Collector forwards redacted signals to the observer.
-    Logs reach configured sinks, including PostHog, through the observer's consent-filtered outbox;
-    traces and metrics use separate Collector sink pipelines for Grafana or generic OTLP. Telemetry
-    payloads exclude prompts, responses, code, tool inputs and results, credentials, and environment
-    values. Exporter settings the user provides, including OTLP headers or tokens, are stored locally
-    in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or
-    `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, so an
-    exporter can authenticate. Every sink beyond local SQLite is opt-in. Propose it only when the
-    user wants to see where their tokens and time go; its `enable-project-telemetry` skill owns
-    that whole flow from consent through verification, so hand off rather than wiring it yourself.
+  - `observability` records exact engine cost, token usage, turn timing, tool activity, and
+    session metadata in a local per-project JSONL ledger. Nothing leaves the machine. Each
+    project is off until `/observability:track on`; `/observability:track off|status` stops or
+    checks recording. `/observability:board` opens the self-contained local usage board.
+    Propose it when the user wants to see where tokens and time go. Its `track` skill describes
+    the commands and privacy boundary; hand off rather than configuring recording yourself.
   - `model-gateway` puts the user's existing ChatGPT/Codex and Grok subscription models in
     Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
     sidequest's non-Claude routes possible. Project-scoped with the rest of the workspace plugins.
@@ -140,10 +134,8 @@ handing off implementation. Draw from three sources, in this order:
     subject to the existing approval flow, never from a host policy label alone; starter live rules
     derived from recurring correction themes, using
     [references/rule-templates.md](references/rule-templates.md) as reference material to derive
-    from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
-    gets the reuse-first implementation baseline from
-    [references/clean-code-principles.md](references/clean-code-principles.md), the self-improvement
-    rule from [references/self-improvement.md](references/self-improvement.md), and, for every
+    from, never copy (byte-identical output means it was copied; rewrite or drop it). Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade.
+    Every workspace gets the self-improvement rule from [references/self-improvement.md](references/self-improvement.md), and, for every
     codebase, a proposed CRAP gate from [references/crap-gate.md](references/crap-gate.md). Adapt
     them to the project and include them in the approved write list. Skip the CRAP gate for a
     not-a-codebase.
@@ -253,8 +245,7 @@ what would make the user's current work easier and whether this setup is earning
 
 - `references/host-capabilities.md` - identify host capabilities before proposing an extension
 - `references/stack-plugins.md` - stack to plugins/marketplaces/LSP catalog
-- `references/rule-templates.md` - craft-baseline and stack rule reference material
+- `references/rule-templates.md` - workflow and stack rule reference material
 - `references/crap-gate.md` - CRAP threshold policy, LCOV recipes, config, and live-rule source
 - `references/self-improvement.md` - the self-improvement live rule every workspace gets
 - `references/structure-notes.md` - structure notes, mostly for greenfield
-- `references/clean-code-principles.md` - optional digest for the guidelines-pointer rule

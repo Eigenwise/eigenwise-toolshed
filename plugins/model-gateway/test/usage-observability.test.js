@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { otlpToObservations } = require('../../observability/lib/observability/otlp.js');
 
 const {
   allocateLargestRemainder,
@@ -430,7 +429,6 @@ test('JSON capture emits exact identities, resolved route, measurements, and no 
   assert.equal(record.attributes.ticket_ref, 'SQ-1234');
 
   const otlp = buildOtlpLogPayload(record);
-  assert.equal(otlpToObservations('logs', otlp)[0].ticket_ref, 'SQ-1234');
   const flat = attributeMap(otlp);
   assert.equal(flat.input_tokens, 10);
   assert.equal(flat.output_tokens, 4);
@@ -633,9 +631,8 @@ test('OTLP payload carries the event.name attribute the collector filter matches
   assert.equal(attributes['event.name'], 'gateway.token.usage');
   assert.equal(attributes.event_name, 'gateway.token.usage');
 
-  // Seam guard: this is the observability collector's filter/signals allowlist
-  // (REQUIRED_LOG_FILTER in plugins/observability/bin/install-otel-collector.js).
-  // If either side changes its key or pattern, this must fail.
+  // Frozen contract for external OTLP collectors that filter on event.name: the gateway's
+  // records keep matching this pattern even though the Toolshed no longer ships a collector.
   const filterRegex = /^(claude_code|agent_sdk|gateway)\.|^(mcp_server_connection|hook_execution_(start|complete))$/;
   assert.match(attributes['event.name'], filterRegex);
 });
