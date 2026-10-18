@@ -70,8 +70,9 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are unattended workers;
   omitting bypass sends their ordinary Bash approvals into the lead session. Never spawn a
   Claude-route executor without `model:` — an omitted model inherits the session model (usually the
-  priciest route), silently defeating routing. The bundled PreToolUse hook injects or blocks as a
-  backstop, but the spawn call must carry it.
+  priciest route), silently defeating routing. The guards hooks module injects or blocks as a
+  backstop, running one admission decision process per Agent spawn and refusing the spawn when that
+  decision cannot run, but the spawn call must carry it.
 - **Codex routes (`exec.model` null):** spawn the EXACT shared dispatch executor the dispatch returned as
   `spawn.subagent_type` (`sidequest-exec-dispatch`, or `sidequest-exec-dispatch-readonly` for a readonly
   category; both are effort-collapsed) with `mode: "bypassPermissions"`, a unique
