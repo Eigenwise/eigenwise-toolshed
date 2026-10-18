@@ -60,21 +60,54 @@ const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const AGENT_DISPATCH_STATE = path.join(HOOKS, 'agent-dispatch-state.js');
-const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
-const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
-const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
-const GUARD_HEREDOC_ISOLATED = path.join(HOOKS, 'guard-heredoc-isolated.js');
-const GUARD_POWERSHELL_CMD_SHIMS = path.join(HOOKS, 'guard-powershell-cmd-shims.js');
-const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
-const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
 const STOP = path.join(HOOKS, 'stop.js');
 const POST_COMPACT = path.join(HOOKS, 'post-compact.js');
-const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
 const WORKTREE_CREATE = path.join(HOOKS, 'worktree-create.js');
+
+// The PreToolUse guards run in the hooks module (hooks/guards/register.ts). These tests drive the pure decisions it
+// calls, fed by the dispatch snapshot the store writes, and render a verdict in the old hook output shape.
+const guardText = require('../hooks/guards/text-guards.ts');
+const guardContext = require('../hooks/guards/context-guards.ts');
+const HOST_MACHINE = { home: os.homedir(), windows: process.platform === 'win32' };
+
+function denyOutput(reason: string | null): any {
+  return reason ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } } : null;
+}
+
+function contextOutput(context: string | null): any {
+  return context ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } } : null;
+}
+
+// The module reads a board with no snapshot yet as one with no dispatches.
+function dispatchSnapshot(projectSlug: string = slug) {
+  const file = path.join(store.projectDir(projectSlug), 'dispatch-snapshot.json');
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { dispatches: [] };
+}
+
+function snapshotCaller(payload: any, projectSlug: string = slug) {
+  return guardContext.callerRow(dispatchSnapshot(projectSlug).dispatches, payload.agent_id || undefined, payload.session_id || '');
+}
+
+function runTaskOutputGuard(payload: any) {
+  if (payload.agent_id) return null;
+  return denyOutput(guardContext.taskOutputDenial(payload.tool_input || {}, dispatchSnapshot().dispatches, payload.session_id || ''));
+}
+
+function runHeredocGuard(payload: any) {
+  return denyOutput(guardContext.heredocDenial(payload.tool_input.command, snapshotCaller(payload), payload.cwd || ''));
+}
+
+const repeatedCommands = new Map();
+function runRepeatedCommandWarn(payload: any) {
+  if (!payload.agent_id || !/^(?:sidequest:)?sidequest-/.test(payload.agent_type || '')) return null;
+  const step = guardContext.repeatedCommandStep(repeatedCommands.get(payload.agent_id), payload.tool_input.command);
+  if (step) repeatedCommands.set(payload.agent_id, step.next);
+  return step?.warn ? guardContext.REPEATED_COMMAND_WARNING : null;
+}
 
 // Budget tests pin the plugin root because the nudge embeds it in CLI fallbacks.
 const BUDGET = {
@@ -1772,7 +1805,7 @@ test('pre-tool hook: malformed input fails soft', () => {
 
 test('task-output guard: blocks Sidequest native task identities and dispatched names', () => {
   const reason = 'native Agent results arrive automatically. Use pulse <ref> / changes --since for liveness. Use TaskStop only after terminal board evidence.';
-  const direct = runHookOutput(GUARD_TASK_OUTPUT, {
+  const direct = runTaskOutputGuard({
     tool_name: 'TaskOutput', tool_input: { task_id: 'sidequest-exec-dispatch@session-abc' },
   });
   assert.equal(direct.hookSpecificOutput.permissionDecision, 'deny');
@@ -1789,7 +1822,7 @@ test('task-output guard: blocks Sidequest native task identities and dispatched 
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
 
   for (const tool_input of [{ task_id: agentName }, { id: agentId }]) {
-    const out = runHookOutput(GUARD_TASK_OUTPUT, { session_id: sessionId, tool_name: 'TaskOutput', tool_input });
+    const out = runTaskOutputGuard({ session_id: sessionId, tool_name: 'TaskOutput', tool_input });
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   }
 });
@@ -1800,130 +1833,87 @@ test('task-output guard: leaves background task IDs and malformed unrelated inpu
     { id: 'unrelated-SQ-439-process' },
     { task_id: {} },
   ]) {
-    assert.strictEqual(runHookOutput(GUARD_TASK_OUTPUT, { tool_name: 'TaskOutput', tool_input }), null);
+    assert.strictEqual(runTaskOutputGuard({ tool_name: 'TaskOutput', tool_input }), null);
   }
 });
 
-test('task-output guard: executor identity variants bypass the main-thread guard', () => {
-  for (const identity of [
-    { agent_id: 'executor' }, { agentId: 'executor' }, { agent_type: 'sidequest-exec-high' }, { agentType: 'sidequest-exec-high' },
-  ]) {
-    assert.strictEqual(runHookOutput(GUARD_TASK_OUTPUT, {
-      tool_name: 'TaskOutput', ...identity, tool_input: { task_id: 'sidequest-exec-dispatch@session-abc' },
-    }), null);
-  }
+test('task-output guard: an executor subagent call bypasses the main-thread guard', () => {
+  assert.strictEqual(runTaskOutputGuard({
+    tool_name: 'TaskOutput', agent_id: 'executor', tool_input: { task_id: 'sidequest-exec-dispatch@session-abc' },
+  }), null);
 });
 
 test('pre-tool repeated-command hook ignores main-thread and unrelated subagent calls', () => {
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { tool_name: 'Bash', agent_id: 'main-thread', tool_input: { command: 'npm test' } }), null);
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { tool_name: 'Bash', agent_type: 'explore', agent_id: 'other-agent', tool_input: { command: 'npm test' } }), null);
+  assert.equal(runRepeatedCommandWarn({ tool_name: 'Bash', agent_id: 'main-thread', tool_input: { command: 'npm test' } }), null);
+  assert.equal(runRepeatedCommandWarn({ tool_name: 'Bash', agent_type: 'explore', agent_id: 'other-agent', tool_input: { command: 'npm test' } }), null);
 });
 
 test('pre-tool repeated-command hook warns on the third repeat and every fifth after', () => {
   const agentId = `repeated-command-${process.pid}-${Date.now()}`;
   const payload = { tool_name: 'Bash', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm   run\n test' } };
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run test' } }), null);
-  const third = runHook(REPEATED_COMMAND_WARN, payload);
+  assert.equal(runRepeatedCommandWarn(payload), null);
+  assert.equal(runRepeatedCommandWarn({ ...payload, tool_input: { command: 'npm run test' } }), null);
+  const third = runRepeatedCommandWarn(payload);
   assert.equal(third, 'sidequest: you have run this exact command 3 times; if you are waiting on something, run it with run_in_background and let the completion notification wake you — polling burns ~14s and ~60k tokens per call');
-  for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
-  assert.match(runHook(REPEATED_COMMAND_WARN, payload), /you have run this exact command 3 times/);
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run typecheck' } }), null);
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run typecheck' } }), null);
-  assert.match(runHook(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run typecheck' } }), /you have run this exact command 3 times/);
+  for (let i = 0; i < 4; i += 1) assert.equal(runRepeatedCommandWarn(payload), null);
+  assert.match(runRepeatedCommandWarn(payload), /you have run this exact command 3 times/);
+  assert.equal(runRepeatedCommandWarn({ ...payload, tool_input: { command: 'npm run typecheck' } }), null);
+  assert.equal(runRepeatedCommandWarn({ ...payload, tool_input: { command: 'npm run typecheck' } }), null);
+  assert.match(runRepeatedCommandWarn({ ...payload, tool_input: { command: 'npm run typecheck' } }), /you have run this exact command 3 times/);
 });
 
 test('pre-tool repeated-command hook warns for PowerShell commands', () => {
   const agentId = `repeated-command-powershell-${process.pid}-${Date.now()}`;
   const payload = { tool_name: 'PowerShell', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm test' } };
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
-  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
-  assert.match(runHook(REPEATED_COMMAND_WARN, payload), /polling burns ~14s and ~60k tokens per call/);
+  assert.equal(runRepeatedCommandWarn(payload), null);
+  assert.equal(runRepeatedCommandWarn(payload), null);
+  assert.match(runRepeatedCommandWarn(payload), /polling burns ~14s and ~60k tokens per call/);
 });
 
-test('pre-tool inline-work hook gives one advisory after 25 substantive actions', () => {
-  const session_id = `inline-advisory-threshold-${Date.now()}`;
-  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  for (let action = 1; action < 25; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  const output = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage);
-  assert.match(output.systemMessage, /25 substantive actions/);
-  assert.match(output.systemMessage, /Small fixes at known locations may stay inline/);
-  assert.ok(Buffer.byteLength(output.systemMessage, 'utf8') <= 768);
-  for (let action = 0; action < 30; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  runHookOutput(INLINE_WORK_NUDGE, { ...payload, tool_name: 'mcp__plugin_sidequest_board__list' });
-  runHookOutput(BOARD_FIRST_REMINDER, { session_id, cwd: BOARD_PATH, prompt: 'hi' });
-  for (let action = 0; action < 25; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+function inlineWorkSession() {
+  let state = {};
+  return (tool_name: string, command = '', subagentType = '') => {
+    const { next, crossed } = guardContext.inlineWorkStep(state, tool_name, command, subagentType);
+    state = next;
+    return crossed ? guardContext.inlineWorkNudge(next.substantiveActions) : null;
+  };
+}
+
+test('inline-work nudge gives one advisory after 25 substantive actions', () => {
+  const step = inlineWorkSession();
+  for (let action = 1; action < 25; action += 1) assert.equal(step('Write'), null);
+  const nudge = step('Write');
+  assert.equal(nudge, 'sidequest: 25 substantive actions without a board call. Consider one owner and a focused check for a bounded fix. Small fixes at known locations may stay inline; use a story or wave only for 3+ independently checkable pieces with a stated reason.');
+  assert.ok(Buffer.byteLength(nudge, 'utf8') <= 768);
+  for (let action = 0; action < 30; action += 1) assert.equal(step('Write'), null);
 });
 
-test('pre-tool inline-work hook stays quiet for reads and native investigation agents', () => {
-  const session_id = `inline-readonly-${Date.now()}`;
+test('inline-work nudge stays quiet for reads and native investigation agents', () => {
+  const step = inlineWorkSession();
   for (const tool_name of ['Read', 'Grep', 'Glob', 'Agent']) {
-    const payload = { session_id, cwd: BOARD_PATH, tool_name, tool_input: { subagent_type: 'Explore' } };
-    for (let action = 0; action < 26; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+    for (let action = 0; action < 26; action += 1) assert.equal(step(tool_name, '', 'Explore'), null);
   }
 });
 
-test('pre-tool inline-work hook keeps bounded transcript lookups inline-safe', () => {
-  const output = runHookOutput(INLINE_WORK_NUDGE, {
-    session_id: `inline-transcript-${Date.now()}`,
-    cwd: BOARD_PATH,
-    prompt: 'Find the session transcript entry for this claim.',
-    tool_name: 'Bash',
-    tool_input: { command: 'node -p "process.argv.slice(1, 2)[0]" transcript --limit 1' },
-  });
-  assert.equal(output, null);
+
+test('inline-work nudge stays quiet after a board interaction, MCP or CLI', () => {
+  const mcp = inlineWorkSession();
+  assert.equal(mcp('mcp__plugin_sidequest_board__claim'), null);
+  for (let i = 0; i < 30; i += 1) assert.equal(mcp(i % 2 ? 'Read' : 'Write'), null);
+  const cli = inlineWorkSession();
+  assert.equal(cli('Bash', 'node "C:/plugins/sidequest/bin/sidequest.js" list'), null);
+  for (let i = 0; i < 30; i += 1) assert.equal(cli('Write'), null);
 });
 
-test('pre-tool inline-work hook records activity without injecting repeat reminders after board interaction', () => {
-  const session_id = `inline-advisory-${Date.now()}`;
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
-  }), null);
-  for (let i = 0; i < 20; i += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id, cwd: BOARD_PATH, tool_name: i % 2 ? 'Read' : 'Write', tool_input: {},
-    }), null);
-  }
-});
 
-test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
-  const session_id = `inline-board-${Date.now()}`;
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
-  }), null);
-  for (let i = 0; i < 12; i += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
-    }), null);
-  }
-  const cliSession = `inline-cli-${Date.now()}`;
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Bash',
-    tool_input: { command: 'node "C:/plugins/sidequest/bin/sidequest.js" list' },
-  }), null);
-  for (let i = 0; i < 12; i += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Glob', tool_input: {},
-    }), null);
-  }
-});
-
-test('pre-tool inline-work nudge ignores subagent identity variants and routing-disabled boards', () => {
-  for (const identity of [
-    { agent_id: 'executor' }, { agentId: 'executor' }, { agent_type: 'sidequest-exec-high' }, { agentType: 'sidequest-exec-high' },
-  ]) {
-    const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, ...identity, tool_name: 'Read', tool_input: {} };
-    for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
-  }
-
+test('the dispatch snapshot carries board routing, so the inline-work nudge stays quiet on a routing-disabled board', () => {
   store.setProjectRouting(slug, 'disabled');
   try {
-    const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
-    for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, disabled), null);
+    assert.equal(dispatchSnapshot().routed, false);
   } finally {
     store.setProjectRouting(slug, 'enabled');
   }
+  assert.equal(dispatchSnapshot().routed, true);
 });
 
 test('usable-route admission keeps unavailable boards inline without a raw Agent fallback', () => {
@@ -1936,9 +1926,7 @@ test('usable-route admission keeps unavailable boards inline without a raw Agent
       route: { model: 'unavailable-test-route', effort: 'high' },
     });
     assert.equal(store.projectDispatchAdmission(slug).status, 'no-usable-route');
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id: `inline-unavailable-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
-    }), null);
+    assert.equal(dispatchSnapshot().routed, false, 'the inline-work nudge stays quiet without a usable route');
     const denied = runHookOutput(FORCE_BYPASS, {
       cwd: BOARD_PATH,
       tool_name: 'Agent',
@@ -1954,17 +1942,9 @@ test('usable-route admission keeps unavailable boards inline without a raw Agent
   assert.equal(store.projectDispatchAdmission(slug).status, 'routed');
 });
 
-test('pre-tool inline-work nudge ignores automation prompts', () => {
-  const payload = {
-    session_id: `inline-automation-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
-    prompt: '<task-notification>Executor completed.</task-notification>',
-  };
-  for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-});
 
-test('pre-tool inline-work nudge counts PowerShell edits and skips test and build runs', () => {
-  const session_id = `inline-shells-${Date.now()}`;
-  const shell = (tool_name: string, command: string) => runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name, tool_input: { command } });
+test('inline-work nudge counts PowerShell edits and skips test and build runs', () => {
+  const step = inlineWorkSession();
   for (const [tool, command] of <Array<[string, string]>>[
     ['Bash', 'npm test'],
     ['PowerShell', 'npm --prefix plugins/demo run build:check'],
@@ -1973,19 +1953,13 @@ test('pre-tool inline-work nudge counts PowerShell edits and skips test and buil
     ['Bash', 'node -e "console.log(1)"'],
     ['PowerShell', 'npm test'],
     ['PowerShell', 'Get-ChildItem src'],
-  ]) assert.equal(shell(tool, command), null, `${tool}: ${command} must not count as an edit`);
-  for (let action = 1; action < 25; action += 1) assert.equal(shell('PowerShell', 'Set-Content notes.txt hello'), null);
-  assert.match(shell('PowerShell', 'Set-Content notes.txt hello').systemMessage, /25 substantive actions/);
+  ]) assert.equal(step(tool, command), null, `${tool}: ${command} must not count as an edit`);
+  for (let action = 1; action < 25; action += 1) assert.equal(step('PowerShell', 'Set-Content notes.txt hello'), null);
+  assert.match(step('PowerShell', 'Set-Content notes.txt hello'), /25 substantive actions/);
 });
 
-test('a new user prompt reopens the inline-work nudge after a board call, and keeps the Explore cap lifted', () => {
+test('Explore spawns stay uncapped after an earlier board call', () => {
   const session_id = `inline-reopen-${Date.now()}`;
-  const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__list', tool_input: {} }), null);
-  for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null, 'a board call silences the nudge for the rest of that prompt');
-  runHookOutput(BOARD_FIRST_REMINDER, { session_id, cwd: BOARD_PATH, prompt: 'hi' });
-  for (let action = 1; action < 25; action += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).systemMessage, /25 substantive actions/);
   for (let round = 1; round <= 3; round += 1) {
     const spawn = runHookOutput(FORCE_BYPASS, {
       session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: `Sweep the docs tree, angle ${round}.` },
@@ -2459,12 +2433,13 @@ test('pre-tool hook: an unprepared dispatch executor remains denied without a mo
  *  the Contractify loop.
  * ------------------------------------------------------------------ */
 
-function runGuardPeer(payload?: any) {
-  const out = execFileSync(process.execPath, [GUARD_PEER], {
-    input: JSON.stringify({ tool_name: 'SendMessage', ...payload }),
-    encoding: 'utf8',
-  });
-  return out.trim() ? JSON.parse(out) : null;
+function runGuardPeer(payload?: any, projectSlug: string = slug) {
+  const to = String(payload?.tool_input?.to ?? '').trim();
+  const rows = dispatchSnapshot(projectSlug).dispatches;
+  const terminal = guardContext.terminalPeerRow(rows, to);
+  if (terminal) return denyOutput(guardContext.terminalPeerDenial(terminal, to));
+  const isolated = guardContext.isolatedPeerRow(rows, to);
+  return isolated && !fs.existsSync(path.join(isolated.worktree, '.git')) ? denyOutput(guardContext.missingWorktreeDenial(isolated)) : null;
 }
 
 test('peer-guard: executor and Codex executor peer messages are allowed', () => {
@@ -2540,8 +2515,7 @@ test('peer-message hooks refuse a completed executor by its exact SendMessage ta
     tool_name: 'SendMessage',
     tool_input: { to: acting.agent_name, message: 'Make one more revision.' },
   };
-  for (const hook of [GUARD_PEER, FORCE_BYPASS]) {
-    const out = runHookOutput(hook, payload);
+  for (const out of [runGuardPeer(payload), runHookOutput(FORCE_BYPASS, payload)]) {
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
     assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
@@ -2573,8 +2547,7 @@ test('peer-message hooks refuse a submitted executor by its exact SendMessage ta
     tool_name: 'SendMessage',
     tool_input: { to: acting.agent_name, message: 'Make one more revision.' },
   };
-  for (const hook of [GUARD_PEER, FORCE_BYPASS]) {
-    const out = runHookOutput(hook, payload);
+  for (const out of [runGuardPeer(payload), runHookOutput(FORCE_BYPASS, payload)]) {
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
     assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
@@ -2609,10 +2582,10 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
   gitFixture(['worktree', 'add', '--detach', worktree], isolatedRoot);
   completeCheckoutCreation(isolatedSlug, sessionId, worktree);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, isolatedName, worktree).ok, true);
-  assert.strictEqual(runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }), null);
+  assert.strictEqual(runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }, isolatedSlug), null);
   fs.rmSync(worktree, { recursive: true, force: true });
 
-  const blocked = runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } });
+  const blocked = runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }, isolatedSlug);
   assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(blocked.hookSpecificOutput.permissionDecisionReason, new RegExp(isolated.ref));
   assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /worktree-isolated/);
@@ -2629,7 +2602,7 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
     agentName: 'shared-worktree-worker',
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sharedSession, sharedPrepared.ticket.dispatchExecutor, `shared-agent-${sqSeq}`, 'shared-worktree-worker').ok, true);
-  assert.strictEqual(runGuardPeer({ tool_input: { to: 'shared-worktree-worker', message: 'continue' } }), null);
+  assert.strictEqual(runGuardPeer({ tool_input: { to: 'shared-worktree-worker', message: 'continue' } }, isolatedSlug), null);
   assert.equal(store.deleteProjectExact(isolatedSlug).ok, true);
   fs.rmSync(isolatedRoot, { recursive: true, force: true });
 });
@@ -2659,30 +2632,18 @@ test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
   assert.strictEqual(runGuardPeer({ agent_type: 'code-reviewer', tool_input: { to: 'researcher', message: 'hi' } }), null);
 });
 
-function runHomeDeleteGuard(tool_name?: any, command?: any) {
-  return runHookOutput(GUARD_HOME_DELETE, { tool_name, tool_input: { command } });
+function runHomeDeleteGuard(_toolName?: any, command?: any) {
+  return denyOutput(guardText.homeDeleteDenial(command, HOST_MACHINE));
 }
 
 function runBashWindowsPathGuard(command?: any, platform = 'win32') {
-  const out = execFileSync(process.execPath, [
-    '-e',
-    `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} }); require(${JSON.stringify(GUARD_BASH_WINDOWS_PATHS)});`,
-  ], {
-    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
-    encoding: 'utf8',
-  });
-  return out.trim() ? JSON.parse(out) : null;
+  if (platform !== 'win32') return null;
+  const verdict = guardText.bashWindowsPathVerdict(command);
+  return verdict && 'deny' in verdict ? denyOutput(verdict.deny) : contextOutput(verdict?.context ?? null);
 }
 
 function runPowerShellCmdShimGuard(command?: any, platform = 'win32') {
-  const out = execFileSync(process.execPath, [
-    '-e',
-    `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} }); require(${JSON.stringify(GUARD_POWERSHELL_CMD_SHIMS)});`,
-  ], {
-    input: JSON.stringify({ tool_name: 'PowerShell', tool_input: { command } }),
-    encoding: 'utf8',
-  });
-  return out.trim() ? JSON.parse(out) : null;
+  return platform === 'win32' ? contextOutput(guardText.powershellShimContext(command)) : null;
 }
 
 test('Bash Windows-path guard: denies an unquoted backslash path', () => {
@@ -2820,13 +2781,6 @@ test('home-delete guard: blocks a recursive delete using $home', () => {
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /user profile or \.claude root/);
 });
 
-test('home-delete guard: applies to executors too', () => {
-  const out = runHookOutput(GUARD_HOME_DELETE, {
-    tool_name: 'PowerShell', agent_type: 'sidequest-exec-high', agent_id: 'executor',
-    tool_input: { command: 'Remove-Item -Recurse -Force $home' },
-  });
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-});
 
 test('home-delete guard: blocks profile and .claude roots', () => {
   for (const command of [
@@ -2949,7 +2903,7 @@ test('heredoc guard: denies a heredoc in a dispatched isolated worktree', () => 
   const ticket = addStopTicket('heredoc isolation guard');
   const sessionId = `heredoc-isolated-${++sqSeq}`;
   const acting = claimStopTicket(ticket, sessionId, 'heredoc-worker');
-  const out = runHookOutput(GUARD_HEREDOC_ISOLATED, {
+  const out = runHeredocGuard({
     ...acting,
     tool_name: 'Bash',
     tool_input: { command: "node - <<'JS'\nconsole.log('probe');\nJS" },
@@ -2961,12 +2915,12 @@ test('heredoc guard: denies a heredoc in a dispatched isolated worktree', () => 
 
 test('heredoc guard: stays silent for non-isolated and non-heredoc Bash commands', () => {
   const heredoc = "node - <<'JS'\nconsole.log('probe');\nJS";
-  assert.strictEqual(runHookOutput(GUARD_HEREDOC_ISOLATED, {
+  assert.strictEqual(runHeredocGuard({
     tool_name: 'Bash',
     cwd: path.join(BOARD_PATH, 'src'),
     tool_input: { command: heredoc },
   }), null);
-  assert.strictEqual(runHookOutput(GUARD_HEREDOC_ISOLATED, {
+  assert.strictEqual(runHeredocGuard({
     tool_name: 'Bash',
     cwd: path.join(BOARD_PATH, '.claude', 'worktrees', 'agent-heredoc-fixture'),
     tool_input: { command: 'node script.js' },
@@ -4163,7 +4117,7 @@ test('pre-tool hooks: a plain user Bash call gets no output from any Sidequest g
   const bashHooks = groups
     .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test('Bash'))
     .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
-  assert.ok(bashHooks.length >= 5, `expected the Bash guard set, got ${bashHooks.length}`);
+  assert.ok(bashHooks.length >= 4, `expected the Bash command-hook guard set, got ${bashHooks.length}`);
   for (const hook of bashHooks) {
     const out = runHookOutput(hook, { session_id: 'plain-user', cwd: project, tool_name: 'Bash', tool_input: { command: 'ls' } }, { SIDEQUEST_HOME: home });
     assert.equal(out, null, path.basename(hook));
@@ -4905,8 +4859,7 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.match(stopCommands[0].command, /stop\.js/);
   assert.doesNotMatch(stopCommands[0].command, /compaction-suggestion|board-reconciliation-reminder/);
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === '*'
-    && entry.hooks.some((hook?: any) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
+  assert.deepEqual(config.modules, ['./guards/register.ts'], 'the PreToolUse guards, the inline-work reminder among them, run in the guards hooks module');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Agent'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
@@ -4922,10 +4875,6 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Edit|Write|MultiEdit|NotebookEdit'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the helper write guard must be registered');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'TaskOutput'
-    && entry.hooks.some((hook?: any) => hook.command.includes('guard-task-output.js'))), 'the TaskOutput guard must be registered');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
-    && entry.hooks.some((hook?: any) => hook.command.includes('repeated-command-warn.js'))), 'the repeated-command warning must run for shell commands');
   assert.equal(config.hooks.TeammateIdle, undefined, 'native terminal retirement must not wake completed executors');
 
   const readme = fs.readFileSync(path.join(pluginRoot, 'README.md'), 'utf8');
@@ -6007,7 +5956,6 @@ test('pre-tool hook: dispatch executor requires an exact briefing and legacy exe
   assert.match(legacy.hookSpecificOutput.permissionDecisionReason, /invalid or retired/);
 });
 
-const GUARD_DENIED_TOOLS = path.join(HOOKS, 'guard-denied-tools.js');
 
 function readOnlyShellCheckout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-shell-'));
@@ -6185,7 +6133,7 @@ test('denied-tools guard: board and category deniedTools refuse an executor call
     assert.deepEqual(store.boardConfig(slug).deniedTools, ['WebFetch']);
     const writer = claimStopTicket(store.createTicket(slug, { title: 'denied tools writer', category, source: 'cli' }), `denied-tools-${++sqSeq}`, 'denied-writer');
     const reader = claimStopTicket(store.createTicket(slug, { title: 'denied tools reader', category: readOnlyCategory, source: 'cli' }), `denied-tools-${++sqSeq}`, 'denied-reader');
-    const run = (acting: any, toolName: string) => runHookOutput(GUARD_DENIED_TOOLS, { ...acting, cwd: BOARD_PATH, tool_name: toolName, tool_input: {} });
+    const run = (acting: any, toolName: string) => denyOutput(guardContext.deniedToolsDenial(toolName, snapshotCaller(acting)));
     for (const toolName of ['Agent', 'mcp__claude-in-chrome__navigate', 'WebFetch']) {
       const reason = run(writer, toolName)?.hookSpecificOutput?.permissionDecisionReason || '';
       assert.match(reason, /is denied to executors on SQ-\d+ by the board deniedTools setting/, toolName);
@@ -6195,7 +6143,7 @@ test('denied-tools guard: board and category deniedTools refuse an executor call
     assert.equal(run(reader, 'mcp__playwright__browser_click').hookSpecificOutput.permissionDecision, 'deny');
     assert.equal(run(reader, 'WebFetch').hookSpecificOutput.permissionDecision, 'deny');
     assert.equal(run(reader, 'mcp__claude-in-chrome__navigate'), null);
-    assert.equal(runHookOutput(GUARD_DENIED_TOOLS, { session_id: 'main-session', cwd: BOARD_PATH, tool_name: 'WebFetch', tool_input: {} }), null);
+    assert.equal(run({ session_id: 'main-session' }, 'WebFetch'), null);
   } finally {
     store.setBoardConfig(slug, { deniedTools: previous.deniedTools, readOnlyDeniedTools: previous.readOnlyDeniedTools });
   }

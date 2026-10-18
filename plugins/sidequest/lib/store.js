@@ -32,6 +32,7 @@ const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
 const { createAssets } = require("./store/assets.js");
+const { createDispatchSnapshot } = require("./store/dispatch-snapshot.js");
 const { createNotifications } = require("./store/notifications.js");
 const { createWorkers } = require("./store/workers.js");
 const { createStories } = require("./store/stories.js");
@@ -1824,8 +1825,31 @@ function ticketStorageRow(slug, ticket) {
     data: stored
   };
 }
+const { writeDispatchSnapshot } = createDispatchSnapshot({
+  listTickets: (slug) => listTickets(slug),
+  projectDir: (slug) => projectDir(slug),
+  boardConfig: (slug) => boardConfig(slug),
+  getCategory: (id, options) => getCategory(id, options),
+  routed: (slug) => projectDispatchAdmission(slug).status === "routed"
+});
+function scheduleDispatchSnapshot(slug) {
+  afterCommit(() => {
+    try {
+      writeDispatchSnapshot(slug);
+    } catch {
+    }
+  });
+}
+function refreshingDispatchSnapshot(write) {
+  return (slug, ...rest) => {
+    const result = write(slug, ...rest);
+    scheduleDispatchSnapshot(slug);
+    return result;
+  };
+}
 function putTicket(slug, ticket) {
   putCachedRow(database(), "tickets", ticketStorageRow(slug, ticket));
+  if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
   const project = readMeta(slug);
   telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
@@ -3935,7 +3959,7 @@ module.exports = {
   promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
-  setProjectRoutingProfile,
+  setProjectRoutingProfile: refreshingDispatchSnapshot(setProjectRoutingProfile),
   setNewProjectRoutingProfile,
   routingProfileEntries,
   routingProfileCategory,
@@ -3945,9 +3969,9 @@ module.exports = {
   getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
-  setProjectCategory,
+  setProjectCategory: refreshingDispatchSnapshot(setProjectCategory),
   detachCategory,
-  removeProjectCategory,
+  removeProjectCategory: refreshingDispatchSnapshot(removeProjectCategory),
   setCategory,
   removeCategory,
   homeRoot,
@@ -3963,7 +3987,7 @@ module.exports = {
   sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
-  setBoardConfig,
+  setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
@@ -4000,7 +4024,7 @@ module.exports = {
   mergeProject,
   moveProject,
   setProjectNotify,
-  setProjectRouting,
+  setProjectRouting: refreshingDispatchSnapshot(setProjectRouting),
   projectRoutingEnabled,
   copyAsset,
   saveAssetData,

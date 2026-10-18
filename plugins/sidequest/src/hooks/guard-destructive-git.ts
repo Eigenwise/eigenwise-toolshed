@@ -4,7 +4,7 @@ import { execFileSync } from '../lib/git-process.js';
 import { createRequire } from 'node:module';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
-import { withoutHereDocBodies } from './shared/heredocs.js';
+import { withoutHereDocBodies } from '../../hooks/guards/heredocs.js';
 
 const runtimeRequire = createRequire(__filename);
 const store = runtimeRequire(['..', 'lib', 'store'].join('/'));
