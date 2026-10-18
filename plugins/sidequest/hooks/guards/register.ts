@@ -35,6 +35,10 @@ async function caller($: EngineInterface, agentId: string | undefined): Promise<
   return callerRow(await sessionRows($), agentId, await $.session.id())
 }
 
+function contextOf(verdict: GuardVerdict): string | null {
+  return verdict && 'context' in verdict ? verdict.context : null
+}
+
 async function isSidequestAgent($: EngineInterface, agentId: string): Promise<boolean> {
   const agent = (await $.agent.list()).find(candidate => candidate.id === agentId)
   return /^(?:sidequest:)?sidequest-/.test(agent?.type ?? '')
@@ -54,12 +58,46 @@ async function routedBoard($: EngineInterface): Promise<boolean> {
   return (await readSnapshot($, directory))?.routed !== false
 }
 
+// The main loop only: a subagent's work is its ticket's, and the nudge is about work done without one.
+async function nudgeWanted($: EngineInterface): Promise<boolean> {
+  return (await routedBoard($)) && !(await caller($, undefined))
+}
+
 async function inlineWorkAdvice($: EngineInterface, tool: string, command: string, subagentType: string): Promise<string | null> {
   const { value = {} } = await $.state.get(INLINE_WORK)
   const { next, crossed } = inlineWorkStep(value, tool, command, subagentType)
   if (next !== value) await $.state.set(INLINE_WORK, next)
-  if (!crossed || !(await routedBoard($)) || (await caller($, undefined))) return null
-  return inlineWorkNudge(next.substantiveActions ?? 0)
+  return crossed && (await nudgeWanted($)) ? inlineWorkNudge(next.substantiveActions ?? 0) : null
+}
+
+async function repeatedCommandWarning($: EngineInterface, agentId: string, command: string): Promise<string | null> {
+  if (!(await isSidequestAgent($, agentId))) return null
+  const { value = {} } = await $.state.get(REPEATED_COMMANDS)
+  const step = repeatedCommandStep(value[agentId], command)
+  if (!step) return null
+  await $.state.set(REPEATED_COMMANDS, { ...value, [agentId]: step.next })
+  return step.warn ? REPEATED_COMMAND_WARNING : null
+}
+
+async function deniedToolsGuard($: EngineInterface, e: { tool: string; agentId?: string }): Promise<string | null> {
+  try {
+    return deniedToolsDenial(e.tool, await caller($, e.agentId))
+  } catch {
+    $.ui.status('sidequest: guard-denied-tools skipped')
+    return null
+  }
+}
+
+async function inlineWorkGuard($: EngineInterface, e: { tool: string; agentId?: string }): Promise<string | null> {
+  if (e.agentId) return null
+  try {
+    const advice = await inlineWorkAdvice($, e.tool, textField(e, 'command'), textField(e, 'subagent_type'))
+    if (advice) $.ui.toast(advice)
+    return advice
+  } catch {
+    $.ui.status('sidequest: inline-work-nudge skipped')
+    return null
+  }
 }
 
 export const register: Register = on => {
@@ -81,7 +119,7 @@ export const register: Register = on => {
       $.ui.status('sidequest: guard-bash-windows-paths skipped')
     }
     if (verdict && 'deny' in verdict) return { deny: verdict.deny }
-    return withContext(await next(e), verdict?.context ?? null)
+    return withContext(await next(e), contextOf(verdict))
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
@@ -105,36 +143,20 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: /^(Bash|PowerShell)$/ }, async ($, e, next) => {
-    let warn = false
+    let warning: string | null = null
     try {
-      if (e.agentId && (await isSidequestAgent($, e.agentId))) {
-        const { value = {} } = await $.state.get(REPEATED_COMMANDS)
-        const step = repeatedCommandStep(value[e.agentId], textField(e, 'command'))
-        if (step) await $.state.set(REPEATED_COMMANDS, { ...value, [e.agentId]: step.next })
-        warn = step?.warn === true
-      }
+      if (e.agentId) warning = await repeatedCommandWarning($, e.agentId, textField(e, 'command'))
     } catch {
       $.ui.status('sidequest: repeated-command-warn skipped')
     }
-    return withContext(await next(e), warn ? REPEATED_COMMAND_WARNING : null)
+    return withContext(await next(e), warning)
   })
 
   // The engine takes one matcher-less tool.call hook per module, so the two every-tool guards share it.
   on('tool.call', async ($, e, next) => {
-    try {
-      const denial = deniedToolsDenial(e.tool, await caller($, e.agentId))
-      if (denial) return { deny: denial }
-    } catch {
-      $.ui.status('sidequest: guard-denied-tools skipped')
-    }
-    let advice: string | null = null
-    try {
-      if (!e.agentId) advice = await inlineWorkAdvice($, e.tool, textField(e, 'command'), textField(e, 'subagent_type'))
-      if (advice) $.ui.toast(advice)
-    } catch {
-      $.ui.status('sidequest: inline-work-nudge skipped')
-    }
-    return withContext(await next(e), advice)
+    const denial = await deniedToolsGuard($, e)
+    if (denial) return { deny: denial }
+    return withContext(await next(e), await inlineWorkGuard($, e))
   })
 
   on('tool.call', { tool: /^TaskOutput$/ }, async ($, e, next) => {

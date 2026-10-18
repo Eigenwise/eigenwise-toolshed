@@ -82,13 +82,15 @@ export function heredocDenial(command: string, row: SnapshotRow | null, cwd: str
 
 export const REPEATED_COMMAND_WARNING = 'sidequest: you have run this exact command 3 times; if you are waiting on something, run it with run_in_background and let the completion notification wake you — polling burns ~14s and ~60k tokens per call';
 
+function warnsAt(count: number, lastWarning: number): boolean {
+  return count >= 3 && (lastWarning === 0 || count - lastWarning >= 5);
+}
+
 export function repeatedCommandStep(previous: RepeatedCommand | undefined, rawCommand: string): { next: RepeatedCommand; warn: boolean } | null {
   const command = rawCommand.trim().replace(/\s+/g, ' ');
   if (!command) return null;
-  const same = previous?.command === command;
-  const count = same ? previous.count + 1 : 1;
-  const lastWarning = same ? previous.lastWarning : 0;
-  const warn = count >= 3 && (lastWarning === 0 || count - lastWarning >= 5);
+  const { count, lastWarning } = previous?.command === command ? { count: previous.count + 1, lastWarning: previous.lastWarning } : { count: 1, lastWarning: 0 };
+  const warn = warnsAt(count, lastWarning);
   return { next: { command, count, lastWarning: warn ? count : lastWarning }, warn };
 }
 
@@ -161,7 +163,10 @@ export function inlineWorkNudge(substantiveActions: number): string {
 // Returns the new state, and whether this call crossed the threshold; the caller checks the board only then.
 export function inlineWorkStep(state: InlineWork, toolName: string, command: string, subagentType: string): { next: InlineWork; crossed: boolean } {
   if (isBoardInteraction(toolName, command.trim(), subagentType)) return { next: { ...state, boardInteraction: true }, crossed: false };
-  if (!isSubstantive(toolName, command.trim())) return { next: state, crossed: false };
+  return isSubstantive(toolName, command.trim()) ? countSubstantiveAction(state) : { next: state, crossed: false };
+}
+
+function countSubstantiveAction(state: InlineWork): { next: InlineWork; crossed: boolean } {
   const substantiveActions = (state.substantiveActions ?? 0) + 1;
   const crossed = !state.boardInteraction && !state.advisorySurfaced && substantiveActions >= SUBSTANTIVE_ADVISORY_THRESHOLD;
   return { next: { ...state, substantiveActions, advisorySurfaced: state.advisorySurfaced || crossed }, crossed };

@@ -20,17 +20,21 @@ function isAbsolute(target: string, machine: Machine): boolean {
   return machine.windows ? /^(?:[A-Za-z]:)?[\\/]/.test(target) : target.startsWith('/');
 }
 
-// path.resolve for an absolute target, without Node: a drive-less Windows target lands on the home drive.
-export function resolveAbsolute(target: string, machine: Machine): string {
-  const separator = machine.windows ? '\\' : '/';
-  const unified = machine.windows ? target.replace(/\//g, '\\') : target;
-  const drive = machine.windows ? (DRIVE.exec(unified)?.[0] ?? machine.home.slice(0, 2)) : '';
+function resolvedSegments(target: string, separator: string): string {
   const parts: string[] = [];
-  for (const part of unified.replace(DRIVE, '').split(separator)) {
+  for (const part of target.split(separator)) {
     if (part === '..') parts.pop();
     else if (part && part !== '.') parts.push(part);
   }
-  return `${drive}${separator}${parts.join(separator)}`;
+  return parts.join(separator);
+}
+
+// path.resolve for an absolute target, without Node: a drive-less Windows target lands on the home drive.
+export function resolveAbsolute(target: string, machine: Machine): string {
+  if (!machine.windows) return `/${resolvedSegments(target, '/')}`;
+  const unified = target.replace(/\//g, '\\');
+  const drive = DRIVE.exec(unified)?.[0] ?? machine.home.slice(0, 2);
+  return `${drive}\\${resolvedSegments(unified.replace(DRIVE, ''), '\\')}`;
 }
 
 function parentOf(resolved: string, separator: string): string {

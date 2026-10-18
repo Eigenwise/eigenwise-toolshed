@@ -6,17 +6,21 @@ const CLOSED_ROW_RETENTION_MS = 24 * 60 * 60 * 1e3;
 function listOf(value) {
   return Array.isArray(value) ? value : [];
 }
-function dispatchRowState(ticket, state) {
-  if (state.terminalAt && (state.outcome === "died" || !ticket.claim?.by)) return state.outcome || "terminal";
+function liveDispatchState(ticket, state) {
   if (state.claimedAt || ticket.claim?.by) return "claimed";
-  if (state.boundAt) return "bound";
-  if (state.launchedAt) return "launched";
-  return "prepared";
+  return state.boundAt ? "bound" : state.launchedAt ? "launched" : "prepared";
+}
+function dispatchRowState(ticket, state) {
+  const closed = state.terminalAt && (state.outcome === "died" || !ticket.claim?.by);
+  return closed ? state.outcome || "terminal" : liveDispatchState(ticket, state);
 }
 function isListed(ticket, state, rowState, now) {
   if (ticket.archived) return false;
   if (!state.terminalAt || rowState === "claimed") return true;
   return now - Date.parse(state.terminalAt) < CLOSED_ROW_RETENTION_MS;
+}
+function ticketCategoryId(ticket) {
+  return ticket.categoryId || ticket.category?.id || (typeof ticket.category === "string" ? ticket.category : "");
 }
 function textOrNull(value) {
   const text = String(value ?? "").trim();
@@ -25,7 +29,7 @@ function textOrNull(value) {
 function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory, routed }) {
   function executorDeniedTools(slug, ticket, readonly) {
     const config = boardConfig(slug) || {};
-    const categoryId = ticket.categoryId || ticket.category?.id || (typeof ticket.category === "string" ? ticket.category : "");
+    const categoryId = ticketCategoryId(ticket);
     const category = categoryId && getCategory(categoryId, { project: slug }) || {};
     return [...listOf(config.deniedTools), ...listOf(category.deniedTools), ...readonly ? listOf(config.readOnlyDeniedTools) : []];
   }

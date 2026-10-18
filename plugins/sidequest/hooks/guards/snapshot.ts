@@ -33,13 +33,19 @@ function parentOf(directory: string): string {
 
 const LINKED_WORKTREE = /^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+\s*$/
 
+// A linked worktree's .git file names its main checkout, which is the board's project root.
+async function gitRootAt($: EngineInterface, directory: string): Promise<string | null> {
+  const gitFile = await readOrNull($, `${directory}/.git`)
+  if (gitFile !== null) return LINKED_WORKTREE.exec(gitFile.trim())?.[1] ?? directory
+  return (await readOrNull($, `${directory}/.git/HEAD`)) !== null ? directory : null
+}
+
 async function repoRoot($: EngineInterface, cwd: string): Promise<string> {
   const marker = cwd.search(/[\\/]\.claude[\\/]worktrees[\\/]/)
   if (marker >= 0) return cwd.slice(0, marker)
   for (let directory = cwd; ; directory = parentOf(directory)) {
-    const gitFile = await readOrNull($, `${directory}/.git`)
-    if (gitFile !== null) return LINKED_WORKTREE.exec(gitFile.trim())?.[1] ?? directory
-    if ((await readOrNull($, `${directory}/.git/HEAD`)) !== null) return directory
+    const root = await gitRootAt($, directory)
+    if (root !== null) return root
     if (parentOf(directory) === directory) return cwd
   }
 }

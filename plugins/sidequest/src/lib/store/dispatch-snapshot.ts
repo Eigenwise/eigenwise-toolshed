@@ -20,19 +20,25 @@ function listOf(value: unknown): string[] {
   return Array.isArray(value) ? value : [];
 }
 
+function liveDispatchState(ticket: any, state: any): string {
+  if (state.claimedAt || ticket.claim?.by) return 'claimed';
+  return state.boundAt ? 'bound' : state.launchedAt ? 'launched' : 'prepared';
+}
+
 // Closed means the executor is gone: terminal, and either it died or no claim holds the ticket any more.
 function dispatchRowState(ticket: any, state: any): string {
-  if (state.terminalAt && (state.outcome === 'died' || !ticket.claim?.by)) return state.outcome || 'terminal';
-  if (state.claimedAt || ticket.claim?.by) return 'claimed';
-  if (state.boundAt) return 'bound';
-  if (state.launchedAt) return 'launched';
-  return 'prepared';
+  const closed = state.terminalAt && (state.outcome === 'died' || !ticket.claim?.by);
+  return closed ? state.outcome || 'terminal' : liveDispatchState(ticket, state);
 }
 
 function isListed(ticket: any, state: any, rowState: string, now: number): boolean {
   if (ticket.archived) return false;
   if (!state.terminalAt || rowState === 'claimed') return true;
   return now - Date.parse(state.terminalAt) < CLOSED_ROW_RETENTION_MS;
+}
+
+function ticketCategoryId(ticket: any): string {
+  return ticket.categoryId || ticket.category?.id || (typeof ticket.category === 'string' ? ticket.category : '');
 }
 
 function textOrNull(value: unknown): string | null {
@@ -43,7 +49,7 @@ function textOrNull(value: unknown): string | null {
 function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory, routed }: SnapshotDependencies) {
   function executorDeniedTools(slug: string, ticket: any, readonly: boolean): string[] {
     const config = boardConfig(slug) || {};
-    const categoryId = ticket.categoryId || ticket.category?.id || (typeof ticket.category === 'string' ? ticket.category : '');
+    const categoryId = ticketCategoryId(ticket);
     const category = (categoryId && getCategory(categoryId, { project: slug })) || {};
     return [...listOf(config.deniedTools), ...listOf(category.deniedTools), ...(readonly ? listOf(config.readOnlyDeniedTools) : [])];
   }
