@@ -44,6 +44,11 @@ test('route returns the live workflow recipe as JSON', () => {
   const hardCoding = jsonCli('route', 'coding.hard');
   assert.equal(hardCoding.result.status, 0, hardCoding.result.stderr);
   assert.deepEqual(hardCoding.body.route, { model: 'opus', effort: 'medium' });
+  assert.deepEqual(hardCoding.body.research, {
+    subagentType: 'sidequest:sidequest-exec-readonly-medium',
+    model: 'opus',
+    promptPrefix: '[sidequest-route model=opus effort=medium]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n',
+  }, 'a Claude route researches on its read-only ladder executor with the route model');
   const debugging = jsonCli('route', 'debugging');
   assert.equal(debugging.result.status, 0, debugging.result.stderr);
   assert.deepEqual(debugging.body.route, { model: 'opus', effort: 'medium' });
@@ -70,6 +75,10 @@ test('route returns the live workflow recipe as JSON', () => {
       promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n',
     },
     effortCarrier: 'marker',
+    research: {
+      subagentType: 'sidequest:sidequest-exec-dispatch-readonly',
+      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n',
+    },
     warnings: [],
     profile: { id: 'coding', revision: 2 },
     categorySource: { kind: 'profile', baseProfileId: 'coding' },
@@ -142,6 +151,7 @@ test('GH-361: a non-shim discovered route recipe names its pinned executor and n
   assert.equal(recipe.body.backend, 'opencode');
   assert.deepEqual(recipe.body.agent, { model: null, subagentType: 'sidequest-exec-model-opencode-deepseek-v4-1-flash-max', promptPrefix: '' });
   assert.equal(recipe.body.effortCarrier, 'definition');
+  assert.equal(recipe.body.research, null, 'a discovered-model route has no ticketless research spawn');
   const definition = fs.readFileSync(path.join(providerHome, 'agents', 'sidequest-exec-model-opencode-deepseek-v4-1-flash-max.md'), 'utf8');
   assert.match(definition, /^model: claude-opencode-deepseek-v4\.1-flash$/m, 'route wrote the definition the recipe names');
 

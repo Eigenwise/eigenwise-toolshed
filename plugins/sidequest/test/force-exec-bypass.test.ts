@@ -2,6 +2,8 @@ import './hooks.test.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 test('correction host hook denies subagents including malformed correct and permits trusted main', () => {
@@ -115,4 +117,58 @@ test('native write intent and undispatched Sidequest executor remain refused', (
   }
   assert.match(nativeAgentDecision({ subagent_type: 'custom-reader', description: 'Edit source', prompt: 'Read files.' }), /permissionDecision.*deny/);
   assert.match(nativeAgentDecision({ subagent_type: 'sidequest:sidequest-exec-dispatch', prompt: 'Read files.' }), /exact prepared FIRST action briefing command/);
+});
+
+const RESEARCH_LINE = 'Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.';
+
+function researchDecision(project: string, toolInput: Record<string, unknown>): { denied: boolean; reason: string; updatedInput: Record<string, unknown> | undefined } {
+  const result = spawnSync(process.execPath, [path.join(__dirname, '../hooks/force-exec-bypass.js')], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', cwd: project, tool_input: toolInput }),
+    encoding: 'utf8', windowsHide: true, timeout: 30_000,
+    env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_PROJECT_DIR: project },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput : {};
+  return { denied: output.permissionDecision === 'deny', reason: String(output.permissionDecisionReason || ''), updatedInput: output.updatedInput };
+}
+
+test('SQ-3739: a read-only executor with a live category research prefix runs without a ticket', () => {
+  const store = require('../lib/store.js');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3739-research-'));
+  const { slug } = store.ensureProject(project);
+  store.setCategory({ id: 'sq3739-codex-research', name: 'sq3739-codex-research', route: { model: 'codex-gpt-6-1-sol', effort: 'medium' }, fallback: null, readonly: true, enabled: true });
+  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'haiku', effort: 'max' }, fallback: null, readonly: true, enabled: true });
+  // Other suites share this profile, so their categories are switched off for this project; a stale marker must not stay live through one of them.
+  for (const category of store.getCategories({ project: slug })) {
+    if (category.enabled && category.id !== 'general' && !category.id.startsWith('sq3739-')) store.setProjectCategory(slug, category.id, 'DISABLE', {});
+  }
+  assert.notDeepEqual(store.getCategory('general', { project: slug }).route, { model: 'haiku', effort: 'max' }, 'general, which cannot be disabled, must not share the stale route');
+  const codexPrompt = `[sidequest-route model=gpt-6.1-sol effort=medium]\n${RESEARCH_LINE}\n\nHow does the UX of the board page read? Edit nothing.`;
+  const claudePrompt = `[sidequest-route model=haiku effort=max]\n${RESEARCH_LINE}\n\nFind every caller of routeMarker.`;
+
+  const codex = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', model: 'opus', isolation: 'worktree', mode: 'bypassPermissions', description: 'UX research', prompt: codexPrompt });
+  assert.equal(codex.denied, false, codex.reason);
+  assert.equal(codex.updatedInput?.prompt, codexPrompt);
+  assert.equal(Object.hasOwn(codex.updatedInput || {}, 'model'), false, 'the Codex definition pin selects the model');
+  assert.equal(Object.hasOwn(codex.updatedInput || {}, 'isolation'), false, 'research runs in the parent tree');
+  assert.equal(Object.hasOwn(codex.updatedInput || {}, 'mode'), false, 'a read-only executor never gets bypassPermissions');
+
+  const claude = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-max', model: 'opus', description: 'Code research', prompt: claudePrompt });
+  assert.equal(claude.denied, false, claude.reason);
+  assert.equal(claude.updatedInput?.model, 'haiku', 'the Claude route model replaces the caller model');
+
+  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'haiku', effort: 'low' }, fallback: null, readonly: true, enabled: true });
+  const stale = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-max', prompt: claudePrompt });
+  assert.equal(stale.denied, true, 'a marker for a route the category no longer has is refused');
+  assert.match(stale.reason, /live research prefix of an enabled category route/);
+  const unknown = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', prompt: `[sidequest-route model=gpt-9-ghost effort=medium]\n${RESEARCH_LINE}\n\nLook around.` });
+  assert.equal(unknown.denied, true, 'an unknown marker is refused');
+  assert.match(unknown.reason, /live research prefix/);
+  const wrongExecutor = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-high', prompt: codexPrompt });
+  assert.equal(wrongExecutor.denied, true, 'the marker must belong to the spawned executor type');
+
+  assert.equal(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch', prompt: codexPrompt }).denied, true, 'a writable Codex executor still needs a dispatch');
+  assert.equal(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-low', model: 'sonnet', prompt: `[sidequest-route model=sonnet effort=low]\n${RESEARCH_LINE}\n\nRead.` }).denied, true, 'a writable Claude executor still needs a dispatch');
+  assert.match(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', prompt: 'Read files.' }).reason, /exact prepared FIRST action briefing command/);
+  assert.match(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-low', model: 'sonnet', prompt: 'Read files.' }).reason, /missing its dispatched ticket/);
 });

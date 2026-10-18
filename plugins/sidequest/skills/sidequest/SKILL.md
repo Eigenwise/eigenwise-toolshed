@@ -28,7 +28,7 @@ a plan advisor needs a named architectural risk or contested approach, no mandat
 
 For substantial work:
 
-0. **One owner by default.** A bounded fix the orchestrator can state keeps one owner and a focused check. A small fix in a few files at known locations may run inline without a ticket. Read-only investigations may use native Explore or general-purpose agents without tickets.
+0. **One owner by default.** A bounded fix the orchestrator can state keeps one owner and a focused check. A small fix in a few files at known locations may run inline without a ticket. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore or general-purpose agents stay for tiny lookups or unrouted projects.
 1. **Story or wave only with a reason.** Require 3+ independently checkable pieces and a stated reason for separate owners. Pin shared interfaces, file boundaries and per-piece verification, then file the complete backlog under a Sidequest story. One-ticket mode stays story-less. A review panel needs a named risk for each lens.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
@@ -43,7 +43,7 @@ dependencies before fixing the shared root. Prefer measured deletion; avoid hypo
 compulsory extractions and unrelated cleanup. Preserve trust-boundary validation, data-loss prevention,
 accessibility, permissions and immutable candidate/review authority.
 
-Answer direct questions and operational requests inline. Small bounded fixes in a few known files may stay inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets.
+Answer direct questions and operational requests inline. Small bounded fixes in a few known files may stay inline without tickets. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore or general-purpose agents stay for tiny lookups or unrouted projects.
 
 ### INLINE-SAFE direct work
 
@@ -79,7 +79,7 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent` in Agent: `model` and `subagentType` when set, `promptPrefix + prompt`. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
+**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent` in Agent: `model` and `subagentType` when set, `promptPrefix + prompt`. Never hand-translate route, gateway, virtual-model, marker, or effort fields. For a ticketless read-only investigation, spawn `recipe.research` instead: `Agent({ subagent_type: research.subagentType, ...(research.model ? { model: research.model } : {}), prompt: research.promptPrefix + question })`; the executor answers with findings and never claims. `research` is null for a discovered-model route, and only a category recipe (no `ticket` argument) matches what the Agent hook admits. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
 (`SIDEQUEST_HOME`). Never scan from root.

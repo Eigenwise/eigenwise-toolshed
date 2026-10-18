@@ -106,6 +106,8 @@ interface Store {
   readMeta: (slug: string) => { path?: string } | null;
   executionScope: (slug: string, ticket: Ticket) => string[];
   resolveExec: (model: string, effort: string) => unknown;
+  getCategories: (options: { project: string }) => Array<{ enabled?: boolean }>;
+  resolveCategoryRoute: (category: unknown) => { effort?: string | null; exec?: unknown } | null;
   terminalDispatchTarget: (agentName: string) => { slug: string; ref: string; outcome: string } | null;
   addComment: (slug: string, ref: string, fields: { by: string; body: string }) => { ok: boolean } | null;
 }
@@ -1190,11 +1192,83 @@ function refusedGenericAgent({ input, type, classification }: AgentSpawnRequest)
   return true;
 }
 
+interface ResearchSpawn {
+  subagentType: string;
+  model?: string;
+  promptPrefix: string;
+}
+
+type ResearchSpawnFor = (exec: unknown, effort: unknown) => ResearchSpawn | null;
+
+const RESEARCH_KINDS: ReadonlySet<ExecutorKind> = new Set<ExecutorKind>(['read_only_codex_dispatch', 'read_only_claude_builtin']);
+
+function categoryResearchSpawn(store: Store, researchSpawnFor: ResearchSpawnFor, category: unknown): ResearchSpawn | null {
+  const route = store.resolveCategoryRoute(category);
+  return route?.exec ? researchSpawnFor(route.exec, route.effort) : null;
+}
+
+// Built from route_recipe's own research field, so the hook and the recipe cannot disagree on a live route.
+function liveResearchSpawns(input: HookInput): ResearchSpawn[] {
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const { researchSpawn } = require(runtimeModule('agentsync')) as { researchSpawn: ResearchSpawnFor };
+    const found = store.findProject(requestedProject(input));
+    if (!found.ok || !found.slug) return [];
+    return store.getCategories({ project: found.slug })
+      .filter((category) => category.enabled)
+      .map((category) => categoryResearchSpawn(store, researchSpawn, category))
+      .filter((spawn): spawn is ResearchSpawn => spawn !== null);
+  } catch (_) {
+    return [];
+  }
+}
+
+function matchingResearchSpawn({ input, toolInput, type }: AgentSpawnRequest): ResearchSpawn | undefined {
+  const prompt = String(toolInput.prompt ?? '');
+  if (dispatchRouteMarkers(input).length !== 1) return undefined;
+  return liveResearchSpawns(input).find((spawn) =>
+    canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
+}
+
+function researchSpawnInput(toolInput: Record<string, unknown>, research: ResearchSpawn): Record<string, unknown> {
+  const updatedInput: Record<string, unknown> = { ...toolInput };
+  delete updatedInput.mode;
+  delete updatedInput.isolation;
+  delete updatedInput.model;
+  if (research.model) updatedInput.model = research.model;
+  return updatedInput;
+}
+
+// A ticketless read-only research spawn: its definition forbids writes, so the live route marker is the only admission it needs.
+function isResearchAttempt({ toolInput, classification }: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
+  return dispatchValidation.status === 'none'
+    && RESEARCH_KINDS.has(classification.kind)
+    && String(toolInput.prompt ?? '').startsWith('[sidequest-route ');
+}
+
+function decidedResearchSpawn(request: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
+  if (!isResearchAttempt(request, dispatchValidation)) return false;
+  const research = matchingResearchSpawn(request);
+  if (!research) {
+    writeDeny('PreToolUse', `sidequest: ${request.type} research prompt does not open with the live research prefix of an enabled category route. Re-fetch route_recipe(category).research and spawn its subagentType, model and promptPrefix unchanged.`);
+    return true;
+  }
+  if (!refusedSubagentModelOverride()) writeToolUpdate(researchSpawnInput(request.toolInput, research));
+  return true;
+}
+
+function decidedBeforeExecutorLaunch(request: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
+  return decidedResearchSpawn(request, dispatchValidation)
+    || refusedPreparedDispatch(request, dispatchValidation)
+    || refusedGenericAgent(request)
+    || refusedSubagentModelOverride();
+}
+
 function routedExecutorSpawn(request: AgentSpawnRequest): AdmittedExecutorSpawn | null {
   const admission = dispatchAdmission(request.input);
   if (refusedForMissingExecutorRoute(request.type, request.classification, admission)) return null;
   const dispatchValidation = preparedDispatchValidation(request.input);
-  if (refusedPreparedDispatch(request, dispatchValidation) || refusedGenericAgent(request) || refusedSubagentModelOverride()) return null;
+  if (decidedBeforeExecutorLaunch(request, dispatchValidation)) return null;
   return { ...request, admission, preparedSpawn: dispatchValidation.spawn };
 }
 

@@ -10,7 +10,7 @@ const CHANGE_VERB = /\b(?:add|build|implement|fix|refactor|change|update|create|
 const GREETING_LENGTH = 60;
 const INLINE_WORK_WINDOW_KEYS = ['boardInteraction', 'readActions', 'substantiveActions', 'soloChoiceSurfaced', 'investigationChoiceSurfaced'];
 
-const ROUTED_BOARD_REMINDER = 'sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations may use native agents without tickets.';
+const ROUTED_BOARD_REMINDER = 'sidequest: I can offer one-owner dispatch when it helps; small bounded fixes may stay inline and read-only investigations run without tickets through the route_recipe(category).research spawn.';
 const NEW_BOARD_HINT = 'sidequest: no board here yet. I can offer one-owner dispatch; the first add creates the board. Small bounded fixes and read-only investigations may stay ticket-free.';
 
 interface Store {

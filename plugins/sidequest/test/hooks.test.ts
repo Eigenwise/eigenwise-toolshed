@@ -2029,7 +2029,7 @@ test('user-prompt reminder fires once for the first human prompt', () => {
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
   assert.equal(reminder.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
   assert.match(reminder.hookSpecificOutput.additionalContext, /offer one-owner dispatch/);
-  assert.match(reminder.hookSpecificOutput.additionalContext, /read-only investigations may use native agents without tickets/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /read-only investigations run without tickets through the route_recipe\(category\)\.research spawn/);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
 });
 
