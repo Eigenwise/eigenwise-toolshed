@@ -40,9 +40,10 @@ export function finishedExecutorUnproven(caller: Caller): boolean {
   return !(caller.fresh && caller.row?.sessionId === caller.sessionId)
 }
 
+// The decision's dispatch and finished-executor checks need an agent id; its read-only check needs only the type.
 export function shellNeedsDecision(caller: Caller, command: string): boolean {
-  if (!caller.agentId && !caller.row) return false
-  return CLI_DISPATCH.test(command) || (isReadOnlyExecutor(caller.type) && namesShellWrite(command)) || finishedExecutorUnproven(caller)
+  if (isReadOnlyExecutor(caller.type) && namesShellWrite(command)) return true
+  return Boolean(caller.agentId) && (CLI_DISPATCH.test(command) || finishedExecutorUnproven(caller))
 }
 
 // A helper's write is checked against its owner's scope, which can sit in any project's live store.
