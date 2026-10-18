@@ -528,18 +528,16 @@ test('reports a stable gateway updater failure', () => withRegistry(registry, (r
   }
 }));
 
-test('heals stale managed status-line shim pins after updating', () => {
+test('removes a stale workbench statusline pin after updating', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-statusline-'));
   const lines = [];
   try {
     const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const settingsFile = path.join(home, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(registryFile), { recursive: true });
-    const observabilityRoot = path.resolve(__dirname, '..', '..', 'observability');
-    const configuredRegistry = structuredClone(registry);
-    configuredRegistry.plugins['observability@eigenwise-toolshed'] = [{ scope: 'user', version: '0.30.0', installPath: observabilityRoot }];
-    fs.writeFileSync(registryFile, JSON.stringify(configuredRegistry));
+    fs.writeFileSync(registryFile, JSON.stringify(registry));
     fs.writeFileSync(settingsFile, JSON.stringify({
+      model: 'opus',
       statusLine: { type: 'command', command: 'node "C:/Users/example/.claude/plugins/cache/eigenwise-toolshed/workbench/0.20.0/bin/workbench-statusline.js"' },
     }));
 
@@ -553,9 +551,9 @@ test('heals stale managed status-line shim pins after updating', () => {
 
     const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
     assert.equal(result.healedStatuslines.length, 1);
-    assert.match(lines.join('\n'), /Healed 1 stale managed status-line shim setting\(s\)\./);
-    assert.equal(settings.statusLine.command, `node --no-warnings "${path.join(home, '.claude', 'workbench-statusline.js')}"`);
-    assert.ok(fs.existsSync(path.join(home, '.claude', 'workbench-statusline.js')));
+    assert.match(lines.join('\n'), /Removed 1 stale status-line setting\(s\)/);
+    assert.equal(settings.statusLine, undefined);
+    assert.equal(settings.model, 'opus');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -622,15 +620,15 @@ test('parses check and dry-run options and rejects the retired wiring-mode flag'
   assert.throws(() => parseArgs(['--wiring-mode', 'global']), /--wiring-mode was removed: model gateway wiring follows the scope where it is recorded\. To change it, use \/model-gateway:model-gateway env --write-project for one project or env --write-user for machine-wide wiring\./);
 });
 
-test('skips statusline healing when the observability plugin is not installed', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-no-observability-'));
+test('leaves a status line that is not the retired Toolshed shim alone', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-own-statusline-'));
   try {
     const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const settingsFile = path.join(home, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(registryFile), { recursive: true });
     fs.writeFileSync(registryFile, JSON.stringify(registry));
-    const stale = 'node "C:/Users/example/.claude/plugins/cache/eigenwise-toolshed/workbench/0.20.0/bin/workbench-statusline.js"';
-    fs.writeFileSync(settingsFile, JSON.stringify({ statusLine: { type: 'command', command: stale } }));
+    const own = 'node "C:/Users/example/my-statusline.js"';
+    fs.writeFileSync(settingsFile, JSON.stringify({ statusLine: { type: 'command', command: own } }));
 
     const result = runUpdate({
       home,
@@ -641,8 +639,7 @@ test('skips statusline healing when the observability plugin is not installed', 
     });
 
     assert.deepEqual(result.healedStatuslines, []);
-    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).statusLine.command, stale);
-    assert.ok(!fs.existsSync(path.join(home, '.claude', 'workbench-statusline.js')));
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).statusLine.command, own);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

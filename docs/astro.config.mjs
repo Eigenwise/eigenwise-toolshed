@@ -54,9 +54,6 @@ export default defineConfig({
           label: 'Observability',
           items: [
             { label: 'Overview', slug: 'observability' },
-            { label: 'Setup', slug: 'observability/setup' },
-            { label: 'Dashboard', slug: 'observability/dashboard' },
-            { label: 'Per-project opt-in', slug: 'observability/project-opt-in' },
           ],
         },
         {

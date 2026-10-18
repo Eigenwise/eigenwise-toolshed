@@ -57,7 +57,7 @@ it on. CRAP combines a function's branching complexity and test coverage, so a l
 little coverage gets a high score. The gate owns its threshold and checks new or modified functions;
 untouched legacy functions stay out of scope. Without a configured gate, run your tests and continue.
 
-The scoring itself belongs to the [Quality Gate](/getting-started/quality-gate/) plugin; Quartermaster
+The scoring itself belongs to the [Quality Gate](../quality-gate/) plugin; Quartermaster
 only sets it up. When you approve it, setup installs quality-gate if it is missing, writes
 `.claude/quality-gate/crap.json`, and adds a live rule that runs:
 
