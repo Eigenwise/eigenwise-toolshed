@@ -22,7 +22,7 @@ function textOrNull(value) {
   const text = String(value ?? "").trim();
   return text || null;
 }
-function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory }) {
+function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory, routed }) {
   function executorDeniedTools(slug, ticket, readonly) {
     const config = boardConfig(slug) || {};
     const categoryId = ticket.categoryId || ticket.category?.id || (typeof ticket.category === "string" ? ticket.category : "");
@@ -38,6 +38,7 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
     return {
       ref: ticket.ref,
       sessionId: textOrNull(state.sessionId),
+      claimSessionId: textOrNull(ticket.claim?.sessionId),
       agentId: textOrNull(state.agentId),
       agentName: textOrNull(state.agentName),
       executor: textOrNull(state.executor),
@@ -52,7 +53,7 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
     const dispatches = listTickets(slug).map((ticket) => dispatchRow(slug, ticket, now)).filter(Boolean);
     const target = path.join(projectDir(slug), "dispatch-snapshot.json");
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    writeFileAtomically(target, `${JSON.stringify({ v: 1, at: new Date(now).toISOString(), dispatches })}
+    writeFileAtomically(target, `${JSON.stringify({ v: 1, at: new Date(now).toISOString(), routed: routed(slug), dispatches })}
 `);
   }
   return { writeDispatchSnapshot };

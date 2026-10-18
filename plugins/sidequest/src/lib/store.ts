@@ -1968,6 +1968,7 @@ const { writeDispatchSnapshot } = createDispatchSnapshot({
   projectDir: (slug: string) => projectDir(slug),
   boardConfig: (slug: string) => boardConfig(slug),
   getCategory: (id: string, options: { project: string }) => getCategory(id, options),
+  routed: (slug: string) => projectDispatchAdmission(slug).status === 'routed',
 });
 
 // Every dispatch prepare, bind, claim, release, submit, done and remove writes its ticket here, so this is

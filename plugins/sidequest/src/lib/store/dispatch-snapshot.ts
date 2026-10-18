@@ -13,6 +13,7 @@ type SnapshotDependencies = {
   projectDir: (slug: string) => string;
   boardConfig: (slug: string) => { deniedTools?: string[]; readOnlyDeniedTools?: string[] } | null;
   getCategory: (id: string, options: { project: string }) => { deniedTools?: string[] } | null;
+  routed: (slug: string) => boolean;
 };
 
 function listOf(value: unknown): string[] {
@@ -39,7 +40,7 @@ function textOrNull(value: unknown): string | null {
   return text || null;
 }
 
-function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory }: SnapshotDependencies) {
+function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory, routed }: SnapshotDependencies) {
   function executorDeniedTools(slug: string, ticket: any, readonly: boolean): string[] {
     const config = boardConfig(slug) || {};
     const categoryId = ticket.categoryId || ticket.category?.id || (typeof ticket.category === 'string' ? ticket.category : '');
@@ -56,6 +57,7 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
     return {
       ref: ticket.ref,
       sessionId: textOrNull(state.sessionId),
+      claimSessionId: textOrNull(ticket.claim?.sessionId),
       agentId: textOrNull(state.agentId),
       agentName: textOrNull(state.agentName),
       executor: textOrNull(state.executor),
@@ -71,7 +73,7 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
     const dispatches = listTickets(slug).map((ticket) => dispatchRow(slug, ticket, now)).filter(Boolean);
     const target = path.join(projectDir(slug), 'dispatch-snapshot.json');
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    writeFileAtomically(target, `${JSON.stringify({ v: 1, at: new Date(now).toISOString(), dispatches })}\n`);
+    writeFileAtomically(target, `${JSON.stringify({ v: 1, at: new Date(now).toISOString(), routed: routed(slug), dispatches })}\n`);
   }
 
   return { writeDispatchSnapshot };

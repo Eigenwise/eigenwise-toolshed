@@ -1828,7 +1828,8 @@ const { writeDispatchSnapshot } = createDispatchSnapshot({
   listTickets: (slug) => listTickets(slug),
   projectDir: (slug) => projectDir(slug),
   boardConfig: (slug) => boardConfig(slug),
-  getCategory: (id, options) => getCategory(id, options)
+  getCategory: (id, options) => getCategory(id, options),
+  routed: (slug) => projectDispatchAdmission(slug).status === "routed"
 });
 function scheduleDispatchSnapshot(slug) {
   afterCommit(() => {
