@@ -42,5 +42,21 @@ Sidequest threads with the GitHub link back. Preserve reporter text unless you a
 it, and do not strip diagnostic error text or hand-edit historical changelogs or generated release
 history.
 
+## Opt-in GitHub updates
+
+`board_config.githubSync` (CLI `sidequest board-config --github-sync off|comment|close`) defaults
+to `off` and appears in board-config output:
+
+- `off`: no GitHub writes.
+- `comment`: one comment per linked GitHub ref when delivery is recorded, `Fixed on <branch> in <sha> (<ticket ref>)`, then `Shipped in <tag>` after the GitHub Release is confirmed published.
+- `close`: the same comments, then closes linked issues after that published release. Delivery alone never closes them. A deferred GitHub Release emits no shipped update.
+
+Enable a mode only with existing user or team authorization for those GitHub writes. Setting the mode
+records that opt-in; linking refs alone grants no posting authority. The authenticated `gh` account
+must have permission in every linked repository. These automatic delivery comments include only the
+branch, commit and ticket ref; this is the narrow exception to omitting local ticket identifiers above.
+Jira refs are ignored. Failed commands leave a local ticket comment and do not block delivery or release.
+No retry queue or duplicate suppression across separate release invocations is provided.
+
 Short version: **Jira says *what* to build; sidequest is *how you execute it* here.** One doesn't
 substitute for the other.

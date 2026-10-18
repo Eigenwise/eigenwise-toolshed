@@ -76,6 +76,7 @@ const CONDITIONAL_MUTATION_FIELDS = {
   new_board_profile: ["profile"],
   global_fallback: ["model", "effort"],
   board_config: [
+    "githubSync",
     "jiraBaseUrl",
     "name",
     "alwaysInScope",

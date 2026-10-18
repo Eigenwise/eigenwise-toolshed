@@ -1592,6 +1592,7 @@ const {
   recordSubmissionWaveDelivery,
   submissionsPayload
 } = createSubmissions({
+  afterCommit,
   EXECUTOR_VERIFY_MAX,
   INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
   MANUAL_VERIFY_PREFIX,
