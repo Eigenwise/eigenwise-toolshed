@@ -166,8 +166,9 @@ test('missing coverage, absent manifest and differing hashes stay unverified', a
   const text = 'function subject() { return 1; }\n';
   const root = await fixture(context, { 'source.js': text });
   const missing = await crapReport({ project: root });
-  assert.equal(missing.exitCode, 2);
-  assert.match(missing.unverified[0].unverified, /Vitest.*raw NODE_V8_COVERAGE/);
+  assert.equal(missing.exitCode, 0);
+  assert.equal(missing.ccOnly, true);
+  assert.deepEqual(missing.unverified, []);
   await lcov(root, 'source.js', text);
   await fs.rm(path.join(root, 'coverage/lcov.info.sources.json'));
   const noManifest = await crapReport({ project: root });
@@ -292,7 +293,7 @@ test('coverageCommand rejects stale output, source edits and command failures', 
 test('CLI writes unverified receipts and preserves actionable help and exit codes', async (context) => {
   const root = await fixture(context, { 'source.js': 'function subject() { return 1; }\n' });
   const head = commitBaseline(root);
-  const unverified = cli(root, ['--base', 'HEAD', '--json']);
+  const unverified = cli(root, ['--base', 'HEAD', '--lcov', 'missing.info', '--json']);
   assert.equal(unverified.status, 2, unverified.stderr);
   const report = JSON.parse(unverified.stdout);
   const receipt = JSON.parse(await fs.readFile(report.receipt, 'utf8'));

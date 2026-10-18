@@ -1,12 +1,31 @@
 # Quality Gate
 
-Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. It uses TypeScript 7 from the scored project first, then the plugin's installed dependency. Install the plugin's dependencies with `npm install` in this directory if neither has the supported parser API.
+```text
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install quality-gate@eigenwise-toolshed
+```
+
+The first run installs the parser; nothing to do by hand. Node 22.5+ and npm are required. Quality Gate keeps TypeScript 7 in the plugin, with a shared installation lock and a 180-second deadline. `quality-gate provision` installs only the parser, or exits 0 when it is present. Offline or missing npm exits 2 with `npm install --prefix <plugin root>` as the remedy.
+
+Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. No config is required. Without LCOV at `coverage/lcov.info`, `crap` checks complexity only and prints a coverage setup notice. Explicit LCOV and coverage commands still require authentic measured coverage.
 
 `--source <path>` narrows configured or default sources for one run without changing config. Repeat it for multiple files or directories, relative to the measured project root, for example `crap --project <root> --source src/changed.py --source src/other.py --cc-only`. Config exclusions still apply; selectors cannot widen configured sources.
 
 Invalid UTF-8, Python syntax errors and lone surrogates produce an informational UNVERIFIED row for that file. Other selected files are still measured.
 
 The CRAP report also prints informational reuse signals after scored rows, including with `--cc-only`. `DUPLICATE? name ≈ other (file:line)` means a new body shares a name (ignoring case, underscores and hyphens) with a top-level JS/TS/Python definition in another source file at HEAD. `CALLERS OPEN name: file:line` lists up to two remaining call sites outside a removed body's old file. Removal uses the existing baseline/body pairing, including deleted files within the selected scope. Tests, fixtures, vendored and generated paths are skipped. These are regex/name checks: nested definitions are missed, and a same-named call in another module can count. They never change the verdict, exit code or receipts. JSON reports put the rows under `signals`; the summary includes the reuse-signal count.
+
+## Turn measurement and inventory
+
+```text
+quality-gate turn --json --project <root>
+quality-gate turn --json --project <root> --since 2026-10-18T08:00:00Z
+quality-gate inventory --project <root> --bytes 2048
+```
+
+`turn` measures staged, unstaged and untracked JS/TS/Python edits against HEAD. `--since` selects tracked and untracked files by modification time instead. It returns `{bodies, signals, unverified, lcov}`; each body has `{file, name, cc, state, verdict}`. States are `new`, `modified-raised`, `legacy-unchanged`; verdicts are `pass`, `fail`, `unverified`. Signals have `{kind, file, name, detail}` with kinds `duplicate` or `open-callers`. Coverage is never run or claimed: `unverified` is true and `lcov` is the detected default path or null.
+
+`inventory` reuses the name-based top-level definition inventory at HEAD (JS/TS/Python, excluding tests and generated/vendor paths). Each line is `name file`; truncated output ends with `… N more`. The byte limit includes that line; budgets too small for the omission line produce no output.
 
 ## Project CRAP gate
 
@@ -27,7 +46,7 @@ node plugins/quality-gate/bin/quality-gate.js crap --project <root> --base <revi
 }
 ```
 
-Defaults: sources `.`, no exclusions, `coverage/lcov.info`, no coverage command, local `develop`, `main` or `master` as the base. If none exists, or `--base HEAD` is selected, all selected bodies are scored. `--base` uses the merge base with HEAD, and only selected files that differ from it (or are untracked) are parsed, so unchanged files never cost a parse. One TypeScript parser process serves the whole run and has exited before the report returns. `--ratchet` and config `ratchet` remain accepted with a deprecation notice. `max` is accepted only as 6. Directory scans skip `.git`, `node_modules` and `.claude`; explicitly named files still work.
+Defaults: tracked JS/TS/Python files from `git ls-files`, excluding node_modules, dist, build, coverage, vendor and `**/test/fixtures/**`, `coverage/lcov.info`, no coverage command, local `develop`, `main` or `master` as the base. If none exists, or `--base HEAD` is selected, all selected bodies are scored. `--base` uses the merge base with HEAD, and only selected files that differ from it (or are untracked) are parsed, so unchanged files never cost a parse. One TypeScript parser process serves the whole run and has exited before the report returns. `--ratchet` and config `ratchet` remain accepted with a deprecation notice. `max` is accepted only as 6. Directory scans skip `.git`, `node_modules` and `.claude`; explicitly named files still work.
 
 Each changed body is `new`, `modified-raised` (complexity increased) or `legacy-unchanged` (complexity held or fell). New and complexity-raised bodies must score strictly below 6 with measured coverage. Legacy edits with equal or lower complexity are informational LEGACY rows, with their measured numbers; they never fail the gate. Exact owned source bytes determine change, so comments and formatting count. Nested owned bodies are excluded from their parent's fingerprint. Explicit user/project rules remain authoritative. Scores are compared before display rounding. Functions unchanged at the base don't enter the scoring scope; an empty scope says `nothing to score` and why.
 
@@ -75,7 +94,7 @@ Python compiles the exact parsed source with optimization disabled to inventory 
 
 Use locally installed `coverage.py` (for example `pipx install coverage`) to generate LCOV with `coverage run script.py` then `coverage lcov -o <path>`. A coverageCommand can write its data file and LCOV into `QUALITY_GATE_COVERAGE_DIR`. The live regression skips with an explicit UNVERIFIED reason when coverage.py is absent; the adapter itself needs only Python.
 
-## Same-byte coverage
+## Upgrade to measured coverage
 
 `--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. `$VAR`, `${VAR}` and `%VAR%` in the command are expanded from its environment before it is spawned, so one command works under cmd.exe and sh alike; an unset name stays as written. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
 
