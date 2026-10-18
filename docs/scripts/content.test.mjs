@@ -67,6 +67,17 @@ test('prose page links resolve to known routes', () => {
   assert.deepEqual(invalidLinks, [], 'Use a page route-relative link that resolves to a known docs route');
 });
 
+test('relative image references resolve to files the Astro build can import', () => {
+  const missingImages = [];
+  for (const file of markdownFiles(contentRoot)) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const target of localLinkTargets(text).filter((target) => isAssetTarget(target) && !target.startsWith('/'))) {
+      if (!fs.existsSync(path.resolve(path.dirname(file), target))) missingImages.push(`${path.relative(repositoryRoot, file)}: ${target}`);
+    }
+  }
+  assert.deepEqual(missingImages, [], 'A page image path is relative to the page file; a wrong ../ count fails the docs build with ImageNotFound');
+});
+
 test('observability guides describe local opt-in recording and exact engine cost', () => {
   const modelGatewayReference = fs.readFileSync(path.join(contentRoot, 'reference/model-gateway.md'), 'utf8');
   assert.match(modelGatewayReference, /`verify`: Verify model-gateway through its CLI and HTTP shim surface\./);
