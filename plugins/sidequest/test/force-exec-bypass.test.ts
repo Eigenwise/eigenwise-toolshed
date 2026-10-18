@@ -135,11 +135,16 @@ function researchDecision(project: string, toolInput: Record<string, unknown>): 
 test('SQ-3739: a read-only executor with a live category research prefix runs without a ticket', () => {
   const store = require('../lib/store.js');
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3739-research-'));
-  store.ensureProject(project);
+  const { slug } = store.ensureProject(project);
   store.setCategory({ id: 'sq3739-codex-research', name: 'sq3739-codex-research', route: { model: 'codex-gpt-6-1-sol', effort: 'medium' }, fallback: null, readonly: true, enabled: true });
-  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'sonnet', effort: 'xhigh' }, fallback: null, readonly: true, enabled: true });
+  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'haiku', effort: 'max' }, fallback: null, readonly: true, enabled: true });
+  // Other suites share this profile, so their categories are switched off for this project; a stale marker must not stay live through one of them.
+  for (const category of store.getCategories({ project: slug })) {
+    if (category.enabled && category.id !== 'general' && !category.id.startsWith('sq3739-')) store.setProjectCategory(slug, category.id, 'DISABLE', {});
+  }
+  assert.notDeepEqual(store.getCategory('general', { project: slug }).route, { model: 'haiku', effort: 'max' }, 'general, which cannot be disabled, must not share the stale route');
   const codexPrompt = `[sidequest-route model=gpt-6.1-sol effort=medium]\n${RESEARCH_LINE}\n\nHow does the UX of the board page read? Edit nothing.`;
-  const claudePrompt = `[sidequest-route model=sonnet effort=xhigh]\n${RESEARCH_LINE}\n\nFind every caller of routeMarker.`;
+  const claudePrompt = `[sidequest-route model=haiku effort=max]\n${RESEARCH_LINE}\n\nFind every caller of routeMarker.`;
 
   const codex = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', model: 'opus', isolation: 'worktree', mode: 'bypassPermissions', description: 'UX research', prompt: codexPrompt });
   assert.equal(codex.denied, false, codex.reason);
@@ -148,12 +153,12 @@ test('SQ-3739: a read-only executor with a live category research prefix runs wi
   assert.equal(Object.hasOwn(codex.updatedInput || {}, 'isolation'), false, 'research runs in the parent tree');
   assert.equal(Object.hasOwn(codex.updatedInput || {}, 'mode'), false, 'a read-only executor never gets bypassPermissions');
 
-  const claude = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-xhigh', description: 'Code research', prompt: claudePrompt });
+  const claude = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-max', model: 'opus', description: 'Code research', prompt: claudePrompt });
   assert.equal(claude.denied, false, claude.reason);
-  assert.equal(claude.updatedInput?.model, 'sonnet', 'the Claude route model is stamped');
+  assert.equal(claude.updatedInput?.model, 'haiku', 'the Claude route model replaces the caller model');
 
-  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'sonnet', effort: 'low' }, fallback: null, readonly: true, enabled: true });
-  const stale = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-xhigh', prompt: claudePrompt });
+  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'haiku', effort: 'low' }, fallback: null, readonly: true, enabled: true });
+  const stale = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-max', prompt: claudePrompt });
   assert.equal(stale.denied, true, 'a marker for a route the category no longer has is refused');
   assert.match(stale.reason, /live research prefix of an enabled category route/);
   const unknown = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', prompt: `[sidequest-route model=gpt-9-ghost effort=medium]\n${RESEARCH_LINE}\n\nLook around.` });
