@@ -1,6 +1,6 @@
 {
   "name": "observability",
-  "version": "0.8.2",
+  "version": "1.0.0",
   "description": "Local usage board for Claude Code. A hooks module records one metadata row per turn (exact engine cost, tokens by model, tool calls, agent spawns, context fill, rate-limit windows) into a per-project JSONL ledger under your Claude config directory, and /observability:board opens a self-contained HTML board. Recording is off until /observability:track on in a project. No server, no network, nothing leaves the machine.",
   "author": {
     "name": "Eigenwise",
