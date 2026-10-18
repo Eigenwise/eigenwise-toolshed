@@ -58,6 +58,7 @@ const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
 const { createAssets } = require('./store/assets.js');
+const { createDispatchSnapshot } = require('./store/dispatch-snapshot.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
@@ -1962,8 +1963,25 @@ function ticketStorageRow(slug?: any, ticket?: any) {
   };
 }
 
+const { writeDispatchSnapshot } = createDispatchSnapshot({
+  listTickets: (slug: string) => listTickets(slug),
+  projectDir: (slug: string) => projectDir(slug),
+  boardConfig: (slug: string) => boardConfig(slug),
+  getCategory: (id: string, options: { project: string }) => getCategory(id, options),
+});
+
+// Every dispatch prepare, bind, claim, release, submit, done and remove writes its ticket here, so this is
+// the one seam that keeps the hooks module's dispatch snapshot current. A failed side write leaves the
+// guards reading an older snapshot; they fail open, so it must never fail the board write that caused it.
+function scheduleDispatchSnapshot(slug: string) {
+  afterCommit(() => {
+    try { writeDispatchSnapshot(slug); } catch {}
+  });
+}
+
 function putTicket(slug?: any, ticket?: any) {
   putCachedRow(database(), 'tickets', ticketStorageRow(slug, ticket));
+  if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
   const project = readMeta(slug);
   telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }

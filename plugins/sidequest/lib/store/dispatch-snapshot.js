@@ -1,0 +1,60 @@
+"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+const { writeFileAtomically } = require("./atomic-file.js");
+const CLOSED_ROW_RETENTION_MS = 24 * 60 * 60 * 1e3;
+function listOf(value) {
+  return Array.isArray(value) ? value : [];
+}
+function dispatchRowState(ticket, state) {
+  if (state.terminalAt && (state.outcome === "died" || !ticket.claim?.by)) return state.outcome || "terminal";
+  if (state.claimedAt || ticket.claim?.by) return "claimed";
+  if (state.boundAt) return "bound";
+  if (state.launchedAt) return "launched";
+  return "prepared";
+}
+function isListed(ticket, state, rowState, now) {
+  if (ticket.archived) return false;
+  if (!state.terminalAt || rowState === "claimed") return true;
+  return now - Date.parse(state.terminalAt) < CLOSED_ROW_RETENTION_MS;
+}
+function textOrNull(value) {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory }) {
+  function executorDeniedTools(slug, ticket, readonly) {
+    const config = boardConfig(slug) || {};
+    const categoryId = ticket.categoryId || ticket.category?.id || (typeof ticket.category === "string" ? ticket.category : "");
+    const category = categoryId && getCategory(categoryId, { project: slug }) || {};
+    return [...listOf(config.deniedTools), ...listOf(category.deniedTools), ...readonly ? listOf(config.readOnlyDeniedTools) : []];
+  }
+  function dispatchRow(slug, ticket, now) {
+    const state = ticket.dispatch;
+    if (!state || typeof state !== "object") return null;
+    const rowState = dispatchRowState(ticket, state);
+    if (!isListed(ticket, state, rowState, now)) return null;
+    const readonly = state.readonly === true;
+    return {
+      ref: ticket.ref,
+      sessionId: textOrNull(state.sessionId),
+      agentId: textOrNull(state.agentId),
+      agentName: textOrNull(state.agentName),
+      executor: textOrNull(state.executor),
+      worktree: textOrNull(state.worktree),
+      sharedTree: state.sharedTree !== false,
+      readonly,
+      state: rowState,
+      deniedTools: executorDeniedTools(slug, ticket, readonly)
+    };
+  }
+  function writeDispatchSnapshot(slug, now = Date.now()) {
+    const dispatches = listTickets(slug).map((ticket) => dispatchRow(slug, ticket, now)).filter(Boolean);
+    const target = path.join(projectDir(slug), "dispatch-snapshot.json");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    writeFileAtomically(target, `${JSON.stringify({ v: 1, at: new Date(now).toISOString(), dispatches })}
+`);
+  }
+  return { writeDispatchSnapshot };
+}
+module.exports = { createDispatchSnapshot, dispatchRowState };
