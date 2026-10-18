@@ -126,7 +126,7 @@ test('operating guidance uses live taxonomy and consistent recon boundaries', ()
     assert.doesNotMatch(source, /`docs-writing`|`security-audit`/);
   }
   for (const source of [skill, userStory, orchestration]) {
-    assert.match(source, /Read-only investigations may use native Explore or general-purpose agents without tickets/);
+    assert.match(source, /Read-only investigations need no ticket: on a routed project spawn `route_recipe\(category\)\.research`/);
   }
   for (const source of [userStory, orchestration]) {
     assert.match(source, /bounded recon.*named anchors/i);

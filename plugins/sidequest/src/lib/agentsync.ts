@@ -143,6 +143,19 @@ function recipeAgentWiring(exec?: any, effort?: any) {
   return { agent: { model: exec.model, promptPrefix: '' }, effortCarrier: 'none' };
 }
 
+const RESEARCH_RUN_LINE = 'Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.';
+
+// The Agent hook admits a ticketless read-only spawn only when its prompt opens with this
+// exact marker line for a live category route. A discovered-model route has none: its
+// read-only definition is written on demand, so its research still goes through a ticket.
+function researchSpawn(exec?: any, effort?: any) {
+  if (exec.backend === 'codex') {
+    return { subagentType: bundledAgentType(stableReadOnlyDispatchName()), promptPrefix: `${routeMarker(exec.dispatchModel, effort)}\n${RESEARCH_RUN_LINE}\n\n` };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) return null;
+  return { subagentType: bundledAgentType(stableReadOnlyClaudeName(effort)), model: exec.model, promptPrefix: `${routeMarker(exec.model, effort)}\n${RESEARCH_RUN_LINE}\n\n` };
+}
+
 function workflowRecipe(category?: any, resolved?: any) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error('A resolved category route is required.');
@@ -155,6 +168,7 @@ function workflowRecipe(category?: any, resolved?: any) {
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
     ...recipeAgentWiring(exec, resolved.effort),
+    research: researchSpawn(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : [],
   };
 }
@@ -280,6 +294,10 @@ function withoutPermissionMode(source: string): string {
   return source.replace(/^permissionMode: bypassPermissions\n/m, '');
 }
 
+function researchRunNote() {
+  return `\n\n**Research runs:** A prompt whose second line is \`${RESEARCH_RUN_LINE}\` has no ticket. Skip the briefing FIRST action, the claim, comments and every other ticket lifecycle step. Investigate read-only and answer with your findings as your final message.`;
+}
+
 function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return withoutPermissionMode(collapseEffortProse(renderExecAgent({
@@ -287,7 +305,7 @@ function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
     effort: 'high',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: `${dispatchNote()}${readOnlyNote()}`,
+    extraNote: `${dispatchNote()}${readOnlyNote()}${researchRunNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools,
   })));
@@ -299,7 +317,7 @@ function renderReadOnlyClaudeAgent(effort?: any, readOnlyDeniedTools?: any) {
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
-    extraNote: readOnlyNote(),
+    extraNote: `${readOnlyNote()}${researchRunNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools,
   }));
@@ -1729,6 +1747,7 @@ module.exports = {
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
+  researchSpawn,
   workflowRecipe,
   renderDispatchAgent,
   renderReadOnlyDispatchAgent,
