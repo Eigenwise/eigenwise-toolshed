@@ -2253,18 +2253,15 @@ test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-s
 // module never hands to it. These read the module's routing the way a session reaches it: the tool.call
 // matcher, then the snapshot prefilter that decides whether the decision process runs at all.
 const executorAdmission = require('../hooks/guards/executor-admission.ts');
-const ROUTING_PROJECT = path.join(os.tmpdir(), 'sq-routing', 'projects', 'p');
+const { MAIN_THREAD_MUTATIONS } = require('../src/hooks/shared/main-thread-mutations.ts');
 
 function mainThreadMutationTools(): string[] {
-  const source: string = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
-  const rules = source.match(/const MAIN_THREAD_MUTATIONS[^\n]* = \{([\s\S]*?)^\};/m);
-  assert.ok(rules, 'MAIN_THREAD_MUTATIONS must still define the main-thread-only rules');
-  return [...rules![1]!.matchAll(/^  (mcp__plugin_sidequest_board__\w+):/gm)].map((match) => match[1]!);
+  return Object.keys(MAIN_THREAD_MUTATIONS);
 }
 
 function routedToDecision(toolName: string, toolInput: Record<string, unknown>, agentId: string): boolean {
-  const caller = { agentId, type: agentId ? 'sidequest:sidequest-exec-high' : '', sessionId: 'routing-session', rows: [] };
-  return executorAdmission.GUARDED_TOOLS.test(toolName) && executorAdmission.needsDecision(toolName, toolInput, caller, ROUTING_PROJECT);
+  const caller = { agentId, type: agentId ? 'sidequest:sidequest-exec-high' : '', sessionId: 'routing-session', row: null, fresh: false };
+  return executorAdmission.GUARDED_TOOLS.test(toolName) && executorAdmission.needsDecision(toolName, toolInput, caller);
 }
 
 // SQ-3203: board__remove was never routed, so an executor's remove {force:true} reached the handler unblocked.
@@ -4048,8 +4045,8 @@ test('pre-tool hooks: a plain user Bash call gets no output from any Sidequest g
     .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
   // Every Sidequest guard a plain Bash call reaches runs in the hooks module; no Bash command hook is left.
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8')).modules, ['./guards/register.ts']);
-  const plainCaller = { agentId: '', type: '', sessionId: 'plain-user', rows: [] };
-  assert.equal(executorAdmission.needsDecision('Bash', { command: 'ls' }, plainCaller, ROUTING_PROJECT), false, 'the guards module runs no decision for a plain user');
+  const plainCaller = { agentId: '', type: '', sessionId: 'plain-user', row: null, fresh: false };
+  assert.equal(executorAdmission.needsDecision('Bash', { command: 'ls' }, plainCaller), false, 'the guards module runs no decision for a plain user');
   for (const hook of bashHooks) {
     const out = runHookOutput(hook, { session_id: 'plain-user', cwd: project, tool_name: 'Bash', tool_input: { command: 'ls' } }, { SIDEQUEST_HOME: home });
     assert.equal(out, null, path.basename(hook));

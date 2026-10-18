@@ -10,6 +10,7 @@ import { readSessionState, sessionStateFile, writeSessionState } from './shared/
 // in the store even when the installed lib is mid-upgrade.
 import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor } from '../lib/exec-names.js';
 import { readOnlyShellRefusal } from './shared/read-only-shell.js';
+import { mainThreadMutationDenial } from './shared/main-thread-mutations.js';
 import { observeBoardMcp, type BoardMcpObservation } from '../lib/board-mcp-liveness.js';
 import { checkSidequestInstall, installRefusalMessage } from '../lib/dispatch-preflight.js';
 
@@ -464,52 +465,12 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
 
-const CLOSEOUT_UPDATE_FIELDS = new Set([
-  'files', 'addFiles', 'removeFiles', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
-  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd', 'admitComposition',
-  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
-]);
-
-const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, unknown>) => boolean; denial: string }> = {
-  mcp__plugin_sidequest_board__dispatch: {
-    matches: (input) => Object.hasOwn(input, 'workProvenance'),
-    denial: 'sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing.',
-  },
-  mcp__plugin_sidequest_board__update: {
-    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
-    denial: 'sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread.',
-  },
-  mcp__plugin_sidequest_board__scopeRequest: {
-    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
-    // already recorded, which is a live-claim mutation just like the update fields
-    // above. Without this, a subagent could pass by:'orchestrator' to mint the
-    // grant itself; the store's by-mismatch check only catches the claim holder's
-    // own by, not an impersonated one.
-    matches: (input) => input.grant === true,
-    denial: 'sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.',
-  },
-  mcp__plugin_sidequest_board__remove: {
-    // force:true is the only path that deletes a live-claimed ticket, so it is the
-    // executor's escape hatch (delete the ticket to shed the claim). The store
-    // refuses ungranted live-claim deletion, but deny it here too so a subagent
-    // can never mint the main-thread grant by riding the MCP remove handler.
-    matches: (input) => input.force === true,
-    denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
-  },
-  mcp__plugin_sidequest_board__verdict: {
-    matches: (input) => ['correct', 'finalize'].some(field => Object.hasOwn(input, field)),
-    denial: 'sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread.',
-  },
-};
-
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
   const toolInput = toolInputOf(input);
-  if (!toolInput) return false;
-  const rule = MAIN_THREAD_MUTATIONS[stringField(input, 'tool_name')];
-  if (!rule) return false;
-  if (!rule.matches(toolInput)) return false;
-  writeDeny('PreToolUse', rule.denial);
+  const denial = toolInput && mainThreadMutationDenial(stringField(input, 'tool_name'), toolInput);
+  if (!denial) return false;
+  writeDeny('PreToolUse', denial);
   return true;
 }
 

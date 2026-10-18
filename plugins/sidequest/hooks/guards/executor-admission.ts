@@ -1,14 +1,16 @@
 import type { EngineInterface, On, ToolCallResult } from 'claude-code'
 
 import { classify, isReadOnlyExecutor } from '../../src/lib/exec-names.js'
+import { mainThreadMutationDenial } from '../../src/hooks/shared/main-thread-mutations.js'
 import { namesShellWrite } from '../../src/hooks/shared/shell-writes.js'
-import { terminalPeerRow } from './context-guards.js'
-import type { SnapshotRow } from './context-guards.js'
+import { callerRow } from './context-guards.js'
+import type { Snapshot, SnapshotRow } from './context-guards.js'
 import { projectDirectory, readSnapshot } from './snapshot.js'
 
 // The executor admission decisions (hooks/force-exec-bypass.js) need the store, agentsync and git, which a
 // module cannot load. So the module answers every call the snapshot proves that code would pass, and runs it
-// as one process only for an Agent spawn or a call it could refuse.
+// as one process only for an Agent spawn or a call it could refuse. The snapshot holds one project's rows
+// while the decision reads every project's live store, so a missing row proves nothing.
 
 export const ADMISSION_FAILED = 'sidequest: executor admission guard could not run; spawn refused'
 
@@ -16,61 +18,37 @@ export const GUARDED_TOOLS = /^(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdi
 const SHELL_TOOLS = /^(Bash|PowerShell)$/
 const WRITE_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 const CLI_DISPATCH = /\bsidequest(?:\.js)?["']?\s+dispatch\s+SQ-\d+\b/i
-const LIVE_STATES = new Set(['prepared', 'launched', 'bound', 'claimed'])
 const CURRENT_EXECUTOR_KINDS = new Set([
   'claude_builtin', 'codex_dispatch', 'discovered_model', 'read_only_claude_builtin', 'read_only_codex_dispatch', 'read_only_discovered_model',
 ])
 const RESERVED_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent'])
 const SNAPSHOT_TTL_MS = 2000
+// The store rewrites the snapshot on every dispatch change, but a failed side write leaves an old one in place.
+const SNAPSHOT_STALE_MS = 60_000
 
-export type Caller = { agentId: string; type: string; sessionId: string; rows: readonly SnapshotRow[] }
+// row is the caller's own live dispatch: a subagent's by agent id, a teammate's by the session that claimed it.
+export type Caller = { agentId: string; type: string; sessionId: string; row: SnapshotRow | null; fresh: boolean }
 export type Decision = { deny?: string; updatedInput?: Record<string, unknown>; context?: string }
 
 function isCurrentExecutor(type: string): boolean {
   return CURRENT_EXECUTOR_KINDS.has(classify(type).kind)
 }
 
-function namePrefixes(name: string, value: string): boolean {
-  return value === name || value.startsWith(`${name}-`) || value.startsWith(`a${name}-`)
-}
-
-// force-exec-bypass.ts dispatchIdentityMatches, read from a snapshot row.
-export function identityMatches(row: SnapshotRow, agentId: string, type: string): boolean {
-  if (row.agentId === agentId) return true
-  return Boolean(row.agentName && (namePrefixes(row.agentName, agentId) || namePrefixes(row.agentName, type)))
-}
-
-// shortcut: an archived ticket leaves the snapshot, so a finished executor of one is not told to stop; the
-// store still refuses its board writes.
-export function closedExecutorCandidate(caller: Caller): boolean {
-  return isCurrentExecutor(caller.type) && caller.rows.some((row) => (
-    !LIVE_STATES.has(row.state) && row.sessionId === caller.sessionId && identityMatches(row, caller.agentId, caller.type)
-  ))
+// Only a fresh row binding this agent to a live dispatch proves the decision would not call it finished.
+export function finishedExecutorUnproven(caller: Caller): boolean {
+  if (!caller.agentId || !isCurrentExecutor(caller.type)) return false
+  return !(caller.fresh && caller.row?.sessionId === caller.sessionId)
 }
 
 export function shellNeedsDecision(caller: Caller, command: string): boolean {
+  if (!caller.agentId && !caller.row) return false
+  return CLI_DISPATCH.test(command) || (isReadOnlyExecutor(caller.type) && namesShellWrite(command)) || finishedExecutorUnproven(caller)
+}
+
+// A helper's write is checked against its owner's scope, which can sit in any project's live store.
+export function writeNeedsDecision(caller: Caller): boolean {
   if (!caller.agentId) return false
-  return CLI_DISPATCH.test(command) || (isReadOnlyExecutor(caller.type) && namesShellWrite(command)) || closedExecutorCandidate(caller)
-}
-
-function comparablePath(value: string): string {
-  return value.replace(/\\/g, '/').toLowerCase()
-}
-
-function sessionTicketRow(caller: Caller): boolean {
-  return caller.rows.some((row) => row.sessionId === caller.sessionId
-    && (row.state === 'claimed' || identityMatches(row, caller.agentId, caller.type)))
-}
-
-// A helper's write is checked against its owner's scope, and any subagent's against board-owned evidence.
-export function writeNeedsDecision(caller: Caller, target: string, evidenceRoot: string): boolean {
-  if (!caller.agentId) return false
-  if (isCurrentExecutor(caller.type)) return closedExecutorCandidate(caller)
-  return comparablePath(target).includes(`${comparablePath(evidenceRoot)}/`) || sessionTicketRow(caller)
-}
-
-export function messageNeedsDecision(caller: Caller, to: string): boolean {
-  return terminalPeerRow(caller.rows, to) !== null || (Boolean(caller.agentId) && closedExecutorCandidate(caller))
+  return isCurrentExecutor(caller.type) ? finishedExecutorUnproven(caller) : true
 }
 
 function textField(e: object, name: string): string {
@@ -78,19 +56,11 @@ function textField(e: object, name: string): string {
   return typeof value === 'string' ? value : ''
 }
 
-function writeTarget(e: object): string {
-  return textField(e, 'file_path') || textField(e, 'notebook_path') || textField(e, 'path')
-}
-
-function parentOf(directory: string): string {
-  return directory.slice(0, Math.max(directory.lastIndexOf('/'), directory.lastIndexOf('\\')))
-}
-
-export function needsDecision(tool: string, e: object, caller: Caller, projectDirectory: string): boolean {
+// A message always runs the decision: its late-steer check finds a terminal recipient in any project's store.
+export function needsDecision(tool: string, e: object, caller: Caller): boolean {
   if (SHELL_TOOLS.test(tool)) return shellNeedsDecision(caller, textField(e, 'command'))
-  if (WRITE_TOOLS.test(tool)) return writeNeedsDecision(caller, writeTarget(e), parentOf(projectDirectory))
-  if (tool === 'SendMessage') return messageNeedsDecision(caller, textField(e, 'to').trim())
-  return Boolean(caller.agentId)
+  if (WRITE_TOOLS.test(tool)) return writeNeedsDecision(caller)
+  return tool === 'SendMessage' || Boolean(caller.agentId)
 }
 
 type OutputFields = { permissionDecision?: string; permissionDecisionReason?: string; updatedInput?: Record<string, unknown>; additionalContext?: string }
@@ -112,23 +82,31 @@ export function rewrittenCall<E extends object>(e: E, updatedInput: Record<strin
   return Object.assign(rewritten, updatedInput)
 }
 
-const snapshots = new Map<string, { at: number; rows: readonly SnapshotRow[] }>()
+const snapshots = new Map<string, { readAt: number; snapshot: Snapshot | null }>()
 
-async function snapshotRows($: EngineInterface, directory: string): Promise<readonly SnapshotRow[]> {
+async function cachedSnapshot($: EngineInterface, directory: string): Promise<Snapshot | null> {
   const cached = snapshots.get(directory)
-  if (cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.rows
-  const rows = (await readSnapshot($, directory))?.dispatches ?? []
-  snapshots.set(directory, { at: Date.now(), rows })
-  return rows
+  if (cached && Date.now() - cached.readAt < SNAPSHOT_TTL_MS) return cached.snapshot
+  const snapshot = await readSnapshot($, directory).catch(() => null)
+  snapshots.set(directory, { readAt: Date.now(), snapshot })
+  return snapshot
 }
 
-async function callerType($: EngineInterface, agentId: string): Promise<string> {
-  if (!agentId) return ''
+function isFresh(snapshot: Snapshot | null): boolean {
+  return snapshot !== null && Date.now() - Date.parse(snapshot.at) < SNAPSHOT_STALE_MS
+}
+
+async function agentType($: EngineInterface, agentId: string): Promise<string> {
   return (await $.agent.list()).find((agent) => agent.id === agentId)?.type ?? ''
 }
 
-async function callerOf($: EngineInterface, agentId: string, directory: string): Promise<Caller> {
-  return { agentId, type: await callerType($, agentId), sessionId: await $.session.id(), rows: await snapshotRows($, directory) }
+// A subagent's type is the runtime's; a teammate runs as its session's main loop, so its claimed row names it.
+async function callerOf($: EngineInterface, agentId: string): Promise<Caller> {
+  const sessionId = await $.session.id()
+  const snapshot = await cachedSnapshot($, await projectDirectory($, await $.session.cwd()))
+  const row = callerRow(snapshot?.dispatches ?? [], agentId || undefined, sessionId)
+  const type = agentId ? await agentType($, agentId) : row?.executor ?? ''
+  return { agentId, sessionId, row, fresh: isFresh(snapshot), type }
 }
 
 function toolArguments(e: object): Record<string, unknown> {
@@ -157,11 +135,19 @@ async function applied<E extends object>(e: E, next: (input: E) => Promise<ToolC
   return withContext(await next(decision.updatedInput ? rewrittenCall(e, decision.updatedInput) : e), decision.context)
 }
 
+// A claimed teammate is no main thread either, though it calls without an agent id.
+async function callerDecision($: EngineInterface, e: { tool: string }, caller: Caller): Promise<Decision> {
+  const denial = caller.row ? mainThreadMutationDenial(e.tool, toolArguments(e)) : null
+  if (denial) return { deny: denial }
+  return needsDecision(e.tool, e, caller) ? runDecision($, e.tool, e, caller) : {}
+}
+
+// The main-thread-only fields are refused from the call alone, so no engine failure can admit them.
 async function guardedDecision($: EngineInterface, e: { tool: string; agentId?: string }): Promise<Decision> {
+  const denial = e.agentId ? mainThreadMutationDenial(e.tool, toolArguments(e)) : null
+  if (denial) return { deny: denial }
   try {
-    const directory = await projectDirectory($, await $.session.cwd())
-    const caller = await callerOf($, e.agentId ?? '', directory)
-    return needsDecision(e.tool, e, caller, directory) ? await runDecision($, e.tool, e, caller) : {}
+    return await callerDecision($, e, await callerOf($, e.agentId ?? ''))
   } catch {
     $.ui.status('sidequest: executor guard skipped')
     return {}
@@ -171,8 +157,7 @@ async function guardedDecision($: EngineInterface, e: { tool: string; agentId?: 
 // A spawn admitted by accident skips routing and bypass-mode stamping, so this one fails closed.
 async function admissionDecision($: EngineInterface, e: { tool: string; agentId?: string }): Promise<Decision> {
   try {
-    const directory = await projectDirectory($, await $.session.cwd())
-    return await runDecision($, e.tool, e, await callerOf($, e.agentId ?? '', directory))
+    return await runDecision($, e.tool, e, await callerOf($, e.agentId ?? ''))
   } catch {
     return { deny: ADMISSION_FAILED }
   }
