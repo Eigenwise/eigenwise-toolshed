@@ -2485,6 +2485,14 @@
         "jiraBaseUrl": {
           "type": "string"
         },
+        "githubSync": {
+          "type": "string",
+          "enum": [
+            "off",
+            "comment",
+            "close"
+          ]
+        },
         "autoApproveTestScope": {
           "type": "boolean"
         },
