@@ -17,7 +17,7 @@ The CRAP report also prints informational reuse signals after scored rows, inclu
 
 ## Live measurement
 
-The hooks module records edits and test-command results by working directory. After each turn with edits, it runs the plugin's CLI once per edited working directory to measure changed function complexity and reuse signals, then publishes the report with test pass/fail and stale status. Each CLI run has a 20-second timeout; tool calls never launch measurement. Subagent worktrees stay separate. Without coverage, it shows `quality-gate: complexity only, coverage not set up` once per session. Measurement failures leave the previous report untouched.
+The hooks module records edits and test-command results by working directory. After each turn with edits, it runs the plugin's CLI once per edited working directory to measure changed function complexity and reuse signals, then publishes the report with test pass/fail and stale status. Each CLI run has a 20-second timeout; tool calls never launch measurement. Subagent worktrees stay separate. Without coverage, it shows `quality-gate: complexity only, coverage not set up` once per session. Measurement failures leave the previous report untouched. Above the prompt, a single line stacks above other bands: `$<cost> · CC <max> <ok|SPLIT n> · tests <pass|fail|none>[ stale]`. SPLIT counts new or complexity-raised bodies at CC 6 or higher. The first unverified report adds `· coverage not set up`, then the status line keeps the reminder. The band yields to surveys and disappears with `/quality-gate off` or before the first report.
 
 ## Turn measurement and inventory
 
