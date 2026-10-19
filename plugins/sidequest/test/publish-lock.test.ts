@@ -111,7 +111,18 @@ test('integrate names both sessions when a matching worker has a stale lock sess
   assert.strictEqual(result.status, 1, result.stderr + result.stdout);
   assert.match(result.stderr, /publish lock session holder-s\.\.\. does not match this session caller-s\.\.\./);
   assert.match(result.stderr, /re-acquire the lock from this session \(publish lock --by orch-a\)/);
-  await publish.releasePublishLock(repo, { by: 'orch-a', force: true });
+
+  const callerEnvironment = Object.assign({}, process.env, {
+    SIDEQUEST_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'sq-publish-lock-cli-')),
+    CLAUDE_PROJECT_DIR: repo,
+    CLAUDE_CODE_SESSION_ID: 'caller-session-654321',
+  });
+  const reacquired = spawnSync(process.execPath, [BIN, 'publish', 'lock', '--by', 'orch-a'], { cwd: repo, encoding: 'utf8', env: callerEnvironment });
+  assert.strictEqual(reacquired.status, 0, reacquired.stderr + reacquired.stdout);
+  assert.match(reacquired.stdout, /publish lock re-acquired/);
+  assert.strictEqual(JSON.parse(fs.readFileSync(lock.file, 'utf8')).by, 'orch-a');
+  const unlocked = spawnSync(process.execPath, [BIN, 'publish', 'unlock', '--by', 'orch-a'], { cwd: repo, encoding: 'utf8', env: callerEnvironment });
+  assert.strictEqual(unlocked.status, 0, unlocked.stderr + unlocked.stdout);
   assert.ok(!fs.existsSync(lock.file));
 });
 
