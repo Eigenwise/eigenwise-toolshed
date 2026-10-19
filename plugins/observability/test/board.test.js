@@ -276,3 +276,28 @@ test('day folds, streaks and rate limits', async () => {
   assert.equal(resetMs(1792000000), 1792000000000)
   assert.equal(resetMs(1792000000000), 1792000000000)
 })
+
+
+test('session quality keeps latest measured tests and maximum CC with any split across unordered rows', async () => {
+  const { sessionsFrom, boardHtml } = await load()
+  const quality = { at: '2026-10-17T10:00:00.000Z', ccMax: 8, split: 1, unverified: true, tests: { status: 'fail', stale: false } }
+  const rows = [
+    row({ at: '2026-10-17T10:05:00.000Z', quality: { ...quality, ccMax: 3, split: 0, tests: { status: 'pass', stale: true } } }),
+    row({ quality }),
+    row({ at: '2026-10-17T10:06:00.000Z' }),
+    row({ session: 'unmeasured', name: 'Unmeasured' }),
+    row({ session: 'no-tests', name: 'No tests', quality: { ...quality, ccMax: 0, split: 0, tests: { status: 'none', stale: false } } }),
+  ]
+  const sessions = sessionsFrom(rows)
+  assert.deepEqual(sessions[0].quality, { ccMax: 8, split: true, ended: Date.parse(rows[0].at), tests: { status: 'pass', stale: true } })
+  assert.equal(sessions[1].quality, undefined)
+  const html = boardHtml(rows, SAMPLE_NOW)
+  assert.match(html, /<th>Tests<\/th>/)
+  assert.match(html, /<th>CC<\/th>/)
+  const page = runPage(boardHtml(rows, Date.parse('2026-10-17T12:00:00.000Z')))
+  const rendered = page.byId('sessions-rows').children
+  assert.match(rendered[0].textContent, /pass stale8 SPLIT$/)
+  assert.equal(rendered[0].children[10].style.color, 'var(--bad-ink)')
+  assert.match(rendered[1].textContent, /––$/)
+  assert.match(rendered[2].textContent, /none0 ok$/)
+})

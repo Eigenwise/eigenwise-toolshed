@@ -1,3 +1,19 @@
+// The slice of quality-gate's published `turn` measurement this plugin reads; the owner's full contract lives in that plugin.
+export type QualityMeasurement = {
+  at: string
+  bodies: Array<{ cc: number; state: 'new' | 'modified-raised' | 'legacy-unchanged' }>
+  unverified: boolean
+  tests: { status: 'pass' | 'fail' | 'none'; stale: boolean }
+}
+
+export type TurnQuality = {
+  at: string
+  ccMax: number
+  split: number
+  unverified: boolean
+  tests: { status: 'pass' | 'fail' | 'none'; stale: boolean }
+}
+
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export type ModelTally = Tokens & { requests: number; latencyMs: number }
