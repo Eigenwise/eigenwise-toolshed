@@ -1,7 +1,6 @@
 import type { ModelUsage, SessionUsage, TurnCompleteReason } from 'claude-code'
 
-import type { ModelTally, Recording, Tokens, ToolTally, TurnQuality } from '../types'
-import type { MeasuredBody, TurnMeasurement } from '../../quality-gate/types'
+import type { ModelTally, QualityMeasurement, Recording, Tokens, ToolTally, TurnQuality } from '../types'
 
 export type TurnRow = {
   v: 1
@@ -43,9 +42,9 @@ export type TurnEnd = {
   version: string
 }
 
-const needsSplit = (body: MeasuredBody): boolean => body.cc >= 6 && body.state !== 'legacy-unchanged'
+const needsSplit = (body: QualityMeasurement['bodies'][number]): boolean => body.cc >= 6 && body.state !== 'legacy-unchanged'
 
-export function qualityForTurn(measurement: TurnMeasurement | undefined, row: TurnRow): TurnQuality | undefined {
+export function qualityForTurn(measurement: QualityMeasurement | undefined, row: TurnRow): TurnQuality | undefined {
   if (measurement === undefined) return
   if (!(Date.parse(measurement.at) >= Date.parse(row.at) - row.durationMs)) return
   return {
