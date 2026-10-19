@@ -91,6 +91,7 @@ jobs:
             path: plugin.dir,
             setup: suite.setup ?? '',
             command: suite.command,
+            moduleTest: suite.moduleTest ?? '',
             affected: affected.has(plugin.name),
             os,
           })));
@@ -120,6 +121,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - name: Install Claude Code for module tests
+        if: matrix.affected && matrix.moduleTest != ''
+        run: npm install -g @anthropic-ai/claude-code
       - name: Test affected plugin
         shell: bash
         env:
@@ -134,6 +138,14 @@ jobs:
           cd "${{ matrix.path }}"
           if [ -n "$SETUP" ]; then eval "$SETUP"; fi
           if [ -n "$COMMAND" ]; then eval "$COMMAND"; fi
+
+      - name: Test affected plugin modules
+        if: matrix.affected && matrix.moduleTest != ''
+        shell: bash
+        working-directory: ${{ matrix.path }}
+        env:
+          MODULE_TEST: ${{ matrix.moduleTest }}
+        run: eval "$MODULE_TEST"
 
   # Branch protection requires check names, and the matrix job names are generated per
   # plugin/platform pair: they truncate and collide, so none of them is a stable thing to require.
