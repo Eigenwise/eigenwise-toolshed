@@ -8,6 +8,25 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.603.0 (2026-10-19)
+
+### observability 1.0.0 → 1.1.0
+
+#### Features
+
+- Show session tests and CC from Quality Gate (SQ-3763) [`f8966ee`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f8966eee2d8532b9e8c53d14d512699c94c7915f)
+
+#### Fixes
+
+- Observability module test expects the hashed ledger filename (SQ-3762) [`f9e4e47`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f9e4e475761d547507cd678e163dabffa9026d64)
+
+### sidequest 6.0.0 → 6.0.1
+
+#### Fixes
+
+- Run hooks-module tests in the CI plugin matrix (SQ-3765)
+  Resolve module-test commands alongside normal plugin suites and run them in the Test workflow on both platforms, using the isolated guards runner for Sidequest.
+
 ## v3.602.0 (2026-10-18)
 
 ### sidequest 5.13.0 → 6.0.0
