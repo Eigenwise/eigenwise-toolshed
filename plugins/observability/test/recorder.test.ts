@@ -15,8 +15,8 @@ test('track reports, turns on and turns off recording for this project', async (
   const track = async (args: string) => (await $.command.run({ command: 'track', args, ...TYPED_IN_COMPOSER })).text ?? ''
 
   expect(await track('status')).toContain('not recording turns for /work/demo')
-  expect(await track('on')).toContain('recording turns for /work/demo, into /cfg/observability/ledger/demo.jsonl')
-  expect(await track('')).toContain('into /cfg/observability/ledger/demo.jsonl')
+  expect(await track('on')).toContain('recording turns for /work/demo, into /cfg/observability/ledger/demo-7b8bd8.jsonl')
+  expect(await track('')).toContain('into /cfg/observability/ledger/demo-7b8bd8.jsonl')
   expect(await track('off')).toContain('not recording')
   expect(await track('sideways')).toContain('Usage: /observability:track on|off|status')
 })
@@ -43,7 +43,7 @@ function fakeSession(on: On) {
   return files
 }
 
-const LEDGER = /\/cfg\/observability\/ledger\/demo\.jsonl$/
+const LEDGER = /\/cfg\/observability\/ledger\/demo-7b8bd8\.jsonl$/
 const BOARD = /\/cfg\/observability\/board\.html$/
 
 test('a tracked turn appends one row to the project ledger and rebuilds the board two seconds later', async ($, on) => {
@@ -57,7 +57,7 @@ test('a tracked turn appends one row to the project ledger and rebuilds the boar
   expect([...files.keys()]).toEqual([expect.stringMatching(LEDGER)])
   const rows = ([...files.values()][0] ?? '').trim().split('\n').map(line => JSON.parse(line))
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ v: 1, name: 'Fix SQ-12 now', ticket: 'SQ-12', project: 'demo', session: 'session-1', reason: 'answer', durationMs: 900, model: 'claude-opus' })
+  expect(rows[0]).toMatchObject({ v: 1, name: 'Fix SQ-12 now', ticket: 'SQ-12', project: 'demo-7b8bd8', session: 'session-1', reason: 'answer', durationMs: 900, model: 'claude-opus' })
 
   await clock.advance(2000)
   expect([...files.keys()]).toEqual([expect.stringMatching(LEDGER), expect.stringMatching(BOARD)])
