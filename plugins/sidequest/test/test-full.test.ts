@@ -54,6 +54,39 @@ function loadBudgetHelpers() {
   };
 }
 
+type ShardHelpers = {
+  selectTestFiles: (testFiles: string[], shard?: string) => string[];
+  formatTestPhaseSummary: (phase: string, duration: number, warning: number, timeout: number, concurrency: number, cores: number, shard?: string) => string;
+};
+
+async function loadShardHelpers(): Promise<ShardHelpers> {
+  return import(runnerModuleUrl);
+}
+
+test('full-suite shards partition sorted files round-robin without changing unsharded runs', async () => {
+  const { selectTestFiles } = await loadShardHelpers();
+  const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  assert.deepEqual(selectTestFiles(files), files);
+  assert.deepEqual(selectTestFiles(files, ''), files);
+  assert.deepEqual(selectTestFiles(files, '1/1'), files);
+  const shards = ['1/3', '2/3', '3/3'].map((shard) => selectTestFiles(files, shard));
+  assert.deepEqual(shards, [['a', 'd', 'g'], ['b', 'e'], ['c', 'f']]);
+  assert.deepEqual(shards.flat().sort(), files);
+  assert.deepEqual(selectTestFiles(['a'], '3/3'), []);
+});
+
+test('full-suite shards reject malformed and out-of-range values', async () => {
+  const { selectTestFiles } = await loadShardHelpers();
+  for (const shard of ['0/3', '4/3', '1/0', '-1/3', '1.5/3', '1', '1/3/4', ' 1/3', '1/3\n', '01/3', '1/9007199254740992', '9007199254740992/9007199254740992']) {
+    assert.throws(() => selectTestFiles(['a'], shard), /SIDEQUEST_TEST_SHARD must be index\/count with 1 <= index <= count\./, shard);
+  }
+});
+
+test('full-suite phase summary identifies its shard', async () => {
+  const { formatTestPhaseSummary } = await loadShardHelpers();
+  assert.match(formatTestPhaseSummary('functional', 1, 2, 3, 4, 4, '2/3'), /^### Sidequest functional test phase \(shard 2\/3\)/);
+});
+
 test('full-suite budget scales down-core runners and stays bounded', () => {
   const helpers = loadBudgetHelpers();
 

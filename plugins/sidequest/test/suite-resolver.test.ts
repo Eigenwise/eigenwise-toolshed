@@ -55,3 +55,10 @@ test('module suites preserve normal commands and select the module runner', (con
   writeFileSync(path.join(pluginDirectory, 'hooks/hooks.json'), JSON.stringify({ hooks: {} }));
   assert.equal(resolveSuite(fixture.root, fixture.plugin).moduleTest, undefined);
 });
+
+test('only Sidequest suites declare three Windows shards independently of module tests', (context) => {
+  const fixture = makePlugin();
+  context.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+  assert.equal(resolveSuite(fixture.root, fixture.plugin).shards, undefined);
+  assert.deepEqual(resolveSuite(fixture.root, { ...fixture.plugin, name: 'sidequest' }).shards, { windows: 3 });
+});
