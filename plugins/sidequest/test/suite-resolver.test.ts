@@ -38,3 +38,20 @@ test('plugin manifests can override the default suite timeout', (t) => {
     'node --test --test-timeout=180000 "test/*.test.js"',
   );
 });
+
+test('module suites preserve normal commands and select the module runner', (context) => {
+  const fixture = makePlugin();
+  context.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+  const pluginDirectory = path.join(fixture.root, fixture.plugin.dir);
+  mkdirSync(path.join(pluginDirectory, 'hooks'));
+  writeFileSync(path.join(pluginDirectory, 'hooks/hooks.json'), JSON.stringify({ modules: ['./register.ts'] }));
+  assert.equal(resolveSuite(fixture.root, fixture.plugin).moduleTest, 'claude plugin test .');
+  writeFileSync(path.join(pluginDirectory, 'package.json'), JSON.stringify({ scripts: { test: 'node custom-test.js' } }));
+  assert.deepEqual(resolveSuite(fixture.root, fixture.plugin), {
+    plugin: 'example', cwd: 'plugins/example', setup: 'npm ci',
+    command: 'npm test', moduleTest: 'claude plugin test .',
+  });
+  assert.equal(resolveSuite(fixture.root, { ...fixture.plugin, name: 'sidequest' }).moduleTest, 'node scripts/test-guards-module.mjs');
+  writeFileSync(path.join(pluginDirectory, 'hooks/hooks.json'), JSON.stringify({ hooks: {} }));
+  assert.equal(resolveSuite(fixture.root, fixture.plugin).moduleTest, undefined);
+});
