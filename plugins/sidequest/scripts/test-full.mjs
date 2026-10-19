@@ -37,6 +37,18 @@ export function fullSuiteGatewayCatalog() {
   };
 }
 
+export function selectTestFiles(testFiles, shard) {
+  if (!shard) return testFiles;
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(shard);
+  if (!match) throw new Error('SIDEQUEST_TEST_SHARD must be index/count with 1 <= index <= count.');
+  const index = Number(match[1]);
+  const count = Number(match[2]);
+  if (![index, count].every(Number.isSafeInteger) || index > count) {
+    throw new Error('SIDEQUEST_TEST_SHARD must be index/count with 1 <= index <= count.');
+  }
+  return testFiles.filter((file, position) => position % count === index - 1);
+}
+
 export function calculateTestConcurrency(availableParallelism) {
   return Math.min(maximumTestConcurrency, Math.max(minimumTestConcurrency, availableParallelism));
 }
@@ -71,9 +83,10 @@ export function formatTestPhaseSummary(
   testPhaseTimeoutMilliseconds,
   testConcurrency,
   availableParallelism,
+  shard = '',
 ) {
   return [
-    `### Sidequest ${phase} test phase`,
+    `### Sidequest ${phase} test phase${shard ? ` (shard ${shard})` : ''}`,
     `- Duration: ${Math.round(phaseDurationMilliseconds)} ms`,
     `- Warning threshold: ${Math.round(testPhaseWarningMilliseconds)} ms`,
     `- Phase budget: ${testPhaseTimeoutMilliseconds} ms`,
@@ -130,7 +143,7 @@ async function runTests(phase, files, environment) {
   if (githubStepSummaryPath) {
     await fs.appendFile(
       githubStepSummaryPath,
-      `${formatTestPhaseSummary(phase, phaseDurationMilliseconds, testPhaseWarningMilliseconds, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism)}\n\n`,
+      `${formatTestPhaseSummary(phase, phaseDurationMilliseconds, testPhaseWarningMilliseconds, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism, process.env.SIDEQUEST_TEST_SHARD)}\n\n`,
     );
   }
   if (result.error) throw result.error;
@@ -160,7 +173,7 @@ async function runTests(phase, files, environment) {
   }
 }
 
-async function main() {
+async function main(selectedTestFiles) {
   const suiteTemporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-full-suite-'));
   const suiteHomeDirectory = path.join(suiteTemporaryDirectory, 'home');
   const suiteClaudeDirectory = path.join(suiteHomeDirectory, '.claude');
@@ -185,12 +198,19 @@ async function main() {
   };
 
   try {
-    await runTests('functional', testFiles, suiteTestEnvironment);
+    await runTests('functional', selectedTestFiles, suiteTestEnvironment);
   } finally {
     await fs.rm(suiteTemporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
   }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  let selectedTestFiles;
+  try {
+    selectedTestFiles = selectTestFiles(testFiles, process.env.SIDEQUEST_TEST_SHARD);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(2);
+  }
+  if (selectedTestFiles.length) await main(selectedTestFiles);
 }
