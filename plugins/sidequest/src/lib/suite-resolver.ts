@@ -19,25 +19,43 @@ function declaredSuiteTimeout(pluginManifest: any): number {
   return usable ? declared : DEFAULT_TEST_TIMEOUT;
 }
 
+type ResolvedSuite = {
+  plugin: string;
+  cwd: string;
+  setup: string | null;
+  command: string;
+  moduleTest?: string;
+};
+
+const MODULE_TEST_COMMANDS = new Map([
+  ['sidequest', 'node scripts/test-guards-module.mjs'],
+]);
+
+function includeModuleTests(pluginDirectory: string, suite: ResolvedSuite): ResolvedSuite {
+  const hooks = readJson(path.join(pluginDirectory, 'hooks', 'hooks.json'));
+  if (!Array.isArray(hooks.modules)) return suite;
+  return { ...suite, moduleTest: MODULE_TEST_COMMANDS.get(suite.plugin) ?? 'claude plugin test .' };
+}
+
 function resolveSuite(repoRoot: string, plugin: any) {
   const pluginDir = path.join(repoRoot, plugin.dir);
   const packageJson = readJson(path.join(pluginDir, 'package.json'));
   const pluginManifest = readJson(path.join(pluginDir, '.claude-plugin', 'plugin.json'));
   for (const script of ['test:full', 'test']) {
     if (packageJson.scripts?.[script]) {
-      return {
+      return includeModuleTests(pluginDir, {
         plugin: plugin.name,
         cwd: plugin.dir,
         setup: 'npm ci',
         command: script === 'test' ? 'npm test' : `npm run ${script}`,
-      };
+      });
     }
   }
 
   const testDir = path.join(pluginDir, 'test');
   if (existsSync(testDir) && readdirSync(testDir).some((name: string) => name.endsWith('.test.js'))) {
     const timeout = declaredSuiteTimeout(pluginManifest);
-    return { plugin: plugin.name, cwd: plugin.dir, setup: null, command: `node --test --test-timeout=${timeout} "test/*.test.js"` };
+    return includeModuleTests(pluginDir, { plugin: plugin.name, cwd: plugin.dir, setup: null, command: `node --test --test-timeout=${timeout} "test/*.test.js"` });
   }
 
   return null;

@@ -15,7 +15,9 @@ type Repo = { root: string; commonDir: string; dirty?: string[] }
 type Row = { ref: string; agentId: string | null; worktree: string | null; sharedTree: boolean; state: string; claimSessionId?: string }
 type Git = (argv: readonly string[], cwd: string) => { exitCode: number; stdout: string } | undefined
 
-const key = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+// A POSIX engine treats a Windows path as relative and resolves it under its cwd before the hook sees it;
+// drop that prefix so the faked world matches on every platform.
+const key = (path: string) => path.replace(/\\/g, '/').replace(/^.*?(?=[a-z]:\/)/i, '').replace(/\/+$/, '').toLowerCase()
 
 async function worktreeRoot(): Promise<string> {
   return `${HOME}\\worktrees\\${await slugify(PROJECT, true)}`

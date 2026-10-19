@@ -181,3 +181,26 @@ test('invalid manifest and release fragment fail the matrix even when no full su
   });
   assert.equal(aggregate.status, 1, 'focused metadata failure fails test-complete');
 });
+
+test('workflow matrix carries module tests for both platforms', (context) => {
+  const plugins = { observability: '1.0.0', 'quality-gate': '1.0.0', sidequest: '1.0.0' };
+  const repo = makeGitRepo({ plugins });
+  context.after(repo.cleanup);
+  const base = repo.git('rev-parse', 'HEAD');
+  for (const name of Object.keys(plugins)) {
+    repo.write(`plugins/${name}/hooks/hooks.json`, JSON.stringify({ modules: ['./register.ts'] }));
+  }
+  repo.commit('declare hook modules');
+  const result = matrixRun(repo, base);
+  assert.equal(result.status, 0, result.stderr);
+  const matrix = JSON.parse(result.stdout.trim().slice('matrix='.length));
+  assert.equal(matrix.include.length, 6);
+  for (const entry of matrix.include) {
+    assert.equal(entry.affected, true);
+    assert.equal(entry.moduleTest, entry.name === 'sidequest'
+      ? 'node scripts/test-guards-module.mjs' : 'claude plugin test .');
+  }
+  assert.match(workflow, /run: npm install -g @anthropic-ai\/claude-code/);
+  assert.match(workflow, /MODULE_TEST: \$\{\{ matrix.moduleTest \}\}/);
+  assert.match(workflow, /run: eval \"\$MODULE_TEST\"/);
+});

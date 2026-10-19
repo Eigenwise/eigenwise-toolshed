@@ -13,6 +13,7 @@ import {
   nextRecording,
   notePrompt,
   projectSlug,
+  qualityForTurn,
   rowsSince,
   tokensOf,
 } from './ledger.ts'
@@ -178,11 +179,15 @@ export const register: Register = on => {
       row = foldTurn(current, end)
       return nextRecording(current, row.costUsd)
     })
+    const result = await next(e)
     if (row !== undefined && (await isTracked($, project))) {
+      const { value } = await $.state.get({ plugin: 'quality-gate', key: 'turn' })
+      const quality = qualityForTurn(value?.[await $.session.cwd()], row)
+      if (quality !== undefined) row.quality = quality
       await appendRow($, await ledgerFile($, project), row).catch(() => $.ui.status('observability: could not write the ledger'))
       scheduleBoard($)
     }
-    return next(e)
+    return result
   }).catch(($, e, next) => next(e))
 
   // A /clear starts a new task: its name and ticket come from the next prompt.
