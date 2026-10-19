@@ -124,14 +124,14 @@ jobs:
       - name: Install Claude Code for module tests
         if: matrix.affected && matrix.moduleTest != ''
         run: npm install -g @anthropic-ai/claude-code
-      # The sidequest suite spawns thousands of git and node processes over fresh small files; Defender's
-      # real-time scan made the Windows job 5-6x slower than Ubuntu on the same tests (2089 s vs 362 s).
-      - name: Exclude test processes and paths from Defender scanning
+      # The sidequest suite builds thousands of small git repositories under the temp directory. On the
+      # hosted Windows image that is the OS disk (C:); the workspace and RUNNER_TEMP sit on the fast D: disk.
+      - name: Put the test temp directory on the runner's fast disk
         if: runner.os == 'Windows' && matrix.affected
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionProcess 'node.exe', 'git.exe', 'npm.cmd'
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}", "$env:RUNNER_TEMP", "$env:TEMP"
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - name: Test affected plugin
         shell: bash
         env:
