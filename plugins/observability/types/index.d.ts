@@ -1,3 +1,11 @@
+export type TurnQuality = {
+  at: string
+  ccMax: number
+  split: number
+  unverified: boolean
+  tests: { status: 'pass' | 'fail' | 'none'; stale: boolean }
+}
+
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export type ModelTally = Tokens & { requests: number; latencyMs: number }
