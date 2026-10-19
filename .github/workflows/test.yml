@@ -86,15 +86,19 @@ jobs:
           const suites = [...manifest.plugins.values()].map((plugin) => ({ plugin, suite: resolveSuite(plugin) }));
           const missing = suites.filter(({ suite }) => suite === null).map(({ plugin }) => plugin.name);
           if (missing.length) throw new Error(`Published plugins without a test suite: ${missing.join(', ')}`);
-          const include = suites.flatMap(({ plugin, suite }) => ['ubuntu-latest', 'windows-latest'].map((os) => ({
-            name: plugin.name,
-            path: plugin.dir,
-            setup: suite.setup ?? '',
-            command: suite.command,
-            moduleTest: suite.moduleTest ?? '',
-            affected: affected.has(plugin.name),
-            os,
-          })));
+          const include = suites.flatMap(({ plugin, suite }) => ['ubuntu-latest', 'windows-latest'].flatMap((os) => {
+            const count = suite.shards?.[os.split('-')[0]] ?? 1;
+            return Array.from({ length: count }, (_, position) => ({
+              name: count > 1 ? `${plugin.name} shard ${position + 1}/${count}` : plugin.name,
+              shard: count > 1 ? `${position + 1}/${count}` : '',
+              path: plugin.dir,
+              setup: suite.setup ?? '',
+              command: suite.command,
+              moduleTest: suite.moduleTest ?? '',
+              affected: affected.has(plugin.name),
+              os,
+            }));
+          }));
           process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
           NODE
 
@@ -122,7 +126,7 @@ jobs:
         with:
           node-version: 22
       - name: Install Claude Code for module tests
-        if: matrix.affected && matrix.moduleTest != ''
+        if: matrix.affected && matrix.moduleTest != '' && (matrix.shard == '' || startsWith(matrix.shard, '1/'))
         run: npm install -g @anthropic-ai/claude-code
       - name: Test affected plugin
         shell: bash
@@ -130,6 +134,7 @@ jobs:
           AFFECTED: ${{ matrix.affected }}
           SETUP: ${{ matrix.setup }}
           COMMAND: ${{ matrix.command }}
+          SHARD: ${{ matrix.shard }}
         run: |
           if [ "$AFFECTED" = "false" ]; then
             echo "${{ matrix.name }} is unaffected"
@@ -137,10 +142,11 @@ jobs:
           fi
           cd "${{ matrix.path }}"
           if [ -n "$SETUP" ]; then eval "$SETUP"; fi
+          if [ -n "$SHARD" ]; then export SIDEQUEST_TEST_SHARD="$SHARD"; fi
           if [ -n "$COMMAND" ]; then eval "$COMMAND"; fi
 
       - name: Test affected plugin modules
-        if: matrix.affected && matrix.moduleTest != ''
+        if: matrix.affected && matrix.moduleTest != '' && (matrix.shard == '' || startsWith(matrix.shard, '1/'))
         shell: bash
         working-directory: ${{ matrix.path }}
         env:

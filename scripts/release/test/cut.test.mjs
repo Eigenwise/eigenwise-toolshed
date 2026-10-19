@@ -356,6 +356,7 @@ test('a failed Test workflow refuses before suites or release mutations', async 
           plugin: 'sidequest',
           cwd: 'plugins/sidequest',
           setup: null,
+          shards: { windows: 3 },
           command: 'node --test --test-timeout=120000 "test/*.test.js"',
         }]);
         return assertParentCiPassed(repoRoot, commit, failedTestRun, suites);

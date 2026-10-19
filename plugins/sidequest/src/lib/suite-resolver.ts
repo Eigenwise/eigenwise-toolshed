@@ -25,13 +25,20 @@ type ResolvedSuite = {
   setup: string | null;
   command: string;
   moduleTest?: string;
+  shards?: { windows: number };
 };
 
 const MODULE_TEST_COMMANDS = new Map([
   ['sidequest', 'node scripts/test-guards-module.mjs'],
 ]);
 
+const SUITE_SHARDS = new Map<string, { windows: number }>([
+  ['sidequest', { windows: 3 }],
+]);
+
 function includeModuleTests(pluginDirectory: string, suite: ResolvedSuite): ResolvedSuite {
+  const shards = SUITE_SHARDS.get(suite.plugin);
+  if (shards) suite = { ...suite, shards };
   const hooks = readJson(path.join(pluginDirectory, 'hooks', 'hooks.json'));
   if (!Array.isArray(hooks.modules)) return suite;
   return { ...suite, moduleTest: MODULE_TEST_COMMANDS.get(suite.plugin) ?? 'claude plugin test .' };

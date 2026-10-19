@@ -137,19 +137,26 @@ test('workflow executes focused metadata validation and preserves both OS suite 
   const result = matrixRun(repo, base);
   assert.equal(result.status, 0, result.stderr);
   const matrix = JSON.parse(result.stdout.trim().slice('matrix='.length));
-  assert.equal(matrix.include.length, 4);
+  assert.equal(matrix.include.length, 6);
   for (const entry of matrix.include) {
     assert.equal(entry.affected, false);
     assert.equal(entry.command, 'node --test --test-timeout=120000 "test/*.test.js"');
     assert.equal(entry.setup, '');
   }
-  assert.deepEqual(matrix.include.map(({ os }) => os), ['ubuntu-latest', 'windows-latest', 'ubuntu-latest', 'windows-latest']);
+  assert.deepEqual(matrix.include.map(({ os, shard, name }) => [os, shard, name]), [
+    ['ubuntu-latest', '', 'sidequest'],
+    ['windows-latest', '1/3', 'sidequest shard 1/3'],
+    ['windows-latest', '2/3', 'sidequest shard 2/3'],
+    ['windows-latest', '3/3', 'sidequest shard 3/3'],
+    ['ubuntu-latest', '', 'workbench'],
+    ['windows-latest', '', 'workbench'],
+  ]);
   repo.write('plugins/sidequest/.claude-plugin/plugin.json', JSON.stringify({ name: 'sidequest', version: '3.6.18' }));
   repo.write(MARKETPLACE_PATH, marketplaceJson({ version: '3.208.0', plugins: { ...PLUGINS, sidequest: '3.6.18' } }));
   repo.commit('runtime consumed plugin version');
   const bumped = matrixRun(repo, base);
   assert.equal(bumped.status, 0, bumped.stderr);
-  assert.deepEqual(JSON.parse(bumped.stdout.trim().slice('matrix='.length)).include.map(({ affected }) => affected), [true, true, false, false]);
+  assert.deepEqual(JSON.parse(bumped.stdout.trim().slice('matrix='.length)).include.map(({ affected }) => affected), [true, true, true, true, false, false]);
 });
 
 test('invalid manifest and release fragment fail the matrix even when no full suite is selected', (context) => {
@@ -194,13 +201,21 @@ test('workflow matrix carries module tests for both platforms', (context) => {
   const result = matrixRun(repo, base);
   assert.equal(result.status, 0, result.stderr);
   const matrix = JSON.parse(result.stdout.trim().slice('matrix='.length));
-  assert.equal(matrix.include.length, 6);
+  assert.equal(matrix.include.length, 8);
   for (const entry of matrix.include) {
     assert.equal(entry.affected, true);
-    assert.equal(entry.moduleTest, entry.name === 'sidequest'
+    assert.equal(entry.moduleTest, entry.path === 'plugins/sidequest'
       ? 'node scripts/test-guards-module.mjs' : 'claude plugin test .');
   }
   assert.match(workflow, /run: npm install -g @anthropic-ai\/claude-code/);
   assert.match(workflow, /MODULE_TEST: \$\{\{ matrix.moduleTest \}\}/);
   assert.match(workflow, /run: eval \"\$MODULE_TEST\"/);
+});
+
+test('workflow passes file shards to the suite and runs module tests only once per platform', () => {
+  assert.ok(workflow.includes('SHARD: $' + '{{ matrix.shard }}'));
+  assert.ok(workflow.includes('if [ -n "$SHARD" ]; then export SIDEQUEST_TEST_SHARD="$SHARD"; fi'));
+  for (const step of ['Install Claude Code for module tests', 'Test affected plugin modules']) {
+    assert.ok(workflow.includes('- name: ' + step + "\n        if: matrix.affected && matrix.moduleTest != '' && (matrix.shard == '' || startsWith(matrix.shard, '1/'))"));
+  }
 });
