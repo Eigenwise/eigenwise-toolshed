@@ -74,9 +74,20 @@ export function startSession(row) {
   }
 }
 
+export function foldSessionQuality(session, row) {
+  if (!row.quality) return
+  const quality = session.quality || { ccMax: 0, split: false, ended: -Infinity }
+  quality.ccMax = Math.max(quality.ccMax, row.quality.ccMax)
+  quality.split = quality.split || row.quality.split > 0
+  const at = Date.parse(row.at)
+  if (at >= quality.ended) Object.assign(quality, { ended: at, tests: row.quality.tests })
+  session.quality = quality
+}
+
 // Sums every turn; name, model, cost and outcome come from the newest turn, since cost is the session total.
 export function foldSessionRow(session, row) {
   const current = session || startSession(row)
+  foldSessionQuality(current, row)
   current.turns += 1
   current.requests += modelRequests(row)
   current.durationMs += finite(row.durationMs)
@@ -187,7 +198,7 @@ export function resetMs(value) {
 
 const SHARED = [
   dayKey, dayKeys, finite, sum, usageTokens, contextPercent, modelRequests, agentSpawns, addTicket, startSession,
-  foldSessionRow, sessionsFrom, accumulate, finishModel, modelMix, toolRanking, ticketTotals, perDay, currentStreak,
+  foldSessionQuality, foldSessionRow, sessionsFrom, accumulate, finishModel, modelMix, toolRanking, ticketTotals, perDay, currentStreak,
   streaks, newestRateLimits, resetMs,
 ]
 
@@ -635,13 +646,23 @@ function pill(reason) {
   var o = OUTCOMES[reason] || ['var(--muted)', '•', String(reason || 'unknown')], p = el('span', 'pill'), i = el('i', '', o[1])
   p.style.setProperty('--c', o[0]); p.append(i, el('span', '', o[2])); return p
 }
+function sessionTests(quality) {
+  if (!quality) return cell('–')
+  return cell(quality.tests.status + (quality.tests.stale ? ' stale' : ''))
+}
+function sessionComplexity(quality) {
+  if (!quality) return cell('–')
+  var result = cell(String(quality.ccMax) + (quality.split ? ' SPLIT' : ' ok'))
+  if (quality.split) result.style.color = 'var(--bad-ink)'
+  return result
+}
 function renderSessions(list, keys) {
   var start = new Date(keys[0] + 'T00:00').getTime(), q = state.query.trim().toLowerCase(), body = byId('sessions-rows'); body.textContent = ''
   var all = sessionsFrom(list).filter(function (s) { return s.ended >= start })
   byId('sessions').hidden = !all.length
   var shown = all.filter(function (s) { return !q || [s.name, s.project, s.model].concat(s.tickets).join(' ').toLowerCase().indexOf(q) >= 0 })
   byId('sessions-count').textContent = String(shown.length)
-  if (!shown.length) { var tr = el('tr'), td = el('td', 'empty-row', 'No session matches.'); td.colSpan = 9; tr.append(td); body.append(tr); return }
+  if (!shown.length) { var tr = el('tr'), td = el('td', 'empty-row', 'No session matches.'); td.colSpan = 11; tr.append(td); body.append(tr); return }
   shown.forEach(function (s) {
     var tr = el('tr'), name = el('td', 'wrap'), title = el('div', 'title', s.name || 'Untitled session')
     title.title = s.name
@@ -649,7 +670,7 @@ function renderSessions(list, keys) {
     if (s.compactions) bits.push('compacted ×' + s.compactions)
     if (s.agents) bits.push(plural(s.agents, 'subagent'))
     name.append(title, el('div', 'sub', bits.filter(Boolean).join(' · ')))
-    tr.append(name, cell(s.model || '–', 'mono'), cell(String(s.turns), 'r'), cell(compact(s.requests), 'r'), cell(money(s.costUsd), 'r'), cell(duration(s.durationMs), 'r'), cell(compact(s.tokens), 'r'), cell(miniMeter(s.contextPeak / 100, Math.round(s.contextPeak) + '%')), cell(pill(s.outcome)))
+    tr.append(name, cell(s.model || '–', 'mono'), cell(String(s.turns), 'r'), cell(compact(s.requests), 'r'), cell(money(s.costUsd), 'r'), cell(duration(s.durationMs), 'r'), cell(compact(s.tokens), 'r'), cell(miniMeter(s.contextPeak / 100, Math.round(s.contextPeak) + '%')), cell(pill(s.outcome)), sessionTests(s.quality), sessionComplexity(s.quality))
     body.append(tr)
   })
 }
@@ -775,7 +796,7 @@ ${listCard('models', 'Models', ['Model', 'Tokens', '>Requests', '>Mean latency',
 ${listCard('tools', 'Tools', ['Tool', 'Calls', '>Errors', '>Denied', '>Avg time'], TOOL_KEY)}
 </div>
 ${listCard('tickets', 'Tickets', ['Ticket', '>Turns', '>Tokens', '>Agent time', 'Cost'], '<span class="sub" id="tickets-sub"></span>')}
-${listCard('sessions', 'Sessions<span class="n" id="sessions-count"></span>', ['Session', 'Model', '>Turns', '>Requests', '>Cost', '>Time', '>Tokens', 'Context peak', 'Outcome'], `<label class="search">${SEARCH_ICON}<input id="q" type="search" placeholder="Search sessions" aria-label="Search sessions"></label>`)}
+${listCard('sessions', 'Sessions<span class="n" id="sessions-count"></span>', ['Session', 'Model', '>Turns', '>Requests', '>Cost', '>Time', '>Tokens', 'Context peak', 'Outcome', 'Tests', 'CC'], `<label class="search">${SEARCH_ICON}<input id="q" type="search" placeholder="Search sessions" aria-label="Search sessions"></label>`)}
 <section id="activity" class="card heat" hidden><div class="heat-grid"><div><h3>Activity</h3><div class="sub">Agent time per day, last 12 weeks</div><svg id="heat" role="img" aria-label="Agent time per day, last 12 weeks"></svg></div>
 <div><div class="heroes"><div><div class="hero-label">Active days</div><div class="hero-value" id="h-active"></div><div class="hero-sub" id="h-active-sub"></div></div>
 <div><div class="hero-label">Current streak</div><div class="hero-value" id="h-streak"></div><div class="hero-sub" id="h-streak-sub"></div></div></div><div id="facts"></div><div class="sub" id="facts-sub"></div></div></div></section>

@@ -20,6 +20,8 @@ Installing the plugin does not opt any project in.
 
 The board shows cost, agent time, tokens, sessions, quota usage, project activity, model mix, tool calls and failures, ticket totals, session outcomes, and activity streaks. Filter by project, period, or session name. Cost uses the engine's own /cost figure, with per-turn differences from its session total. There are no price tables or estimates. Agent time sums turn durations; it can exceed elapsed wall time when sessions overlap.
 
+When Quality Gate is installed, sessions also show the latest test status (marked stale after edits) and maximum CC, with SPLIT in red for new or complexity-raised bodies at CC 6 or higher.
+
 ## Local data and privacy
 
 The Claude config directory is `CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude` (`%USERPROFILE%\.claude` on Windows). Ledgers live at `<claude config dir>/observability/ledger/<project-slug>.jsonl`. The slug is the project root's basename (characters outside letters, digits, underscore, dot, and hyphen replaced by underscores) followed by a six-character hash of the full path, so two projects with the same folder name keep separate ledgers. The generated board is `<claude config dir>/observability/board.html`.
