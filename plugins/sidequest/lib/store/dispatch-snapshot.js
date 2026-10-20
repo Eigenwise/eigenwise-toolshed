@@ -49,6 +49,9 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
       worktree: textOrNull(state.worktree),
       sharedTree: state.sharedTree !== false,
       readonly,
+      evidenceMode: state.evidenceMode === true,
+      evidenceRepositoryRoot: textOrNull(state.evidenceRepositoryRoot),
+      evidenceWriteRoots: listOf(state.evidenceWriteRoots),
       state: rowState,
       deniedTools: executorDeniedTools(slug, ticket, readonly)
     };

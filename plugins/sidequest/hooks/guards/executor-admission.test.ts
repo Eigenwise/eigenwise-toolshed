@@ -197,3 +197,21 @@ test('the 50-call mix runs one decision process', async ($, on) => {
   for (const call of MAIN_LOOP_MIX) await $.tool.call(call as never)
   expect(decisions).toBe(1)
 })
+
+
+test('evidence writes use snapshot roots in a board-free canonical path decision', async ($, on) => {
+  const roots = ['C:/evidence/SQ-1', 'C:/evidence/US-1', 'C:/investigation-data'];
+  const evidence = row({ readonly: true, evidenceMode: true, evidenceWriteRoots: roots, evidenceRepositoryRoot: 'C:/repo-evidence', executor: 'sidequest-exec-evidence-medium' });
+  sessionWithSnapshot(on, 'C:/repo-evidence', 'main-session', { at: new Date().toISOString(), dispatches: [evidence] });
+  on('agent.list', () => ({ value: [{ id: 'agent-1', type: 'sidequest:sidequest-exec-evidence-medium' }] }));
+  const requests: string[] = [];
+  on('process.run', ($, event) => { requests.push(JSON.stringify(event)); return decisionDenies('sidequest: evidence roots refused'); });
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never);
+  const refused = await $.tool.call({ tool: 'Write', file_path: 'C:/repo-evidence/source.ts', content: 'x', agentId: 'agent-1' } as never);
+  expect(Reflect.get(refused, 'deny')).toBe('sidequest: evidence roots refused');
+  expect(requests.length).toBe(1);
+  expect(requests[0]).toContain('guard-evidence-write.js');
+  expect(requests[0]).toContain('C:/investigation-data');
+  expect(requests[0]).toContain('C:/evidence/US-1');
+  expect(requests[0]).not.toContain('force-exec-bypass');
+});

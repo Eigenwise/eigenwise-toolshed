@@ -5361,3 +5361,56 @@ test('checkpoint cursor enforces UTF-8 bytes and evidence stays relative', () =>
   assert.equal(recorded.ticket.checkpoint.cursor, 'é'.repeat(1024));
   assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
 });
+
+function claimedEvidenceDispatch() {
+  const story = store.createStory(slug, { title: "Evidence dispatch story" });
+  const ticket = store.createTicket(slug, { title: "Evidence roots and done", category: "research.evidence", storyId: story.ref, source: "test" });
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sq-lifecycle-evidence-data-"));
+  store.setBoardConfig(slug, { investigationDataRoots: [dataRoot] });
+  const sessionId = "evidence-session-" + ticket.id;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId, runtimeCwd: PROJECT });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentId = "evidence-agent-" + ticket.id;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName: agentId }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+  const by = "evidence-owner-" + ticket.id;
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+  return { ticket: store.getTicket(slug, ticket.ref), story, dataRoot, sessionId, executor, agentId, by };
+}
+
+test("evidence dispatch records dispatch story and data roots in its snapshot", () => {
+  const fixture = claimedEvidenceDispatch();
+  const dispatch = fixture.ticket.dispatch;
+  assert.equal(fixture.executor, 'sidequest-exec-evidence-medium');
+  assert.equal(dispatch.evidenceMode, true);
+  assert.equal(dispatch.readonly, true);
+  const canonical = worktreeLease.canonicalPath;
+  assert.deepEqual(dispatch.evidenceWriteRoots, [canonical(dispatch.evidenceDirectory), canonical(path.join(path.dirname(dispatch.evidenceDirectory), fixture.story.ref)), canonical(fixture.dataRoot)]);
+  for (const root of dispatch.evidenceWriteRoots) assert.ok(fs.existsSync(root));
+  const snapshot = JSON.parse(fs.readFileSync(path.join(SIDEQUEST_HOME, "projects", slug, "dispatch-snapshot.json"), "utf8"));
+  assert.deepEqual(snapshot.dispatches.find((row: { ref: string }) => row.ref === fixture.ticket.ref).evidenceWriteRoots, dispatch.evidenceWriteRoots);
+  assert.equal(store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body: "Nothing was saved" }).ok, true);
+});
+
+test("evidence done refuses a report without a saved relative path or nothing-saved statement", () => {
+  const fixture = claimedEvidenceDispatch();
+  const result = store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body: "Investigation finished" });
+  assert.equal(result.reason, "evidence_report_required");
+  assert.equal(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by);
+  assert.equal(store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body: "Nothing was saved" }).ok, true);
+});
+
+test("evidence done closes without a commit and SubagentStop adds no second report", () => {
+  const fixture = claimedEvidenceDispatch();
+  const before = execFileSync("git", ["rev-parse", "HEAD"], { cwd: PROJECT, encoding: "utf8" });
+  fs.writeFileSync(path.join(fixture.dataRoot, "inventory.json"), "[]\n");
+  const body = "Saved evidence: inventory.json";
+  assert.equal(store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body }).ok, true);
+  const closed = store.getTicket(slug, fixture.ticket.ref);
+  assert.equal(closed.status, "done");
+  assert.equal(closed.submission, undefined);
+  assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: PROJECT, encoding: "utf8" }), before);
+  const stop = runLifecycleHook(SUBAGENT_STOP, { session_id: fixture.sessionId, agent_type: fixture.executor, agent_id: fixture.agentId, agent_name: fixture.agentId });
+  assert.doesNotMatch(JSON.stringify(stop), /Saved evidence: inventory.json/);
+  assert.equal(store.getTicket(slug, fixture.ticket.ref).comments.filter((comment: { body: string }) => comment.body === body).length, 1);
+});

@@ -140,7 +140,20 @@ async function applied<E extends object>(e: E, next: (input: E) => Promise<ToolC
 async function callerDecision($: EngineInterface, e: { tool: string }, caller: Caller): Promise<Decision> {
   const denial = caller.row ? mainThreadMutationDenial(e.tool, toolArguments(e)) : null
   if (denial) return { deny: denial }
+  if (evidenceFileCall(e.tool, caller)) return evidenceCallerDecision($, e, caller)
   return needsDecision(e.tool, e, caller) ? runDecision($, e.tool, e, caller) : {}
+}
+
+function evidenceFileCall(tool: string, caller: Caller): boolean {
+  return caller.row?.evidenceMode === true && /^(Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell)$/.test(tool);
+}
+
+async function evidenceCallerDecision($: EngineInterface, e: { tool: string }, caller: Caller): Promise<Decision> {
+  const scope = caller.fresh && caller.row?.state === 'claimed' ? caller.row : {};
+  const input = { tool_name: e.tool, tool_input: toolArguments(e), cwd: await $.session.cwd(), scope };
+  const ran = await $.process.run(['node', `${$.plugin.root}/hooks/guard-evidence-write.js`], { stdin: JSON.stringify(input), timeoutMs: 10_000 }).catch(() => ({ exitCode: 1, stdout: '' }));
+  if (ran.exitCode !== 0) return { deny: 'sidequest: evidence path guard unavailable; write refused.' };
+  return parseDecision(ran.stdout);
 }
 
 // The main-thread-only fields are refused from the call alone, so no engine failure can admit them.

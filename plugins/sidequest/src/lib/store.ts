@@ -29,7 +29,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
+const { EVIDENCE_DISPATCH_NAME, stableEvidenceClaudeName, dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { execFileSync } = require('./git-process.js');
@@ -2231,16 +2231,26 @@ function priorityRank(p?: any) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? (PRIORITY_RANK[String(p)] ?? 9) : 9;
 }
 
+function evidenceExecutorName(ticket: { categoryId?: string; project?: string; effort: string }, resolved: { backend: string }): string | null {
+  if (getCategory(ticketCategory(ticket), { project: ticket.project })?.writes !== 'evidence') return null;
+  return resolved.backend === 'codex' ? EVIDENCE_DISPATCH_NAME : stableEvidenceClaudeName(ticket.effort);
+}
+
+function readonlyExecutorName(ticket: { effort: string }, resolved: { backend: string; readOnlyAgent?: string }): string {
+  return evidenceExecutorName(ticket, resolved) || resolved.readOnlyAgent || defaultReadonlyExecutorName(ticket, resolved);
+}
+
+function defaultReadonlyExecutorName(ticket: { effort: string }, resolved: { backend: string }): string {
+  return resolved.backend === 'codex' ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
+}
+
 // The plugin-bundled stable executor receives the briefing and token in its prompt.
 function stableExecutorName(ticket?: any, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
-  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
-  return resolved.backend === 'codex'
-    ? stableReadOnlyDispatchName(ticket.effort)
-    : stableReadOnlyClaudeName(ticket.effort);
+  return readonlyExecutorName(ticket, resolved);
 }
 
 // Prepare a ticket for dispatch: persist a fresh claim nonce and the stable
@@ -2779,6 +2789,8 @@ type Diagnostic = import('./kernel/index').Diagnostic;
 type ReleaseClaim = { by?: string; at?: string };
 type ReleaseSubmission = { by?: string; commit?: string };
 type ReleaseDispatch = {
+  evidenceMode?: boolean;
+  evidenceWriteRoots?: string[];
   terminalAt?: string | null;
   outcome?: string;
   declaredFiles?: string[];
@@ -2836,7 +2848,7 @@ type ReleaseOptions = {
   requireReleaseVerdict?: boolean;
   claimRelease?: { kind?: string };
   workedBy?: unknown;
-  completionComment?: { advisory?: unknown };
+  completionComment?: { advisory?: unknown; body?: string };
   recordedDelivery?: RecordedDelivery;
 };
 type PreparedComment = Readonly<Record<string, unknown>>;
@@ -3026,9 +3038,13 @@ function pendingSubmissionRefusal(t: ReleaseTicket, heldOwner: string, reopenSta
   };
 }
 
+function doneAuthorityRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
+  return evidenceDoneReportRefusal(request, facts) || executorDoneRefusal(request, facts);
+}
+
 function releaseRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
   const refusal = unclaimedActiveDispatchRefusal(request, facts)
-    || executorDoneRefusal(request, facts)
+    || doneAuthorityRefusal(request, facts)
     || changedClaimRefusal(request, facts)
     || ownershipRefusal(request, facts);
   if (refusal) return refusal;
@@ -3053,6 +3069,33 @@ function unclaimedDispatchRefusal(t: ReleaseTicket, dispatch: ReleaseDispatch | 
 }
 
 const NO_COMPLETION_DELTA: CompletionDeltaCheck = { completionDelta: null, sharedTreeCommittedScope: false };
+
+function savedEvidencePath(root: string, relative: string): boolean {
+  if (path.isAbsolute(relative)) return false;
+  const target = path.resolve(root, relative);
+  if (!boardVerificationEvidencePath(target, root)) return false;
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function evidenceReportNamesSavedFile(roots: readonly string[], body: string): boolean {
+  const paths = body.match(/`[^`]+`|[^\s,;]+/g) || [];
+  return roots.some((root) => paths.some((relative) => savedEvidencePath(root, relative.replace(/^`|`$/g, ''))));
+}
+
+function evidenceCompletionReported(dispatch: { evidenceWriteRoots?: string[] }, body: string): boolean {
+  return /\bnothing was saved\b/i.test(body) || evidenceReportNamesSavedFile(dispatch.evidenceWriteRoots || [], body);
+}
+
+function evidenceDoneReportRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
+  if (!facts.executorDone || facts.dispatch?.evidenceMode !== true) return null;
+  const body = String(request.opts.completionComment?.body || '');
+  if (evidenceCompletionReported(facts.dispatch, body)) return null;
+  return { ok: false, reason: 'evidence_report_required', message: 'Evidence dispatch done requires a written evidence file path relative to its admitted root, or the explicit statement "nothing was saved".', ticket: facts.t };
+}
 
 function executorDoneRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
   if (!facts.executorDone) return null;
