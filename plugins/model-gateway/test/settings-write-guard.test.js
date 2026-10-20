@@ -105,7 +105,10 @@ test('a temp path that symlinks out of the temp directory is refused', (t) => {
   if (process.platform === 'win32') return t.skip('directory symlinks need privileges on Windows');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-guard-link-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  fs.symlinkSync(__dirname, path.join(directory, '.claude'), 'dir');
+  // The filesystem root is the one directory that exists and is outside the temp
+  // directory on every machine; __dirname can itself sit under os.tmpdir().
+  const root = path.parse(os.tmpdir()).root;
+  fs.symlinkSync(root, path.join(directory, '.claude'), 'dir');
   assert.throws(() => writeSettings(path.join(directory, '.claude', 'settings.json'), {}), /refusing to touch/);
-  assert.equal(fs.existsSync(path.join(__dirname, 'settings.json')), false);
+  assert.equal(fs.existsSync(path.join(root, 'settings.json')), false);
 });
