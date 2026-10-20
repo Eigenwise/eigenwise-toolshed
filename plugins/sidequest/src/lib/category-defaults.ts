@@ -7,7 +7,7 @@ export const ROUTING_PROFILE_SEED_REVISION = 10;
 const EVIDENCE_CATEGORY = {
   id: 'research.evidence',
   name: 'Evidence collection',
-  description: 'Collect external evidence incrementally under dispatch evidence roots and declared investigation data roots. Repository writes are forbidden; close through done with relative evidence paths or explicitly state that nothing was saved.',
+  description: 'Collect external evidence incrementally under dispatch evidence roots and declared investigation data roots. Sonnet/medium fits bounded collection and transcription with provenance rules carried by the contract; Opus/high is the fallback for sources that need judgment. Repository writes are forbidden; close through done with relative evidence paths or explicitly state that nothing was saved.',
   route: { model: 'sonnet', effort: 'medium' },
   fallback: { model: 'opus', effort: 'high' },
   contract: "Inventory rows carry source id, channel or ticket, date, author role and why; files deduped by sha256 against the data root and story manifest; no private individuals' names in inventories or drafted cases (company names allowed); customer documents flagged and kept under the data root, never in the repository or the ticket thread; write evidence incrementally and checkpoint with a cursor before budget.",
