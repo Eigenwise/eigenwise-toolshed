@@ -48,10 +48,10 @@ function releaseSweepLock(file: string): void {
   } catch (_) {}
 }
 
-// A detached SessionEnd sweep and the next SessionStart sweep (a /clear fires both back to back)
+// Two SessionStart sweeps in different sessions, or one and a ticket close sweeping its own tree,
 // would otherwise rename the same trees into quarantine and race each other's git worktree repair
-// (SQ-51), and a ticket close sweeps its own tree in between. null means a live sweep holds the
-// lock. The lock is advisory, so a home it cannot be written in sweeps anyway.
+// (SQ-51). null means a live sweep holds the lock. The lock is advisory, so a home it cannot be
+// written in sweeps anyway.
 function acquireSweepLock(file: string): (() => void) | null {
   let outcome = createSweepLock(file);
   if (outcome === 'held') {
