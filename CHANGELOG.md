@@ -8,6 +8,16 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.604.0 (2026-10-20)
+
+### sidequest 6.0.1 → 6.0.2
+
+#### Fixes
+
+- Shard Sidequest Windows CI across three runners (SQ-3767)
+  Run the Sidequest Windows CI suite in three parallel file shards, keeping local and Linux runs unchanged.
+- publish lock and unlock accept --by, matching the identity the integrate refusal names (SQ-3769) [`5b9b98b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5b9b98ba17106935efb977ef1b81a01c0f4070e3)
+
 ## v3.603.0 (2026-10-19)
 
 ### observability 1.0.0 → 1.1.0

@@ -167,7 +167,7 @@ test('only the changed plugins get their suites queued', (t) => {
     suites: { sidequest: 'package', workbench: 'testdir', 'codex-gateway': 'package' },
   });
   assert.deepEqual(plan.suites, [
-    { plugin: 'sidequest', cwd: 'plugins/sidequest', setup: 'npm ci', command: 'npm run test:full' },
+    { plugin: 'sidequest', cwd: 'plugins/sidequest', setup: 'npm ci', command: 'npm run test:full', shards: { windows: 3 } },
     { plugin: 'workbench', cwd: 'plugins/workbench', setup: null, command: 'node --test --test-timeout=120000 "test/*.test.js"' },
   ]);
 });

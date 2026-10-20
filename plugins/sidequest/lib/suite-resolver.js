@@ -14,7 +14,12 @@ function declaredSuiteTimeout(pluginManifest) {
 const MODULE_TEST_COMMANDS = /* @__PURE__ */ new Map([
   ["sidequest", "node scripts/test-guards-module.mjs"]
 ]);
+const SUITE_SHARDS = /* @__PURE__ */ new Map([
+  ["sidequest", { windows: 3 }]
+]);
 function includeModuleTests(pluginDirectory, suite) {
+  const shards = SUITE_SHARDS.get(suite.plugin);
+  if (shards) suite = { ...suite, shards };
   const hooks = readJson(path.join(pluginDirectory, "hooks", "hooks.json"));
   if (!Array.isArray(hooks.modules)) return suite;
   return { ...suite, moduleTest: MODULE_TEST_COMMANDS.get(suite.plugin) ?? "claude plugin test ." };
