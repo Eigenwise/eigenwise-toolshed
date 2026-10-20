@@ -100,3 +100,38 @@ test('agent worktrees sit where the module looks for another executor\'s checkou
   const expected = path.join(SIDEQUEST_HOME, 'worktrees', await slugify(path.resolve(PROJECT), WINDOWS));
   assert.ok(samePath(parent, expected) || samePath(parent, path.join(PROJECT, '.claude', 'worktrees')), parent);
 });
+
+
+test('evidence guard admits Write Edit and Bash under dispatch story and data roots', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-roots-'));
+  const roots = ['SQ-1', 'US-1', 'data'].map((name) => path.join(directory, name));
+  for (const root of roots) fs.mkdirSync(root);
+  const scope = { evidenceMode: true, evidenceWriteRoots: roots, evidenceRepositoryRoot: PROJECT };
+  const guard = path.resolve(__dirname, '../hooks/guard-evidence-write.js');
+  for (const root of roots) {
+    for (const tool of ['Write', 'Edit', 'Bash']) {
+      const target = path.join(root, 'inventory.json');
+      const input = { file_path: target, command: 'echo x > "' + target.replaceAll('\\', '/') + '"' };
+      const output = execFileSync(process.execPath, [guard], { input: JSON.stringify({ tool_name: tool, tool_input: input, cwd: PROJECT, scope }), encoding: 'utf8' });
+      assert.equal(output, '', tool + ' under ' + root);
+    }
+  }
+});
+
+test('evidence guard refuses repository traversal prefix siblings and symlink escapes', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-refusal-'));
+  const data = path.join(directory, 'data');
+  fs.mkdirSync(data);
+  fs.symlinkSync(PROJECT, path.join(data, 'checkout'), WINDOWS ? 'junction' : 'dir');
+  const scope = { evidenceMode: true, evidenceWriteRoots: [data], evidenceRepositoryRoot: PROJECT };
+  const guard = path.resolve(__dirname, '../hooks/guard-evidence-write.js');
+  for (const target of [path.join(PROJECT, 'README.md'), path.join(data, '../outside.txt'), data + '-sibling/file.txt', path.join(data, 'checkout/README.md')]) {
+    for (const tool of ['Write', 'Edit', 'Bash']) {
+      const input = { file_path: target, command: 'echo x > "' + target.replaceAll('\\', '/') + '"' };
+      const output = execFileSync(process.execPath, [guard], { input: JSON.stringify({ tool_name: tool, tool_input: input, cwd: PROJECT, scope }), encoding: 'utf8' });
+      assert.equal(JSON.parse(output).hookSpecificOutput.permissionDecision, 'deny');
+      assert.match(output, /Repository paths remain forbidden/);
+      assert.ok(output.includes(data.replaceAll('\\', '\\\\')));
+    }
+  }
+});

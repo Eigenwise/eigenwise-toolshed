@@ -25,6 +25,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 var DISPATCH_NAME = "sidequest-exec-dispatch";
@@ -32,12 +34,17 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)

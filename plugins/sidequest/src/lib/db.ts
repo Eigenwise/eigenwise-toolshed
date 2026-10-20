@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync, SQLInputValue, SQLOutputValue, StatementSync } from 'node:sqlite';
 
-import { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } from './category-defaults.js';
+import { categoryEvidenceFields, DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } from './category-defaults.js';
 import { discoverExternalModels, providerReadiness } from './discovery.js';
 
 const originalEmitWarning = process.emitWarning;
@@ -357,6 +357,7 @@ function normalizedCategory(category: Record<string, unknown>): Record<string, u
       : null,
     contract: String(category.contract ?? '').trim(),
     artifactRoots: Array.isArray(category.artifactRoots) ? category.artifactRoots.map(String) : [],
+    ...categoryEvidenceFields(category),
     enabled: category.enabled !== false,
   };
 }

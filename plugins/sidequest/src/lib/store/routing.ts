@@ -1,5 +1,6 @@
 'use strict';
 
+const { categoryEvidenceFields } = require('../category-defaults.js');
 const { normalizeDeniedTools } = require('../denied-tools.js');
 const { discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName } = require('../exec-names.js');
 
@@ -678,6 +679,7 @@ function normalizeCategory(raw?: any) {
     contract: String(raw.contract || '').trim(),
     artifactRoots: normalizeArtifactRoots(raw.artifactRoots),
     readonly: raw.readonly === true,
+    ...categoryEvidenceFields(raw),
     enabled: raw.enabled !== false,
     ...categoryDeniedTools(raw.deniedTools),
   };
@@ -783,7 +785,7 @@ function setProjectCategory(project?: any, id?: any, kind?: any, data?: any) {
   } else if (normalizedKind === 'OVERRIDE') {
     if (!base) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a profile category.`);
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Project category OVERRIDE requires a patch object.');
-    const allowed = new Set(['name', 'description', 'contract', 'artifactRoots', 'readonly', 'route', 'fallback']);
+    const allowed = new Set(['name', 'description', 'contract', 'artifactRoots', 'readonly', 'writes', 'route', 'fallback']);
     for (const key of Object.keys(data)) if (!allowed.has(key)) throw new Error(`Project category OVERRIDE cannot patch "${key}".`);
     requireArtifactRoots(data.artifactRoots);
     if (data.route != null && !normalizeRoute(data.route)) throw new Error('Project category OVERRIDE route requires a valid model and effort.');

@@ -241,6 +241,7 @@ function normalizedCategory(category) {
     fallback: normalizedFallback && (normalizedFallback.model !== normalizedRoute.model || normalizedFallback.effort !== normalizedRoute.effort) ? normalizedFallback : null,
     contract: String(category.contract ?? "").trim(),
     artifactRoots: Array.isArray(category.artifactRoots) ? category.artifactRoots.map(String) : [],
+    ...(0, import_category_defaults.categoryEvidenceFields)(category),
     enabled: category.enabled !== false
   };
 }

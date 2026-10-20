@@ -8,7 +8,9 @@ import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
-import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor } from '../lib/exec-names.js';
+import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor, isEvidenceExecutor } from '../lib/exec-names.js';
+import { evidenceToolDenial } from '../lib/evidence-writes.js';
+import { dispatchEvidenceScope } from './shared/runtime-identity.js';
 import { readOnlyShellRefusal } from './shared/read-only-shell.js';
 import { mainThreadMutationDenial } from './shared/main-thread-mutations.js';
 import { observeBoardMcp, type BoardMcpObservation } from '../lib/board-mcp-liveness.js';
@@ -1073,7 +1075,14 @@ interface CorrectedSpawnInput {
   preparedCorrection: string | null;
 }
 
-function nonAgentToolGuard(toolName: string): ((input: HookInput) => void) | null {
+function guardEvidenceTool(input: HookInput): void {
+  const scope = dispatchEvidenceScope(input);
+  const denial = evidenceToolDenial(stringField(input, 'tool_name'), toolInputOf(input) || {}, stringField(input, 'cwd') || process.cwd(), scope || {});
+  if (denial) writeDeny('PreToolUse', denial);
+}
+
+function nonAgentToolGuard(toolName: string, input: HookInput): ((input: HookInput) => void) | null {
+  if (isEvidenceExecutor(stringField(input, 'agent_type', 'agentType'))) return guardEvidenceTool;
   if (toolName === 'SendMessage') return guardLateSteer;
   if (WRITE_TOOLS.has(toolName)) return guardHelperWrite;
   if (SHELL_TOOLS.has(toolName)) return guardReadOnlyShell;
@@ -1083,7 +1092,7 @@ function nonAgentToolGuard(toolName: string): ((input: HookInput) => void) | nul
 function decidedBeforeAgentAdmission(input: HookInput): boolean {
   const toolName = stringField(input, 'tool_name');
   if (guardTerminalExecutor(input) || guardOwnTicketDispatch(input) || executorLiveClaimMutationRefusal(input)) return true;
-  const toolGuard = nonAgentToolGuard(toolName);
+  const toolGuard = nonAgentToolGuard(toolName, input);
   if (toolGuard) toolGuard(input);
   return toolName !== 'Agent';
 }

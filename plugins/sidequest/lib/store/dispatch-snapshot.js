@@ -50,6 +50,9 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
       sharedTree: state.sharedTree !== false,
       readonly,
       ...readonly ? { readOnlyDeniedTools: boardConfig(slug)?.readOnlyDeniedTools } : {},
+      evidenceMode: state.evidenceMode === true,
+      evidenceRepositoryRoot: textOrNull(state.evidenceRepositoryRoot),
+      evidenceWriteRoots: listOf(state.evidenceWriteRoots),
       state: rowState,
       deniedTools: executorDeniedTools(slug, ticket)
     };

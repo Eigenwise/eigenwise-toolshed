@@ -34,7 +34,7 @@ function execFileSync(file, args, options = {}) {
 // src/hooks/force-exec-bypass.ts
 var import_node_fs8 = __toESM(require("node:fs"));
 var import_node_os5 = __toESM(require("node:os"));
-var import_node_path8 = __toESM(require("node:path"));
+var import_node_path9 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -43,6 +43,8 @@ var import_node_fs = __toESM(require("node:fs"));
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
 var DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
@@ -137,6 +139,14 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
+function isEvidenceExecutor(value) {
+  if (typeof value !== "string") return false;
+  const name = canonicalExecutorName(value);
+  return name === EVIDENCE_DISPATCH_NAME || EFFORTS.some((effort) => name === stableEvidenceClaudeName(effort));
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
@@ -145,7 +155,14 @@ function discoveredModelEffort(name, prefix) {
   const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
   return name.startsWith(prefix) && isEffort(effort) ? effort : null;
 }
+function classifyEvidenceExecutor(name) {
+  if (name === EVIDENCE_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  const effort = name.slice(EVIDENCE_CLAUDE_PREFIX.length);
+  return name.startsWith(EVIDENCE_CLAUDE_PREFIX) && isEffort(effort) ? { kind: "read_only_claude_builtin", effort } : null;
+}
 function classifyDiscoveredModel(name) {
+  const evidence = classifyEvidenceExecutor(name);
+  if (evidence) return evidence;
   const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
   if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
   const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
@@ -154,6 +171,8 @@ function classifyDiscoveredModel(name) {
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -325,32 +344,31 @@ function writeSessionState(file, state) {
   import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
 }
 
-// src/hooks/shared/read-only-shell.ts
-var import_node_fs4 = __toESM(require("node:fs"));
-var import_node_os2 = __toESM(require("node:os"));
+// src/lib/evidence-writes.ts
 var import_node_path4 = __toESM(require("node:path"));
 
-// src/hooks/shared/runtime-identity.ts
+// src/lib/kernel/worktree.ts
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path3 = __toESM(require("node:path"));
-function canonicalPath(value) {
-  const kernel = require(runtimeModule("kernel/worktree"));
-  return kernel.canonicalPath(value);
+var import_node_crypto2 = __toESM(require("node:crypto"));
+function platformPath(value) {
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }
-function enclosingCheckout(start) {
-  let directory = canonicalPath(start);
-  for (; ; ) {
-    const gitEntry = import_node_path3.default.join(directory, ".git");
-    let stats = null;
-    try {
-      stats = import_node_fs3.default.statSync(gitEntry);
-    } catch (_) {
-      stats = null;
-    }
-    if (stats) return { root: directory, linked: stats.isFile() };
-    const parent = import_node_path3.default.dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
+function canonicalPath(value) {
+  const gitBashDrive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
+  const resolved = import_node_path3.default.resolve(gitBashDrive ? `${gitBashDrive[1]}:${value.slice(2)}` : value);
+  const missing = [];
+  let existing = resolved;
+  while (!import_node_fs3.default.existsSync(existing)) {
+    const parent = import_node_path3.default.dirname(existing);
+    if (parent === existing) return platformPath(resolved);
+    missing.unshift(import_node_path3.default.basename(existing));
+    existing = parent;
+  }
+  try {
+    return platformPath(import_node_path3.default.join(import_node_fs3.default.realpathSync.native(existing), ...missing));
+  } catch {
+    return platformPath(resolved);
   }
 }
 
@@ -461,17 +479,122 @@ function ignoredTarget(word) {
   return !word || word.startsWith("$") || NULL_SINKS.has(word.toLowerCase());
 }
 
+// src/lib/evidence-writes.ts
+function within(root, target) {
+  const relative = import_node_path4.default.relative(canonicalPath(root), canonicalPath(target));
+  return relative !== ".." && !relative.startsWith(`..${import_node_path4.default.sep}`) && !import_node_path4.default.isAbsolute(relative);
+}
+function protectedRoots(scope) {
+  return [scope.evidenceRepositoryRoot, scope.worktree].filter((root) => Boolean(root));
+}
+function evidencePathAllowed(target, scope) {
+  if (!scope.evidenceMode || !import_node_path4.default.isAbsolute(target)) return false;
+  if (protectedRoots(scope).some((root) => within(root, target))) return false;
+  return (scope.evidenceWriteRoots ?? []).some((root) => within(root, target));
+}
+function refusal(scope) {
+  return `sidequest: evidence executor may write only under admitted roots: ${(scope.evidenceWriteRoots ?? []).join(", ") || "(no live evidence scope)"}. Repository paths remain forbidden. Close through done, without commit or submit.`;
+}
+function nativeTarget(base, target) {
+  const native = process.platform === "win32" ? target.replace(/^\/([a-z])(\/|$)/i, "$1:/") : target;
+  return import_node_path4.default.resolve(base, native);
+}
+function segmentTargets(segment, base) {
+  return [...segment.redirects, ...commandWriteTargets(segment.words)].filter((target) => !ignoredTarget(target)).map((target) => nativeTarget(base, target));
+}
+function changedDirectory(segment, base) {
+  return segment.words[0] === "cd" && segment.words[1] ? nativeTarget(base, segment.words[1]) : base;
+}
+function segmentForbidden(segment, base, scope) {
+  return isGitMutation(segment.words) || segmentTargets(segment, base).some((target) => !evidencePathAllowed(target, scope));
+}
+function shellDenial(command, cwd, scope) {
+  let base = cwd;
+  for (const segment of shellSegments(command)) {
+    base = changedDirectory(segment, base);
+    if (segmentForbidden(segment, base, scope)) return refusal(scope);
+  }
+  return null;
+}
+function fileDenial(input, _cwd, scope) {
+  return evidencePathAllowed(String(input.file_path ?? input.path ?? ""), scope) ? null : refusal(scope);
+}
+var TOOL_GUARDS = {
+  Bash: (input, cwd, scope) => shellDenial(String(input.command ?? ""), cwd, scope),
+  PowerShell: (input, cwd, scope) => shellDenial(String(input.command ?? ""), cwd, scope),
+  Write: fileDenial,
+  Edit: fileDenial,
+  MultiEdit: fileDenial,
+  NotebookEdit: (_input, _cwd, scope) => refusal(scope),
+  Agent: (_input, _cwd, scope) => refusal(scope),
+  mcp__plugin_sidequest_board__commit: (_input, _cwd, scope) => refusal(scope),
+  mcp__plugin_sidequest_board__submit: (_input, _cwd, scope) => refusal(scope),
+  mcp__plugin_sidequest_board__integrate: (_input, _cwd, scope) => refusal(scope)
+};
+function evidenceToolDenial(tool, input, cwd, scope) {
+  return TOOL_GUARDS[tool]?.(input, cwd, scope) ?? null;
+}
+
+// src/hooks/shared/runtime-identity.ts
+var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_path5 = __toESM(require("node:path"));
+function canonicalPath2(value) {
+  const kernel = require(runtimeModule("kernel/worktree"));
+  return kernel.canonicalPath(value);
+}
+function dispatchEvidenceScope(input) {
+  const found = isolationExpectation(input, stringField(input, "agent_id", "agentId"), stringField(input, "agent_type", "agentType"), true, stringField(input, "cwd"));
+  if (!found?.claimHeld || found.terminal) return null;
+  const store = require(runtimeModule("store"));
+  try {
+    return store.getTicket(found.project, found.ref)?.dispatch ?? null;
+  } catch {
+    return null;
+  }
+}
+function hookSessionId(input) {
+  return stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+}
+function enclosingCheckout(start) {
+  let directory = canonicalPath2(start);
+  for (; ; ) {
+    const gitEntry = import_node_path5.default.join(directory, ".git");
+    let stats = null;
+    try {
+      stats = import_node_fs4.default.statSync(gitEntry);
+    } catch (_) {
+      stats = null;
+    }
+    if (stats) return { root: directory, linked: stats.isFile() };
+    const parent = import_node_path5.default.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true, observedWorktree = "") {
+  try {
+    const store = require(runtimeModule("store"));
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
+    return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
+  } catch (_) {
+    return null;
+  }
+}
+
 // src/hooks/shared/read-only-shell.ts
+var import_node_fs5 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path6 = __toESM(require("node:path"));
 function nativePath(word) {
-  if (word === "~" || word.startsWith("~/")) return import_node_path4.default.join(import_node_os2.default.homedir(), word.slice(1));
+  if (word === "~" || word.startsWith("~/")) return import_node_path6.default.join(import_node_os2.default.homedir(), word.slice(1));
   return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
 }
 function resolvedTarget(base, word) {
-  return ignoredTarget(word) ? null : canonicalPath(import_node_path4.default.resolve(base, nativePath(word)));
+  return ignoredTarget(word) ? null : canonicalPath2(import_node_path6.default.resolve(base, nativePath(word)));
 }
 function mainCheckoutOf(linkedRoot) {
-  const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs4.default.readFileSync(import_node_path4.default.join(linkedRoot, ".git"), "utf8"));
-  return pointer ? canonicalPath(import_node_path4.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..")) : null;
+  const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs5.default.readFileSync(import_node_path6.default.join(linkedRoot, ".git"), "utf8"));
+  return pointer ? canonicalPath2(import_node_path6.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..")) : null;
 }
 function checkoutRoots(cwd) {
   const checkout = enclosingCheckout(cwd);
@@ -483,8 +606,8 @@ function comparable(value) {
   return process.platform === "win32" ? value.toLowerCase() : value;
 }
 function isWithin(root, target) {
-  const relative = import_node_path4.default.relative(comparable(root), comparable(target));
-  return !relative.startsWith("..") && !import_node_path4.default.isAbsolute(relative);
+  const relative = import_node_path6.default.relative(comparable(root), comparable(target));
+  return !relative.startsWith("..") && !import_node_path6.default.isAbsolute(relative);
 }
 function insideAny(roots, target) {
   return roots.some((root) => isWithin(root, target));
@@ -497,7 +620,7 @@ function segmentWriteTargets(segment, base) {
 }
 function firstCheckoutWrite(command, cwd) {
   const roots = checkoutRoots(cwd);
-  let base = canonicalPath(cwd);
+  let base = canonicalPath2(cwd);
   for (const segment of shellSegments(command)) {
     base = nextBase(segment.words, base);
     const blocked = segmentWriteTargets(segment, base).find((target) => insideAny(roots, target));
@@ -572,39 +695,12 @@ function mainThreadMutationDenial(toolName, toolInput) {
 // src/lib/board-mcp-liveness.ts
 var import_node_fs6 = __toESM(require("node:fs"));
 var import_node_os3 = __toESM(require("node:os"));
-var import_node_path6 = __toESM(require("node:path"));
-
-// src/lib/kernel/worktree.ts
-var import_node_fs5 = __toESM(require("node:fs"));
-var import_node_path5 = __toESM(require("node:path"));
-var import_node_crypto2 = __toESM(require("node:crypto"));
-function platformPath(value) {
-  return process.platform === "win32" ? value.toLowerCase() : value;
-}
-function canonicalPath2(value) {
-  const gitBashDrive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
-  const resolved = import_node_path5.default.resolve(gitBashDrive ? `${gitBashDrive[1]}:${value.slice(2)}` : value);
-  const missing = [];
-  let existing = resolved;
-  while (!import_node_fs5.default.existsSync(existing)) {
-    const parent = import_node_path5.default.dirname(existing);
-    if (parent === existing) return platformPath(resolved);
-    missing.unshift(import_node_path5.default.basename(existing));
-    existing = parent;
-  }
-  try {
-    return platformPath(import_node_path5.default.join(import_node_fs5.default.realpathSync.native(existing), ...missing));
-  } catch {
-    return platformPath(resolved);
-  }
-}
-
-// src/lib/board-mcp-liveness.ts
+var import_node_path7 = __toESM(require("node:path"));
 var MARKER_PREFIX = "board-mcp-";
 var MARKER_SUFFIX = ".json";
 function boardMcpMarkerDirectory() {
-  const home = process.env.SIDEQUEST_HOME || import_node_path6.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
-  return import_node_path6.default.join(home, "tmp", "state");
+  const home = process.env.SIDEQUEST_HOME || import_node_path7.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
+  return import_node_path7.default.join(home, "tmp", "state");
 }
 function markerField(value, key) {
   return value !== null && typeof value === "object" ? Reflect.get(value, key) : void 0;
@@ -621,7 +717,7 @@ function legacySessionId(name) {
   return decodeURIComponent(name.slice(MARKER_PREFIX.length, -MARKER_SUFFIX.length));
 }
 function readMarker(directory, name) {
-  const file = import_node_path6.default.join(directory, name);
+  const file = import_node_path7.default.join(directory, name);
   try {
     const value = JSON.parse(import_node_fs6.default.readFileSync(file, "utf8"));
     const pid = markerPid(value);
@@ -665,7 +761,7 @@ function observeBoardMcp(sessionId, project) {
     return unlistableMarkers(error, directory);
   }
   const markers = names.flatMap((name) => readMarker(directory, name));
-  return observeMarkers(markers, sessionId, project ? canonicalPath2(project) : "", directory);
+  return observeMarkers(markers, sessionId, project ? canonicalPath(project) : "", directory);
 }
 
 // src/lib/dispatch-preflight.ts
@@ -673,7 +769,7 @@ var import_node_child_process2 = require("node:child_process");
 var import_node_crypto3 = require("node:crypto");
 var import_node_fs7 = __toESM(require("node:fs"));
 var import_node_os4 = __toESM(require("node:os"));
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_path8 = __toESM(require("node:path"));
 var PLUGIN_ID = "sidequest@eigenwise-toolshed";
 var REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
 var FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300];
@@ -696,11 +792,11 @@ function readFileSyncWithRetry(filePath, encoding) {
   }
 }
 function claudeHomeDir(opts = {}) {
-  return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path7.default.join(import_node_os4.default.homedir(), ".claude");
+  return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path8.default.join(import_node_os4.default.homedir(), ".claude");
 }
 function normalizeDir(value) {
   if (typeof value !== "string" || !value.trim()) return null;
-  return import_node_path7.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return import_node_path8.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 function jsonRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -730,8 +826,8 @@ function installRuntimeSnapshot(installPath, version) {
   if (typeof installPath !== "string" || !installPath.trim()) return { detail: "the registry entry has no installPath" };
   if (typeof version !== "string" || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
   try {
-    const mcpManifest = canonicalJsonFile(import_node_path7.default.join(installPath, ".mcp.json"));
-    const hooks = canonicalJsonFile(import_node_path7.default.join(installPath, "hooks", "hooks.json"));
+    const mcpManifest = canonicalJsonFile(import_node_path8.default.join(installPath, ".mcp.json"));
+    const hooks = canonicalJsonFile(import_node_path8.default.join(installPath, "hooks", "hooks.json"));
     const manifest = jsonRecord(mcpManifest);
     const mcpServers = jsonRecord(manifest?.mcpServers);
     const identity = (0, import_node_crypto3.createHash)("sha256").update(JSON.stringify({
@@ -747,7 +843,7 @@ function installRuntimeSnapshot(installPath, version) {
 }
 function checkSidequestInstall(projectPath, opts = {}) {
   const claudeHome = claudeHomeDir(opts);
-  const registryPath = import_node_path7.default.join(claudeHome, "plugins", "installed_plugins.json");
+  const registryPath = import_node_path8.default.join(claudeHome, "plugins", "installed_plugins.json");
   let registry;
   try {
     registry = JSON.parse(readFileSyncWithRetry(registryPath, "utf8"));
@@ -799,8 +895,8 @@ function installRefusalMessage(check, projectPath) {
 }
 
 // src/hooks/force-exec-bypass.ts
-var { canonicalPath: canonicalPath3 } = require(import_node_path8.default.join(__dirname, "..", "lib", "worktrees.js"));
-var { isInScope: scopeMatch } = require(import_node_path8.default.join(__dirname, "..", "lib", "scope-match.js"));
+var { canonicalPath: canonicalPath3 } = require(import_node_path9.default.join(__dirname, "..", "lib", "worktrees.js"));
+var { isInScope: scopeMatch } = require(import_node_path9.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "Plan", "statusline-setup"]);
 var READ_ONLY_NATIVE_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "Plan", "claude-code-guide"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
@@ -864,7 +960,7 @@ function helperModelDenyReason(type) {
 }
 function helperEvidenceRule(input) {
   const transcriptPath = stringField(input, "transcript_path", "transcriptPath").trim();
-  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path8.default.join(import_node_path8.default.dirname(transcriptPath), "subagents")] : [];
+  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path9.default.join(import_node_path9.default.dirname(transcriptPath), "subagents")] : [];
   const knownLocations = sessionPaths.length ? ` Current session self-reference locations: ${sessionPaths.join(", ")}.` : "";
   return "\n\nEvidence rule: quoted ticket strings appear in this session’s context and generated transcripts. A match in the parent or helper session transcript, subagent transcript, or task-output files is self-reference, not evidence: report it as such. Do not search session, transcript, or task-output directories for evidence. Cite only the directly reachable artifact under investigation; if it is outside the parent worktree or otherwise unavailable, report a visibility block rather than a finding." + knownLocations;
 }
@@ -1396,7 +1492,7 @@ function writeTarget(input) {
   const raw = writeTargetValue(input);
   if (!raw) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
-  return import_node_path8.default.resolve(cwd, raw);
+  return import_node_path9.default.resolve(cwd, raw);
 }
 function restoresCommittedContent(input, target) {
   try {
@@ -1414,12 +1510,12 @@ function restoresCommittedContent(input, target) {
       return false;
     }
     const repository = canonicalPath3(execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd: import_node_path8.default.dirname(target),
+      cwd: import_node_path9.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
     }).trim());
-    const relative = import_node_path8.default.relative(repository, canonicalPath3(target)).replace(/\\/g, "/");
-    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path8.default.isAbsolute(relative)) return false;
+    const relative = import_node_path9.default.relative(repository, canonicalPath3(target)).replace(/\\/g, "/");
+    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path9.default.isAbsolute(relative)) return false;
     const committed = execFileSync("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
       windowsHide: true
@@ -1430,13 +1526,13 @@ function restoresCommittedContent(input, target) {
   }
 }
 function relativeInside(root, target) {
-  const relative = import_node_path8.default.relative(root, target).replace(/\\/g, "/");
-  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path8.default.isAbsolute(relative) ? relative : null;
+  const relative = import_node_path9.default.relative(root, target).replace(/\\/g, "/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path9.default.isAbsolute(relative) ? relative : null;
 }
 function linkedWorktreeRelative(target, projectPath) {
-  let existing = import_node_path8.default.dirname(target);
+  let existing = import_node_path9.default.dirname(target);
   while (!import_node_fs8.default.existsSync(existing)) {
-    const parent = import_node_path8.default.dirname(existing);
+    const parent = import_node_path9.default.dirname(existing);
     if (parent === existing) return null;
     existing = parent;
   }
@@ -1451,8 +1547,8 @@ function linkedWorktreeRelative(target, projectPath) {
       encoding: "utf8",
       windowsHide: true
     }).trim();
-    const common = canonicalPath3(import_node_path8.default.isAbsolute(commonOutput) ? commonOutput : import_node_path8.default.resolve(checkout, commonOutput));
-    if (common !== canonicalPath3(import_node_path8.default.join(projectPath, ".git"))) return null;
+    const common = canonicalPath3(import_node_path9.default.isAbsolute(commonOutput) ? commonOutput : import_node_path9.default.resolve(checkout, commonOutput));
+    if (common !== canonicalPath3(import_node_path9.default.join(projectPath, ".git"))) return null;
     return relativeInside(checkout, target);
   } catch (_) {
     return null;
@@ -1470,7 +1566,7 @@ function inScope(target, scope) {
   const canonicalTarget = canonicalPath3(target);
   const relative = projectRelative(canonicalTarget, canonicalPath3(scope.projectPath));
   if (relative != null) return scopeMatch(relative, scope.files);
-  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path8.default.isAbsolute(file)).map(canonicalPath3));
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path9.default.isAbsolute(file)).map(canonicalPath3));
 }
 function evidencePathRelation(target, scope) {
   const evidenceDirectory = canonicalPath3(scope.evidenceDirectory);
@@ -1483,8 +1579,8 @@ function evidenceTraversalAttempt(input, scope) {
   const rawTarget = writeTargetValue(input);
   if (!rawTarget) return false;
   const cwd = stringField(input, "cwd") || process.cwd();
-  const candidate = (import_node_path8.default.isAbsolute(rawTarget) ? rawTarget : import_node_path8.default.join(cwd, rawTarget)).replace(/\\/g, "/");
-  const evidenceDirectory = import_node_path8.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
+  const candidate = (import_node_path9.default.isAbsolute(rawTarget) ? rawTarget : import_node_path9.default.join(cwd, rawTarget)).replace(/\\/g, "/");
+  const evidenceDirectory = import_node_path9.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
   const comparableCandidate = process.platform === "win32" ? candidate.toLowerCase() : candidate;
   const comparableDirectory = process.platform === "win32" ? evidenceDirectory.toLowerCase() : evidenceDirectory;
   if (!comparableCandidate.startsWith(`${comparableDirectory}/`)) return false;
@@ -1498,10 +1594,10 @@ function denyEvidenceWrite(target) {
 }
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
-  const roots = [configuredRoot, import_node_path8.default.join(import_node_os5.default.tmpdir(), "claude")].filter((root) => Boolean(root));
+  const roots = [configuredRoot, import_node_path9.default.join(import_node_os5.default.tmpdir(), "claude")].filter((root) => Boolean(root));
   return roots.some((root) => {
-    const relative = import_node_path8.default.relative(import_node_path8.default.resolve(root), target);
-    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path8.default.sep}`) && !import_node_path8.default.isAbsolute(relative);
+    const relative = import_node_path9.default.relative(import_node_path9.default.resolve(root), target);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path9.default.sep}`) && !import_node_path9.default.isAbsolute(relative);
   });
 }
 function guardHelperWrite(input) {
@@ -1538,8 +1634,8 @@ function guardHelperWrite(input) {
 }
 function guardReadOnlyShell(input) {
   if (!isReadOnlyExecutor(stringField(input, "agent_type", "agentType"))) return;
-  const refusal = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ""), stringField(input, "cwd") || process.cwd());
-  if (refusal) writeDeny("PreToolUse", refusal);
+  const refusal2 = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ""), stringField(input, "cwd") || process.cwd());
+  if (refusal2) writeDeny("PreToolUse", refusal2);
 }
 function spawnPermissionFields(reducedAgentSchema, type) {
   return reducedAgentSchema || isReadOnlyExecutor(type) ? {} : { mode: "bypassPermissions" };
@@ -1574,7 +1670,13 @@ ${message.trim()}`
   } catch (_) {
   }
 }
-function nonAgentToolGuard(toolName) {
+function guardEvidenceTool(input) {
+  const scope = dispatchEvidenceScope(input);
+  const denial = evidenceToolDenial(stringField(input, "tool_name"), toolInputOf(input) || {}, stringField(input, "cwd") || process.cwd(), scope || {});
+  if (denial) writeDeny("PreToolUse", denial);
+}
+function nonAgentToolGuard(toolName, input) {
+  if (isEvidenceExecutor(stringField(input, "agent_type", "agentType"))) return guardEvidenceTool;
   if (toolName === "SendMessage") return guardLateSteer;
   if (WRITE_TOOLS.has(toolName)) return guardHelperWrite;
   if (SHELL_TOOLS.has(toolName)) return guardReadOnlyShell;
@@ -1583,7 +1685,7 @@ function nonAgentToolGuard(toolName) {
 function decidedBeforeAgentAdmission(input) {
   const toolName = stringField(input, "tool_name");
   if (guardTerminalExecutor(input) || guardOwnTicketDispatch(input) || executorLiveClaimMutationRefusal(input)) return true;
-  const toolGuard = nonAgentToolGuard(toolName);
+  const toolGuard = nonAgentToolGuard(toolName, input);
   if (toolGuard) toolGuard(input);
   return toolName !== "Agent";
 }
