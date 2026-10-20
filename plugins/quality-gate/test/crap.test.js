@@ -59,9 +59,9 @@ function commitBaseline(root) {
   return git(root, ['rev-parse', 'HEAD']);
 }
 
-// view and its returned arrow start on the same line, and noop's empty body has no statement line.
+// noop's empty body has no statement line.
 for (const [issue, file, expected, unverifiedNames] of [
-  [497, 'multiline-ternary.ts', [['describe', 1], ['view', 1], ['<anonymous>', 2]], ['view', '<anonymous>']],
+  [497, 'multiline-ternary.ts', [['describe', 1], ['view', 1], ['<anonymous>', 2]], []],
   [495, 'database.types.ts', [], []],
   [493, 'function-type-alias.ts', [['send', 1], ['noop', 1]], ['noop']],
   [490, 'expression-arrow.ts', [['viewOf', 2], ['pick', 3]], []],
@@ -220,7 +220,7 @@ test('the TS executable-line inventory skips decorators, blocks, empty, type-onl
   assert.ok(rows.every((row) => row.ownedLines === row.executableLines));
 });
 
-test('JS LCOV measures statement lines per owned body and refuses shared or missing lines', async (context) => {
+test('JS LCOV measures owned statement lines including nested callbacks and refuses missing lines', async (context) => {
   const text = 'function subject(value) {\n  const pick = (flag) =>\n    flag ? 1 : 0;\n  return pick(value);\n}\nfunction inline(items) {\n  return items.map((item) => item);\n}\n';
   const root = await fixture(context, { 'source.js': text });
   await lcov(root, 'source.js', text, 0);
@@ -230,8 +230,9 @@ test('JS LCOV measures statement lines per owned body and refuses shared or miss
   assert.deepEqual(byName.pick.executableLines, [3]);
   assert.equal(byName.subject.coverage, 0);
   assert.equal(byName.pick.crap, 6);
-  assert.match(byName.inline.unverified, /share executable source lines/);
-  assert.equal(report.exitCode, 2);
+  assert.equal(byName.inline.coverage, 0);
+  assert.match(byName.inline.coverageNote, /upper bound for callback execution/);
+  assert.equal(report.exitCode, 1);
   await fs.writeFile(path.join(root, 'coverage/lcov.info'), 'SF:source.js\nDA:2,1\nDA:3,1\nend_of_record\n');
   const unmeasured = await crapReport({ project: root });
   assert.match(unmeasured.changedMetrics.find((metric) => metric.name === 'subject').unverified, /Missing executable LCOV lines/);
@@ -447,4 +448,62 @@ test('CALLERS OPEN flags a removed paired body, is silent without callers, and p
   assert.equal(deleted.exitCode, report.exitCode);
   await config(root, { sources: ['source.js'], exclude: ['source.js'] });
   assert.deepEqual((await crapReport({ project: root, base, ccOnly: true })).signals, []);
+});
+
+for (const [file, text, expectedNames] of [
+  ['src/a.ts', await fs.readFile(path.join(pluginRoot, 'test/fixtures/nested-callback.ts.txt'), 'utf8'), ['g', '<anonymous>']],
+  ['subject.py', 'def outer():\n    value = 1\n    return lambda: value\n', ['outer', 'outer.<lambda>']],
+]) {
+  test('nested LCOV line ownership scores both bodies with explicit upper-bound notes: ' + file, async (context) => {
+    const root = await fixture(context, { [file]: text });
+    await lcov(root, file, text);
+    const report = await crapReport({ project: root });
+    assert.equal(report.exitCode, 0);
+    assert.deepEqual(report.changedMetrics.map((row) => row.name), expectedNames);
+    for (const row of report.changedMetrics) {
+      assert.equal(row.coverage, 1);
+      assert.equal(row.crap, 1);
+      assert.match(row.coverageNote, /upper bound for callback execution/);
+    }
+    const output = cli(root);
+    assert.equal(output.status, 0, output.stdout + output.stderr);
+    assert.equal(output.stdout.match(/upper bound for callback execution/g).length, 2);
+  });
+}
+
+test('GH-573 shell reproduction scores g and its callback against the committed baseline', async (context) => {
+  const root = await fixture(context, { 'src/a.ts': 'export const base = 1;\n' });
+  commitBaseline(root);
+  git(root, ['checkout', '-qb', 'feature']);
+  const text = await fs.readFile(path.join(pluginRoot, 'test/fixtures/nested-callback.ts.txt'), 'utf8');
+  await fs.writeFile(path.join(root, 'src/a.ts'), text);
+  git(root, ['add', 'src/a.ts']);
+  git(root, ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'add g']);
+  await config(root, { sources: ['src'], base: 'main', lcov: 'coverage/lcov.info' });
+  await lcov(root, 'src/a.ts', text);
+  await fs.writeFile(path.join(root, 'coverage/lcov.info'), 'TN:\nSF:src/a.ts\nFN:3,g\nFN:4,(anonymous_1)\nFNDA:2,g\nFNDA:1,(anonymous_1)\nFNF:2\nFNH:2\nDA:1,1\nDA:3,2\nDA:4,2\nDA:5,2\nLF:4\nLH:4\nend_of_record\n');
+  const result = cli(root);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^PASS src\/a\.ts:3 g cc=1 coverage=100\.00% CRAP=1\.0000/m);
+  assert.match(result.stdout, /^PASS src\/a\.ts:4 <anonymous> cc=1 coverage=100\.00% CRAP=1\.0000/m);
+});
+
+test('sibling arrows sharing one executable line stay UNVERIFIED', async (context) => {
+  const text = 'const first = () => 1; const second = () => 2;\n';
+  const root = await fixture(context, { 'source.js': text });
+  await lcov(root, 'source.js', text);
+  const report = await crapReport({ project: root });
+  assert.equal(report.exitCode, 2);
+  assert.equal(report.unverified.length, 2);
+  assert.ok(report.unverified.every((row) => /Sibling bodies share executable source lines/.test(row.unverified)));
+});
+
+test('nested LCOV containment follows multiple parent identities and preserves zero and missing DA evidence', () => {
+  const outer = { identity: 'outer', parent: '<root>', ownedLines: [1, 2], executableLines: [1, 2] };
+  const middle = { identity: 'middle', parent: 'outer', ownedLines: [2], executableLines: [2] };
+  const inner = { identity: 'inner', parent: 'middle', ownedLines: [2], executableLines: [2] };
+  const descriptors = [outer, middle, inner];
+  assert.equal(functionLineCoverage(outer, descriptors, new Map([[1, 1], [2, 0]])).coverage, 0.5);
+  assert.equal(functionLineCoverage(inner, descriptors, new Map([[1, 1], [2, 0]])).coverage, 0);
+  assert.match(functionLineCoverage(inner, descriptors, new Map([[1, 1]])).unverified, /Missing executable LCOV lines/);
 });

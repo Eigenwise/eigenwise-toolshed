@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { pythonPolicy, pythonOracles } from './python.mjs';
 
 export const JAVASCRIPT_SOURCE = /\.(?:[cm]?[jt]s|[jt]sx)$/i;
-const SOURCE = /\.(?:[cm]?[jt]s|[jt]sx|py|php|vue)$/i;
+export const SOURCE = /\.(?:[cm]?[jt]s|[jt]sx|py|php|vue|rs|go|kt|kts|java|c|cc|cpp|cxx|h|hh|hpp|hxx|swift|rb|cs|scala|sc|m|mm|lua|pl|pm|r|gd|ttcn|ttcn3|sol)$/i;
 
 export function runGit(root, argumentsList) {
   const result = spawnSync('git', argumentsList, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
@@ -98,14 +98,14 @@ export function trackedSources(root, extraArguments = []) {
     .filter((file) => fs.existsSync(path.resolve(root, file)));
 }
 
-export function selectedFiles(root, settings, explicitFiles) {
+export function selectedFiles(root, settings, explicitFiles, sourcePattern = SOURCE) {
   if (explicitFiles) return explicitFiles;
   const requested = settings.source && new Set(settings.source.flatMap((source) => filesAt(path.resolve(root, source))));
   const candidates = settings.trackedOnly
-    ? trackedSources(root).map((file) => path.resolve(root, file))
+    ? runGit(root, ['ls-files', '-z']).split('\0').filter((file) => file && fs.existsSync(path.resolve(root, file))).map((file) => path.resolve(root, file))
     : settings.sources.flatMap((source) => filesAt(path.resolve(root, source)));
   return [...new Set(candidates)]
-    .filter((file) => SOURCE.test(file))
+    .filter((file) => sourcePattern.test(file))
     .filter((file) => !requested || requested.has(file))
     .map((file) => path.relative(root, file).replaceAll('\\', '/'))
     .filter((file) => !settings.exclude.some((pattern) => path.matchesGlob(file, pattern)));
@@ -134,6 +134,15 @@ export function selectedDeletedFiles(root, base, settings) {
     .filter((file) => pathSelected(root, file, settings.sources))
     .filter((file) => !settings.source || pathSelected(root, file, settings.source))
     .filter((file) => !settings.exclude.some((pattern) => path.matchesGlob(file, pattern)));
+}
+
+const NON_SOURCE = /\.(?:md|mdx|rst|txt|json|jsonl|ya?ml|toml|ini|cfg|csv|xml|html?|css|scss|less|svg|png|jpe?g|gif|webp|ico|pdf|lock|map|snap|info)$/i;
+
+export function unsupportedSources(root, settings, base) {
+  const files = selectedFiles(root, settings, undefined, /\.[^./]+$/)
+    .filter((file) => !SOURCE.test(file) && !NON_SOURCE.test(file));
+  return Object.entries(Object.groupBy(filesChangedSince(root, base, files), (file) => path.extname(file).toLowerCase()))
+    .map(([extension, changed]) => ({ extension, count: changed.length }));
 }
 
 export function sourceHashes(root, files) {

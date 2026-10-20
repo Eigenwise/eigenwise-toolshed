@@ -259,6 +259,8 @@ agree).
 
 ## Failure modes worth knowing
 
+- **Client disconnects during upload**: the public shim relay and `/internal/rc-compatibility` discard aborted or failed body reads without stopping the supervisor or interrupting sibling streams. Aborted uploads are not forwarded or counted as worker failures, and the application does not write to a disconnected response. Other read failures return a non-retryable HTTP 400 only while the response is writable. Both readers enforce a 64 MiB body cap (HTTP 413). This protects incoming uploads only; do not infer that disconnecting after a completed upload cancels provider work or prevents charges.
+
 - **Every request fails after wiring**: a SessionStart hook can time out while it starts the shim. Claude Code cancels that hook, and a directly spawned supervisor can die with its process tree before it records an exit. Model Gateway launches the supervisor outside that tree and stops waiting before the hook budget, but if this is an older install or it still repeats, run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.
 - **Codex sessions drop while this plugin's suite runs**: this version scopes fixture cleanup to

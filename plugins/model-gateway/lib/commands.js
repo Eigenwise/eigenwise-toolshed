@@ -1925,6 +1925,56 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
+// A completed IncomingMessage can be destroyed while its response is still
+// writable. Only upload aborts and the response's state establish disconnects.
+function uploadResponseUnavailable(req, res) {
+  return req.aborted || res.destroyed || res.writableEnded || res.socket?.destroyed;
+}
+
+function sendUploadError(req, res, statusCode) {
+  if (uploadResponseUnavailable(req, res)) return;
+  res.writeHead(statusCode, {
+    'connection': 'close', 'x-should-retry': 'false',
+    ...(statusCode === 400 ? { 'content-type': 'application/json' } : {}),
+  });
+  res.end(statusCode === 400 ? JSON.stringify({
+    type: 'error',
+    error: { type: 'invalid_request_error', message: 'model-gateway could not read the request body' },
+  }) : undefined);
+}
+
+async function collectShimRequestBody(req, res) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 64 * 1024 * 1024) {
+      sendUploadError(req, res, 413);
+      return null;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function readShimRequestBody(req, res) {
+  try {
+    const body = await collectShimRequestBody(req, res);
+    return uploadResponseUnavailable(req, res) ? null : body;
+  } catch (error) {
+    // This boundary covers incoming reads only. Worker failures still follow
+    // the relay's existing delivery/retry accounting, not this client error.
+    if (!['ECONNRESET', 'ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(error?.code)) {
+      sendUploadError(req, res, 400);
+    }
+    return null;
+  }
+}
+
+function parseCompatibilityControl(body) {
+  try { return JSON.parse(body.toString()) ?? {}; } catch { return {}; }
+}
+
 const {
   catalogReadiness, effectiveSentryPolicy, getCodexReadiness, hasOpenAiRejectionEvidence, noteCodexUpstreamRejection, runWorker,
 } = require('./request-worker.js');
@@ -1989,71 +2039,63 @@ function createShimRelay({
     });
   }
 
-  async function readRelayBody(req, res) {
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of req) {
-      size += chunk.length;
-      if (size > 64 * 1024 * 1024) {
-        res.writeHead(413, { 'connection': 'close', 'x-should-retry': 'false' });
-        res.end();
-        return null;
-      }
-      chunks.push(chunk);
+  function relayWorkerResponse(req, res, upstream) {
+    // Once the worker's headers are out this can no longer become an HTTP
+    // error, and `pipe` forwards neither an error nor an abort, so a worker
+    // that dies mid-answer would leave the client holding an open response
+    // that never completes. Break the connection instead, the way the worker
+    // already does when its own upstream dies, so the client sees ECONNRESET
+    // and decides for itself whether to ask again.
+    upstream.on('error', () => res.destroy());
+    upstream.on('aborted', () => res.destroy());
+    if (req.url.split('?')[0] === '/healthz') {
+      const response = [];
+      upstream.on('data', (chunk) => response.push(chunk));
+      upstream.once('end', () => {
+        const health = JSON.parse(Buffer.concat(response).toString());
+        health.supervisorVersion = PLUGIN_VERSION;
+        health.supervisorPid = process.pid;
+        health.proxyRecovery = true;
+        health.compat = getHealthMetadata();
+        res.writeHead(upstream.statusCode || 502, upstream.headers);
+        res.end(JSON.stringify(health));
+      });
+      return;
     }
-    return Buffer.concat(chunks);
+    res.writeHead(upstream.statusCode || 502, upstream.headers);
+    upstream.pipe(res);
+  }
+
+  function sendWorkerFailure(res, error) {
+    // Claude Code resends any retryable status without telling the user:
+    // measured at five identical resends of one 503, and `x-should-retry:
+    // false` cuts that to none (verification/SQ-2861). So the answer depends
+    // on whether a worker took the body: if it did, that inference is
+    // already being paid for upstream and a resend silently buys a second
+    // one, and if it did not, the resend is free and wanted.
+    const bodyTakenByWorker = error?.bodyTakenByWorker === true;
+    res.writeHead(503, {
+      'content-type': 'application/json',
+      ...(bodyTakenByWorker ? { 'x-should-retry': 'false' } : {}),
+    });
+    res.end(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: bodyTakenByWorker
+          ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
+          : 'model-gateway could not deliver this request to the shim worker; retry it shortly',
+      },
+    }));
   }
 
   async function relay(req, res) {
-    const body = await readRelayBody(req, res);
+    const body = await readShimRequestBody(req, res);
     if (body === null) return;
     try {
-      const upstream = await requestWorker(req, body);
-      // Once the worker's headers are out this can no longer become an HTTP
-      // error, and `pipe` forwards neither an error nor an abort, so a worker
-      // that dies mid-answer would leave the client holding an open response
-      // that never completes. Break the connection instead, the way the worker
-      // already does when its own upstream dies, so the client sees ECONNRESET
-      // and decides for itself whether to ask again.
-      upstream.on('error', () => res.destroy());
-      upstream.on('aborted', () => res.destroy());
-      if (req.url.split('?')[0] === '/healthz') {
-        const response = [];
-        upstream.on('data', (chunk) => response.push(chunk));
-        upstream.once('end', () => {
-          const health = JSON.parse(Buffer.concat(response).toString());
-          health.supervisorVersion = PLUGIN_VERSION;
-          health.supervisorPid = process.pid;
-          health.proxyRecovery = true;
-          health.compat = getHealthMetadata();
-          res.writeHead(upstream.statusCode || 502, upstream.headers);
-          res.end(JSON.stringify(health));
-        });
-        return;
-      }
-      res.writeHead(upstream.statusCode || 502, upstream.headers);
-      upstream.pipe(res);
+      relayWorkerResponse(req, res, await requestWorker(req, body));
     } catch (error) {
-      // Claude Code resends any retryable status without telling the user:
-      // measured at five identical resends of one 503, and `x-should-retry:
-      // false` cuts that to none (verification/SQ-2861). So the answer depends
-      // on whether a worker took the body: if it did, that inference is
-      // already being paid for upstream and a resend silently buys a second
-      // one, and if it did not, the resend is free and wanted.
-      const bodyTakenByWorker = error?.bodyTakenByWorker === true;
-      res.writeHead(503, {
-        'content-type': 'application/json',
-        ...(bodyTakenByWorker ? { 'x-should-retry': 'false' } : {}),
-      });
-      res.end(JSON.stringify({
-        type: 'error',
-        error: {
-          type: 'api_error',
-          message: bodyTakenByWorker
-            ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
-            : 'model-gateway could not deliver this request to the shim worker; retry it shortly',
-        },
-      }));
+      sendWorkerFailure(res, error);
     }
   }
 
@@ -2388,20 +2430,21 @@ function runShim() {
   }
 
   async function handleCompatibilityControl(req, res) {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    let control;
-    try { control = JSON.parse(Buffer.concat(chunks).toString()); } catch { return sendControlResponse(res, { status: 'unknown' }); }
-    if (control?.expectedSupervisorPid !== process.pid) return sendControlResponse(res, { status: 'unknown' });
-    if (control.action === 'probe') {
-      const response = await serializeCompatibility(async () => {
-        if (compatServer?.listening && compatState.port80Bound) return { status: 'bound' };
-        return probeCompatibilityListener();
-      });
-      return sendControlResponse(res, response);
+    async function compatibilityControlResponse(control) {
+      if (control.expectedSupervisorPid !== process.pid) return { status: 'unknown' };
+      if (control.action === 'probe') {
+        return serializeCompatibility(async () => {
+          if (compatServer?.listening && compatState.port80Bound) return { status: 'bound' };
+          return probeCompatibilityListener();
+        });
+      }
+      if (control.action === 'reconcile') return reconcileCompatibilityListener();
+      return { status: 'unknown' };
     }
-    if (control.action === 'reconcile') return sendControlResponse(res, await reconcileCompatibilityListener());
-    return sendControlResponse(res, { status: 'unknown' });
+
+    const body = await readShimRequestBody(req, res);
+    if (body === null) return;
+    sendControlResponse(res, await compatibilityControlResponse(parseCompatibilityControl(body)));
   }
 
   function supervisorRequestAllowed(req, compatibilityListener) {
