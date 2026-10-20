@@ -438,6 +438,7 @@ function checkpointProjection(ticket?: any, now?: any) {
     failure: checkpoint.failure || null,
     worktree: checkpoint.worktree || null,
     verify: verify.text,
+    ...checkpointRecoveryFields(checkpoint),
     verifyLength: verify.length,
     verifyTruncated: verify.truncated,
   };
@@ -461,12 +462,48 @@ function oracleProjection(ticket?: any) {
   return { round, at, candidate, deliverable, ask, summary };
 }
 
+function checkpointCursor(cursor: unknown): string | undefined {
+  if (cursor === undefined) return undefined;
+  if (typeof cursor !== 'string') throw new Error('checkpoint cursor must be a string');
+  const bytes = Buffer.byteLength(cursor, 'utf8');
+  if (bytes > 2048) throw new Error(`checkpoint cursor is ${bytes} bytes; maximum is 2048 bytes (2 KiB)`);
+  return cursor;
+}
+
+function checkpointEvidencePath(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('checkpoint evidence paths must be strings');
+  if (!value || /^(?:[a-z]:|[\\/])/i.test(value)) throw new Error('checkpoint evidence paths must be relative to the dispatch evidence directory');
+  if (value.split(/[\\/]/).includes('..')) throw new Error('checkpoint evidence paths must not contain ..');
+  return value;
+}
+
+function checkpointEvidence(evidence: unknown): string[] | undefined {
+  if (evidence === undefined) return undefined;
+  if (!Array.isArray(evidence)) throw new Error('checkpoint evidence must be an array of relative paths');
+  return evidence.map(checkpointEvidencePath);
+}
+
+function checkpointRecoveryFields(checkpoint: { cursor?: string; evidence?: string[] }) {
+  return {
+    ...(checkpoint.cursor === undefined ? {} : { cursor: checkpoint.cursor }),
+    ...(checkpoint.evidence === undefined ? {} : { evidence: checkpoint.evidence }),
+  };
+}
+
+function checkpointRecoveryComment(checkpoint: { id: string; cursor?: string; evidence?: string[] }): string {
+  const recovery: string[] = [];
+  if (checkpoint.cursor !== undefined) recovery.push(`Cursor: ${checkpoint.cursor}`);
+  if (checkpoint.evidence !== undefined) recovery.push(`Evidence: ${checkpoint.evidence.join(', ')}`);
+  const title = recovery.length ? 'Continuation checkpoint' : 'Live review checkpoint';
+  return [`${title} ${checkpoint.id}`, ...recovery].join('\n');
+}
+
 function checkpointCommentBody(checkpoint?: any) {
   const candidate = [
     checkpoint.commit ? `commit ${checkpoint.commit}` : null,
     checkpoint.worktree ? `worktree ${checkpoint.worktree}` : null,
   ].filter(Boolean).join(', ');
-  return `Live review checkpoint ${checkpoint.id}\nCandidate: ${candidate}\nVerification: ${checkpoint.verify}\nExpires: ${checkpoint.expiresAt}`;
+  return `${checkpointRecoveryComment(checkpoint)}\nCandidate: ${candidate}\nVerification: ${checkpoint.verify}\nExpires: ${checkpoint.expiresAt}`;
 }
 
 function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -484,6 +521,8 @@ function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   const verify = String(opts.verify || '').trim();
   if (!verify) throw new Error('checkpoint verification evidence is required');
   if (verify.length > CHECKPOINT_VERIFY_MAX) throw new Error(`checkpoint verification evidence exceeds ${CHECKPOINT_VERIFY_MAX} characters`);
+  const cursor = checkpointCursor(opts.cursor);
+  const evidence = checkpointEvidence(opts.evidence);
   const ttlMs = checkpointTtlMs(opts.ttlMinutes);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
@@ -512,6 +551,7 @@ function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       } : null,
       worktree,
       verify,
+      ...checkpointRecoveryFields({ cursor, evidence }),
     };
     const body = opts.commentBody == null ? checkpointCommentBody(checkpoint) : String(opts.commentBody);
     const prepared = prepareComment({ by, body, source: opts.source || 'cli' });

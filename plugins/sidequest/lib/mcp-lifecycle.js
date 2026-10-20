@@ -540,7 +540,7 @@ const tools = [
   },
   {
     name: "checkpoint",
-    description: "Retain verified live candidate/evidence while claim and dispatch stay active. Advisory checkpoint only, not final acceptance; immutable reviewTarget binds after terminal submission.",
+    description: "Retain verified live candidate/evidence while claim and dispatch stay active. Record a cursor and evidence paths before budget to resume an investigation. Advisory checkpoint only, not final acceptance; immutable reviewTarget binds after terminal submission.",
     inputSchema: {
       type: "object",
       properties: {
@@ -550,6 +550,8 @@ const tools = [
         commit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$" },
         worktree: { type: "string", description: "Absolute path to the verified candidate worktree." },
         verify: { type: "string", minLength: 1, maxLength: 4e3, description: "Verification command and result evidence." },
+        cursor: { type: "string", description: "Resume position, at most 2048 UTF-8 bytes. Record before a budget handoff." },
+        evidence: { type: "array", items: { type: "string" }, description: "Paths relative to the dispatch evidence directory. Absolute paths and .. segments are refused." },
         ttlMinutes: { type: "integer", minimum: 1, maximum: store.MAX_CHECKPOINT_TTL_MIN }
       },
       required: ["ref", "by", "verify"],
@@ -566,6 +568,8 @@ const tools = [
         worktree: args.worktree,
         verify: args.verify,
         ttlMinutes: args.ttlMinutes,
+        cursor: args.cursor,
+        evidence: args.evidence,
         source: "mcp"
       });
       return mutationAck(slug, res, res.ok ? { checkpoint: res.checkpoint, commentId: res.comment.id } : null);
