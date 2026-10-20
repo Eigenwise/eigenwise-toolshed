@@ -151,6 +151,10 @@ function complexityFailureAdvice(metric) {
   return metric.complexity >= THRESHOLD ? '; fails at any coverage, split the function, more tests cannot help' : '';
 }
 
+function coverageNoteSuffix(metric) {
+  return metric.coverageNote ? `; ${metric.coverageNote}` : '';
+}
+
 function metricLine(metric, ccOnly) {
   const label = `${metric.relativePath}:${metric.line} ${metric.name}${pythonClassificationLabel(metric)}`;
   const legacy = metric.classification === LEGACY_UNCHANGED;
@@ -158,7 +162,7 @@ function metricLine(metric, ccOnly) {
   const prefix = legacy ? 'LEGACY' : ['PASS', 'FAIL'][Number(metric.crap >= THRESHOLD)];
   const measured = ccOnly ? ' (cc-only, no coverage)' : ` coverage=${(metric.coverage * 100).toFixed(2)}%`;
   const advice = complexityFailureAdvice(metric);
-  return `${prefix} ${label} cc=${metric.complexity}${measured} CRAP=${metric.crap.toFixed(4)} source=${metric.source}${advice}`;
+  return `${prefix} ${label} cc=${metric.complexity}${measured} CRAP=${metric.crap.toFixed(4)} source=${metric.source}${advice}${coverageNoteSuffix(metric)}`;
 }
 
 export function formatCrapReport(report) {
