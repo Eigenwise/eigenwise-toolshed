@@ -36,10 +36,10 @@ function validSpan(row, text) {
 }
 
 function boundRows(rows, definitions, text) {
-  const counts = new Map();
+  const counts = new Map(rows.map((row) => [row.name, 0]));
   const boundDefinitions = definitions ?? rows;
   return rows.map((row) => {
-    const ordinal = counts.get(row.name) ?? 0;
+    const ordinal = counts.get(row.name);
     counts.set(row.name, ordinal + 1);
     const definition = boundDefinitions.find((candidate) => candidate.line === row.line && candidate.name === row.name);
     const identity = `<root>/lizard:${row.name}#${ordinal}`;
