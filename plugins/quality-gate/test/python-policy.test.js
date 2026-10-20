@@ -94,7 +94,8 @@ test('Native Python independently owns nested methods closures and lambdas', () 
   ]);
   assert.ok(rows.slice(1).every((row) => row.parent === rows[0].identity));
   const lines = new Map(rows[0].executableLines.map((line) => [line, 1]));
-  assert.match(functionLineCoverage(rows[0], rows, lines).unverified, /share executable source lines/);
+  assert.equal(functionLineCoverage(rows[0], rows, lines).coverage, 1);
+  assert.match(functionLineCoverage(rows[0], rows, lines).coverageNote, /upper bound for callback execution/);
   const methodLines = new Map(rows[1].executableLines.map((line) => [line, 1]));
   assert.equal(functionLineCoverage(rows[1], rows, methodLines).coverage, 1);
   assert.match(functionLineCoverage(rows[1], rows, lines).unverified, /Missing executable LCOV lines/);

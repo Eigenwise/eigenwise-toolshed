@@ -29,14 +29,15 @@ followed by a Node-family command is refused by the host guard (startup code can
 capture-launch command supports that exact boundary. Stop after that actual refusal; missing measurements stay UNVERIFIED.
 
 crap optionally reads .claude/quality-gate/crap.json (legacy quartermaster config is a fallback).
-Without configured sources, it selects tracked JS/TS/Python, excluding dependencies, build output, coverage, vendor and test fixtures.
+Without configured sources, it selects tracked JS/TS/Python and Lizard-language files, excluding dependencies, build output, coverage, vendor and test fixtures.
 Without LCOV or a coverage command it defaults to complexity only.
 The first run installs TypeScript 7 automatically; provision does only that step.
 turn measures working-tree edits (or file mtimes after --since), never runs coverage, and emits bodies/signals/unverified/lcov.
 inventory lists top-level definitions from HEAD within --bytes (default 2048), including the final omitted-count line.
 --project selects the tree measured, including a linked worktree; without it the cwd's Git root is used.
 --source <path> is repeatable and narrows configured/default sources to files or directories relative to --project; exclusions still apply.
-JS/TS runtime functions use the TypeScript AST, PHP/Vue use lizard. Python uses the versioned
+JS/TS runtime functions use the TypeScript AST. PHP/Vue, Rust, Go, Kotlin, Java, C/C++, Swift, Ruby, C# and other Lizard languages use lizard or --complexity <lizard.csv>.
+Lizard LCOV coverage stays UNVERIFIED without an executable-line inventory. Unsupported source-only changes exit 2; docs-only changes still exit 0. Python uses the versioned
 stdlib AST adapter through python3 or py -3 (no radon dependency), with qualified oracle rows. No JavaScript or TypeScript lizard row is scored, including --complexity input.
 Invalid UTF-8 and Python syntax/surrogate errors leave per-file informational UNVERIFIED rows; other files are still measured.
 --python-policy (config pythonPolicy) explicitly selects ${PYTHON_POLICIES.join(" or ")}; default ${DEFAULT_PYTHON_POLICY}.
