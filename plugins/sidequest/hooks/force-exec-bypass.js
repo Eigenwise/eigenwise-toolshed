@@ -22,7 +22,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/lib/git-process.ts
+// plugins/sidequest/src/lib/git-process.ts
 var import_node_child_process = __toESM(require("node:child_process"));
 var import_node_util = require("node:util");
 var GIT_OUTPUT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -31,15 +31,15 @@ function execFileSync(file, args, options = {}) {
   return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
 }
 
-// src/hooks/force-exec-bypass.ts
+// plugins/sidequest/src/hooks/force-exec-bypass.ts
 var import_node_fs8 = __toESM(require("node:fs"));
 var import_node_os5 = __toESM(require("node:os"));
 var import_node_path8 = __toESM(require("node:path"));
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// src/lib/exec-names.ts
+// plugins/sidequest/src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
@@ -201,7 +201,7 @@ function classify(value) {
   return { kind: "unknown", effort: null };
 }
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -228,7 +228,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// src/hooks/shared/output.ts
+// plugins/sidequest/src/hooks/shared/output.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
@@ -295,7 +295,7 @@ function writeToolUpdate(updatedInput, systemMessage) {
   });
 }
 
-// src/hooks/shared/paths.ts
+// plugins/sidequest/src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -304,7 +304,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// src/hooks/shared/session-state.ts
+// plugins/sidequest/src/hooks/shared/session-state.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
@@ -325,12 +325,12 @@ function writeSessionState(file, state) {
   import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
 }
 
-// src/hooks/shared/read-only-shell.ts
+// plugins/sidequest/src/hooks/shared/read-only-shell.ts
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path4 = __toESM(require("node:path"));
 
-// src/hooks/shared/runtime-identity.ts
+// plugins/sidequest/src/hooks/shared/runtime-identity.ts
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path3 = __toESM(require("node:path"));
 function canonicalPath(value) {
@@ -354,7 +354,7 @@ function enclosingCheckout(start) {
   }
 }
 
-// src/hooks/shared/shell-writes.ts
+// plugins/sidequest/src/hooks/shared/shell-writes.ts
 var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
@@ -461,7 +461,7 @@ function ignoredTarget(word) {
   return !word || word.startsWith("$") || NULL_SINKS.has(word.toLowerCase());
 }
 
-// src/hooks/shared/read-only-shell.ts
+// plugins/sidequest/src/hooks/shared/read-only-shell.ts
 function nativePath(word) {
   if (word === "~" || word.startsWith("~/")) return import_node_path4.default.join(import_node_os2.default.homedir(), word.slice(1));
   return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
@@ -513,7 +513,7 @@ function readOnlyShellRefusal(command, cwd) {
   return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Use scratch files outside the checkout, under ${import_node_os2.default.tmpdir()}, or the ticket's verification directory. For repository edits, comment the needed change and release the ticket.` : null;
 }
 
-// src/hooks/shared/main-thread-mutations.ts
+// plugins/sidequest/src/hooks/shared/main-thread-mutations.ts
 var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "files",
   "addFiles",
@@ -569,12 +569,12 @@ function mainThreadMutationDenial(toolName, toolInput) {
   return rule?.matches(toolInput) ? rule.denial : null;
 }
 
-// src/lib/board-mcp-liveness.ts
+// plugins/sidequest/src/lib/board-mcp-liveness.ts
 var import_node_fs6 = __toESM(require("node:fs"));
 var import_node_os3 = __toESM(require("node:os"));
 var import_node_path6 = __toESM(require("node:path"));
 
-// src/lib/kernel/worktree.ts
+// plugins/sidequest/src/lib/kernel/worktree.ts
 var import_node_fs5 = __toESM(require("node:fs"));
 var import_node_path5 = __toESM(require("node:path"));
 var import_node_crypto2 = __toESM(require("node:crypto"));
@@ -599,7 +599,7 @@ function canonicalPath2(value) {
   }
 }
 
-// src/lib/board-mcp-liveness.ts
+// plugins/sidequest/src/lib/board-mcp-liveness.ts
 var MARKER_PREFIX = "board-mcp-";
 var MARKER_SUFFIX = ".json";
 function boardMcpMarkerDirectory() {
@@ -668,7 +668,7 @@ function observeBoardMcp(sessionId, project) {
   return observeMarkers(markers, sessionId, project ? canonicalPath2(project) : "", directory);
 }
 
-// src/lib/dispatch-preflight.ts
+// plugins/sidequest/src/lib/dispatch-preflight.ts
 var import_node_child_process2 = require("node:child_process");
 var import_node_crypto3 = require("node:crypto");
 var import_node_fs7 = __toESM(require("node:fs"));
@@ -798,7 +798,7 @@ function installRefusalMessage(check, projectPath) {
   return `Dispatch refused: sidequest@eigenwise-toolshed has no install with a lifecycle-compatible runtime registered for ${projectPath} in ${check.registryPath}. A \`.claude/settings.json\` enabledPlugins entry is not proof of an install. ${repairGuidance()}`;
 }
 
-// src/hooks/force-exec-bypass.ts
+// plugins/sidequest/src/hooks/force-exec-bypass.ts
 var { canonicalPath: canonicalPath3 } = require(import_node_path8.default.join(__dirname, "..", "lib", "worktrees.js"));
 var { isInScope: scopeMatch } = require(import_node_path8.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "Plan", "statusline-setup"]);

@@ -206,11 +206,16 @@ test('CLI and MCP expose the checkpoint operation and compact pulse state', asyn
     '--worktree', PROJECT_DIR,
     '--verify', 'node --test: 2 passed, 0 failed',
     '--ttl-minutes', '10',
+    '--cursor', 'search 5/10, last id X',
+    '--evidence', 'inventory.md',
+    '--evidence', 'sources/next.md',
     '--json',
   ]);
   assert.strictEqual(cli.ok, true);
   assert.strictEqual(cli.checkpoint.state, 'active');
   assert.strictEqual(cli.checkpoint.ttlMinutes, 10);
+  assert.strictEqual(cli.checkpoint.cursor, 'search 5/10, last id X');
+  assert.deepEqual(cli.checkpoint.evidence, ['inventory.md', 'sources/next.md']);
 
   const mcpTicket = addDirect('MCP checkpoint');
   claimDirect(mcpTicket, 'mcp-worker');
@@ -221,9 +226,13 @@ test('CLI and MCP expose the checkpoint operation and compact pulse state', asyn
     commit: COMMIT,
     verify: 'node --test: 3 passed, 0 failed',
     ttlMinutes: 20,
+    cursor: 'search 5/10, last id X',
+    evidence: ['inventory.md'],
   });
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.checkpoint.state, 'active');
+  assert.strictEqual(result.checkpoint.cursor, 'search 5/10, last id X');
+  assert.deepEqual(result.checkpoint.evidence, ['inventory.md']);
 
   const pulse = await callTool('pulse', { ref: mcpTicket.ref, project: PROJECT_DIR });
   assert.strictEqual(pulse.checkpoint.id, result.checkpoint.id);

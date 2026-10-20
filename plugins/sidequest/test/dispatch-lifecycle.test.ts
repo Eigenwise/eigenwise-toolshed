@@ -5318,3 +5318,46 @@ test('write-capable executor done accepts a report only with no commits or dirty
     }
   }
 });
+
+
+test('read-only investigation checkpoint replays cursor and evidence after redispatch', () => {
+  const ticket = createFixture('investigation cursor fixture', 'research');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'cursor-first' });
+  const by = 'cursor-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor }).ok, true);
+  const recorded = store.checkpointTicket(slug, ticket.ref, by, {
+    worktree: PROJECT, verify: 'Inventoried five of ten sources.',
+    cursor: 'search 5/10, last id X', evidence: ['inventory.md'],
+  });
+  assert.equal(recorded.ok, true);
+  assert.equal(recorded.ticket.checkpoint.cursor, 'search 5/10, last id X');
+  assert.deepEqual(recorded.checkpoint.evidence, ['inventory.md']);
+  assert.match(recorded.comment.body, /^Continuation checkpoint/m);
+  assert.match(recorded.comment.body, /^Cursor: search 5[/]10, last id X$/m);
+  assert.match(recorded.comment.body, /^Evidence: inventory.md$/m);
+  assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
+  const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: 'cursor-second' });
+  const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+  assert.match(briefing, /^Cursor: search 5[/]10, last id X$/m);
+  assert.match(briefing, /^Evidence: inventory.md$/m);
+  assert.doesNotMatch(briefing, /^Checkpoint commit:|^Checkpoint worktree:/m);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'cursor-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
+test('checkpoint cursor enforces UTF-8 bytes and evidence stays relative', () => {
+  const ticket = createFixture('checkpoint validation fixture', 'research');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'cursor-validation' });
+  const by = 'cursor-validation-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor }).ok, true);
+  const options = { worktree: PROJECT, verify: 'Inventory inspected.' };
+  assert.throws(() => store.checkpointTicket(slug, ticket.ref, by, { ...options, cursor: 'é'.repeat(1025) }), /2050 bytes.*2048/);
+  for (const evidence of [['/absolute'], ['C:\\absolute'], ['../escape'], ['nested/../escape'], ['nested\\..\\escape'], [''], [42]]) {
+    assert.throws(() => store.checkpointTicket(slug, ticket.ref, by, { ...options, evidence }), /evidence/);
+  }
+  assert.throws(() => store.checkpointTicket(slug, ticket.ref, by, { ...options, cursor: 42 }), /cursor/);
+  assert.throws(() => store.checkpointTicket(slug, ticket.ref, by, { ...options, evidence: 'inventory.md' }), /evidence/);
+  const recorded = store.checkpointTicket(slug, ticket.ref, by, { ...options, cursor: 'é'.repeat(1024), evidence: ['nested/inventory.md'] });
+  assert.equal(recorded.ok, true);
+  assert.equal(recorded.ticket.checkpoint.cursor, 'é'.repeat(1024));
+  assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
+});

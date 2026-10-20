@@ -23,14 +23,14 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/hooks/session-start.ts
+// plugins/sidequest/src/hooks/session-start.ts
 var import_node_fs10 = __toESM(require("node:fs"));
 var import_node_path11 = __toESM(require("node:path"));
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// src/lib/exec-names.ts
+// plugins/sidequest/src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
@@ -109,7 +109,7 @@ function classify(value) {
   return { kind: "unknown", effort: null };
 }
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -142,7 +142,7 @@ function isSubagent(input) {
   });
 }
 
-// src/hooks/shared/output.ts
+// plugins/sidequest/src/hooks/shared/output.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
@@ -198,7 +198,7 @@ function writeContext(hookEventName, additionalContext, initialUserMessage = "")
   });
 }
 
-// src/hooks/shared/paths.ts
+// plugins/sidequest/src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -207,7 +207,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// src/hooks/shared/compaction.ts
+// plugins/sidequest/src/hooks/shared/compaction.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
@@ -252,17 +252,17 @@ function initializeCompactionState(sessionId3, transcriptPath) {
   writeState(sessionId3, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
-// src/hooks/shared/sweep-handoff.ts
+// plugins/sidequest/src/hooks/shared/sweep-handoff.ts
 var import_node_child_process = require("node:child_process");
 var import_node_fs5 = __toESM(require("node:fs"));
 var import_node_path6 = __toESM(require("node:path"));
 
-// src/lib/sweep-state-path.ts
+// plugins/sidequest/src/lib/sweep-state-path.ts
 var import_node_crypto3 = __toESM(require("node:crypto"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path4 = __toESM(require("node:path"));
 
-// src/lib/kernel/worktree.ts
+// plugins/sidequest/src/lib/kernel/worktree.ts
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path3 = __toESM(require("node:path"));
 var import_node_crypto2 = __toESM(require("node:crypto"));
@@ -287,7 +287,7 @@ function canonicalPath(value) {
   }
 }
 
-// src/lib/sweep-state-path.ts
+// plugins/sidequest/src/lib/sweep-state-path.ts
 function stateDirectory2() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path4.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
   return import_node_path4.default.join(home, "sweep-reports");
@@ -297,7 +297,7 @@ function reportFile(cwd) {
   return import_node_path4.default.join(stateDirectory2(), `${key}.json`);
 }
 
-// src/hooks/shared/sweep-flight.ts
+// plugins/sidequest/src/hooks/shared/sweep-flight.ts
 var import_node_crypto4 = __toESM(require("node:crypto"));
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_path5 = __toESM(require("node:path"));
@@ -365,7 +365,7 @@ function reclaimSweepFlight(cwd) {
   releaseSweepFlight(cwd, owner.token);
 }
 
-// src/hooks/shared/sweep-handoff.ts
+// plugins/sidequest/src/hooks/shared/sweep-handoff.ts
 var DEFAULT_DEADLINE_MS = 2500;
 var DEFERRAL_NOTICE = "sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background. Its worker has a 60-second lifetime limit.";
 var EMPTY_SWEEP_PROGRESS = {
@@ -517,19 +517,19 @@ function waitForSweep(child, budget) {
   });
 }
 
-// src/hooks/shared/worktree-sweep.ts
+// plugins/sidequest/src/hooks/shared/worktree-sweep.ts
 var import_node_child_process2 = require("node:child_process");
 var import_node_fs7 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
 var import_node_os4 = __toESM(require("node:os"));
 var import_node_path8 = __toESM(require("node:path"));
 
-// src/lib/worktree-sweep-lock.ts
+// plugins/sidequest/src/lib/worktree-sweep-lock.ts
 var import_node_fs6 = __toESM(require("node:fs"));
 var import_node_os3 = __toESM(require("node:os"));
 var import_node_path7 = __toESM(require("node:path"));
 
-// src/hooks/shared/worktree-sweep.ts
+// plugins/sidequest/src/hooks/shared/worktree-sweep.ts
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 function stateFile2() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path8.default.join(import_node_os4.default.homedir(), ".claude", "sidequest");
@@ -590,7 +590,7 @@ function registerSweepSession(data) {
   }
 }
 
-// src/hooks/diagnostic-worktree-warning.ts
+// plugins/sidequest/src/hooks/diagnostic-worktree-warning.ts
 var import_node_fs8 = __toESM(require("node:fs"));
 var import_node_path9 = __toESM(require("node:path"));
 var ENDED_RUN_WINDOW_MS = 2 * 60 * 60 * 1e3;
@@ -744,7 +744,7 @@ function diagnosticWorktreeWarning(input, now) {
   return worktrees.length ? warningFor(worktrees, roots, ownAgentWorktree(location)) : "";
 }
 
-// src/lib/plugin-freshness.ts
+// plugins/sidequest/src/lib/plugin-freshness.ts
 var import_node_crypto5 = __toESM(require("node:crypto"));
 var import_node_fs9 = __toESM(require("node:fs"));
 var import_node_os5 = __toESM(require("node:os"));
@@ -853,7 +853,7 @@ function reportLoadedSidequestVersion(input, options = {}) {
   return version;
 }
 
-// src/hooks/session-start.ts
+// plugins/sidequest/src/hooks/session-start.ts
 var MAX_SESSION_CONTEXT_BYTES = 4 * 1024;
 var MAX_WORKFORCE_BYTES = 800;
 var MAX_WORKFORCE_DESCRIPTION = 90;

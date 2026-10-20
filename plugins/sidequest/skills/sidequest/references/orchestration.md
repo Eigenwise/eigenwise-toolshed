@@ -123,7 +123,7 @@ keeping the claim addressable. It is optional recovery evidence, not a formal re
 acceptance gate. It lasts 60 minutes by default (explicit TTL: 1 minute to 24 hours); expired evidence
 stays recorded but cannot prove fresh execution. If its executor dies, salvage before release and
 redispatch under the normal liveness rules. A **Continuation checkpoint** is the 75-tool-round handoff:
-commit, comment, release to `todo`, then a fresh executor/dispatch. Only that continuation flow releases
+record a `checkpoint` with a `cursor` describing the next search or resume position and `evidence` paths relative to the dispatch evidence directory before budget. The emitted comment carries `Cursor: <text>` and `Evidence: <path>, <path>` lines for the next briefing. Commit repository work when present, release to `todo`, then use a fresh executor/dispatch. Only that continuation flow releases
 during a healthy handoff; a draft checkpoint never authorizes ownership release.
 
 ### Scope expansion without a bounce

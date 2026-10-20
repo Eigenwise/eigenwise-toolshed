@@ -23,10 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// src/lib/exec-names.ts
+// plugins/sidequest/src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -53,7 +53,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -86,15 +86,15 @@ function isSubagent(input) {
   });
 }
 
-// src/hooks/shared/compaction.ts
+// plugins/sidequest/src/hooks/shared/compaction.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
 
-// src/hooks/shared/paths.ts
+// plugins/sidequest/src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 
-// src/hooks/shared/compaction.ts
+// plugins/sidequest/src/hooks/shared/compaction.ts
 var TRANSCRIPT_BYTES_THRESHOLD = 3 * 1024 * 1024;
 function isPrimarySession(input) {
   return !isSubagent(input);
@@ -128,7 +128,7 @@ function resetCompactionState(sessionId, transcriptPath) {
   writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
-// src/hooks/post-compact.ts
+// plugins/sidequest/src/hooks/post-compact.ts
 function main() {
   const input = readStdin();
   if (!input || !isPrimarySession(input)) return;

@@ -570,6 +570,15 @@ function resumedCheckpointEvidence(continuation: { releaseReason?: string | null
   ];
 }
 
+function checkpointContinuationPacket(ticket: { checkpoint?: { cursor?: string; evidence?: string[] } }) {
+  const checkpoint = ticket.checkpoint;
+  if (!checkpoint) return ticketContinuationPacket(ticket);
+  const lines: string[] = [];
+  if (checkpoint.cursor !== undefined) lines.push(`Cursor: ${checkpoint.cursor}`);
+  if (checkpoint.evidence !== undefined) lines.push(`Evidence: ${checkpoint.evidence.join(', ')}`);
+  return [...lines, ticketContinuationPacket(ticket)].filter(Boolean).join('\n') || null;
+}
+
 function ticketContinuationPacket(ticket?: any) {
   const continuation = ticket?.dispatch?.continuation;
   if (continuation?.mode === 'live_claim_resume' && continuation.sourceWorktree && continuation.commit) {
@@ -1197,7 +1206,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const planDocument = planDocumentPacket(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
-  const continuation = ticketContinuationPacket(ticket);
+  const continuation = checkpointContinuationPacket(ticket);
   const taskAndScope = taskAndScopeBody(ticket, slug);
   const rejectionHistory = rejectedSubmissionHistoryBody(ticket);
   const snapshot = storySnapshot(ticket, slug);

@@ -28,7 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/hooks/registry-writer.ts
+// plugins/sidequest/src/hooks/registry-writer.ts
 var registry_writer_exports = {};
 __export(registry_writer_exports, {
   SCHEMA_VERSION: () => SCHEMA_VERSION,
@@ -43,13 +43,13 @@ var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
 
-// src/hooks/shared/paths.ts
+// plugins/sidequest/src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
 }
 
-// src/hooks/registry-writer.ts
+// plugins/sidequest/src/hooks/registry-writer.ts
 var SCHEMA_VERSION = 1;
 function pluginVersion(root) {
   const parsed = JSON.parse(import_node_fs.default.readFileSync(import_node_path2.default.join(root, ".claude-plugin", "plugin.json"), "utf8"));

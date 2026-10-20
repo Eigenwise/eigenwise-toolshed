@@ -388,6 +388,14 @@ function resumedCheckpointEvidence(continuation) {
     "Handback reason: " + (continuation.releaseReason || "not recorded")
   ];
 }
+function checkpointContinuationPacket(ticket) {
+  const checkpoint = ticket.checkpoint;
+  if (!checkpoint) return ticketContinuationPacket(ticket);
+  const lines = [];
+  if (checkpoint.cursor !== void 0) lines.push(`Cursor: ${checkpoint.cursor}`);
+  if (checkpoint.evidence !== void 0) lines.push(`Evidence: ${checkpoint.evidence.join(", ")}`);
+  return [...lines, ticketContinuationPacket(ticket)].filter(Boolean).join("\n") || null;
+}
 function ticketContinuationPacket(ticket) {
   const continuation = ticket?.dispatch?.continuation;
   if (continuation?.mode === "live_claim_resume" && continuation.sourceWorktree && continuation.commit) {
@@ -912,7 +920,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const planDocument = planDocumentPacket(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
-  const continuation = ticketContinuationPacket(ticket);
+  const continuation = checkpointContinuationPacket(ticket);
   const taskAndScope = taskAndScopeBody(ticket, slug);
   const rejectionHistory = rejectedSubmissionHistoryBody(ticket);
   const snapshot = storySnapshot(ticket, slug);

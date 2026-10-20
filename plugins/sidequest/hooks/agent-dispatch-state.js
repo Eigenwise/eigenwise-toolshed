@@ -23,14 +23,14 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/hooks/agent-dispatch-state.ts
+// plugins/sidequest/src/hooks/agent-dispatch-state.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// src/lib/exec-names.ts
+// plugins/sidequest/src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -57,7 +57,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// src/hooks/shared/input.ts
+// plugins/sidequest/src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -84,7 +84,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// src/hooks/shared/paths.ts
+// plugins/sidequest/src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -93,7 +93,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// src/hooks/agent-dispatch-state.ts
+// plugins/sidequest/src/hooks/agent-dispatch-state.ts
 var DISPATCH_STATE_FILE = "sidequest-dispatch.json";
 function linkedGitDirectory(worktree) {
   const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs2.default.readFileSync(import_node_path2.default.join(worktree, ".git"), "utf8"))?.[1];
