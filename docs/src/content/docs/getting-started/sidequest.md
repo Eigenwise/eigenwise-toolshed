@@ -64,6 +64,10 @@ For a bound review that was never dispatched, add `"authority": "main-attestatio
 
 CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
 
+## Integration branches in linked worktrees
+
+If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. It merges and runs the delivery verifier there, leaving the registered checkout alone. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
