@@ -22,7 +22,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -49,7 +49,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -77,7 +77,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// plugins/sidequest/src/hooks/shared/output.ts
+// src/hooks/shared/output.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
@@ -135,7 +135,7 @@ function writeSystemMessage(hookEventName, systemMessage) {
   });
 }
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -144,7 +144,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/hooks/quota-fallback.ts
+// src/hooks/quota-fallback.ts
 function projectFromPrompt(prompt) {
   const matches = [...String(prompt || "").matchAll(/--project\s+"([^"]+)"|--project[=\s]+(\S+)/g)];
   const match = matches.at(-1);

@@ -23,10 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -53,7 +53,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -80,7 +80,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -89,7 +89,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/hooks/shared/output.ts
+// src/hooks/shared/output.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
@@ -156,7 +156,7 @@ function writeToolUpdate(updatedInput, systemMessage) {
   });
 }
 
-// plugins/sidequest/src/hooks/shared/runtime-identity.ts
+// src/hooks/shared/runtime-identity.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
 function canonicalPath(value) {
@@ -215,7 +215,7 @@ function bindObservedRuntimeIdentity(input, agentId, executor, worktree) {
   }
 }
 
-// plugins/sidequest/src/hooks/bind-runtime-identity.ts
+// src/hooks/bind-runtime-identity.ts
 function bindClaimRuntimeIdentity(input, agentId, executor) {
   if (stringField(input, "tool_name") !== "mcp__plugin_sidequest_board__claim" || !isRecord(input.tool_input)) return false;
   const toolInput = input.tool_input;

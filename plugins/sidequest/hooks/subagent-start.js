@@ -23,10 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -53,7 +53,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -80,7 +80,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// plugins/sidequest/src/hooks/shared/output.ts
+// src/hooks/shared/output.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
@@ -136,7 +136,7 @@ function writeContext(hookEventName, additionalContext, initialUserMessage = "")
   });
 }
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -145,7 +145,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/hooks/diagnostic-worktree-warning.ts
+// src/hooks/diagnostic-worktree-warning.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
 var ENDED_RUN_WINDOW_MS = 2 * 60 * 60 * 1e3;
@@ -299,7 +299,7 @@ function diagnosticWorktreeWarning(input, now) {
   return worktrees.length ? warningFor(worktrees, roots, ownAgentWorktree(location)) : "";
 }
 
-// plugins/sidequest/src/hooks/subagent-start.ts
+// src/hooks/subagent-start.ts
 function fallbackClassify(type) {
   const readOnlyDispatch = /^sidequest-exec-dispatch-readonly(?:-(low|medium|high|xhigh|max))?$/.exec(type);
   if (readOnlyDispatch) return { kind: "read_only_codex_dispatch", effort: readOnlyDispatch[1] || null };

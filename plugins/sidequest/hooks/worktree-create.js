@@ -23,15 +23,15 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// plugins/sidequest/src/hooks/worktree-create.ts
+// src/hooks/worktree-create.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
 var import_node_child_process = require("node:child_process");
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -58,7 +58,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -85,7 +85,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -94,7 +94,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/lib/hook-timeouts.ts
+// src/lib/hook-timeouts.ts
 var WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS = 120;
 var WORKTREE_CREATE_SETUP_HEADROOM_MS = 1e4;
 function positiveInteger(value) {
@@ -111,7 +111,7 @@ function worktreeSetupDeadlineMs(environment = process.env) {
   return Math.max(1, hookTimeoutMs - headroomMs);
 }
 
-// plugins/sidequest/src/lib/prepared-dispatch.ts
+// src/lib/prepared-dispatch.ts
 function canonicalPreparedDispatchExecutor(ticket) {
   const currentExecutor = String(ticket?.dispatch?.executor || "").trim();
   if (currentExecutor) return currentExecutor;
@@ -121,7 +121,7 @@ function canonicalPreparedDispatchExecutor(ticket) {
   return routedExecutor || null;
 }
 
-// plugins/sidequest/src/lib/refusal-guidance.ts
+// src/lib/refusal-guidance.ts
 function abbreviatedSessionId(value) {
   const sessionId = String(value || "").trim();
   return sessionId ? `\`${sessionId.slice(0, 12)}\`` : "<not recorded>";
@@ -221,7 +221,7 @@ var INHERITED_REJECTED_REFUSALS = Object.freeze({
   partial_inheritance: "this range carries only part of that rejected range. Inherit the whole rejected candidate or none of it; do not reconstruct a subset."
 });
 
-// plugins/sidequest/src/hooks/worktree-create.ts
+// src/hooks/worktree-create.ts
 var leaseKernel = require(runtimeModule("kernel/worktree"));
 function git(repository, args) {
   return (0, import_node_child_process.execFileSync)("git", args, {

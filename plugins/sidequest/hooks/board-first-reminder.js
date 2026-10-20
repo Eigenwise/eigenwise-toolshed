@@ -22,7 +22,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// plugins/sidequest/src/lib/plugin-freshness.ts
+// src/lib/plugin-freshness.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
@@ -63,10 +63,10 @@ function reportLoadedSidequestVersion(input, options = {}) {
   return version;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -93,7 +93,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -126,7 +126,7 @@ function isSubagent(input) {
   });
 }
 
-// plugins/sidequest/src/hooks/shared/output.ts
+// src/hooks/shared/output.ts
 var import_node_crypto2 = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
@@ -182,7 +182,7 @@ function writeContext(hookEventName, additionalContext, initialUserMessage = "")
   });
 }
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path2 = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path2.default.join(__dirname, "..");
@@ -191,7 +191,7 @@ function runtimeModule(name) {
   return import_node_path2.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/hooks/shared/session-state.ts
+// src/hooks/shared/session-state.ts
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path3 = __toESM(require("node:path"));
@@ -212,7 +212,7 @@ function writeSessionState(file, state) {
   import_node_fs3.default.writeFileSync(file, JSON.stringify(state));
 }
 
-// plugins/sidequest/src/hooks/board-first-reminder.ts
+// src/hooks/board-first-reminder.ts
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 var CHANGE_VERB = /\b(?:add|build|implement|fix|refactor|change|update|create|write|remove|delete|rename|move|migrate|rewrite|port|wire|improve|investigate|audit|debug|make)\b/i;
 var GREETING_LENGTH = 60;

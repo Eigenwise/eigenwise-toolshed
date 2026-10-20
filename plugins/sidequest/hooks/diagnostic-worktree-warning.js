@@ -27,7 +27,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// plugins/sidequest/src/hooks/diagnostic-worktree-warning.ts
+// src/hooks/diagnostic-worktree-warning.ts
 var diagnostic_worktree_warning_exports = {};
 __export(diagnostic_worktree_warning_exports, {
   diagnosticWorktreeWarning: () => diagnosticWorktreeWarning
@@ -36,10 +36,10 @@ module.exports = __toCommonJS(diagnostic_worktree_warning_exports);
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -60,7 +60,7 @@ var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   ...EFFORTS.map(stableReadOnlyClaudeName)
 ]);
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 function stringField(input, ...names) {
   for (const name of names) {
     const value = input[name];
@@ -69,7 +69,7 @@ function stringField(input, ...names) {
   return "";
 }
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -78,7 +78,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/hooks/diagnostic-worktree-warning.ts
+// src/hooks/diagnostic-worktree-warning.ts
 var ENDED_RUN_WINDOW_MS = 2 * 60 * 60 * 1e3;
 function gitDirectory(entry) {
   try {

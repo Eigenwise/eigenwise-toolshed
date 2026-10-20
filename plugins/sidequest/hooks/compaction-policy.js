@@ -23,10 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
-// plugins/sidequest/src/lib/exec-names.ts
+// src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
@@ -53,7 +53,7 @@ function canonicalExecutorName(name) {
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
 }
 
-// plugins/sidequest/src/hooks/shared/input.ts
+// src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -73,12 +73,12 @@ function readStdin() {
   }
 }
 
-// plugins/sidequest/src/hooks/shared/compaction-policy.ts
+// src/hooks/shared/compaction-policy.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
 
-// plugins/sidequest/src/hooks/shared/paths.ts
+// src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
@@ -87,7 +87,7 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// plugins/sidequest/src/hooks/shared/compaction-policy.ts
+// src/hooks/shared/compaction-policy.ts
 var MAX_INSTRUCTION_BYTES = 1500;
 function policy() {
   const value = String(process.env.SIDEQUEST_COMPACTION_POLICY || "").trim().toLowerCase();
@@ -238,7 +238,7 @@ async function compactionPolicyOutput(input) {
   }
 }
 
-// plugins/sidequest/src/hooks/compaction-policy.ts
+// src/hooks/compaction-policy.ts
 async function main() {
   const input = readStdin() || {};
   if (input.hook_event_name !== "PreCompact" || input.trigger !== "auto") return;
