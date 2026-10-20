@@ -8,13 +8,13 @@ function csvFields(row) {
   return [...row.matchAll(/(?:^|,)("(?:[^"]|"")*"|[^,]*)/g)].map((match) => match[1].replace(/^"|"$/g, '').replaceAll('""', '"'));
 }
 
-export function parseLizardCsv(text) {
+export function parseLizardCsv(text = '') {
   return text.split(/\r?\n/).map(csvFields).filter((fields) => fields.length >= 11).map((fields) => ({ file: fields[6], name: fields[7], complexity: Number(fields[1]), line: Number(fields[9]), endLine: Number(fields[10]) })).filter((entry) => [entry.complexity, entry.line, entry.endLine].every(Number.isFinite));
 }
 
-function runLizard(file, root, language) {
+function runLizard(file, root, languageArguments) {
   for (const [command, leading] of [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]]) {
-    const result = spawnSync(command, [...leading, '--csv', '-l', language, file], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+    const result = spawnSync(command, [...leading, '--csv', ...languageArguments, file], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 60000 });
     if (result.error?.code === 'ENOENT') continue;
     if (result.status !== 0) throw new Error(`Lizard failed: ${result.stderr || result.error?.message}. Install or repair lizard with uv tool install lizard, pipx install lizard, or pip install lizard.`);
     return parseLizardCsv(result.stdout);
@@ -31,14 +31,20 @@ function overlappingSpan(row, rows) {
   return rows.some((other) => other !== row && other.line <= row.endLine && row.line <= other.endLine);
 }
 
+function validSpan(row, text) {
+  return [row.line, row.endLine].every(Number.isInteger) && row.line > 0 && row.endLine >= row.line && row.endLine <= text.split('\n').length;
+}
+
 function boundRows(rows, definitions, text) {
-  const counts = new Map();
+  const counts = new Map(rows.map((row) => [row.name, 0]));
+  const boundDefinitions = definitions ?? rows;
   return rows.map((row) => {
-    const ordinal = counts.get(row.name) ?? 0;
+    const ordinal = counts.get(row.name);
     counts.set(row.name, ordinal + 1);
-    const definition = definitions.find((candidate) => candidate.line === row.line && candidate.name === row.name);
+    const definition = boundDefinitions.find((candidate) => candidate.line === row.line && candidate.name === row.name);
     const identity = `<root>/lizard:${row.name}#${ordinal}`;
     const fingerprint = definition?.fingerprint ?? crypto.createHash('sha256').update(text.split('\n').slice(row.line - 1, row.endLine).join('\n')).digest('hex');
+    if (!validSpan(row, text)) return { ...row, identity, parent: '<root>', fingerprint, source: 'lizard', unverified: 'Invalid Lizard source span; regenerate CSV from the exact source.' };
     if (overlappingSpan(row, rows)) return { ...row, identity, parent: '<root>', fingerprint, source: 'lizard', unverified: 'Overlapping Lizard spans cannot establish independent body ownership; measurement is unverified. Use a supported source adapter for nested or shared-line bodies.' };
     return { ...row, identity, parent: '<root>', fingerprint, source: 'lizard', ...(definition ? {} : { unverified: 'Lizard row cannot be bound to a source definition; informational only. Update the language adapter to measure this body.' }) };
   });
@@ -49,19 +55,20 @@ function vueScript(text) {
 }
 
 async function languageDefinitions(text, file, analyzer) {
-  if (path.extname(file).toLowerCase() === '.php') return { language: 'php', source: text, definitions: phpDefinitions(text) };
+  if (path.extname(file).toLowerCase() === '.php') return { language: 'php', languageArguments: ['-l', 'php'], source: text, definitions: phpDefinitions(text) };
+  if (path.extname(file).toLowerCase() !== '.vue') return { language: null, languageArguments: [], source: text, definitions: null };
   const source = vueScript(text);
-  return { language: 'javascript', source, definitions: await analyzer.collectFunctions(source, 'script.ts') };
+  return { language: 'javascript', languageArguments: ['-l', 'javascript'], source, definitions: await analyzer.collectFunctions(source, 'script.ts') };
 }
 
-export async function lizardDescriptors(text, file, analyzer, complexityCsv) {
-  const { language, source, definitions } = await languageDefinitions(text, file, analyzer);
-  if (complexityCsv !== undefined) return boundRows(parseLizardCsv(complexityCsv).filter((row) => path.resolve(row.file) === path.resolve(file)), definitions, source);
+export async function lizardDescriptors(text, file, analyzer, complexityCsv, root = process.cwd()) {
+  const { language, languageArguments, source, definitions } = await languageDefinitions(text, file, analyzer);
+  if (complexityCsv !== undefined) return boundRows(parseLizardCsv(complexityCsv).filter((row) => path.resolve(root, row.file) === path.resolve(root, file)), definitions, source);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-gate-lizard-'));
   try {
-    const target = path.join(directory, language === 'php' ? 'source.php' : 'source.js');
+    const target = path.join(directory, language ? (language === 'php' ? 'source.php' : 'source.js') : 'source' + path.extname(file));
     fs.writeFileSync(target, source);
-    return boundRows(runLizard(target, directory, language), definitions, source);
+    return boundRows(runLizard(target, directory, languageArguments), definitions, source);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

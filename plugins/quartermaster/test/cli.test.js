@@ -92,7 +92,7 @@ test('crap without quality-gate installed scores nothing, names the install comm
   const result = run(['crap', '--json'], projectPath, { CLAUDE_CONFIG_DIR: configDir });
   assert.equal(result.status, 2);
   assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'quartermaster crap is retired: CRAP scoring lives in quality-gate. Install it with /plugin install quality-gate@eigenwise-toolshed\n');
+  assert.equal(result.stderr, 'quartermaster crap is retired: CRAP scoring lives in quality-gate: JS/TS via the TypeScript AST, Python via the versioned inventory, PHP/Vue and other Lizard languages via lizard or --complexity <lizard.csv> (LCOV coverage stays UNVERIFIED without an executable-line inventory). Install it with /plugin install quality-gate@eigenwise-toolshed\n');
 
   const noRegistry = run(['crap'], projectPath, { CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-empty-')) });
   assert.equal(noRegistry.status, 2);

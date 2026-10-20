@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createAnalyzer, changedMetricsAgainstBase, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
 import { crapScore, enforcedMetrics, THRESHOLD } from './measure.mjs';
-import { JAVASCRIPT_SOURCE, projectRoot, readConfig, gateSettings, selectedFiles, filesChangedSince, selectedDeletedFiles, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
+import { JAVASCRIPT_SOURCE, SOURCE, unsupportedSources, projectRoot, readConfig, gateSettings, selectedFiles, filesChangedSince, selectedDeletedFiles, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
 import { acquireCoverage, coverageByFile, coverageTrust, functionLineCoverage } from './lcov.mjs';
-import { lizardDescriptors } from './lizard.mjs';
+import { lizardDescriptors, parseLizardCsv } from './lizard.mjs';
 import { pythonDescriptors, verifyOracleOwnership } from './python.mjs';
 
 import { reuseSignals, formatReuseSignal } from './reuse-signals.mjs';
@@ -19,7 +19,7 @@ function unsupportedDescriptor(text, file, reason) {
 async function descriptors(text, file, analyzer, complexityCsv, root, policy, oracles) {
   if (JAVASCRIPT_SOURCE.test(file)) return (await analyzer.collectFunctions(text, file)).map((descriptor) => ({ ...descriptor, endLine: text.slice(0, descriptor.end).split('\n').length, source: 'typescript-ast' }));
   if (file.endsWith('.py')) return pythonDescriptors(text, file, root, policy, oracles);
-  const rows = await lizardDescriptors(text, file, analyzer, complexityCsv);
+  const rows = await lizardDescriptors(text, file, analyzer, complexityCsv, root);
   if (!rows.length) return unsupportedDescriptor(text, file, 'Lizard reported no functions; source definitions are unverified. Install a supported language adapter to verify this file.');
   return rows.map((row) => ({ ...row, informational: Boolean(row.unverified) }));
 }
@@ -98,12 +98,13 @@ export async function crapReport(options = {}) {
   const { config, warnings } = readConfig(root);
   const settings = gateSettings(options, config);
   const baseline = baseRevision(root, settings.base);
-  const selected = selectedFiles(root, settings, options.files);
+  const complexityCsv = options.complexity ? fs.readFileSync(path.resolve(root, options.complexity), 'utf8') : undefined;
+  const suppliedFiles = new Set(parseLizardCsv(complexityCsv).map((row) => path.resolve(root, row.file)));
+  const selected = selectedFiles(root, settings, options.files, { test: (file) => SOURCE.test(file) || suppliedFiles.has(path.resolve(root, file)) });
   const files = filesChangedSince(root, baseline.base, selected);
   const changedPaths = files.concat(selectedDeletedFiles(root, baseline.base, settings));
   const removedMetrics = [];
   const analyzer = changedPaths.some((file) => JAVASCRIPT_SOURCE.test(file) || file.endsWith('.vue')) ? await createAnalyzer(root) : null;
-  const complexityCsv = options.complexity ? fs.readFileSync(path.resolve(root, options.complexity), 'utf8') : undefined;
   const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: complexityOnly(root, options, settings), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
   if (settings.usedDeprecatedRatchet) report.warnings.push('--ratchet and config ratchet are deprecated. Use --base or config base instead.');
   try {
@@ -115,7 +116,16 @@ export async function crapReport(options = {}) {
   }
   report.signals = reuseSignals(root, report.changedMetrics, removedMetrics);
   report.nothingToScoreReason = emptyScopeReason(selected, files, report.metrics, report.changedMetrics);
-  return measureReport(report, settings);
+  return unsupportedSourceReport(measureReport(report, settings), settings, selected);
+}
+
+function unsupportedSourceReport(report, settings, selected) {
+  report.unsupportedSources = selected.length ? [] : unsupportedSources(report.root, settings, report.base);
+  if (report.unsupportedSources.length) {
+    report.exitCode = 2;
+    report.verdict = 'unverified';
+  }
+  return report;
 }
 
 function measureReport(report, settings) {
@@ -166,6 +176,7 @@ function metricLine(metric, ccOnly) {
 }
 
 export function formatCrapReport(report) {
+  if (report.unsupportedSources?.length) return report.unsupportedSources.map(({ extension, count }) => `UNVERIFIED ${extension}: ${count} changed source files`).join('\n') + '\nSupported: JS/TS via the TypeScript AST, Python via the versioned inventory, PHP/Vue and other Lizard languages via lizard or --complexity <lizard.csv>. No adapter scored these extensions.\n';
   const signals = report.signals ?? [];
   const signalRows = signals.map(formatReuseSignal);
   if (report.nothingToScoreReason) return [...signalRows, `CRAP gate: nothing to score. ${report.nothingToScoreReason} ${signals.length} reuse signals.`].join('\n') + '\n';

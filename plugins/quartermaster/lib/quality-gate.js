@@ -7,7 +7,7 @@ const { spawnSync } = require('node:child_process');
 const { pluginsDir } = require('./paths.js');
 
 const QUALITY_GATE_INSTALL = '/plugin install quality-gate@eigenwise-toolshed';
-const RETIRED_NOTICE = `quartermaster crap is retired: CRAP scoring lives in quality-gate. Install it with ${QUALITY_GATE_INSTALL}\n`;
+const RETIRED_NOTICE = `quartermaster crap is retired: CRAP scoring lives in quality-gate: JS/TS via the TypeScript AST, Python via the versioned inventory, PHP/Vue and other Lizard languages via lizard or --complexity <lizard.csv> (LCOV coverage stays UNVERIFIED without an executable-line inventory). Install it with ${QUALITY_GATE_INSTALL}\n`;
 
 function installRecords(env) {
   try {
