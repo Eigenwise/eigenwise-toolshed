@@ -2,6 +2,7 @@
 
 const { normalizeDeniedTools } = require('../denied-tools.js');
 const { VERIFICATION_ENVIRONMENTS } = require('../kernel/verification.js');
+const { canonicalPath } = require('../kernel/worktree.js');
 
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
@@ -31,7 +32,7 @@ function normalizeAlwaysInScope(paths?: any) {
 }
 
 function normalizeReadOnlyDeniedTools(value?: any) {
-  if (value == null) return [];
+  if (value == null) return null;
   if (!Array.isArray(value)) throw new Error('readOnlyDeniedTools must be an array of tool patterns.');
   const seen = new Set();
   const normalized: any[] = [];
@@ -348,10 +349,38 @@ function integrationTargetCommit(absPath: any, target: any) {
   }).trim();
 }
 
+function existingAbsoluteDataRoot(value: unknown): string {
+  if (typeof value !== 'string' || !path.isAbsolute(value)) throw new Error('investigationDataRoots entries must be absolute paths.');
+  if (!fs.existsSync(value)) throw new Error(`investigationDataRoots path does not exist: ${value}`);
+  return canonicalPath(value);
+}
+
+function repositoryContainsDataRoot(repository: string, root: string): boolean {
+  const relative: string = path.relative(canonicalPath(repository), root);
+  return relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative);
+}
+
+function investigationDataRoot(value: unknown, repository: string): string {
+  const root = existingAbsoluteDataRoot(value);
+  if (repositoryContainsDataRoot(repository, root)) {
+    throw new Error(`investigationDataRoots must lie outside the repository: ${value}`);
+  }
+  return root;
+}
+
+function normalizeInvestigationDataRoots(value: unknown, repository = ''): string[] {
+  if (!Array.isArray(value)) throw new Error('investigationDataRoots must be an array of absolute paths.');
+  return [...new Set(value.map((root) => investigationDataRoot(root, repository)))];
+}
+
 function normalizeBoardName(value?: any) {
   const name = typeof value === 'string' ? value.trim() : '';
   if (!name) throw new Error('Board name cannot be empty.');
   return name;
+}
+
+function storedInvestigationDataRoots(meta: { investigationDataRoots?: string[] }): string[] {
+  return meta.investigationDataRoots ?? [];
 }
 
 function boardConfig(slug?: any) {
@@ -366,6 +395,7 @@ function boardConfig(slug?: any) {
     jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
     githubSync: normalizeGithubSync(meta.githubSync),
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
+    investigationDataRoots: storedInvestigationDataRoots(meta),
     readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
     deniedTools: normalizeDeniedTools(meta.deniedTools),
     generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
@@ -410,7 +440,8 @@ function normalizeGithubSync(value: unknown = 'off'): 'off' | 'comment' | 'close
   throw new Error('githubSync must be off, comment or close. Enabling it authorizes GitHub comments, and close also authorizes closing issues after publication.');
 }
 
-const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any) => any> = {
+const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any, repository?: string) => any> = {
+  investigationDataRoots: normalizeInvestigationDataRoots,
   name: normalizeBoardName,
   jiraBaseUrl: normalizeJiraBaseUrl,
   githubSync: normalizeGithubSync,
@@ -445,7 +476,7 @@ function setBoardConfig(slug?: any, patch?: any) {
     if (!entries.length) return { ok: true, config: boardConfig(slug) };
     for (const [key, value] of entries) {
       const normalize = BOARD_CONFIG_NORMALIZERS[key];
-      if (normalize) meta[key] = normalize(value);
+      if (normalize) meta[key] = normalize(value, meta.path);
     }
     putProject(slug, meta);
     return { ok: true, config: boardConfig(slug) };

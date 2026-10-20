@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
+const { EVIDENCE_DISPATCH_NAME, stableEvidenceClaudeName, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -114,11 +114,11 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
   const extra = Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [];
   return {
     tools: null,
-    disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra])]
+    disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra.filter((tool) => !tool.startsWith("mcp__plugin_sidequest_board"))])]
   };
 }
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** MCP read tools are allowed; MCP write tools are refused by name. board_config readOnlyDeniedTools replaces the whole default deny list, rather than extending it. Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 function scratchWorktreeNote() {
   return "\n\n**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.";
@@ -199,6 +199,18 @@ function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
     disallowedTools: readOnlyTools.disallowedTools
   }));
 }
+function renderEvidenceAgent(effort, dispatch = false) {
+  const denied = [...READ_ONLY_DENIED_TOOLS.filter((tool) => tool !== "Edit" && tool !== "Write"), "mcp__plugin_sidequest_board__commit", "mcp__plugin_sidequest_board__submit", "mcp__plugin_sidequest_board__integrate"];
+  return withoutPermissionMode(renderExecAgent({
+    name: dispatch ? EVIDENCE_DISPATCH_NAME : stableEvidenceClaudeName(effort),
+    effort,
+    modelId: dispatch ? DISPATCH_MODEL_ID : void 0,
+    marker: MARKER,
+    extraNote: "\n\n**Evidence role:** Write and Edit are available only under the dispatch evidenceWriteRoots. Repository writes, coding submissions, commits, NotebookEdit and delegation are forbidden. Save evidence incrementally and checkpoint with a cursor before budget. Close with done naming root-relative saved paths, or explicitly say nothing was saved. Report once through the board." + researchRunNote(),
+    tools: null,
+    disallowedTools: denied
+  }));
+}
 function implementationExecutorSources() {
   const sources = /* @__PURE__ */ new Map();
   sources.set(`${stableDispatchName()}.md`, renderDispatchAgent());
@@ -213,6 +225,8 @@ function implementationExecutorSources() {
 }
 function bundledExecutorSources(readOnlyDeniedTools) {
   const sources = implementationExecutorSources();
+  sources.set(`${EVIDENCE_DISPATCH_NAME}.md`, collapseEffortProse(renderEvidenceAgent("high", true)));
+  for (const effort of EXEC_EFFORTS) sources.set(`${stableEvidenceClaudeName(effort)}.md`, renderEvidenceAgent(effort));
   sources.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
   sources.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
@@ -338,6 +352,10 @@ function ticketRouteMarker(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   return resolved && resolved.backend === "codex" && resolved.dispatchModel ? routeMarker(resolved.dispatchModel, ticket.effort, ticket.ref) : null;
 }
+function readOnlyCloseout(ticket, model, effort) {
+  if (ticket.dispatch.evidenceMode) return `Closeout: this evidence dispatch closes with done --model ${model} --effort ${effort}. Name each saved evidence file relative to its admitted root, or explicitly say "nothing was saved". Do not commit, submit or integrate. Report once through the done comment, then stop.`;
+  return `Closeout: this prepared dispatch is read-only. MCP read tools are allowed; MCP write tools are refused by name (board_config readOnlyDeniedTools replaces the default list). Close with done --model ${model} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
+}
 function ticketCloseout(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
@@ -354,7 +372,7 @@ function ticketCloseout(ticket) {
     return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Closeout attributes only your declared paths and your own release fragment. Outside-scope dirty paths are recorded on completion and returned as ignoredDirtyPaths, never a scope refusal. Eligible completed sibling candidate drift is recorded and returned as a warning naming the sibling, without refusing your closeout. Preserve other work and report drift to the existing parent for verification or grooming; never revert, absorb, or commit it. Your own committed paths, empty deliverable, or failed candidate verification still refuse. Do not commit or submit. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
   }
   if (ticket?.dispatch?.readonly === true) {
-    return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
+    return readOnlyCloseout(ticket, resolved.runsModel, effort);
   }
   const externalDeliverableRequirement = ticket.dispatch?.verificationRequirement || {};
   const externalDeliverableVerify = externalDeliverableRequirement.command ? "the pinned verify-capture wrapper records the current dispatch attempt and revision" : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || "custom"} requirement is supplied`;
@@ -387,6 +405,14 @@ function resumedCheckpointEvidence(continuation) {
     "Verification log: " + (logPath || "not recorded"),
     "Handback reason: " + (continuation.releaseReason || "not recorded")
   ];
+}
+function checkpointContinuationPacket(ticket) {
+  const checkpoint = ticket.checkpoint;
+  if (!checkpoint) return ticketContinuationPacket(ticket);
+  const lines = [];
+  if (checkpoint.cursor !== void 0) lines.push(`Cursor: ${checkpoint.cursor}`);
+  if (checkpoint.evidence !== void 0) lines.push(`Evidence: ${checkpoint.evidence.join(", ")}`);
+  return [...lines, ticketContinuationPacket(ticket)].filter(Boolean).join("\n") || null;
 }
 function ticketContinuationPacket(ticket) {
   const continuation = ticket?.dispatch?.continuation;
@@ -600,10 +626,16 @@ function capturedVerifyCommand(verify, ticketRef, project, boundWorktree) {
   const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : "";
   return `node "${captureScript}"${commandSource}${worktree}`;
 }
+function evidenceGuidanceText(dispatch, directory) {
+  if (dispatch.evidenceMode === true) return `Evidence write roots (repository paths remain forbidden):
+${dispatch.evidenceWriteRoots.map((root) => "- " + root).join("\n")}
+Save incrementally. Customer documents stay under the investigation data root. Close with done naming root-relative evidence paths, or say "nothing was saved".`;
+  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery; the active owner and its admitted helpers can write it without a scope request. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
+}
 function ticketEvidenceGuidance(ticket) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || "").trim();
   if (!directory) return null;
-  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery; the active owner and its admitted helpers can write it without a scope request. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
+  return evidenceGuidanceText(ticket.dispatch, directory);
 }
 function dispatchUncertaintyPacket(ticket, slug) {
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
@@ -876,6 +908,26 @@ function taskAndScopeBody(ticket, slug) {
   const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket));
 }
+function parentEvidenceLine(parent) {
+  if (parent.status !== "done") return "- " + parent.ref + ": pending (" + parent.status + ")";
+  const directory = parent.dispatch?.evidenceDirectory;
+  if (!directory) return "- " + parent.ref + ": done (no evidence directory recorded)";
+  const completion = parent.comments.find((comment) => comment.id === parent.completion?.commentId);
+  const firstLine = completion ? completion.body.split(/\r?\n/, 1)[0] : "(No done comment recorded.)";
+  return "- " + parent.ref + ": " + path.resolve(directory) + "\n  " + firstLine;
+}
+function parentEvidencePacket(links = [], slug) {
+  const parents = links.filter((link) => link.type === "blocked-by").map((link) => store.getTicket(slug, link.ref)).filter(Boolean);
+  return parents.length ? "Parent evidence:\n" + parents.map(parentEvidenceLine).join("\n") : "";
+}
+function storyEvidencePacket(storyId, slug) {
+  if (!storyId || !slug) return "";
+  const story = store.getStory(slug, storyId);
+  if (!story) return "";
+  const directory = store.ticketEvidenceDirectory(slug, story.ref, store.readMeta(slug).path);
+  if (!fs.existsSync(directory)) return "";
+  return "Story evidence root: " + directory + "\nRead " + path.join(directory, "manifest.sha256.json") + " before saving a file, then append {sha256, path, source, savedBy}; synthesis uses this manifest as the dedupe authority.";
+}
 function executorHandlesBody(ticket, slug) {
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
   return [
@@ -886,6 +938,8 @@ ${ticketContractsPacket(ticket)}`,
 ${ticketReadinessContractPacket(ticket, slug)}`,
     `Dependencies:
 ${links}`,
+    parentEvidencePacket(ticket.links, slug),
+    storyEvidencePacket(ticket.storyId, slug),
     `Attachments (inspect every readable attachment before implementation):
 ${ticketAssetsPacket(ticket, slug)}`
   ].join("\n\n");
@@ -912,7 +966,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const planDocument = planDocumentPacket(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
-  const continuation = ticketContinuationPacket(ticket);
+  const continuation = checkpointContinuationPacket(ticket);
   const taskAndScope = taskAndScopeBody(ticket, slug);
   const rejectionHistory = rejectedSubmissionHistoryBody(ticket);
   const snapshot = storySnapshot(ticket, slug);

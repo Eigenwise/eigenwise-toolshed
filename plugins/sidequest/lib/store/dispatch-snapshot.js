@@ -27,11 +27,11 @@ function textOrNull(value) {
   return text || null;
 }
 function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory, routed }) {
-  function executorDeniedTools(slug, ticket, readonly) {
+  function executorDeniedTools(slug, ticket) {
     const config = boardConfig(slug) || {};
     const categoryId = ticketCategoryId(ticket);
     const category = categoryId && getCategory(categoryId, { project: slug }) || {};
-    return [...listOf(config.deniedTools), ...listOf(category.deniedTools), ...readonly ? listOf(config.readOnlyDeniedTools) : []];
+    return [...listOf(config.deniedTools), ...listOf(category.deniedTools)];
   }
   function dispatchRow(slug, ticket, now) {
     const state = ticket.dispatch;
@@ -49,8 +49,12 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
       worktree: textOrNull(state.worktree),
       sharedTree: state.sharedTree !== false,
       readonly,
+      ...readonly ? { readOnlyDeniedTools: boardConfig(slug)?.readOnlyDeniedTools } : {},
+      evidenceMode: state.evidenceMode === true,
+      evidenceRepositoryRoot: textOrNull(state.evidenceRepositoryRoot),
+      evidenceWriteRoots: listOf(state.evidenceWriteRoots),
       state: rowState,
-      deniedTools: executorDeniedTools(slug, ticket, readonly)
+      deniedTools: executorDeniedTools(slug, ticket)
     };
   }
   function writeDispatchSnapshot(slug, now = Date.now()) {

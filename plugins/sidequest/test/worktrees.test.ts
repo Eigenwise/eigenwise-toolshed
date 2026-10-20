@@ -2367,7 +2367,9 @@ test('a park whose registration cannot be repaired keeps the commit and reports 
     assert.equal(reachableFromEveryRef(repository, commit), true, 'that later sweep still cannot prune the unrepaired park registration');
     assert.equal(registeredWorktreePaths(repository).includes(worktrees.canonicalPath(worktree)), true, 'the stale registration stays until repair can move it');
     assert.equal(registeredWorktreePaths(repository).includes(worktrees.canonicalPath(ordinary)), true, 'the unrelated missing registration stays while repair is unresolved');
-    assert.match(second.failures.map((failure: any) => failure.message).join('\n'), /metadata pruning is deferred/, 'the later sweep reports why it deferred repository metadata cleanup');
+    const deferred = second.failures.filter((failure: any) => /metadata pruning is deferred/.test(failure.message));
+    assert.equal(deferred.length, 1, 'the later sweep reports the deferral once, not once per park');
+    assert.match(deferred[0].message, /^1 retained parked worktree could not reconcile .* and [1-9]\d* prunable registrations? stay listed\. Run git worktree repair/, 'with the counts and what to run');
 
     fs.chmodSync(path.join(registration, 'gitdir'), 0o644);
     const retried = await worktrees.sweep(repository, [ticket], {
@@ -2403,6 +2405,78 @@ test('a park whose registration cannot be repaired keeps the commit and reports 
     if (ordinary && fs.existsSync(ordinary)) git(repository, ['worktree', 'remove', '--force', ordinary]);
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+function parkInQuarantine(repository: string, quarantineDir: string, name: string): string {
+  const worktree = createAgentWorktree(repository, path.join(repository, '.claude', 'worktrees'), name, false);
+  const destination = path.join(quarantineDir, `agent-${name}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  fs.renameSync(worktree, destination);
+  git(repository, ['worktree', 'repair', destination]);
+  return destination;
+}
+
+function strandRegistrations(repository: string, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    const worktree = createAgentWorktree(repository, path.join(repository, '.claude', 'worktrees'), `stranded-${index}`, false);
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
+}
+
+function prunableRegistrations(repository: string): number {
+  return git(repository, ['worktree', 'list', '--porcelain']).split(/\r?\n/).filter((line) => line.startsWith('prunable')).length;
+}
+
+// GH-429: a park whose registration was removed out of band could never be repaired, so every sweep
+// reported it and deferred the prune, and directories already gone stayed listed by the hundred.
+test('a parked worktree whose registration is already gone is reconciled once and pruning completes', async () => {
+  const { repository } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-gone-registration-quarantine-'));
+  const parked = parkInQuarantine(repository, quarantineDir, 'gone-registration');
+  const registration = path.join(repository, '.git', 'worktrees', 'agent-gone-registration');
+  fs.rmSync(registration, { recursive: true, force: true });
+  strandRegistrations(repository, 3);
+  assert.equal(prunableRegistrations(repository), 3);
+  try {
+    const options = { execute: true, minAgeMs: 0, integrationTarget: localMainTarget, quarantineDir };
+    const first = await worktrees.sweep(repository, [], options);
+    const entry = first.recovery.quarantine.entries.find((candidate: any) => candidate.path === parked);
+
+    assert.deepEqual(first.failures, [], 'a registration that no longer exists is not a reconcile failure');
+    assert.equal(entry.registrationSkipped.reason, 'registration_gone', 'the report records why the park was reconciled without repair');
+    assert.equal(worktrees.canonicalPath(entry.registrationSkipped.gitDirectory), worktrees.canonicalPath(registration), 'and the missing registration it names');
+    assert.equal(entry.registrationRepaired, undefined, 'no repair was attempted against a registration that is gone');
+    assert.equal(prunableRegistrations(repository), 0, 'the deferred prune ran and removed every stranded registration');
+    assert.equal(fs.existsSync(path.join(parked, 'README.md')), true, 'the parked files stay until retention expires them');
+
+    const second = await worktrees.sweep(repository, [], options);
+    assert.deepEqual(second.failures, [], 'the next sweep does not report it again');
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// Quarantine is shared by every project, so each project's sweep saw every other project's parks and
+// deferred its own prune because git worktree list here could never name them (GH-429).
+test('a park another repository owns neither defers this repository\'s pruning nor loses its own registration', async () => {
+  const { repository } = repositoryFixture();
+  const { repository: other } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-foreign-park-quarantine-'));
+  const parked = parkInQuarantine(other, quarantineDir, 'foreign-park');
+  strandRegistrations(repository, 2);
+  try {
+    const result = await worktrees.sweep(repository, [], { execute: true, minAgeMs: 0, integrationTarget: localMainTarget, quarantineDir });
+    const entry = result.recovery.quarantine.entries.find((candidate: any) => candidate.path === parked);
+
+    assert.deepEqual(result.failures, []);
+    assert.equal(entry.registrationSkipped.reason, 'other_repository');
+    assert.equal(prunableRegistrations(repository), 0, 'this repository pruned its own stranded registrations');
+    assert.equal(registeredWorktreePaths(other).includes(worktrees.canonicalPath(parked)), true, 'the owning repository still lists its park');
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
     fs.rmSync(quarantineDir, { recursive: true, force: true });
   }
 });

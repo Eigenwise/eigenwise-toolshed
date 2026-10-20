@@ -1,6 +1,7 @@
 "use strict";
 const { normalizeDeniedTools } = require("../denied-tools.js");
 const { VERIFICATION_ENVIRONMENTS } = require("../kernel/verification.js");
+const { canonicalPath } = require("../kernel/worktree.js");
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
@@ -26,7 +27,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     return normalized;
   }
   function normalizeReadOnlyDeniedTools(value) {
-    if (value == null) return [];
+    if (value == null) return null;
     if (!Array.isArray(value)) throw new Error("readOnlyDeniedTools must be an array of tool patterns.");
     const seen = /* @__PURE__ */ new Set();
     const normalized = [];
@@ -304,10 +305,33 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       stdio: "pipe"
     }).trim();
   }
+  function existingAbsoluteDataRoot(value) {
+    if (typeof value !== "string" || !path.isAbsolute(value)) throw new Error("investigationDataRoots entries must be absolute paths.");
+    if (!fs.existsSync(value)) throw new Error(`investigationDataRoots path does not exist: ${value}`);
+    return canonicalPath(value);
+  }
+  function repositoryContainsDataRoot(repository, root) {
+    const relative = path.relative(canonicalPath(repository), root);
+    return relative.split(path.sep)[0] !== ".." && !path.isAbsolute(relative);
+  }
+  function investigationDataRoot(value, repository) {
+    const root = existingAbsoluteDataRoot(value);
+    if (repositoryContainsDataRoot(repository, root)) {
+      throw new Error(`investigationDataRoots must lie outside the repository: ${value}`);
+    }
+    return root;
+  }
+  function normalizeInvestigationDataRoots(value, repository = "") {
+    if (!Array.isArray(value)) throw new Error("investigationDataRoots must be an array of absolute paths.");
+    return [...new Set(value.map((root) => investigationDataRoot(root, repository)))];
+  }
   function normalizeBoardName(value) {
     const name = typeof value === "string" ? value.trim() : "";
     if (!name) throw new Error("Board name cannot be empty.");
     return name;
+  }
+  function storedInvestigationDataRoots(meta) {
+    return meta.investigationDataRoots ?? [];
   }
   function boardConfig(slug) {
     const meta = readMeta(slug);
@@ -321,6 +345,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
       githubSync: normalizeGithubSync(meta.githubSync),
       alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
+      investigationDataRoots: storedInvestigationDataRoots(meta),
       readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
       deniedTools: normalizeDeniedTools(meta.deniedTools),
       generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
@@ -363,6 +388,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     throw new Error("githubSync must be off, comment or close. Enabling it authorizes GitHub comments, and close also authorizes closing issues after publication.");
   }
   const BOARD_CONFIG_NORMALIZERS = {
+    investigationDataRoots: normalizeInvestigationDataRoots,
     name: normalizeBoardName,
     jiraBaseUrl: normalizeJiraBaseUrl,
     githubSync: normalizeGithubSync,
@@ -395,7 +421,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       if (!entries.length) return { ok: true, config: boardConfig(slug) };
       for (const [key, value] of entries) {
         const normalize = BOARD_CONFIG_NORMALIZERS[key];
-        if (normalize) meta[key] = normalize(value);
+        if (normalize) meta[key] = normalize(value, meta.path);
       }
       putProject(slug, meta);
       return { ok: true, config: boardConfig(slug) };

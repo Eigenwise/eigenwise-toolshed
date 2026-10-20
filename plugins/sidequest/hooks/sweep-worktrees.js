@@ -50,6 +50,8 @@ var import_node_fs = __toESM(require("node:fs"));
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 var DISPATCH_NAME = "sidequest-exec-dispatch";
@@ -57,12 +59,17 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -156,12 +163,6 @@ function writeSweepProgress(cwd, progress) {
   } catch (_) {
   }
 }
-function clearSweepProgress(cwd) {
-  try {
-    import_node_fs3.default.rmSync(progressFile(cwd), { force: true });
-  } catch (_) {
-  }
-}
 function writeReport(cwd, notices) {
   try {
     import_node_fs3.default.mkdirSync(stateDirectory(), { recursive: true });
@@ -169,27 +170,14 @@ function writeReport(cwd, notices) {
   } catch (_) {
   }
 }
-function drainReport(cwd) {
-  const file = reportFile(cwd);
-  let raw;
-  try {
-    raw = import_node_fs3.default.readFileSync(file, "utf8");
-  } catch (_) {
-    return null;
-  }
-  import_node_fs3.default.rmSync(file, { force: true });
-  clearSweepProgress(cwd);
-  try {
-    const parsed = JSON.parse(raw);
-    const notices = parsed?.notices;
-    return Array.isArray(notices) ? notices.map((notice) => String(notice)).filter(Boolean) : [];
-  } catch (_) {
-    return [];
-  }
+function sessionEndHandoffFile(cwd) {
+  return reportFile(cwd).replace(/\.json$/, ".session-end.json");
 }
-function appendReport(cwd, notices) {
-  if (!notices.length) return;
-  writeReport(cwd, [...drainReport(cwd) || [], ...notices]);
+function clearSessionEndHandoff(cwd) {
+  try {
+    import_node_fs3.default.rmSync(sessionEndHandoffFile(cwd), { force: true });
+  } catch (_) {
+  }
 }
 
 // src/hooks/shared/sweep-flight.ts
@@ -389,14 +377,6 @@ function currentProject(data, store) {
     sessionPath: sessionWorktreePath(start)
   };
 }
-function unregisterSweepSession(data) {
-  const id = sessionId(data);
-  if (!id) return;
-  const state = readState();
-  if (state.sessions) delete state.sessions[id];
-  if (state.reportedOrphans) delete state.reportedOrphans[id];
-  writeState(state);
-}
 function liveSessionPaths() {
   return Object.values(readState().sessions || {});
 }
@@ -561,15 +541,6 @@ async function sessionStartMaintenance(data) {
   }
   return notices;
 }
-async function sessionEndSweep(data) {
-  try {
-    appendReport(String(data.cwd), await withWorktreeSweepLock(() => sweepWorktrees(data, false)));
-  } catch (error) {
-    appendReport(String(data.cwd), [`sidequest: session-end worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`]);
-  } finally {
-    unregisterSweepSession(data);
-  }
-}
 function workerDeadlineMilliseconds() {
   const configured = Number(process.env.SIDEQUEST_SWEEP_WORKER_DEADLINE_MS);
   return Number.isFinite(configured) && configured > 0 ? Math.min(configured, 6e4) : 6e4;
@@ -598,8 +569,8 @@ async function main() {
   const cwd = argument("cwd") || process.cwd();
   const data = { cwd, session_id: argument("session") };
   if (argument("supervise")) return superviseSweep(cwd, argument("supervise"));
-  if (argument("mode") === "session-end") return sessionEndSweep(data);
   writeReport(cwd, await sessionStartMaintenance(data));
+  clearSessionEndHandoff(cwd);
 }
 main().catch((error) => {
   writeReport(argument("cwd") || process.cwd(), [

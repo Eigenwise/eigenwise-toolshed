@@ -341,9 +341,9 @@ test('candidate review admission names an untested risk and precedes delivery', 
 
 test('all shipped executor profiles budget final verification before the continuation boundary', () => {
   const sources = agentsync.bundledExecutorSources() as Map<string, string>;
-  assert.equal(sources.size, 13);
+  assert.equal(sources.size, 19);
   assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
-  assert.equal(sources.size, 12);
+  assert.equal(sources.size, 18);
   assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 75);
   for (const [filename, source] of sources) {
     assert.match(source, /Size implementation plus final verification to fit comfortably before 75 tool rounds/, filename);
@@ -357,7 +357,7 @@ test('all shipped executor profiles budget final verification before the continu
 test('heavy resource handoffs preserve independent work and require the actual owner return', () => {
   const sources = agentsync.bundledExecutorSources() as Map<string, string>;
   assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
-  assert.equal(sources.size, 12);
+  assert.equal(sources.size, 18);
   for (const [filename, source] of sources) {
     assert.match(source, /Serialize heavy commands on the parent-named shared resource, not entire tickets/, filename);
     assert.match(source, /continue independent reading, editing, and scoped commits/, filename);
@@ -441,9 +441,9 @@ test('continuous execution freezes trustworthy measurement and pauses only the b
   assert.match(verifyDiscipline, /without a duplicate suite merely for reviewer identity/);
 });
 
-test('all twelve executors discover optional gates without a shipped quality mandate', () => {
+test('all shipped executors discover optional gates without a shipped quality mandate', () => {
   const executors = [...agentsync.bundledExecutorSources()].filter(([filename]) => filename !== 'sidequest-diagnostic-probe.md');
-  assert.equal(executors.length, 12);
+  assert.equal(executors.length, 18);
   for (const [filename, source] of executors) {
     assert.equal(fs.readFileSync(path.join(ROOT, 'agents', filename), 'utf8'), source, filename);
     assert.match(source, /configured quality gate when the briefing names one/);

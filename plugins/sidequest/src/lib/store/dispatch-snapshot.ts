@@ -11,7 +11,7 @@ const CLOSED_ROW_RETENTION_MS = 24 * 60 * 60 * 1000;
 type SnapshotDependencies = {
   listTickets: (slug: string) => any[];
   projectDir: (slug: string) => string;
-  boardConfig: (slug: string) => { deniedTools?: string[]; readOnlyDeniedTools?: string[] } | null;
+  boardConfig: (slug: string) => { deniedTools?: string[]; readOnlyDeniedTools?: string[] | null } | null;
   getCategory: (id: string, options: { project: string }) => { deniedTools?: string[] } | null;
   routed: (slug: string) => boolean;
 };
@@ -47,11 +47,11 @@ function textOrNull(value: unknown): string | null {
 }
 
 function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCategory, routed }: SnapshotDependencies) {
-  function executorDeniedTools(slug: string, ticket: any, readonly: boolean): string[] {
+  function executorDeniedTools(slug: string, ticket: any): string[] {
     const config = boardConfig(slug) || {};
     const categoryId = ticketCategoryId(ticket);
     const category = (categoryId && getCategory(categoryId, { project: slug })) || {};
-    return [...listOf(config.deniedTools), ...listOf(category.deniedTools), ...(readonly ? listOf(config.readOnlyDeniedTools) : [])];
+    return [...listOf(config.deniedTools), ...listOf(category.deniedTools)];
   }
 
   function dispatchRow(slug: string, ticket: any, now: number) {
@@ -70,8 +70,12 @@ function createDispatchSnapshot({ listTickets, projectDir, boardConfig, getCateg
       worktree: textOrNull(state.worktree),
       sharedTree: state.sharedTree !== false,
       readonly,
+      ...(readonly ? { readOnlyDeniedTools: boardConfig(slug)?.readOnlyDeniedTools } : {}),
+      evidenceMode: state.evidenceMode === true,
+      evidenceRepositoryRoot: textOrNull(state.evidenceRepositoryRoot),
+      evidenceWriteRoots: listOf(state.evidenceWriteRoots),
       state: rowState,
-      deniedTools: executorDeniedTools(slug, ticket, readonly),
+      deniedTools: executorDeniedTools(slug, ticket),
     };
   }
 

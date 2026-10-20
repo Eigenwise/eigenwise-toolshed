@@ -3,7 +3,7 @@ var import_work_provenance = require("./store/work-provenance");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
+const { EVIDENCE_DISPATCH_NAME, stableEvidenceClaudeName, dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 const { execFileSync } = require("./git-process.js");
@@ -21,7 +21,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
+const { branchOwningWorktree, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
@@ -712,6 +712,7 @@ const {
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
+  ticketEvidenceDirectory,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -2034,13 +2035,22 @@ const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 function priorityRank(p) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[String(p)] ?? 9 : 9;
 }
+function evidenceExecutorName(ticket, resolved) {
+  if (getCategory(ticketCategory(ticket), { project: ticket.project })?.writes !== "evidence") return null;
+  return resolved.backend === "codex" ? EVIDENCE_DISPATCH_NAME : stableEvidenceClaudeName(ticket.effort);
+}
+function readonlyExecutorName(ticket, resolved) {
+  return evidenceExecutorName(ticket, resolved) || resolved.readOnlyAgent || defaultReadonlyExecutorName(ticket, resolved);
+}
+function defaultReadonlyExecutorName(ticket, resolved) {
+  return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
+}
 function stableExecutorName(ticket, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
-  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
-  return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
+  return readonlyExecutorName(ticket, resolved);
 }
 const DIRECT_REASON_MIN_LENGTH = 20;
 function isRoutedTicket(ticket) {
@@ -2596,8 +2606,11 @@ function pendingSubmissionRefusal(t, heldOwner, reopenStatus) {
     message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission?.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
   };
 }
+function doneAuthorityRefusal(request, facts) {
+  return evidenceDoneReportRefusal(request, facts) || executorDoneRefusal(request, facts);
+}
 function releaseRefusal(request, facts) {
-  const refusal = unclaimedActiveDispatchRefusal(request, facts) || executorDoneRefusal(request, facts) || changedClaimRefusal(request, facts) || ownershipRefusal(request, facts);
+  const refusal = unclaimedActiveDispatchRefusal(request, facts) || doneAuthorityRefusal(request, facts) || changedClaimRefusal(request, facts) || ownershipRefusal(request, facts);
   if (refusal) return refusal;
   assertOracleRelease(request, facts);
   return sweepReleaseRefusal(request, facts);
@@ -2617,6 +2630,29 @@ function unclaimedDispatchRefusal(t, dispatch2, by) {
   };
 }
 const NO_COMPLETION_DELTA = { completionDelta: null, sharedTreeCommittedScope: false };
+function savedEvidencePath(root, relative) {
+  if (path.isAbsolute(relative)) return false;
+  const target = path.resolve(root, relative);
+  if (!boardVerificationEvidencePath(target, root)) return false;
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+function evidenceReportNamesSavedFile(roots, body) {
+  const paths = body.match(/`[^`]+`|[^\s,;]+/g) || [];
+  return roots.some((root) => paths.some((relative) => savedEvidencePath(root, relative.replace(/^`|`$/g, ""))));
+}
+function evidenceCompletionReported(dispatch2, body) {
+  return /\bnothing was saved\b/i.test(body) || evidenceReportNamesSavedFile(dispatch2.evidenceWriteRoots || [], body);
+}
+function evidenceDoneReportRefusal(request, facts) {
+  if (!facts.executorDone || facts.dispatch?.evidenceMode !== true) return null;
+  const body = String(request.opts.completionComment?.body || "");
+  if (evidenceCompletionReported(facts.dispatch, body)) return null;
+  return { ok: false, reason: "evidence_report_required", message: 'Evidence dispatch done requires a written evidence file path relative to its admitted root, or the explicit statement "nothing was saved".', ticket: facts.t };
+}
 function executorDoneRefusal(request, facts) {
   if (!facts.executorDone) return null;
   const delta = facts.active ? reviewedCompletionDelta(request.slug, facts) : NO_COMPLETION_DELTA;
@@ -3371,7 +3407,8 @@ function sameBranchWaveTarget(slug, targets) {
   return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
-  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
+  const repository = branchOwningWorktree(readMeta(slug)?.path, recorded.branch);
+  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(repository, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
   if (!branch || branch === recorded.branch) return recorded;
   return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
 }
@@ -4079,6 +4116,7 @@ module.exports = {
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
+  ticketEvidenceDirectory,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,

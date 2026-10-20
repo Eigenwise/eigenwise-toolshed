@@ -1,6 +1,6 @@
 'use strict';
 
-const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
+const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'investigationDataRoots', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
 // These settings read null as "leave it alone"; the others hand null to their normalizer (worktreeSetup: null clears the command).
 const BOARD_CONFIG_NULL_LEAVES_ALONE = new Set(['alwaysInScope', 'integrationMode', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'verifyEnvironment']);
 
@@ -270,6 +270,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         profile: { type: 'string' },
         id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        writes: { type: 'string', enum: ['evidence'], description: 'Read-only evidence collection under dispatch evidence and investigation data roots, closing with done.' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
@@ -285,6 +286,7 @@ const tools: ToolDefinition[] = [
         artifactRoots: args.artifactRoots || [],
         route: { model: args.routeModel, effort: args.routeEffort },
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
+        writes: args.writes,
         readonly: args.readonly === true,
         enabled: args.enabled !== false,
       };
@@ -302,6 +304,7 @@ const tools: ToolDefinition[] = [
       type: 'object',
       properties: {
         id: { type: 'string' }, project: PROJECT_PROP, profile: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        writes: { type: 'string', enum: ['evidence'], description: 'Read-only evidence collection under dispatch evidence and investigation data roots, closing with done.' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: ['string', 'null'], description: 'Set null to clear the fallback route.' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
@@ -327,7 +330,7 @@ const tools: ToolDefinition[] = [
       const existing: any = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch: Record<string, unknown> = {};
-      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly', 'deniedTools']) if (args[key] !== undefined) patch[key] = args[key];
+      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly', 'writes', 'deniedTools']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel === null) patch.fallback = null;
       else if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
@@ -422,15 +425,15 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'board_config',
-    description: 'Board settings.',
+    description: 'Board settings. investigationDataRoots admits existing absolute paths outside the repository for research.evidence dispatches.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         name: { type: 'string' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
-        readOnlyDeniedTools: { type: 'array', items: { type: 'string' } },
-        deniedTools: { type: 'array', items: { type: 'string' } },
+        investigationDataRoots: { type: 'array', items: { type: 'string' }, description: 'Replace investigation data roots. Paths must exist, be absolute, and lie outside the repository, including after resolving symlinks.' },
+        readOnlyDeniedTools: { type: 'array', items: { type: 'string' }, description: 'Replaces the whole default read-only MCP write-name deny list, rather than extending it. An empty list disables that default.' },        deniedTools: { type: 'array', items: { type: 'string' } },
         generatedPairs: {},
         integrationMode: { type: 'string', description: 'auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },

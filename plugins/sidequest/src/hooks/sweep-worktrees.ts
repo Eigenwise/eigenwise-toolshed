@@ -5,8 +5,8 @@ import type { HookInput } from './shared/input.js';
 import { runtimeModule, pluginRoot } from './shared/paths.js';
 import path from 'node:path';
 import { protectSweepFlight, releaseSweepFlight, sweepFlightOwned } from './shared/sweep-flight.js';
-import { sweepWorktrees, unregisterSweepSession, withWorktreeSweepLock } from './shared/worktree-sweep.js';
-import { appendReport, writeReport } from './shared/sweep-handoff.js';
+import { sweepWorktrees, withWorktreeSweepLock } from './shared/worktree-sweep.js';
+import { clearSessionEndHandoff, writeReport } from './shared/sweep-handoff.js';
 
 interface Store {
   sweepStaleClaims: (options: { source: string }) => unknown;
@@ -64,18 +64,6 @@ async function sessionStartMaintenance(data: HookInput): Promise<string[]> {
   return notices;
 }
 
-// SessionEnd already reconciled claims and agents before it detached this worker, so only the
-// current project's sweep is left, and its notices wait for the next session start.
-async function sessionEndSweep(data: HookInput): Promise<void> {
-  try {
-    appendReport(String(data.cwd), await withWorktreeSweepLock(() => sweepWorktrees(data, false)));
-  } catch (error: unknown) {
-    appendReport(String(data.cwd), [`sidequest: session-end worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`]);
-  } finally {
-    unregisterSweepSession(data);
-  }
-}
-
 function workerDeadlineMilliseconds(): number {
   const configured = Number(process.env.SIDEQUEST_SWEEP_WORKER_DEADLINE_MS);
   return Number.isFinite(configured) && configured > 0 ? Math.min(configured, 60_000) : 60_000;
@@ -111,8 +99,8 @@ async function main(): Promise<void> {
   const cwd = argument('cwd') || process.cwd();
   const data = { cwd, session_id: argument('session') };
   if (argument('supervise')) return superviseSweep(cwd, argument('supervise'));
-  if (argument('mode') === 'session-end') return sessionEndSweep(data);
   writeReport(cwd, await sessionStartMaintenance(data));
+  clearSessionEndHandoff(cwd);
 }
 
 main().catch((error: unknown) => {

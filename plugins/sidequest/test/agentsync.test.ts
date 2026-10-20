@@ -21,14 +21,16 @@ const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-gpt-5.6-p
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Codex dispatch executors are effort-collapsed: model AND effort ride the route
-// marker, so the stable set is 2 shared dispatch defs plus the per-effort Claude ladder.
+// marker, so each role has one dispatch definition and a per-effort Claude ladder.
 const STABLE_EXECUTORS = [
   'sidequest-diagnostic-probe.md',
   'sidequest-exec-dispatch.md',
   'sidequest-exec-dispatch-readonly.md',
+  'sidequest-exec-dispatch-evidence.md',
   ...EFFORTS.flatMap((effort) => [
     `sidequest-exec-${effort}.md`,
     `sidequest-exec-readonly-${effort}.md`,
+    `sidequest-exec-evidence-${effort}.md`,
   ]),
 ].sort();
 
@@ -732,7 +734,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   try {
     assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
     const result = agentsync.syncExecAgents(null, { dir });
-    assert.equal(result.written, 13);
+    assert.equal(result.written, STABLE_EXECUTORS.length);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
     // One collapsed dispatch definition keeps a safe frontmatter effort for internal non-marker calls.
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
@@ -918,7 +920,7 @@ test('sync writes route-independent generated executors', () => {
   configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.equal(result.written, 13);
+  assert.equal(result.written, STABLE_EXECUTORS.length);
   assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
@@ -1946,3 +1948,20 @@ for (const { label, artifact, legacyArtifact, expectedArtifact } of [
 }
 
 export {};
+
+
+test('evidence definitions admit Write and Edit while denying delegation and coding closeout', () => {
+  const sources = agentsync.bundledExecutorSources();
+  for (const name of ['sidequest-exec-dispatch-evidence', ...EFFORTS.map((effort) => 'sidequest-exec-evidence-' + effort)]) {
+    const source = sources.get(name + '.md');
+    assert.ok(source);
+    const denied = /^disallowedTools: (.+)$/m.exec(source)?.[1]?.split(', ') || [];
+    assert.ok(!denied.includes('Write'));
+    assert.ok(!denied.includes('Edit'));
+    assert.ok(denied.includes('Agent'));
+    assert.ok(denied.includes('NotebookEdit'));
+    assert.ok(denied.includes('mcp__plugin_sidequest_board__submit'));
+    assert.doesNotMatch(source, /^permissionMode:/m);
+    assert.equal(require('../lib/exec-names.js').isReadOnlyExecutor('sidequest:' + name), true);
+  }
+});

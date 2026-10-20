@@ -172,3 +172,19 @@ test('SQ-3739: a read-only executor with a live category research prefix runs wi
   assert.match(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', prompt: 'Read files.' }).reason, /exact prepared FIRST action briefing command/);
   assert.match(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-low', model: 'sonnet', prompt: 'Read files.' }).reason, /missing its dispatched ticket/);
 });
+
+
+test('evidence category keeps its ticketless readonly research recipe admissible', () => {
+  const store = require('../lib/store.js');
+  const agentsync = require('../lib/agentsync.js');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-recipe-'));
+  const { slug } = store.ensureProject(project);
+  const category = store.getCategory('research.evidence', { project: slug });
+  const resolved = store.resolveCategoryRoute(category);
+  const recipe = agentsync.workflowRecipe({ ...category, project: slug }, resolved);
+  assert.equal(recipe.category, 'research.evidence');
+  assert.ok(recipe.agent);
+  assert.equal(recipe.research.subagentType, 'sidequest:sidequest-exec-readonly-medium');
+  const decision = researchDecision(project, { subagent_type: recipe.research.subagentType, model: recipe.research.model, description: 'Evidence research', prompt: recipe.research.promptPrefix + 'Inspect only. Save nothing.' });
+  assert.equal(decision.denied, false, decision.reason);
+});

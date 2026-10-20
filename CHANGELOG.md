@@ -8,6 +8,39 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.606.0 (2026-10-20)
+
+### sidequest 6.0.2 → 6.1.0
+
+#### Features
+
+- Add evidence collection categories with external write roots (SQ-3777)
+  Evidence collection keeps repository writes forbidden and closes through done without a commit. A distinct evidence executor family admits Write and Edit under evidence roots, leaving existing read-only definitions unchanged.
+
+#### Fixes
+
+- Worktree sweep stops deferring pruning on parks it can't repair, and SessionEnd stops sweeping (SQ-3438)
+  GH-429, GH-539: a retained park whose Git registration is already gone, or that belongs to another repository (quarantine is shared across projects), no longer counts as an unreconciled park. The sweep records why on that quarantine entry and runs `git worktree prune` as usual, so prunable registrations stop piling up. When pruning really is deferred, the sweep now reports it once with the count of unreconciled parks and prunable registrations, instead of one notice per park on every run.
+
+  GH-400: SessionEnd no longer starts a sweep. It unregisters the ended session and records that the project is owed a sweep, all inside the host's ~1.5 s exit budget, and the next SessionStart maintenance runs the sweep under its worker deadline and clears the record. A sweep cancelled at exit can no longer leave its session registered as live.
+- Deliver integration branches in their owning linked worktree (SQ-3502)
+  Resolve the branch-owning checkout for integrate and manual delivery recording, including merged-tree verification. Leave the registered checkout untouched when the integration branch lives in a linked worktree. Keep qualified dispatch refs and frozen submission ranges unchanged. Fixes GH-499.
+- Preserve investigation cursors and evidence across checkpoint handoffs (SQ-3778)
+  Checkpoint accepts a resume cursor and relative evidence paths, and continuation briefings replay them.
+
+  The MCP tools/list ceiling rises from 29100 to 29400 bytes for the two new checkpoint properties; the 2500-byte headroom floor is unchanged.
+- Deny read-only executor MCP write calls by default (SQ-3779)
+- Carry story and parent evidence into dependent briefings (SQ-3780)
+  Briefings list completed dependency evidence directories and done summaries, pending parents, and existing story evidence roots with the sha256 manifest dedupe convention. Ready output is unchanged.
+
+  Concurrent children can race when appending to manifest.sha256.json. TODO SQ-3787: serialize manifest updates without losing another child's entry.
+
+  A briefing rendered without a project slug (as the briefing unit tests do) skips the story evidence root instead of querying the store with an unbound parameter.
+- Document fan-out investigations (SQ-3781)
+  Orchestration, user-story and the Sidequest guide now explain the research.evidence category, evidence roots, investigationDataRoots, checkpoint cursors and the read-only MCP write guard.
+- Refresh evidence executor and category shape expectations (SQ-3789)
+  Refresh executor counts, generated category fixtures, dispatch snapshot fields, and category-edit expectations for evidence collection. Explain the evidence category route and clean up lifecycle fixture state.
+
 ## v3.605.0 (2026-10-20)
 
 ### model-gateway 0.54.4 → 0.54.5

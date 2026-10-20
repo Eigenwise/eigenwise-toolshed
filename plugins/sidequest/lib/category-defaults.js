@@ -22,12 +22,29 @@ __export(category_defaults_exports, {
   ROUTING_PROFILE_SEED_REVISION: () => ROUTING_PROFILE_SEED_REVISION,
   STARTER_GATEWAY_MODEL_SLUGS: () => STARTER_GATEWAY_MODEL_SLUGS,
   STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES,
+  categoryEvidenceFields: () => categoryEvidenceFields,
   categoryWithCurrentCodexRoutes: () => categoryWithCurrentCodexRoutes,
   starterRoutingProfilesFor: () => starterRoutingProfilesFor
 });
 module.exports = __toCommonJS(category_defaults_exports);
-const ROUTING_PROFILE_SEED_REVISION = 9;
+function categoryEvidenceFields(category) {
+  return category.writes === "evidence" ? { writes: "evidence" } : {};
+}
+const ROUTING_PROFILE_SEED_REVISION = 10;
+const EVIDENCE_CATEGORY = {
+  id: "research.evidence",
+  name: "Evidence collection",
+  description: "Collect external evidence incrementally under dispatch evidence roots and declared investigation data roots. Sonnet/medium fits bounded collection and transcription with provenance rules carried by the contract; Opus/high is the fallback for sources that need judgment. Repository writes are forbidden; close through done with relative evidence paths or explicitly state that nothing was saved.",
+  route: { model: "sonnet", effort: "medium" },
+  fallback: { model: "opus", effort: "high" },
+  contract: "Inventory rows carry source id, channel or ticket, date, author role and why; files deduped by sha256 against the data root and story manifest; no private individuals' names in inventories or drafted cases (company names allowed); customer documents flagged and kept under the data root, never in the repository or the ticket thread; write evidence incrementally and checkpoint with a cursor before budget.",
+  artifactRoots: [],
+  readonly: true,
+  writes: "evidence",
+  enabled: true
+};
 const DEFAULT_CATEGORIES = [
+  EVIDENCE_CATEGORY,
   {
     id: "codebase-exploration",
     name: "Codebase exploration",
@@ -240,6 +257,7 @@ const CREATIVE_MUSIC_CATEGORIES = [
   }
 ];
 const RESEARCH_CATEGORIES = [
+  EVIDENCE_CATEGORY,
   {
     id: "source-lookup",
     name: "Source lookup",
@@ -419,6 +437,7 @@ function categoryWithCurrentCodexRoutes(category, categoryId = category.id) {
   ROUTING_PROFILE_SEED_REVISION,
   STARTER_GATEWAY_MODEL_SLUGS,
   STARTER_ROUTING_PROFILES,
+  categoryEvidenceFields,
   categoryWithCurrentCodexRoutes,
   starterRoutingProfilesFor
 });

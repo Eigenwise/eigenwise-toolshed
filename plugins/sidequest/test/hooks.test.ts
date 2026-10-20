@@ -2887,86 +2887,6 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
 });
 
-test('session-end reclaims an unbound old patch-equivalent worktree and stays fail-soft', async () => {
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-project-'));
-  const worktrees = path.join(project, '.claude', 'worktrees');
-  const projectGit = (args: string[], cwd?: string) => execFileSync('git', args, { cwd: cwd || project, encoding: 'utf8', windowsHide: true }).trim();
-  projectGit(['init', '-b', 'main']);
-  projectGit(['config', 'user.name', 'Sidequest Test']);
-  projectGit(['config', 'user.email', 'sidequest-test@example.invalid']);
-  fs.writeFileSync(path.join(project, 'README.md'), 'session-end fixture\n');
-  projectGit(['add', '.']);
-  projectGit(['commit', '-m', 'base']);
-  projectGit(['branch', '-M', 'main']);
-  fs.mkdirSync(worktrees, { recursive: true });
-  const worktree = path.join(worktrees, 'agent-session-end');
-  const branch = 'worktree-agent-session-end';
-  projectGit(['worktree', 'add', '-b', branch, worktree, 'main']);
-  fs.writeFileSync(path.join(worktree, 'integrated.txt'), 'integrated\n');
-  projectGit(['add', 'integrated.txt'], worktree);
-  projectGit(['commit', '-m', 'integrated fixture'], worktree);
-  const commit = projectGit(['rev-parse', 'HEAD'], worktree);
-  projectGit(['cherry-pick', commit]);
-  const old = new Date(Date.now() - 4 * 60 * 60 * 1000);
-  fs.utimesSync(worktree, old, old);
-  store.ensureProject(project);
-
-  assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
-  // The hook hands the sweep to a detached worker (GH-439), so the reclaim lands after it returns.
-  // The worker keeps running git in the project after the reclaim is visible and holds the sweep
-  // lock until it is done; removing the project before then hits EBUSY on a loaded Windows runner.
-  const sweepLock = path.join(SIDEQUEST_HOME, 'worktree-sweep.lock');
-  const deadline = Date.now() + waitForPathDefaultBudgetMs() * 4;
-  while (Date.now() < deadline && (fs.existsSync(worktree) || projectGit(['branch', '--list', branch]) !== '' || fs.existsSync(sweepLock))) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  assert.equal(fs.existsSync(worktree), false);
-  assert.equal(projectGit(['branch', '--list', branch]), '');
-  assert.equal(fs.existsSync(sweepLock), false, 'the session-end sweep finished before the project is removed');
-  assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
-  fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-});
-
-// GH-439: SessionEnd ran the sweep inline, and Claude Code gives SessionEnd about 1.5 s (#400), so a
-// sweep over more than a handful of trees was cut off on every exit. The stub worker stands in for a
-// sweep that takes 30 s.
-test('session-end returns within a second while its detached sweep keeps running', async () => {
-  const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-stub-'));
-  const marker = path.join(stubRoot, 'worker-started.json');
-  fs.symlinkSync(path.join(PLUGIN_ROOT, 'lib'), path.join(stubRoot, 'lib'), process.platform === 'win32' ? 'junction' : 'dir');
-  fs.mkdirSync(path.join(stubRoot, 'hooks'));
-  fs.writeFileSync(path.join(stubRoot, 'hooks', 'sweep-worktrees.js'), [
-    `require('fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid: process.pid, argv: process.argv.slice(2) }));`,
-    'setTimeout(() => {}, 30000);',
-    '',
-  ].join('\n'));
-  let workerPid = 0;
-  try {
-    const started = Date.now();
-    const result = spawnSync(process.execPath, [SESSION_END], {
-      input: JSON.stringify({ session_id: 'session-end-detached', cwd: BOARD_PATH, reason: 'prompt_input_exit' }),
-      encoding: 'utf8',
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: stubRoot },
-      windowsHide: true,
-    });
-    const elapsedMs = Date.now() - started;
-
-    assert.equal(result.status, 0, result.stderr);
-    assert.ok(elapsedMs < Math.max(1000, measureProcessSpawnBaselineMs() * 10), `session-end took ${elapsedMs}ms`);
-    await waitForPath(marker);
-    const worker = JSON.parse(fs.readFileSync(marker, 'utf8'));
-    workerPid = worker.pid;
-    assert.deepEqual(worker.argv.slice(-2), ['--mode', 'session-end']);
-    assert.doesNotThrow(() => process.kill(workerPid, 0), 'the sweep outlives the hook that started it');
-  } finally {
-    if (workerPid) {
-      try { process.kill(workerPid); } catch (_) {}
-    }
-    fs.rmSync(stubRoot, { recursive: true, force: true });
-  }
-});
-
-
 // Session ids diverge across a long orchestration, and the old exemption was
 // keyed on them, so a healthy running wave read as unfinished business and the
 // orchestrator was told to go close tickets its executors were mid-way through
@@ -3825,10 +3745,6 @@ test('session-start reclaims a clean old worktree without lease identity', async
     assert.equal(fs.existsSync(old), false, 'SessionStart must reclaim a clean old worktree without lease identity');
   } finally {
     if (fs.existsSync(old)) gitFixture(['worktree', 'remove', '--force', old], repo);
-    // Ending the session, like the sibling live-worktree test above, runs the sweep
-    // one more time in the foreground and only returns once that child process has
-    // exited — giving Windows a chance to release any handle the detached sweep
-    // worker still held on `repo` before cleanup deletes it (SQ-2907).
     runHook(SESSION_END, { session_id: 'session-sweep', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
     fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
@@ -6019,7 +5935,7 @@ test('read-only executors never ship or spawn with bypassPermissions (GH-282)', 
   const sources = agentsync.bundledExecutorSources();
   for (const [filename, source] of sources) {
     const frontmatter = source.split('\n---\n')[0];
-    const readOnly = /readonly|diagnostic-probe/.test(filename);
+    const readOnly = /readonly|evidence|diagnostic-probe/.test(filename);
     assert.equal(/^permissionMode:/m.test(frontmatter), !readOnly, filename);
   }
   for (const subagentType of [stableReadOnlyClaudeName('high'), `sidequest:${stableReadOnlyClaudeName('low')}`]) {

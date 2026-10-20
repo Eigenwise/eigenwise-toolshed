@@ -919,6 +919,15 @@
           "minLength": 1,
           "maxLength": 4000
         },
+        "cursor": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "ttlMinutes": {
           "type": "integer",
           "minimum": 1,
@@ -2207,6 +2216,12 @@
         "contract": {
           "type": "string"
         },
+        "writes": {
+          "type": "string",
+          "enum": [
+            "evidence"
+          ]
+        },
         "artifactRoots": {
           "type": "array",
           "items": {
@@ -2276,6 +2291,12 @@
         },
         "contract": {
           "type": "string"
+        },
+        "writes": {
+          "type": "string",
+          "enum": [
+            "evidence"
+          ]
         },
         "artifactRoots": {
           "type": "array",
@@ -2424,6 +2445,12 @@
           "type": "string"
         },
         "alwaysInScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "investigationDataRoots": {
           "type": "array",
           "items": {
             "type": "string"

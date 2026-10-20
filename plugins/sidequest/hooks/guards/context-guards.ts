@@ -13,8 +13,12 @@ export type SnapshotRow = {
   worktree: string | null;
   sharedTree: boolean;
   readonly: boolean;
+  evidenceMode?: boolean;
+  evidenceWriteRoots?: string[];
+  evidenceRepositoryRoot?: string | null;
   state: string;
   deniedTools: string[];
+  readOnlyDeniedTools?: string[] | null;
 };
 
 export type Snapshot = { at: string; routed: boolean; dispatches: SnapshotRow[] };
@@ -33,8 +37,26 @@ export function callerRow(rows: readonly SnapshotRow[], agentId: string | undefi
 export function deniedToolsDenial(toolName: string, row: SnapshotRow | null): string | null {
   if (!row) return null;
   const pattern = deniedToolMatch(toolName, row.deniedTools);
-  if (!pattern) return null;
+  if (!pattern) return readOnlyMcpDenial(toolName, row);
   return `sidequest: ${toolName} is denied to executors on ${row.ref} by the board deniedTools setting (${pattern}). Finish the ticket with the remaining tools; when it needs ${toolName}, comment why on the ticket and release it.`;
+}
+
+const READ_ONLY_BOARD_TOOLS = new Set(['comment', 'checkpoint', 'done', 'release', 'scopeRequest'].map(name => `mcp__plugin_sidequest_board__${name}`));
+const MCP_WRITE_WORD = /(^|_)(send|post|create|add|edit|update|delete|remove|archive|transition|write|upload|publish|assign|comment|reply|move|rename)(_|$)/i;
+
+export function mcpWriteWord(toolName: string): string | null {
+  if (!toolName.startsWith('mcp__')) return null;
+  const finalSegment = toolName.slice(toolName.lastIndexOf('__') + 2).replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+  return finalSegment.match(MCP_WRITE_WORD)?.[2] ?? null;
+}
+
+export function readOnlyMcpDenial(toolName: string, row: SnapshotRow): string | null {
+  if (!row.readonly || READ_ONLY_BOARD_TOOLS.has(toolName)) return null;
+  const pattern = Array.isArray(row.readOnlyDeniedTools)
+    ? deniedToolMatch(toolName, row.readOnlyDeniedTools)
+    : mcpWriteWord(toolName);
+  if (!pattern) return null;
+  return `sidequest: ${toolName} is denied to read-only executors on ${row.ref} (matched ${pattern}). board_config readOnlyDeniedTools replaces the whole default MCP write-name deny list, rather than extending it.`;
 }
 
 export const HEREDOC_DENIAL = 'sidequest: the harness refuses heredocs in isolated worktrees; Write the script to your scratchpad and run it by path.';

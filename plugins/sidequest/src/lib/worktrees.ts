@@ -752,6 +752,16 @@ function parseWorktreeList(output: string): any[] {
   }).filter((entry) => entry.worktree);
 }
 
+function branchOwningWorktree(repository: string, branch: string): string {
+  const output: string = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+    cwd: repository, encoding: 'utf8', windowsHide: true, stdio: 'pipe',
+  });
+  const fields = output.split('\0\0')
+    .map((entry) => entry.split('\0'))
+    .find((entry) => entry.includes(`branch refs/heads/${branch}`));
+  return fields?.find((field) => field.startsWith('worktree '))?.slice('worktree '.length) ?? repository;
+}
+
 function isAgentWorktree(repo: string, worktree: string): boolean {
   const candidate = canonicalPath(worktree);
   return agentWorktreeRoots(repo).some((root) => {
@@ -2434,8 +2444,11 @@ type RecoveryStoreEntry = {
   action: 'keep' | 'remove';
   reason: 'within_retention' | 'retention_age' | 'live_claim';
   registrationRepaired?: boolean;
+  registrationSkipped?: ParkedRegistrationSkip;
   sizeBytes?: number;
 };
+
+type ParkedRegistrationSkip = { reason: 'registration_gone' | 'other_repository'; gitDirectory: string };
 
 type RecoveryStoreReport = {
   path: string;
@@ -2546,16 +2559,67 @@ function clearQuarantineFailureForDestination(destination: string): void {
   if (changed) writeFailureState(state);
 }
 
+async function parkedGitDirectory(destination: string): Promise<string | null> {
+  try {
+    const gitDirectory = /^gitdir:\s*(.+?)\s*$/m.exec(await fs.readFile(path.join(destination, '.git'), 'utf8'))?.[1] || '';
+    return path.isAbsolute(gitDirectory) && path.basename(path.dirname(gitDirectory)) === 'worktrees' ? gitDirectory : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function repositoryCommonDirectory(repo: string): Promise<string> {
+  const common = await git(repo, ['rev-parse', '--git-common-dir']);
+  return common.ok ? canonicalPath(path.resolve(repo, common.stdout)) : '';
+}
+
+// Quarantine is shared by every project, so a park can belong to another repository, whose own sweep
+// reconciles it; repairing it from here could even hand this repository's same-named registration to
+// it. A park whose registration directory is already gone has nothing left for repair to move or for
+// the prune to take. Neither is a reason to defer this repository's metadata pruning, and both did,
+// on every sweep, until prunable registrations piled up by the hundred (GH-429, GH-539).
+async function parkedRegistrationSkip(commonDirectory: string, destination: string): Promise<ParkedRegistrationSkip | null> {
+  const gitDirectory = await parkedGitDirectory(destination);
+  if (!gitDirectory || !commonDirectory) return null;
+  if (canonicalPath(path.dirname(path.dirname(gitDirectory))) !== commonDirectory) return { reason: 'other_repository', gitDirectory };
+  return nativeFs.existsSync(gitDirectory) ? null : { reason: 'registration_gone', gitDirectory };
+}
+
+async function prunableRegistrationCount(repo: string): Promise<number | null> {
+  const listed = await git(repo, ['worktree', 'list', '--porcelain']);
+  return listed.ok ? listed.stdout.split(/\r?\n/).filter((line) => line.startsWith('prunable')).length : null;
+}
+
+async function deferredPruneFailure(repo: string, unreconciled: string[]): Promise<{ path: string; message: string }> {
+  const prunable = await prunableRegistrationCount(repo);
+  const parks = unreconciled.length === 1 ? '1 retained parked worktree' : `${unreconciled.length} retained parked worktrees`;
+  const listed = prunable === null ? 'its prunable registrations stay listed' : `${prunable} prunable registration${prunable === 1 ? '' : 's'} stay listed`;
+  return {
+    path: unreconciled[0]!,
+    message: `${parks} could not reconcile their Git registration (first: ${unreconciled[0]}), so repository metadata pruning is deferred and ${listed}. Run git worktree repair on that path from ${repo}, then sweep again.`,
+  };
+}
+
+async function parkedRegistrationReconciled(repo: string, commonDirectory: string, entry: RecoveryStoreEntry): Promise<boolean> {
+  const skipped = await parkedRegistrationSkip(commonDirectory, entry.path);
+  if (skipped) {
+    entry.registrationSkipped = skipped;
+    return true;
+  }
+  entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
+  return entry.registrationRepaired;
+}
+
 async function reconcileRetainedParkedRegistrations(repo: string, entries: RecoveryStoreEntry[]): Promise<{ unrepaired: boolean; failures: Array<{ path: string; message: string }> }> {
-  const failures: Array<{ path: string; message: string }> = [];
+  const unreconciled: string[] = [];
+  let commonDirectory: string | null = null;
   for (const entry of entries.filter((candidate) => candidate.action === 'keep')) {
     if (!await linkedPark(entry.path)) continue;
-    entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
-    if (!entry.registrationRepaired) {
-      failures.push({ path: entry.path, message: `retained parked worktree at ${entry.path} could not reconcile its Git registration, so repository metadata pruning is deferred` });
-    }
+    commonDirectory ??= await repositoryCommonDirectory(repo);
+    if (!await parkedRegistrationReconciled(repo, commonDirectory, entry)) unreconciled.push(entry.path);
   }
-  return { unrepaired: failures.length > 0, failures };
+  if (!unreconciled.length) return { unrepaired: false, failures: [] };
+  return { unrepaired: true, failures: [await deferredPruneFailure(repo, unreconciled)] };
 }
 
 async function recoveryStoreReport(store: RecoveryStoreName, root: string, entries: RecoveryStoreEntry[], options: any): Promise<RecoveryStoreReport> {
@@ -3096,4 +3160,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };
+module.exports = { branchOwningWorktree, WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };
