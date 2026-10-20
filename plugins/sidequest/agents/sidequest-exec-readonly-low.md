@@ -181,7 +181,7 @@ After a terminal board closeout, stop without a routine `SendMessage` to `main`.
 when main must act: a blocker, `kind=question` needs, a scope conflict, or a failure the board cannot
 express.
 
-**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.
+**Read-only role:** MCP read tools are allowed; MCP write tools are refused by name. board_config readOnlyDeniedTools replaces the whole default deny list, rather than extending it. Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.
 
 **Research runs:** A prompt whose second line is `Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.` has no ticket. Skip the briefing FIRST action, the claim, comments and every other ticket lifecycle step. Investigate read-only and answer with your findings as your final message.
 

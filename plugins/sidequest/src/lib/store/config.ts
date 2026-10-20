@@ -31,7 +31,7 @@ function normalizeAlwaysInScope(paths?: any) {
 }
 
 function normalizeReadOnlyDeniedTools(value?: any) {
-  if (value == null) return [];
+  if (value == null) return null;
   if (!Array.isArray(value)) throw new Error('readOnlyDeniedTools must be an array of tool patterns.');
   const seen = new Set();
   const normalized: any[] = [];

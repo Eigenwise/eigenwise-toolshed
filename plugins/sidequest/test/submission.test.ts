@@ -2252,7 +2252,7 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
     const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'branch_not_checked_out');
-    assert.ok(refused.message.startsWith(`${recorded} must be checked out before integration; currently on ${unrelated}.`), refused.message);
+    assert.ok(refused.message.startsWith(`${recorded} must be checked out in the registered checkout or a linked worktree before integration; currently on ${unrelated}.`), refused.message);
     assert.match(refused.message, /pass integrationBranch \(CLI --integration-branch\)/);
 
     // The recorded branch moved on after another branch was fast-forwarded to its old
@@ -7575,3 +7575,56 @@ test('command verification refuses an absent pinned command', () => {
   const refused = commandVerificationResult({ kind: 'command', evidenceContract: '' }, 'node -e "process.exit(0)"', [], 'SQ-fixture', { source: 'git', value: COMMIT }, 'attempt');
   assert.strictEqual(refused.diagnostic.code, 'executor_verify_required');
 });
+
+for (const delivery of ['single', 'wave', 'manual']) {
+  test(`GH-499: ${delivery} delivery uses the branch-owning linked worktree`, () => {
+    const originalConfig = store.boardConfig(slug);
+    let linked = '';
+    let candidateWorktree = '';
+    try {
+      const fixture = sq3144SubmittedOnRecordedBranch(`linked-${delivery}`);
+      const candidateFile = `lib/sq3144-linked-${delivery}.js`;
+      git(['checkout', '-f', 'main']);
+      linked = fs.mkdtempSync(path.join(os.tmpdir(), 'sq gh499 linked-'));
+      fs.rmdirSync(linked);
+      git(['worktree', 'add', linked, fixture.recorded]);
+      git(['checkout', '-B', `gh499-parked-${fixture.stamp}`, fixture.recorded]);
+      const registeredHead = git(['rev-parse', 'HEAD']);
+      const inLinked = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
+      candidateWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-gh499-candidate-'));
+      fs.rmdirSync(candidateWorktree);
+      git(['worktree', 'add', '--detach', candidateWorktree, fixture.commit]);
+      const ticket = store.getTicket(slug, fixture.t.ref);
+      ticket.submission.worktree = candidateWorktree;
+      ticket.submission.verify = 'node -e "require(\'node:fs\').accessSync(\'' + candidateFile + '\')"';
+      ticket.dispatch.verificationRequirement = { kind: 'command', command: ticket.submission.verify, evidenceContract: 'exit zero' };
+      persist(ticket);
+      fs.writeFileSync(path.join(PROJECT_DIR, 'registered-only.txt'), 'leave this checkout alone\n');
+      assert.strictEqual(store.deliveryIntegrationTarget(slug, store.ticketIntegrationTarget(slug, ticket)).branch, fixture.recorded, 'the linked owner keeps the recorded target');
+      let result;
+      if (delivery === 'manual') {
+        inLinked(['merge', '--no-ff', '--no-edit', fixture.commit]);
+        result = store.recordDeliveredSubmission(slug, ticket.ref, {
+          target: store.ticketIntegrationTarget(slug, ticket), deliveryCommit: fixture.commit,
+          deliveryMethod: 'manual', reason: 'Candidate merged in its branch-owning linked worktree.',
+        });
+      } else if (delivery === 'wave') {
+        const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+        assert.strictEqual(assembled.ok, true, assembled.message);
+        result = store.integrateSubmissionWave(slug, [ticket.ref]);
+      } else {
+        result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge' });
+      }
+      assert.strictEqual(result.ok, true, JSON.stringify(result));
+      assert.strictEqual(inLinked(['merge-base', '--is-ancestor', fixture.commit, 'HEAD']), '', 'candidate is delivered in the linked owner');
+      assert.strictEqual(git(['rev-parse', 'HEAD']), registeredHead, 'registered checkout HEAD stays unchanged');
+      assert.ok(fs.existsSync(path.join(PROJECT_DIR, 'registered-only.txt')), 'registered checkout dirt stays untouched');
+      assert.strictEqual(store.getTicket(slug, ticket.ref).submission.integration.verify.status, 'passed', 'merged-tree verifier sees the candidate in the linked checkout');
+    } finally {
+      fs.rmSync(path.join(PROJECT_DIR, 'registered-only.txt'), { force: true });
+      store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+      if (linked) git(['worktree', 'remove', '--force', linked]);
+      if (candidateWorktree) git(['worktree', 'remove', '--force', candidateWorktree]);
+    }
+  });
+}

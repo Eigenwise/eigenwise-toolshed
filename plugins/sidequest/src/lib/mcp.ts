@@ -78,7 +78,7 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 27900 for the GH-424 shared add/update field schema merged with develop: measured 25425 payload bytes, +31 net over develop (add now also accepts externalDeliverable). Keeps the 2.5KB reserve.
 // Raised from 27900 for update.addFiles/removeFiles and scopeRequest.grant (GitHub #173): +535 bytes compacted, measured 25929 payload bytes on the merged tree. Keeps the 2.5KB reserve.
 // Merged 13 Oct: both raises apply (shared field schema plus addFiles/removeFiles/scopeRequest.grant); measured 26255 payload bytes on the merged tree. Keeps the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 29100;
+const MCP_TOOLS_LIST_MAX_BYTES = 29400;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {

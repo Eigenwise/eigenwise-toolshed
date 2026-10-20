@@ -438,6 +438,7 @@ function checkpointProjection(ticket?: any, now?: any) {
     failure: checkpoint.failure || null,
     worktree: checkpoint.worktree || null,
     verify: verify.text,
+    ...checkpointRecoveryFields(checkpoint),
     verifyLength: verify.length,
     verifyTruncated: verify.truncated,
   };
@@ -461,12 +462,48 @@ function oracleProjection(ticket?: any) {
   return { round, at, candidate, deliverable, ask, summary };
 }
 
+function checkpointCursor(cursor: unknown): string | undefined {
+  if (cursor === undefined) return undefined;
+  if (typeof cursor !== 'string') throw new Error('checkpoint cursor must be a string');
+  const bytes = Buffer.byteLength(cursor, 'utf8');
+  if (bytes > 2048) throw new Error(`checkpoint cursor is ${bytes} bytes; maximum is 2048 bytes (2 KiB)`);
+  return cursor;
+}
+
+function checkpointEvidencePath(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('checkpoint evidence paths must be strings');
+  if (!value || /^(?:[a-z]:|[\\/])/i.test(value)) throw new Error('checkpoint evidence paths must be relative to the dispatch evidence directory');
+  if (value.split(/[\\/]/).includes('..')) throw new Error('checkpoint evidence paths must not contain ..');
+  return value;
+}
+
+function checkpointEvidence(evidence: unknown): string[] | undefined {
+  if (evidence === undefined) return undefined;
+  if (!Array.isArray(evidence)) throw new Error('checkpoint evidence must be an array of relative paths');
+  return evidence.map(checkpointEvidencePath);
+}
+
+function checkpointRecoveryFields(checkpoint: { cursor?: string; evidence?: string[] }) {
+  return {
+    ...(checkpoint.cursor === undefined ? {} : { cursor: checkpoint.cursor }),
+    ...(checkpoint.evidence === undefined ? {} : { evidence: checkpoint.evidence }),
+  };
+}
+
+function checkpointRecoveryComment(checkpoint: { id: string; cursor?: string; evidence?: string[] }): string {
+  const recovery: string[] = [];
+  if (checkpoint.cursor !== undefined) recovery.push(`Cursor: ${checkpoint.cursor}`);
+  if (checkpoint.evidence !== undefined) recovery.push(`Evidence: ${checkpoint.evidence.join(', ')}`);
+  const title = recovery.length ? 'Continuation checkpoint' : 'Live review checkpoint';
+  return [`${title} ${checkpoint.id}`, ...recovery].join('\n');
+}
+
 function checkpointCommentBody(checkpoint?: any) {
   const candidate = [
     checkpoint.commit ? `commit ${checkpoint.commit}` : null,
     checkpoint.worktree ? `worktree ${checkpoint.worktree}` : null,
   ].filter(Boolean).join(', ');
-  return `Live review checkpoint ${checkpoint.id}\nCandidate: ${candidate}\nVerification: ${checkpoint.verify}\nExpires: ${checkpoint.expiresAt}`;
+  return `${checkpointRecoveryComment(checkpoint)}\nCandidate: ${candidate}\nVerification: ${checkpoint.verify}\nExpires: ${checkpoint.expiresAt}`;
 }
 
 function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -484,6 +521,8 @@ function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   const verify = String(opts.verify || '').trim();
   if (!verify) throw new Error('checkpoint verification evidence is required');
   if (verify.length > CHECKPOINT_VERIFY_MAX) throw new Error(`checkpoint verification evidence exceeds ${CHECKPOINT_VERIFY_MAX} characters`);
+  const cursor = checkpointCursor(opts.cursor);
+  const evidence = checkpointEvidence(opts.evidence);
   const ttlMs = checkpointTtlMs(opts.ttlMinutes);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
@@ -512,6 +551,7 @@ function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       } : null,
       worktree,
       verify,
+      ...checkpointRecoveryFields({ cursor, evidence }),
     };
     const body = opts.commentBody == null ? checkpointCommentBody(checkpoint) : String(opts.commentBody);
     const prepared = prepareComment({ by, body, source: opts.source || 'cli' });
@@ -1175,7 +1215,7 @@ function deliveryRecordFailure(ticket: any, delivery: any, error: any) {
 
 function branchNotCheckedOutMessage(targetBranch: string, currentBranch: string, action: string) {
   const checkedOut = currentBranch || 'detached HEAD';
-  return `${targetBranch} must be checked out before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
+  return `${targetBranch} must be checked out in the registered checkout or a linked worktree before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
 }
 
 function integrationTargetCheckoutState(repo: string): string[] {
@@ -1959,7 +1999,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const target = opts.target;
   if (!registeredRepo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
   const requestedWorktree = String(opts.worktree || '').trim();
-  let repo = registeredRepo;
+  let repo = worktrees.branchOwningWorktree(registeredRepo, target.branch);
   if (requestedWorktree) {
     const resolvedWorktree = resolveDeliveryWorktree(registeredRepo, requestedWorktree);
     if (!resolvedWorktree.ok) {
@@ -2498,8 +2538,9 @@ function recordSourceRevisionIntegrations(slug: string | undefined, assembled: A
 function deliverGitWave(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions) {
   const resolved = waveIntegrationTarget(slug, assembled.tickets, opts.integrationBranch);
   if (!resolved.ok) return resolved;
-  const repo = readMeta(slug)?.path;
-  if (!repo || !resolved.target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
+  const registeredRepo = readMeta(slug)?.path;
+  if (!registeredRepo || !resolved.target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
+  const repo = worktrees.branchOwningWorktree(registeredRepo, resolved.target.branch);
   return deliverGitWaveUnderLease(slug, assembled, opts, repo, resolved.target);
 }
 
@@ -2540,7 +2581,7 @@ function deliverLockedGitWave(slug: string | undefined, assembled: AssembledWave
   const mergeFailure = mergeWaveCandidates(repo, prepared, before, assembled.tickets);
   if (mergeFailure) return mergeFailure;
   const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
-  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
+  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], { ...opts, cwd: repo });
   if (!verificationAccepted(verification)) return rollBackUnverifiedWave(slug, assembled, repo, { before, resultingHead }, prepared.dirt, verification);
   return recordGitWaveDelivery(slug, assembled, target, prepared, resultingHead, verification);
 }
@@ -2670,7 +2711,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
   if (!preflight.ok) return preflight;
   let ticket = preflight.ticket;
   const project = readMeta(slug);
-  const repo = project?.path;
+  let repo = project?.path;
   const mode = normalizeDeliveryMode(opts.mode);
   let target: any;
   try {
@@ -2679,6 +2720,8 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
   if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  repo = worktrees.branchOwningWorktree(repo, target.branch);
+  opts = { ...opts, cwd: repo };
   let dirt: { blocking: string[]; ignoredDirtyPaths: string[] };
   try {
     dirt = integrationTargetDirt(repo, [ticket.submission]);

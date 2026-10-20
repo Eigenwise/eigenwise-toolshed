@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField, type HookInput } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
-import { detachSessionEndSweep, HANDOFF_FAILED_NOTICE } from './shared/sweep-handoff.js';
+import { recordSessionEndHandoff } from './shared/sweep-handoff.js';
 import { unregisterSweepSession } from './shared/worktree-sweep.js';
 
 function endedSessionId(data: HookInput | null): string {
@@ -29,22 +29,21 @@ function reconcileEndedSession(sessionId: string, reason: string): string[] {
   }
 }
 
-// Claude Code gives SessionEnd about 1.5 s however long the hook's timeout says, and a sweep over
-// dozens of worktrees ran past it and was cancelled on every exit (SQ-51, GH-400, GH-439). The hook
-// now only reconciles and starts a detached worker; the worker owns the sweep and this session's
-// unregistration, so the session's own tree stays protected while that sweep runs.
-async function main(): Promise<void> {
+// Claude Code gives SessionEnd about 1.5 s however long the hook's timeout says, so no sweep starts
+// here: one that ran past it was cancelled mid-write and left this session registered as live (SQ-51,
+// GH-400). Unregistering and recording the handoff are single small writes and go first.
+function main(): void {
   const data = readStdin();
   const sessionId = endedSessionId(data);
   if (!data || !sessionId) return;
+  unregisterSweepSession(data);
+  recordSessionEndHandoff(data);
   const notices = reconcileEndedSession(sessionId, endReason(data));
-  if (!detachSessionEndSweep(data)) {
-    unregisterSweepSession(data);
-    notices.push(HANDOFF_FAILED_NOTICE);
-  }
   if (notices.length) console.error(notices.join('\n'));
 }
 
-main().catch((error) => {
+try {
+  main();
+} catch (error: any) {
   console.error(`sidequest: session-end failed: ${(error && error.message) || error}`);
-});
+}

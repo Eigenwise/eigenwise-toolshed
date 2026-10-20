@@ -429,7 +429,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         name: { type: 'string' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
-        readOnlyDeniedTools: { type: 'array', items: { type: 'string' } },
+        readOnlyDeniedTools: { type: 'array', items: { type: 'string' }, description: 'Replaces the whole default read-only MCP write-name deny list, rather than extending it. An empty list disables that default.' },
         deniedTools: { type: 'array', items: { type: 'string' } },
         generatedPairs: {},
         integrationMode: { type: 'string', description: 'auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode.' },

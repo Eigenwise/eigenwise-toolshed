@@ -545,6 +545,16 @@ function parseWorktreeList(output) {
     return entry;
   }).filter((entry) => entry.worktree);
 }
+function branchOwningWorktree(repository, branch) {
+  const output = execFileSync("git", ["worktree", "list", "--porcelain", "-z"], {
+    cwd: repository,
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: "pipe"
+  });
+  const fields = output.split("\0\0").map((entry) => entry.split("\0")).find((entry) => entry.includes(`branch refs/heads/${branch}`));
+  return fields?.find((field) => field.startsWith("worktree "))?.slice("worktree ".length) ?? repository;
+}
 function isAgentWorktree(repo, worktree) {
   const candidate = canonicalPath(worktree);
   return agentWorktreeRoots(repo).some((root) => {
@@ -1881,16 +1891,56 @@ function clearQuarantineFailureForDestination(destination) {
   }
   if (changed) writeFailureState(state);
 }
+async function parkedGitDirectory(destination) {
+  try {
+    const gitDirectory = /^gitdir:\s*(.+?)\s*$/m.exec(await fs.readFile(path.join(destination, ".git"), "utf8"))?.[1] || "";
+    return path.isAbsolute(gitDirectory) && path.basename(path.dirname(gitDirectory)) === "worktrees" ? gitDirectory : null;
+  } catch (_) {
+    return null;
+  }
+}
+async function repositoryCommonDirectory(repo) {
+  const common = await git(repo, ["rev-parse", "--git-common-dir"]);
+  return common.ok ? canonicalPath(path.resolve(repo, common.stdout)) : "";
+}
+async function parkedRegistrationSkip(commonDirectory, destination) {
+  const gitDirectory = await parkedGitDirectory(destination);
+  if (!gitDirectory || !commonDirectory) return null;
+  if (canonicalPath(path.dirname(path.dirname(gitDirectory))) !== commonDirectory) return { reason: "other_repository", gitDirectory };
+  return nativeFs.existsSync(gitDirectory) ? null : { reason: "registration_gone", gitDirectory };
+}
+async function prunableRegistrationCount(repo) {
+  const listed = await git(repo, ["worktree", "list", "--porcelain"]);
+  return listed.ok ? listed.stdout.split(/\r?\n/).filter((line) => line.startsWith("prunable")).length : null;
+}
+async function deferredPruneFailure(repo, unreconciled) {
+  const prunable = await prunableRegistrationCount(repo);
+  const parks = unreconciled.length === 1 ? "1 retained parked worktree" : `${unreconciled.length} retained parked worktrees`;
+  const listed = prunable === null ? "its prunable registrations stay listed" : `${prunable} prunable registration${prunable === 1 ? "" : "s"} stay listed`;
+  return {
+    path: unreconciled[0],
+    message: `${parks} could not reconcile their Git registration (first: ${unreconciled[0]}), so repository metadata pruning is deferred and ${listed}. Run git worktree repair on that path from ${repo}, then sweep again.`
+  };
+}
+async function parkedRegistrationReconciled(repo, commonDirectory, entry) {
+  const skipped = await parkedRegistrationSkip(commonDirectory, entry.path);
+  if (skipped) {
+    entry.registrationSkipped = skipped;
+    return true;
+  }
+  entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
+  return entry.registrationRepaired;
+}
 async function reconcileRetainedParkedRegistrations(repo, entries) {
-  const failures = [];
+  const unreconciled = [];
+  let commonDirectory = null;
   for (const entry of entries.filter((candidate) => candidate.action === "keep")) {
     if (!await linkedPark(entry.path)) continue;
-    entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
-    if (!entry.registrationRepaired) {
-      failures.push({ path: entry.path, message: `retained parked worktree at ${entry.path} could not reconcile its Git registration, so repository metadata pruning is deferred` });
-    }
+    commonDirectory ??= await repositoryCommonDirectory(repo);
+    if (!await parkedRegistrationReconciled(repo, commonDirectory, entry)) unreconciled.push(entry.path);
   }
-  return { unrepaired: failures.length > 0, failures };
+  if (!unreconciled.length) return { unrepaired: false, failures: [] };
+  return { unrepaired: true, failures: [await deferredPruneFailure(repo, unreconciled)] };
 }
 async function recoveryStoreReport(store, root, entries, options) {
   const planned = entries.filter((entry) => entry.action === "remove");
@@ -2310,4 +2360,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };
+module.exports = { branchOwningWorktree, WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };
