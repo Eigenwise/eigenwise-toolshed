@@ -1215,7 +1215,7 @@ function deliveryRecordFailure(ticket: any, delivery: any, error: any) {
 
 function branchNotCheckedOutMessage(targetBranch: string, currentBranch: string, action: string) {
   const checkedOut = currentBranch || 'detached HEAD';
-  return `${targetBranch} must be checked out before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
+  return `${targetBranch} must be checked out in the registered checkout or a linked worktree before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
 }
 
 function integrationTargetCheckoutState(repo: string): string[] {
@@ -1999,7 +1999,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const target = opts.target;
   if (!registeredRepo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
   const requestedWorktree = String(opts.worktree || '').trim();
-  let repo = registeredRepo;
+  let repo = worktrees.branchOwningWorktree(registeredRepo, target.branch);
   if (requestedWorktree) {
     const resolvedWorktree = resolveDeliveryWorktree(registeredRepo, requestedWorktree);
     if (!resolvedWorktree.ok) {
@@ -2538,8 +2538,9 @@ function recordSourceRevisionIntegrations(slug: string | undefined, assembled: A
 function deliverGitWave(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions) {
   const resolved = waveIntegrationTarget(slug, assembled.tickets, opts.integrationBranch);
   if (!resolved.ok) return resolved;
-  const repo = readMeta(slug)?.path;
-  if (!repo || !resolved.target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
+  const registeredRepo = readMeta(slug)?.path;
+  if (!registeredRepo || !resolved.target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
+  const repo = worktrees.branchOwningWorktree(registeredRepo, resolved.target.branch);
   return deliverGitWaveUnderLease(slug, assembled, opts, repo, resolved.target);
 }
 
@@ -2580,7 +2581,7 @@ function deliverLockedGitWave(slug: string | undefined, assembled: AssembledWave
   const mergeFailure = mergeWaveCandidates(repo, prepared, before, assembled.tickets);
   if (mergeFailure) return mergeFailure;
   const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
-  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
+  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], { ...opts, cwd: repo });
   if (!verificationAccepted(verification)) return rollBackUnverifiedWave(slug, assembled, repo, { before, resultingHead }, prepared.dirt, verification);
   return recordGitWaveDelivery(slug, assembled, target, prepared, resultingHead, verification);
 }
@@ -2710,7 +2711,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
   if (!preflight.ok) return preflight;
   let ticket = preflight.ticket;
   const project = readMeta(slug);
-  const repo = project?.path;
+  let repo = project?.path;
   const mode = normalizeDeliveryMode(opts.mode);
   let target: any;
   try {
@@ -2719,6 +2720,8 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
   if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  repo = worktrees.branchOwningWorktree(repo, target.branch);
+  opts = { ...opts, cwd: repo };
   let dirt: { blocking: string[]; ignoredDirtyPaths: string[] };
   try {
     dirt = integrationTargetDirt(repo, [ticket.submission]);

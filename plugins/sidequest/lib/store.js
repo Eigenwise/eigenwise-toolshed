@@ -21,7 +21,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
+const { branchOwningWorktree, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
@@ -3371,7 +3371,8 @@ function sameBranchWaveTarget(slug, targets) {
   return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
-  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
+  const repository = branchOwningWorktree(readMeta(slug)?.path, recorded.branch);
+  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(repository, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
   if (!branch || branch === recorded.branch) return recorded;
   return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
 }
