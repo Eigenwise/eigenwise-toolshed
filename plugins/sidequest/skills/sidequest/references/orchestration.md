@@ -16,7 +16,7 @@ the host still apply; gate absence alone never holds, parks or marks work UNVERI
 - [Fan-out](#fan-out-mechanics), [environment lane](#environment-lane), [resources](#shared-resource-handoff) and [worktree bases](#worktree-base-selection)
 - [Bookend supervision and immutable review](#bookend-supervision)
 - [Checkpoints](#natural-orchestrator-checkpoints), [touch budget](#small-ticket-touch-budget) and [lead load](#orchestration-load-keep-the-lead-responsive)
-- [Research](#discovery-and-research) and [agent teams](#agent-teams-claude_code_experimental_agent_teams)
+- [Research](#discovery-and-research), [investigations](#investigations) and [agent teams](#agent-teams-claude_code_experimental_agent_teams)
 - [Background permissions](#background-fan-out-and-the-permission-allowlist)
 - [Instant dispatch](#instant-ticket-executor-dispatch) and [routed dispatch](#routed-agent-dispatch)
 
@@ -483,6 +483,18 @@ interaction is refused, as is any Explore relaunch of work a generic Agent was a
 fan-out investigation is a `codebase-exploration` spike. Other delegated implementation, research, review,
 or domain analysis needs a ticketed route; its concise findings inform the next ticket boundaries. Workflow agents
 remain governed by their Workflow contract.
+
+## Investigations
+
+An investigation that must leave files behind (an inventory, downloaded documents, a cursor to resume from) is a `research.evidence` ticket, not a plain Agent spawn. The category is on both starter profiles: readonly, `writes: "evidence"`, sonnet/medium with an opus/high fallback. Its contract carries the provenance rules: inventory rows hold source id, channel or ticket, date, author role and why; files are deduped by sha256; no private individuals' names in inventories or drafted cases (company names are fine); customer documents stay under a data root, never in the repository or the ticket thread; write incrementally.
+
+- **Executor family.** Dispatch uses `sidequest-exec-evidence-*`, separate from the read-only family. Write and Edit are allowed only under the admitted roots; every repository path stays refused (the refusal names the admitted roots). `commit`, `submit`, `integrate`, `Agent` and `NotebookEdit` are denied. Like the read-only family it carries no `permissionMode` and inherits the session's, so in a non-bypass session its writes prompt.
+- **Admitted roots**, in order: the dispatch evidence directory; the story evidence root when the ticket belongs to a story (created on the first evidence dispatch under that story, so sibling tickets share it); every path in `board_config investigationDataRoots`. That key takes absolute paths that exist and lie outside the repository. It is per machine, so it lives in board config and not on the category.
+- **Closeout.** `done` with no commit and no submission; the comment names the evidence files written, relative to their root. A ticket that saved nothing says so.
+- **Budget.** Before the budget runs out the executor calls `checkpoint` with `cursor` (a resume position, at most 2048 UTF-8 bytes) and `evidence` (paths relative to the dispatch evidence directory; absolute paths and `..` are refused). The next dispatch of the same ticket gets both back in its continuation briefing. Redispatch from the checkpoint; do not restart the sweep.
+- **MCP policy.** Read-only and evidence executors may call MCP read tools. By default any `mcp__*` tool whose final segment contains a write word (send, post, create, add, edit, update, delete, remove, archive, transition, write, upload, publish, assign, comment, reply, move, rename) is refused, and the refusal names the matched pattern. `board_config readOnlyDeniedTools` replaces the whole default list rather than extending it, and an explicit empty list disables the default. Sidequest's own board tools stay allowed.
+
+Fan-out shape: one `research.evidence` ticket per source (one Slack sweep, one Jira sweep), each writing to the shared story evidence root, then a dependent synthesis ticket that reads the siblings' evidence and writes the report. See the user-story sizing section.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
 

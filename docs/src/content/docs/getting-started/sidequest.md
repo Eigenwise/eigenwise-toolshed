@@ -403,6 +403,23 @@ Read-only executors run in your session's own permission mode. They don't ask fo
 
 Ask Claude to set `deniedTools` on the board (`board_config`) or on one category (`category_edit`). It takes tool names like `Agent` or `WebFetch`, or an MCP server prefix like `mcp__claude-in-chrome` for every tool on that server. Any executor on that board, or working a ticket in that category, gets refused those tools when it calls them, write executors included. `readOnlyDeniedTools` still applies to read-only executors only. The Sidequest board tools can't be denied, since executors need them to claim and close. The denial happens at call time, so the tool's schema still sits in the executor's context.
 
+### Investigations that leave evidence behind
+
+For a sweep across outside systems, such as Slack and Jira, use the `research.evidence` category. It is on both starter profiles, runs on sonnet/medium with an opus/high fallback, and is read-only for the repository: the executor can write files only under the folders Sidequest admits for it, and closes with `done` instead of a commit.
+
+Those folders are the ticket's own dispatch evidence directory, a shared evidence folder for the story the ticket belongs to, and any path you list in `investigationDataRoots` on the board config. Ask Claude to set that key to absolute paths that already exist and sit outside the repository, for example a folder for customer documents. The key is per machine, so it isn't a category setting. The evidence executors are a separate `sidequest-exec-evidence` family. Like the read-only executors, they inherit your session's permission mode, so outside a bypass session their file writes prompt.
+
+If a run is about to hit its budget, the executor records a checkpoint with a resume cursor and the evidence files saved so far. The next dispatch of that ticket starts from them.
+
+These executors also have a default MCP write guard: any MCP tool whose name ends in a write word (send, post, create, edit, update, delete and similar) is refused. Setting `readOnlyDeniedTools` on the board config replaces that whole list, and an empty list turns the default off.
+
+A worked example:
+
+1. You ask: "Find every discussion of the export timeout in Slack and Jira over the last quarter and tell me what's driving it."
+2. Claude files two `research.evidence` tickets, one for the Slack sweep and one for the Jira sweep. Each writes an inventory with one row per hit (source id, channel or ticket, date, author role, why it matters) and saves linked files, skipping any file whose sha256 is already recorded.
+3. Claude files a third ticket that depends on both. It reads the inventories from the story's evidence folder and writes the findings, with company names allowed and individuals' names left out.
+4. If the Slack sweep runs out of budget, it checkpoints a cursor, and the redispatch continues where it stopped.
+
 ## If something stops working
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.
