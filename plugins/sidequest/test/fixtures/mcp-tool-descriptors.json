@@ -2433,7 +2433,8 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Replaces the whole default read-only MCP write-name deny list, rather than extending it. An empty list disables that default."
         },
         "deniedTools": {
           "type": "array",

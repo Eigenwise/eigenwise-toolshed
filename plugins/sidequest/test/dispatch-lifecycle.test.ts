@@ -5361,3 +5361,32 @@ test('checkpoint cursor enforces UTF-8 bytes and evidence stays relative', () =>
   assert.equal(recorded.ticket.checkpoint.cursor, 'é'.repeat(1024));
   assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
 });
+
+test('read-only MCP snapshots preserve unset defaults and whole-list overrides', () => {
+  const { createDispatchSnapshot } = require('../lib/store/dispatch-snapshot.js');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-policy-'));
+  let config: { readOnlyDeniedTools?: string[] | null } = {};
+  const snapshot = createDispatchSnapshot({
+    listTickets: () => [{ ref: 'SQ-1', dispatch: { readonly: true } }],
+    projectDir: () => directory,
+    boardConfig: () => config,
+    getCategory: () => null,
+    routed: () => true,
+  });
+  const readPolicy = () => JSON.parse(fs.readFileSync(path.join(directory, 'dispatch-snapshot.json'), 'utf8')).dispatches[0].readOnlyDeniedTools;
+  try {
+    snapshot.writeDispatchSnapshot('test');
+    assert.equal(readPolicy(), undefined);
+    config = { readOnlyDeniedTools: [] };
+    snapshot.writeDispatchSnapshot('test');
+    assert.deepEqual(readPolicy(), []);
+    config = { readOnlyDeniedTools: ['mcp__jira__getJiraIssue'] };
+    snapshot.writeDispatchSnapshot('test');
+    assert.deepEqual(readPolicy(), config.readOnlyDeniedTools);
+    const { normalizeReadOnlyDeniedTools } = require('../lib/store/config.js').createConfig({});
+    assert.equal(normalizeReadOnlyDeniedTools(undefined), null);
+    assert.deepEqual(normalizeReadOnlyDeniedTools([]), []);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

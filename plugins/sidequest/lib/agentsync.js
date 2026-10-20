@@ -114,11 +114,11 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
   const extra = Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [];
   return {
     tools: null,
-    disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra])]
+    disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra.filter((tool) => !tool.startsWith("mcp__plugin_sidequest_board"))])]
   };
 }
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** MCP read tools are allowed; MCP write tools are refused by name. board_config readOnlyDeniedTools replaces the whole default deny list, rather than extending it. Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 function scratchWorktreeNote() {
   return "\n\n**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.";
@@ -354,7 +354,7 @@ function ticketCloseout(ticket) {
     return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Closeout attributes only your declared paths and your own release fragment. Outside-scope dirty paths are recorded on completion and returned as ignoredDirtyPaths, never a scope refusal. Eligible completed sibling candidate drift is recorded and returned as a warning naming the sibling, without refusing your closeout. Preserve other work and report drift to the existing parent for verification or grooming; never revert, absorb, or commit it. Your own committed paths, empty deliverable, or failed candidate verification still refuse. Do not commit or submit. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
   }
   if (ticket?.dispatch?.readonly === true) {
-    return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
+    return `Closeout: this prepared dispatch is read-only. MCP read tools are allowed; MCP write tools are refused by name (board_config readOnlyDeniedTools replaces the default list). Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
   }
   const externalDeliverableRequirement = ticket.dispatch?.verificationRequirement || {};
   const externalDeliverableVerify = externalDeliverableRequirement.command ? "the pinned verify-capture wrapper records the current dispatch attempt and revision" : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || "custom"} requirement is supplied`;
