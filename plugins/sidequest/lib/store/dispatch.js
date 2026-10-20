@@ -4310,6 +4310,7 @@ function createDispatch(dependencies) {
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,
+    ticketEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

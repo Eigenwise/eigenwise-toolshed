@@ -1194,6 +1194,37 @@ function taskAndScopeBody(ticket?: any, slug?: any) {
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket));
 }
 
+type EvidenceParent = {
+  ref: string;
+  status: string;
+  dispatch?: { evidenceDirectory?: string };
+  completion?: { commentId?: string };
+  comments: { id: string; body: string }[];
+};
+
+function parentEvidenceLine(parent: EvidenceParent): string {
+  if (parent.status !== 'done') return '- ' + parent.ref + ': pending (' + parent.status + ')';
+  const directory = parent.dispatch?.evidenceDirectory;
+  if (!directory) return '- ' + parent.ref + ': done (no evidence directory recorded)';
+  const completion = parent.comments.find((comment) => comment.id === parent.completion?.commentId);
+  const firstLine = completion ? completion.body.split(/\r?\n/, 1)[0] : '(No done comment recorded.)';
+  return '- ' + parent.ref + ': ' + path.resolve(directory) + '\n  ' + firstLine;
+}
+
+function parentEvidencePacket(links: { type: string; ref: string }[] = [], slug: string): string {
+  const parents = links.filter((link) => link.type === 'blocked-by').map((link) => store.getTicket(slug, link.ref)).filter(Boolean);
+  return parents.length ? 'Parent evidence:\n' + parents.map(parentEvidenceLine).join('\n') : '';
+}
+
+function storyEvidencePacket(storyId: string | undefined, slug: string): string {
+  if (!storyId) return '';
+  const story = store.getStory(slug, storyId);
+  if (!story) return '';
+  const directory = store.ticketEvidenceDirectory(slug, story.ref, store.readMeta(slug).path);
+  if (!fs.existsSync(directory)) return '';
+  return 'Story evidence root: ' + directory + '\nRead ' + path.join(directory, 'manifest.sha256.json') + ' before saving a file, then append {sha256, path, source, savedBy}; synthesis uses this manifest as the dedupe authority.';
+}
+
 function executorHandlesBody(ticket?: any, slug?: any) {
   const links = Array.isArray(ticket.links) && ticket.links.length
     ? ticket.links.map((link: any) => `- ${link.type || 'related'}: ${link.ref || '(unknown ticket)'}${linkedPlanSuffix(link, slug)}`).join('\n')
@@ -1206,6 +1237,8 @@ ${ticketContractsPacket(ticket)}`,
 ${ticketReadinessContractPacket(ticket, slug)}`,
     `Dependencies:
 ${links}`,
+    parentEvidencePacket(ticket.links, slug),
+    storyEvidencePacket(ticket.storyId, slug),
     `Attachments (inspect every readable attachment before implementation):
 ${ticketAssetsPacket(ticket, slug)}`,
   ].join('\n\n');

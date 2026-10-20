@@ -5465,6 +5465,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,
+    ticketEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
