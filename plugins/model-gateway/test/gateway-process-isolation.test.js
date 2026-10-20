@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -8,7 +9,9 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
+const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway, waitForFixtureProxy,
+  removeOwnedGatewayTestHome, observeGatewayChildClose, waitForGatewayChildClose, stopGatewayChild,
+  requestFixtureWorkerDrain } = require('./support.js');
 const { commandIncludesFile, commandResultAsync, createProxyRecovery, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, processIsOwnedByThisInstall, probeTimeoutMs, recordedGatewayPid, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
 const { PLUGIN_VERSION, startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
@@ -653,6 +656,504 @@ test('sync gateway fixture cleanup removes helper-owned homes and preserves supp
   assert.equal(fs.existsSync(suppliedHome), true);
 });
 
+async function runFixtureHooks(hooks) {
+  for (const hook of hooks) await hook();
+}
+
+function removalError(code, file) {
+  return Object.assign(new Error(`fixture removal ${code}`), { code, path: file, syscall: 'rmdir' });
+}
+
+test('owned fixture teardown yields and retries transient EBUSY (simulated Windows lock)', async (t) => {
+  const hooks = [];
+  const environment = gatewayTestEnvironment({ after: (hook) => hooks.push(hook), diagnostic: () => {} });
+  const home = environment.HOME;
+  const synchronousRemove = fs.rmSync;
+  const asynchronousRemove = fs.promises.rm;
+  let locked = true;
+  let asyncAttempts = 0;
+  t.mock.method(fs, 'rmSync', (file, options) => {
+    if (file === home && locked) throw removalError('EBUSY', path.join(home, 'AppData', 'Roaming'));
+    return synchronousRemove(file, options);
+  });
+  t.mock.method(fs.promises, 'rm', async (file, options) => {
+    assert.equal(options.maxRetries, 0, 'retry budgeting belongs to the fixture helper');
+    asyncAttempts += 1;
+    if (locked) throw removalError('EBUSY', path.join(home, 'AppData', 'Roaming'));
+    return asynchronousRemove(file, options);
+  });
+  assert.throws(() => fs.rmSync(home, { recursive: true, force: true }), { code: 'EBUSY' },
+    'the synchronous Windows-lock simulation is active before cleanup');
+  setImmediate(() => { locked = false; });
+  try {
+    await runFixtureHooks(hooks);
+    assert.ok(asyncAttempts >= 2);
+    assert.equal(fs.existsSync(home), false);
+  } finally {
+    locked = false;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+function ownedCleanupFixture(t) {
+  const hooks = [];
+  const diagnostics = [];
+  const environment = gatewayTestEnvironment({ after: (hook) => hooks.push(hook), diagnostic: (message) => diagnostics.push(message) });
+  t.after(() => fs.rmSync(environment.HOME, { recursive: true, force: true }));
+  return { home: environment.HOME, hooks, diagnostics };
+}
+
+function cleanupClock() {
+  let elapsed = 0;
+  return {
+    now: () => elapsed,
+    pause: async (delay) => { elapsed += delay; },
+    advance: (delay) => { elapsed += delay; },
+  };
+}
+
+for (const code of ['EBUSY', 'EPERM', 'ENOTEMPTY', 'EMFILE', 'ENFILE']) {
+  test(`owned fixture removal retries transient ${code} with one application budget`, async (t) => {
+    const { home } = ownedCleanupFixture(t);
+    const clock = cleanupClock();
+    let attempts = 0;
+    await removeOwnedGatewayTestHome(home, {
+      ...clock,
+      remove: async (file, options) => {
+        assert.equal(file, home);
+        assert.equal(options.maxRetries, 0);
+        attempts += 1;
+        if (attempts === 1) throw removalError(code, file);
+        await fs.promises.rm(file, options);
+      },
+    });
+    assert.equal(attempts, 2);
+    assert.equal(fs.existsSync(home), false);
+  });
+}
+
+test('owned fixture removal reports persistent EBUSY without a post-deadline attempt', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const clock = cleanupClock();
+  const cause = removalError('EBUSY', path.join(home, 'AppData', 'Roaming'));
+  let attempts = 0;
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    ...clock, timeout: 250, remove: async () => { attempts += 1; throw cause; },
+  }), (error) => {
+    assert.equal(error.cause, cause);
+    assert.match(error.message, /EBUSY/);
+    assert.match(error.message, /Roaming/);
+    assert.match(error.message, /rmdir/);
+    assert.equal(error.details.attempts, 2);
+    assert.equal(error.details.elapsedMs, 250);
+    return true;
+  });
+  assert.equal(attempts, 2);
+  assert.equal(fs.existsSync(home), true);
+});
+
+test('owned fixture removal does not retry a nontransient failure', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const cause = removalError('EACCES', home);
+  let attempts = 0;
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    ...cleanupClock(), remove: async () => { attempts += 1; throw cause; },
+    pause: async () => assert.fail('nontransient error must not retry'),
+  }), (error) => { assert.equal(error.cause, cause); return true; });
+  assert.equal(attempts, 1);
+});
+
+test('owned fixture removal accepts an already absent root without submitting IO', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  fs.rmSync(home, { recursive: true });
+  await removeOwnedGatewayTestHome(home, { remove: async () => assert.fail('root is already absent') });
+});
+
+test('owned fixture removal accepts ENOENT from an in-flight removal', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  await removeOwnedGatewayTestHome(home, { remove: async () => {
+    await fs.promises.rm(home, { recursive: true });
+    throw removalError('ENOENT', home);
+  } });
+  assert.equal(fs.existsSync(home), false);
+});
+
+test('owned fixture removal awaits IO that crosses the retry deadline', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const clock = cleanupClock();
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  let settled = false;
+  const removing = removeOwnedGatewayTestHome(home, {
+    ...clock, timeout: 100,
+    remove: async (file, options) => {
+      clock.advance(300);
+      await pending;
+      await fs.promises.rm(file, options);
+    },
+  }).then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, 'deadline does not detach an in-flight removal');
+  release();
+  await removing;
+  assert.equal(fs.existsSync(home), false);
+});
+
+test('owned fixture removal preserves a late IO failure without starting another attempt', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const clock = cleanupClock();
+  let attempts = 0;
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    ...clock, timeout: 100,
+    remove: async () => { attempts += 1; clock.advance(300); throw removalError('EBUSY', home); },
+  }), (error) => {
+    assert.equal(error.details.attempts, 1);
+    assert.equal(error.details.elapsedMs, 300);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});
+
+test('owned fixture removal revalidates the root before retrying', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const retired = `${home}-retired`;
+  t.after(() => fs.rmSync(retired, { recursive: true, force: true }));
+  const clock = cleanupClock();
+  let attempts = 0;
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    ...clock,
+    remove: async () => { attempts += 1; throw removalError('EBUSY', home); },
+    pause: async (delay) => {
+      clock.advance(delay);
+      fs.renameSync(home, retired);
+      fs.mkdirSync(home);
+    },
+  }), /ERR_GATEWAY_FIXTURE_OWNERSHIP/);
+  assert.equal(attempts, 1, 'the replacement root is never removed');
+  assert.equal(fs.existsSync(home), true);
+  assert.equal(fs.existsSync(retired), true);
+});
+
+test('owned fixture removal refuses a caller-supplied unowned root', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unowned-cleanup-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    remove: async () => assert.fail('unowned root cannot be removed'),
+  }), /ERR_GATEWAY_FIXTURE_OWNERSHIP/);
+  assert.equal(fs.existsSync(home), true);
+});
+
+test('direct worker fixture drains to exit zero and a real close event', async (t) => {
+  const proxy = http.createServer((_request, response) => response.end(JSON.stringify({ data: [] })));
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_PROXY_PORT: String(proxyPort) });
+  const { child } = await startGateway(t, 'serve-worker', environment);
+  const closed = new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
+  assert.equal(await stopGatewayChild(child), true);
+  assert.deepEqual(await closed, { code: 0, signal: null });
+  t.after(() => assert.equal(fs.existsSync(environment.HOME), false));
+});
+
+test('direct worker classification precedes readiness and never parent-disconnects a failed start', async (t) => {
+  const environment = gatewayTestEnvironment(t);
+  const child = spawnGatewayProcess(t, process.execPath, ['-e',
+    'process.on("message", () => process.exit(7)); process.stdout.write("ready\\n");'], {
+    env: environment, fixtureCommand: 'serve-worker', stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  child.gracefulShutdown = true;
+  await waitForReady(child);
+  let disconnects = 0;
+  t.mock.method(child, 'disconnect', () => { disconnects += 1; });
+  const stopping = stopGatewayChild(child);
+  const parentDisconnects = disconnects; // Node may also call disconnect internally on natural IPC EOF.
+  child.send('finish');
+  assert.equal(await stopping, true, 'expected failed-start exit can still close cleanly');
+  assert.equal(child.exitCode, 7);
+  assert.equal(parentDisconnects, 0);
+});
+
+async function fakeDirectWorker(t, mode) {
+  const hooks = [];
+  const context = { after: (hook) => hooks.push(hook), diagnostic: () => {} };
+  const environment = gatewayTestEnvironment(context, { FIXTURE_DRAIN_MODE: mode });
+  const home = environment.HOME;
+  const state = path.join(home, '.claude', 'model-gateway');
+  const script = path.join(home, 'fake-worker.cjs');
+  let child;
+  t.after(async () => {
+    if (!child) return runFixtureHooks(hooks);
+    if (child.connected) child.send('finish');
+    assert.equal(await waitForGatewayChildClose(child), true, 'negative-control fixture really closed before its files are removed');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  fs.writeFileSync(script, `
+    const fs = require('node:fs');
+    const http = require('node:http');
+    const path = require('node:path');
+    const state = path.join(process.env.HOME, '.claude', 'model-gateway');
+    fs.mkdirSync(state, { recursive: true });
+    const token = 'a'.repeat(64);
+    fs.writeFileSync(path.join(state, 'control-token'), token);
+    const mode = process.env.FIXTURE_DRAIN_MODE;
+    const server = http.createServer((req, res) => {
+      if (req.url === '/healthz') return res.end('{"ok":true}');
+      const authMatched = req.headers['x-model-gateway-control-token'] === token;
+      fs.appendFileSync(path.join(state, 'control-requests.jsonl'), JSON.stringify({ method: req.method, path: req.url, host: req.headers.host, connection: req.headers.connection, authMatched }) + '\\n');
+      req.resume();
+      if (mode === 'stall') return;
+      if (mode === 'reset-and-exit') { req.socket.destroy(); setImmediate(() => process.exit(0)); return; }
+      if (mode === 'redirect') { res.writeHead(302, { location: 'http://127.0.0.1:9/never' }); return res.end(); }
+      if (!authMatched) { res.writeHead(403); return res.end('{}'); }
+      res.writeHead(202, { 'content-type': 'application/json' });
+      if (mode === 'oversize') return res.end('x'.repeat(4097));
+      if (mode === 'malformed') return res.end('{invalid');
+      if (mode === 'not-draining') return res.end('{"ok":true,"draining":false}');
+      if (mode === 'null-response') return res.end('null');
+      res.end('{"ok":true,"draining":true}');
+    });
+    server.listen(0, '127.0.0.1', () => console.log('listening on 127.0.0.1:' + server.address().port));
+    process.on('message', (message) => {
+      if (message === 'close-listener') { server.closeAllConnections(); server.close(() => process.send('listener-closed')); return; }
+      server.closeAllConnections(); server.close(() => process.exit(0));
+    });
+  `);
+  ({ child } = await startGateway(context, 'serve-worker', environment, { cliPath: script }));
+  return { child, home, state };
+}
+
+function changeFixtureControlToken(mode, state) {
+  const file = path.join(state, 'control-token');
+  if (mode === 'missing-token') { fs.rmSync(file); return; }
+  const values = { 'wrong-token': 'b'.repeat(64), 'malformed-token': 'invalid', 'oversize-token': 'a'.repeat(66) };
+  if (Object.hasOwn(values, mode)) fs.writeFileSync(file, values[mode]);
+}
+
+for (const [mode, expected] of [
+  ['wrong-token', 'http-403'], ['missing-token', 'token-unavailable'], ['malformed-token', 'token-unavailable'],
+  ['oversize-token', 'token-unavailable'], ['malformed', 'bad-response'], ['not-draining', 'bad-response'],
+  ['null-response', 'bad-response'], ['oversize', 'response-too-large'], ['redirect', 'http-302'], ['stall', 'timeout'],
+]) {
+  test(`direct worker drain records bounded ${mode} failure even after a later real close`, async (t) => {
+    const { child, home, state } = await fakeDirectWorker(t, mode);
+    changeFixtureControlToken(mode, state);
+    const startedAt = Date.now();
+    const result = await requestFixtureWorkerDrain(child, startedAt + 5000);
+    assert.equal(result.kind, 'failure');
+    assert.equal(result.code, expected);
+    assert.ok(Date.now() - startedAt < 3000, 'control delivery has its own subdeadline');
+    child.send('finish');
+    assert.equal(await waitForGatewayChildClose(child), true);
+    assert.deepEqual(await requestFixtureWorkerDrain(child, Date.now() + 5000), result,
+      'an exited-child observation cannot overwrite an earlier definite control failure');
+    assert.equal(await stopGatewayChild(child), false, 'later close cannot erase a definite control failure');
+    await assert.rejects(removeOwnedGatewayTestHome(home, {
+      shutdown: { children: [child], pids: [], closed: false },
+    }), /ERR_GATEWAY_FIXTURE_CONTROL_FAILED/);
+  });
+}
+
+test('direct worker drain uses only its registered loopback endpoint and settled local control', async (t) => {
+  const { child, home, state } = await fakeDirectWorker(t, 'accepted');
+  const result = await requestFixtureWorkerDrain(child, Date.now() + 5000);
+  assert.equal(result.kind, 'accepted');
+  const requests = fs.readFileSync(path.join(state, 'control-requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(requests.length, 1);
+  assert.deepEqual({ ...requests[0], host: 'loopback' }, { method: 'POST', path: '/drain', host: 'loopback', connection: 'close', authMatched: true });
+  assert.match(requests[0].host, /^127\.0\.0\.1:\d+$/);
+  child.send('finish');
+  assert.equal(await waitForGatewayChildClose(child), true);
+  assert.equal(await stopGatewayChild(child), true);
+  await removeOwnedGatewayTestHome(home, { shutdown: { children: [child], pids: [], closed: true } });
+});
+
+test('direct worker natural close with a reset does not manufacture a control failure', async (t) => {
+  const { child } = await fakeDirectWorker(t, 'reset-and-exit');
+  const result = await requestFixtureWorkerDrain(child, Date.now() + 5000);
+  assert.notEqual(result.kind, 'failure');
+  assert.equal(await waitForGatewayChildClose(child), true);
+  assert.equal(child.exitCode, 0);
+  assert.equal(await stopGatewayChild(child), true);
+});
+
+test('direct worker drain clamps its subdeadline to the remaining shutdown budget', async (t) => {
+  const { child } = await fakeDirectWorker(t, 'stall');
+  const began = Date.now();
+  assert.deepEqual(await requestFixtureWorkerDrain(child, began + 80), { kind: 'failure', code: 'timeout' });
+  assert.ok(Date.now() - began < 1000);
+});
+
+test('direct worker drain refuses unregistered children without looking up any default control', async (t) => {
+  t.mock.method(http, 'request', () => assert.fail('no registered fixture endpoint'));
+  assert.equal((await requestFixtureWorkerDrain(fixtureChild(), Date.now() + 5000)).kind, 'skipped');
+});
+
+test('direct worker drain revalidates its registered root before reading control credentials', async (t) => {
+  const { child, home } = await fakeDirectWorker(t, 'accepted');
+  const retired = `${home}-retired`;
+  fs.renameSync(home, retired);
+  fs.mkdirSync(home);
+  t.after(() => fs.rmSync(retired, { recursive: true, force: true }));
+  t.mock.method(http, 'request', () => assert.fail('changed root cannot authorize control'));
+  assert.deepEqual(await requestFixtureWorkerDrain(child, Date.now() + 5000), { kind: 'failure', code: 'ownership-unavailable' });
+});
+
+test('direct worker refused control never counts as observed close', async (t) => {
+  const { child, home } = await fakeDirectWorker(t, 'accepted');
+  const acknowledged = new Promise((resolve) => child.once('message', resolve));
+  child.send('close-listener');
+  assert.equal(await acknowledged, 'listener-closed');
+  const result = await requestFixtureWorkerDrain(child, Date.now() + 5000);
+  assert.ok(['failure', 'transport-error'].includes(result.kind));
+  assert.equal(await waitForGatewayChildClose(child, 0), false);
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    shutdown: { children: [child], pids: [], closed: false },
+  }), /ERR_GATEWAY_FIXTURE_(?:CLOSE_TIMEOUT|CONTROL_FAILED)/);
+});
+
+function fixtureChild() {
+  return Object.assign(new EventEmitter(), { pid: 4242, exitCode: null, signalCode: null });
+}
+
+test('fixture close observation waits beyond exit and remembers an already-fired close', async () => {
+  const child = fixtureChild();
+  observeGatewayChildClose(child);
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  const waiting = waitForGatewayChildClose(child, 1000);
+  setImmediate(() => child.emit('close', 0, null));
+  assert.equal(await waiting, true);
+  assert.equal(await waitForGatewayChildClose(child, 0), true);
+});
+
+for (const [exitCode, signalCode] of [[0, null], [null, 'SIGTERM']]) {
+  test(`fixture close timeout never escalates an exited child (${exitCode}, ${signalCode})`, async (t) => {
+    const { home } = ownedCleanupFixture(t);
+    const child = Object.assign(fixtureChild(), { fixtureShutdown: true, connected: true });
+    child.send = (_message, acknowledged) => {
+      child.exitCode = exitCode;
+      child.signalCode = signalCode;
+      child.emit('exit', exitCode, signalCode);
+      acknowledged(null);
+    };
+    observeGatewayChildClose(child);
+    const probes = [];
+    t.mock.method(process, 'kill', (pid, signal) => {
+      probes.push({ pid, signal });
+      // Even the old path cannot reach taskkill/SIGKILL in this control.
+      throw Object.assign(new Error('simulated absent PID'), { code: 'ESRCH' });
+    });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const stopping = stopGatewayChild(child);
+    t.mock.timers.tick(5000);
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5000);
+    const closed = await stopping;
+    t.mock.timers.reset();
+    assert.equal(closed, false, 'the missing close event is still a failure');
+    assert.deepEqual(probes, [], 'observed exit removes authority to probe or signal this numeric PID');
+    await assert.rejects(removeOwnedGatewayTestHome(home, {
+      shutdown: { children: [child], pids: [], closed },
+    }), /ERR_GATEWAY_FIXTURE_CLOSE_TIMEOUT/);
+    child.emit('close', exitCode, signalCode);
+  });
+}
+
+test('fixture close timeout is reported and never authorizes root removal', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const child = fixtureChild();
+  observeGatewayChildClose(child);
+  child.signalCode = 'SIGTERM';
+  child.emit('exit', null, 'SIGTERM');
+  const closed = await waitForGatewayChildClose(child, 5);
+  assert.equal(closed, false);
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    shutdown: { pids: [], children: [child], closed },
+    remove: async () => assert.fail('close was never observed'),
+  }), (error) => {
+    assert.match(error.message, /ERR_GATEWAY_FIXTURE_CLOSE_TIMEOUT/);
+    assert.equal(error.details.children[0].closeObserved, false);
+    assert.equal(error.details.children[0].signalCode, 'SIGTERM');
+    return true;
+  });
+  child.emit('close', null, 'SIGTERM');
+  assert.equal(fs.existsSync(home), true);
+});
+
+test('owned fixture removal preserves known-live PID leak checks', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    shutdown: { pids: [process.pid], children: [], closed: true },
+    remove: async () => assert.fail('a known fixture PID is still live'),
+  }), /ERR_GATEWAY_FIXTURE_PROCESS_ALIVE/);
+});
+
+test('owned fixture removal does not submit IO when root validation spends the deadline', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const times = [0, 0, 100];
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    timeout: 100, now: () => times.shift() ?? 100,
+    remove: async () => assert.fail('no removal may begin at the deadline'),
+  }), (error) => {
+    assert.match(error.message, /ERR_GATEWAY_FIXTURE_REMOVAL_TIMEOUT/);
+    assert.equal(error.details.attempts, 0);
+    return true;
+  });
+});
+
+test('owned fixture removal bounds diagnostic fields and preserves the underlying cause', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const cause = removalError('EACCES', 'x'.repeat(10000));
+  await assert.rejects(removeOwnedGatewayTestHome(home, { remove: async () => { throw cause; } }), (error) => {
+    assert.equal(error.cause, cause);
+    assert.equal(error.details.path.length, 512);
+    assert.ok(error.message.length < 4096);
+    return true;
+  });
+});
+
+test('fixture close timeout stays a failure even if close arrives before removal', async (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const child = fixtureChild();
+  observeGatewayChildClose(child);
+  const closed = await waitForGatewayChildClose(child, 0);
+  assert.equal(closed, false);
+  child.emit('close', 0, null);
+  await assert.rejects(removeOwnedGatewayTestHome(home, {
+    shutdown: { children: [child], pids: [], closed },
+    remove: async () => assert.fail('an expired close wait is not success'),
+  }), (error) => {
+    assert.match(error.message, /ERR_GATEWAY_FIXTURE_CLOSE_TIMEOUT/);
+    assert.equal(error.details.children[0].closeObserved, true);
+    return true;
+  });
+});
+
+test('fixture teardown preserves primary and cleanup failure evidence', (t) => {
+  const { home } = ownedCleanupFixture(t);
+  const script = path.join(home, 'primary-cleanup.test.cjs');
+  fs.writeFileSync(script, `
+    const test = require('node:test');
+    const fs = require('node:fs');
+    const { gatewayTestEnvironment } = require(${JSON.stringify(require.resolve('./support.js'))});
+    test('intentional primary and cleanup errors', (t) => {
+      gatewayTestEnvironment(t);
+      t.mock.method(fs.promises, 'rm', async (file) => {
+        throw Object.assign(new Error('cleanup evidence'), { code: 'ECLEANUP_SENTINEL', path: file, syscall: 'rmdir' });
+      });
+      throw new Error('PRIMARY_FAILURE_SENTINEL');
+    });
+  `);
+  const result = spawnGatewayProcessSync(process.execPath, ['--test', '--test-reporter=tap', script], {
+    encoding: 'utf8', timeout: 10000,
+    // An inherited sentinel (even an empty string) disables nested --test runs.
+    env: { TMPDIR: home, TMP: home, TEMP: home, NODE_TEST_CONTEXT: undefined },
+  });
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout + result.stderr, /PRIMARY_FAILURE_SENTINEL/);
+  assert.match(result.stdout + result.stderr, /ECLEANUP_SENTINEL/);
+});
+
 test('gateway fixture home teardown stops a supervisor even after later commands reused its home', async (t) => {
   const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_REQUEST_LOG: '0' });
   let supervisorPid = null;
@@ -796,7 +1297,29 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid], 5000);
 });
 
-test('version-change restart leaves the replacement proxy under its live supervisor', async (t) => {
+function delayedProxyStartupArguments(home, delayMs) {
+  if (!delayMs) return [];
+  const preload = path.join(home, 'delay-proxy-startup.cjs');
+  fs.writeFileSync(preload, `
+    if (process.argv[2] === 'serve-shim') {
+      const supervision = require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))});
+      const createRecovery = supervision.createProxyRecovery;
+      supervision.createProxyRecovery = (options) => {
+        let first = true;
+        return createRecovery({ ...options, probe: async () => {
+          if (first) {
+            first = false;
+            await new Promise((resolve) => setTimeout(resolve, ${delayMs}));
+          }
+          return supervision.proxyModelsAnswering();
+        } });
+      };
+    }
+  `);
+  return ['--require', preload];
+}
+
+async function versionChangeRestartScenario(t, startupDelayMs = 0) {
   const shimReservation = net.createServer();
   const shimPort = await listen(shimReservation);
   await new Promise((resolve) => shimReservation.close(resolve));
@@ -820,15 +1343,16 @@ test('version-change restart leaves the replacement proxy under its live supervi
   const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
   installNodeProxy(home);
   fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
-  supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+  const supervisorArguments = [...delayedProxyStartupArguments(home, startupDelayMs), CLI, 'serve-shim'];
+  const startedAt = Date.now();
+  supervisor = spawnGatewayProcess(t, process.execPath, supervisorArguments, {
     cwd: home,
     env: environment,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   supervisor.fixtureShutdown = true;
-  await waitForReady(supervisor);
   const state = path.join(home, '.claude', 'model-gateway');
-  const originalProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+  const originalProxyPid = await waitForFixtureProxy(supervisor, { home, port: proxyPort, startedAt });
   const proxyVersion = (spawnSync(proxyBinary, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout.match(/\d+\.\d+\.\d+/) || [])[0];
   assert.ok(proxyVersion, 'fixture proxy reports a semver version');
   fs.writeFileSync(path.join(state, 'proxy-serving-version.txt'), '0.0.0\n');
@@ -842,6 +1366,14 @@ test('version-change restart leaves the replacement proxy under its live supervi
   supervisor.send({ type: 'fixture-shutdown' });
   await waitForExit(supervisor);
   await waitForProcessesToExit([supervisor.pid, replacementProxyPid], 5000);
+}
+
+test('version-change restart leaves the replacement proxy under its live supervisor', async (t) => {
+  await versionChangeRestartScenario(t);
+});
+
+test('version-change restart preserves its assertions after delayed initial proxy readiness', async (t) => {
+  await versionChangeRestartScenario(t, 5500);
 });
 
 test('older cache version cannot replace a newer sibling shim', (t) => {
