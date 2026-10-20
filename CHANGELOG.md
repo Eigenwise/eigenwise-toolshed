@@ -8,6 +8,37 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.605.0 (2026-10-20)
+
+### model-gateway 0.54.4 → 0.54.5
+
+#### Fixes
+
+- Model Gateway tests run against a throwaway home and refuse settings writes outside the temp directory (GH-319)
+- Model Gateway contains aborted request-body reads instead of crashing the shim (GH-578)
+
+### quality-gate 1.0.0 → 1.1.0
+
+#### Features
+
+- Score Lizard languages and reject unsupported source-only scopes (SQ-3770)
+  Rust and other Lizard languages accept CSV or local Lizard complexity. Unsupported source-only changes exit 2; LCOV inventory trust requirements stay unchanged.
+
+#### Fixes
+
+- quality-gate fails a cc 6+ body even when its coverage is unverified (GH-574)
+  CRAP is never below complexity, so a new or complexity-raised body at cc 6 or more now reports FAIL and exit 1 whatever its coverage capture says, instead of UNVERIFIED and exit 2. The row keeps the coverage reason after the complexity advice. Informational and legacy rows are unchanged. Found while re-gating the GH-574 Rust fixture: cc 7 with an adapter that cannot inventory executable lines came back as a measurement question.
+- Score nested callbacks from complete LCOV with explicit line-hit limits (SQ-3771)
+  JS/TS callbacks and Python lambdas now share LCOV DA hits with proven ancestors when their owned-line inventories are contained, including equal inventories in the GH-573 repro. Each body uses its own executable lines. Rows explain that shared line execution is an upper bound for callback execution, since LCOV cannot prove independent callback hits. Sibling overlaps remain UNVERIFIED. Python has the same parent/lambda shape, so both adapters use the shared-root fix.
+
+### quartermaster 1.0.0 → 1.0.1
+
+#### Fixes
+
+- Quartermaster vetoes glob-argument commands instead of writing a dead allowlist rule (GH-323) [`d74eb6d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d74eb6db429f857a8fded3e27f7713fee586c579)
+- Score Lizard languages and reject unsupported source-only scopes (SQ-3770)
+  Rust and other Lizard languages accept CSV or local Lizard complexity. Unsupported source-only changes exit 2; LCOV inventory trust requirements stay unchanged.
+
 ## v3.604.0 (2026-10-20)
 
 ### sidequest 6.0.1 → 6.0.2
