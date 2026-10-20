@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 (2026-10-20)
+
+Released in v3.605.0, up from 1.0.0.
+
+### Fixes
+
+- Quartermaster vetoes glob-argument commands instead of writing a dead allowlist rule (GH-323) [`d74eb6d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d74eb6db429f857a8fded3e27f7713fee586c579)
+- Score Lizard languages and reject unsupported source-only scopes (SQ-3770)
+  Rust and other Lizard languages accept CSV or local Lizard complexity. Unsupported source-only changes exit 2; LCOV inventory trust requirements stay unchanged.
+
 ## 1.0.0 (2026-10-18)
 
 Released in v3.601.0, up from 0.12.2.
