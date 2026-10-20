@@ -7615,7 +7615,7 @@ for (const delivery of ['single', 'wave', 'manual']) {
       } else {
         result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge' });
       }
-      assert.strictEqual(result.ok, true, result.message || JSON.stringify(result));
+      assert.strictEqual(result.ok, true, JSON.stringify(result));
       assert.strictEqual(inLinked(['merge-base', '--is-ancestor', fixture.commit, 'HEAD']), '', 'candidate is delivered in the linked owner');
       assert.strictEqual(git(['rev-parse', 'HEAD']), registeredHead, 'registered checkout HEAD stays unchanged');
       assert.ok(fs.existsSync(path.join(PROJECT_DIR, 'registered-only.txt')), 'registered checkout dirt stays untouched');
