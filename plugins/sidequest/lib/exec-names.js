@@ -25,6 +25,8 @@ __export(exec_names_exports, {
   DISPATCH_NAME: () => DISPATCH_NAME,
   DISPATCH_PREFIX: () => DISPATCH_PREFIX,
   EFFORTS: () => EFFORTS,
+  EVIDENCE_CLAUDE_PREFIX: () => EVIDENCE_CLAUDE_PREFIX,
+  EVIDENCE_DISPATCH_NAME: () => EVIDENCE_DISPATCH_NAME,
   LEGACY_TICKET_PREFIX: () => LEGACY_TICKET_PREFIX,
   READ_ONLY_CLAUDE_PREFIX: () => READ_ONLY_CLAUDE_PREFIX,
   READ_ONLY_DISCOVERED_MODEL_PREFIX: () => READ_ONLY_DISCOVERED_MODEL_PREFIX,
@@ -38,11 +40,13 @@ __export(exec_names_exports, {
   dispatchLaunchName: () => dispatchLaunchName,
   isDiscoveredModelExecutor: () => isDiscoveredModelExecutor,
   isEffort: () => isEffort,
+  isEvidenceExecutor: () => isEvidenceExecutor,
   isReadOnlyExecutor: () => isReadOnlyExecutor,
   readOnlyDiscoveredModelExecutorName: () => readOnlyDiscoveredModelExecutorName,
   refSlug: () => refSlug,
   stableClaudeName: () => stableClaudeName,
   stableDispatchName: () => stableDispatchName,
+  stableEvidenceClaudeName: () => stableEvidenceClaudeName,
   stableReadOnlyClaudeName: () => stableReadOnlyClaudeName,
   stableReadOnlyDispatchName: () => stableReadOnlyDispatchName,
   titleSlug: () => titleSlug
@@ -51,6 +55,8 @@ module.exports = __toCommonJS(exec_names_exports);
 const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 const CLAUDE_PREFIX = "sidequest-exec-";
 const DISPATCH_PREFIX = "sidequest-exec-dispatch-";
+const EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+const EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 const READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 const READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
 const DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
@@ -148,6 +154,14 @@ function stableClaudeName(effort) {
 function stableDispatchName(_effort) {
   return DISPATCH_NAME;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
+function isEvidenceExecutor(value) {
+  if (typeof value !== "string") return false;
+  const name = canonicalExecutorName(value);
+  return name === EVIDENCE_DISPATCH_NAME || EFFORTS.some((effort) => name === stableEvidenceClaudeName(effort));
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
@@ -165,7 +179,14 @@ function discoveredModelEffort(name, prefix) {
   const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
   return name.startsWith(prefix) && isEffort(effort) ? effort : null;
 }
+function classifyEvidenceExecutor(name) {
+  if (name === EVIDENCE_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  const effort = name.slice(EVIDENCE_CLAUDE_PREFIX.length);
+  return name.startsWith(EVIDENCE_CLAUDE_PREFIX) && isEffort(effort) ? { kind: "read_only_claude_builtin", effort } : null;
+}
 function classifyDiscoveredModel(name) {
+  const evidence = classifyEvidenceExecutor(name);
+  if (evidence) return evidence;
   const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
   if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
   const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
@@ -174,6 +195,8 @@ function classifyDiscoveredModel(name) {
 const BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -237,6 +260,8 @@ function classify(value) {
   DISPATCH_NAME,
   DISPATCH_PREFIX,
   EFFORTS,
+  EVIDENCE_CLAUDE_PREFIX,
+  EVIDENCE_DISPATCH_NAME,
   LEGACY_TICKET_PREFIX,
   READ_ONLY_CLAUDE_PREFIX,
   READ_ONLY_DISCOVERED_MODEL_PREFIX,
@@ -250,11 +275,13 @@ function classify(value) {
   dispatchLaunchName,
   isDiscoveredModelExecutor,
   isEffort,
+  isEvidenceExecutor,
   isReadOnlyExecutor,
   readOnlyDiscoveredModelExecutorName,
   refSlug,
   stableClaudeName,
   stableDispatchName,
+  stableEvidenceClaudeName,
   stableReadOnlyClaudeName,
   stableReadOnlyDispatchName,
   titleSlug

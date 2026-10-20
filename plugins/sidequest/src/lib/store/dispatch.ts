@@ -2439,6 +2439,20 @@ function deliveryVerification(slug: string, t: StoredRecord, sharedTree: boolean
   return { workingTreeDelivery, verificationRequirement };
 }
 
+function dispatchEvidenceScope(slug: string, ticket: StoredRecord, projectPath: string, evidenceDirectory: string) {
+  const evidenceMode = getCategory(ticketCategory(ticket), { project: slug })?.writes === 'evidence';
+  if (!evidenceMode) return { evidenceMode: false, evidenceWriteRoots: [] as string[] };
+  const roots = [evidenceDirectory];
+  if (ticket.storyId) {
+    const story = getStory(slug, ticket.storyId);
+    const directory = ticketEvidenceDirectory(slug, story.ref, projectPath);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    roots.push(directory);
+  }
+  roots.push(...boardConfig(slug).investigationDataRoots);
+  return { evidenceMode: true, evidenceRepositoryRoot: canonicalPath(projectPath), evidenceWriteRoots: [...new Set(roots.map((root) => canonicalPath(root)))] };
+}
+
 function dispatchArtifactRoot(slug: string, t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]): string | null {
   return sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t)
     ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), effectiveFiles[0])
@@ -2630,6 +2644,7 @@ function planPreparedDispatch(slug: string, t: StoredRecord, current: StoredReco
   assertPublishedReleaseBaseline(slug, t, preflight.projectPath, baseCommit, integrationTargetState);
   const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, isolation.nonRepoOutput, preflight.snapshotPreflight);
   return {
+    evidenceScope: dispatchEvidenceScope(slug, t, preflight.projectPath, evidenceDirectory),
     now, preparedExec, fallbackReason, recovery, history, effectiveFiles, isolation, delivery, artifact, launchSeq, story,
     integrationTargetState, localAheadWarning, evidenceDirectory, baseCommit, releasedContinuation, dispatchBaseline, guarded,
   };
@@ -2653,6 +2668,7 @@ function preparationProvenanceFields(plan: PreparedDispatchPlan, opts: DispatchO
     ),
     verificationRequirement: plan.delivery.verificationRequirement,
     evidenceDirectory: plan.evidenceDirectory,
+    ...plan.evidenceScope,
     sessionId: preparingSessionId(opts),
     preparedBy: dispatchPreparationAttribution(opts),
     ...(preparedCompatibility ? { preparedCompatibility } : {}),
@@ -5449,6 +5465,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,
+    ticketEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

@@ -1885,6 +1885,19 @@ function createDispatch(dependencies) {
     }
     return { workingTreeDelivery, verificationRequirement: verificationRequirement2 };
   }
+  function dispatchEvidenceScope(slug, ticket, projectPath, evidenceDirectory) {
+    const evidenceMode = getCategory(ticketCategory(ticket), { project: slug })?.writes === "evidence";
+    if (!evidenceMode) return { evidenceMode: false, evidenceWriteRoots: [] };
+    const roots = [evidenceDirectory];
+    if (ticket.storyId) {
+      const story = getStory(slug, ticket.storyId);
+      const directory = ticketEvidenceDirectory(slug, story.ref, projectPath);
+      fs.mkdirSync(directory, { recursive: true, mode: 448 });
+      roots.push(directory);
+    }
+    roots.push(...boardConfig(slug).investigationDataRoots);
+    return { evidenceMode: true, evidenceRepositoryRoot: canonicalPath(projectPath), evidenceWriteRoots: [...new Set(roots.map((root) => canonicalPath(root)))] };
+  }
   function dispatchArtifactRoot(slug, t, sharedTree, effectiveFiles) {
     return sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), effectiveFiles[0]) : null;
   }
@@ -2032,6 +2045,7 @@ function createDispatch(dependencies) {
     assertPublishedReleaseBaseline(slug, t, preflight.projectPath, baseCommit, integrationTargetState);
     const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, isolation.nonRepoOutput, preflight.snapshotPreflight);
     return {
+      evidenceScope: dispatchEvidenceScope(slug, t, preflight.projectPath, evidenceDirectory),
       now,
       preparedExec,
       fallbackReason,
@@ -2065,6 +2079,7 @@ function createDispatch(dependencies) {
       ),
       verificationRequirement: plan.delivery.verificationRequirement,
       evidenceDirectory: plan.evidenceDirectory,
+      ...plan.evidenceScope,
       sessionId: preparingSessionId(opts),
       preparedBy: dispatchPreparationAttribution(opts),
       ...preparedCompatibility ? { preparedCompatibility } : {}
@@ -4295,6 +4310,7 @@ function createDispatch(dependencies) {
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,
+    ticketEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

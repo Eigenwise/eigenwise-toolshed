@@ -16,7 +16,7 @@ const snapshotPath = path.join(__dirname, 'fixtures', 'category-defaults.json');
 test('seeded categories match the checked-in global category snapshot', () => {
   const snapshot: unknown = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   assert.deepEqual(DEFAULT_CATEGORIES, snapshot);
-  assert.equal(ROUTING_PROFILE_SEED_REVISION, 9);
+  assert.equal(ROUTING_PROFILE_SEED_REVISION, 10);
 });
 
 test('seeded Sol fallbacks name GPT-6.1 Sol and stored rows still on a retired Sol move to it', () => {
@@ -79,26 +79,44 @@ test('experiment category preserves its human-verdict and round protocol gate', 
 
 test('starter profiles expose the re-derived capability sets', () => {
   const expectedIds: Record<string, string[]> = {
-    coding: [
-      'codebase-exploration',
-      'debugging',
-      'experiment',
-      'implementation-explanation',
-      'general',
-      'coding.hard',
-      'source-lookup',
-      'evidence-research',
-      'review-audit',
-      'spike-investigation',
-      'coding.normal',
-      'coding.easy',
-      'behavior-verification',
-      'interaction-design-implementation',
-      'visual-evaluation',
+    "coding": [
+      "research.evidence",
+      "codebase-exploration",
+      "debugging",
+      "experiment",
+      "implementation-explanation",
+      "general",
+      "coding.hard",
+      "source-lookup",
+      "evidence-research",
+      "review-audit",
+      "spike-investigation",
+      "coding.normal",
+      "coding.easy",
+      "behavior-verification",
+      "interaction-design-implementation",
+      "visual-evaluation"
     ],
-    'creative-music': ['concept-framing', 'musical-generation', 'evaluative-revision', 'context-research', 'general'],
-    research: ['source-lookup', 'evidence-investigation', 'evidence-synthesis', 'general'],
-    writing: ['prose-generation', 'meaning-preserving-revision', 'source-verification', 'general'],
+    "creative-music": [
+      "concept-framing",
+      "musical-generation",
+      "evaluative-revision",
+      "context-research",
+      "general"
+    ],
+    "research": [
+      "research.evidence",
+      "source-lookup",
+      "evidence-investigation",
+      "evidence-synthesis",
+      "general"
+    ],
+    "writing": [
+      "prose-generation",
+      "meaning-preserving-revision",
+      "source-verification",
+      "general"
+    ]
   };
 
   assert.deepEqual(

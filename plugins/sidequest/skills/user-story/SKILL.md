@@ -57,6 +57,12 @@ expected raises the size; write that in the story log so the jump is on the reco
 De-escalating is equally fine: if the panel converges on one obvious answer, stop paying for the
 panel.
 
+### Fan-out investigations
+
+When the work is "gather evidence from several sources, then conclude", split by source: one `research.evidence` ticket per source, each saving what it finds under the story evidence root, plus one dependent synthesis ticket that reads the parents' evidence (the briefing's `Parent evidence:` section, where present, and the story evidence root) and writes the conclusion. The evidence tickets run in parallel, close with `done` (no commit), and checkpoint with a cursor if they hit budget, so a redispatch resumes instead of restarting. Children dedupe by sha256 against a `manifest.sha256.json` kept in the story evidence root (a convention the tickets follow, not a store table); the synthesis ticket treats the manifest as the authority on what was saved.
+
+Prefer this over plain Agent spawns for any run that must leave files behind or may hit budget. A plain research spawn from `route_recipe` stays right for a lookup whose whole answer fits in the reply. External data that belongs outside the repository needs a path in `board_config investigationDataRoots` first. Details: `references/orchestration.md`, Investigations.
+
 ## Planning checkpoint
 
 Before dispatching a substantial or ambiguous feature, put one visible, pinned contract on the story,

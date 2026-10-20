@@ -5935,7 +5935,7 @@ test('read-only executors never ship or spawn with bypassPermissions (GH-282)', 
   const sources = agentsync.bundledExecutorSources();
   for (const [filename, source] of sources) {
     const frontmatter = source.split('\n---\n')[0];
-    const readOnly = /readonly|diagnostic-probe/.test(filename);
+    const readOnly = /readonly|evidence|diagnostic-probe/.test(filename);
     assert.equal(/^permissionMode:/m.test(frontmatter), !readOnly, filename);
   }
   for (const subagentType of [stableReadOnlyClaudeName('high'), `sidequest:${stableReadOnlyClaudeName('low')}`]) {

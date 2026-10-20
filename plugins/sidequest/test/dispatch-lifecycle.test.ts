@@ -185,8 +185,8 @@ test('US-84 D1: every dispatch write rewrites the project dispatch snapshot the 
   const snapshotFile = path.join(SIDEQUEST_HOME, 'projects', slug, 'dispatch-snapshot.json');
   const readRow = (ref: string) => JSON.parse(fs.readFileSync(snapshotFile, 'utf8')).dispatches.find((row: { ref: string }) => row.ref === ref);
   store.setBoardConfig(slug, { deniedTools: ['WebFetch'] });
+  const ticket = createFixture('dispatch snapshot rows');
   try {
-    const ticket = createFixture('dispatch snapshot rows');
     store.prepareDispatch(slug, ticket.ref, { sessionId: 'snapshot-session' });
 
     const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
@@ -196,12 +196,13 @@ test('US-84 D1: every dispatch write rewrites the project dispatch snapshot the 
     assert.deepEqual(fs.readdirSync(path.dirname(snapshotFile)).filter((name: string) => name.endsWith('.tmp')), []);
     assert.deepEqual(
       { ...readRow(ticket.ref), executor: typeof readRow(ticket.ref).executor },
-      { ref: ticket.ref, sessionId: 'snapshot-session', claimSessionId: null, agentId: null, agentName: readRow(ticket.ref).agentName, executor: 'string', worktree: readRow(ticket.ref).worktree, sharedTree: readRow(ticket.ref).sharedTree, readonly: false, state: 'prepared', deniedTools: ['WebFetch'] },
+      { ref: ticket.ref, sessionId: 'snapshot-session', claimSessionId: null, agentId: null, agentName: readRow(ticket.ref).agentName, executor: 'string', worktree: readRow(ticket.ref).worktree, sharedTree: readRow(ticket.ref).sharedTree, readonly: false, evidenceMode: false, evidenceRepositoryRoot: null, evidenceWriteRoots: [], state: 'prepared', deniedTools: ['WebFetch'] },
     );
 
     assert.equal(store.releaseTicket(slug, ticket.ref, 'snapshot-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
     assert.notEqual(readRow(ticket.ref)?.state ?? 'gone', 'prepared');
   } finally {
+    store.releaseTicket(slug, ticket.ref, 'snapshot-cleanup', { status: 'todo', source: 'test', force: true });
     store.setBoardConfig(slug, { deniedTools: [] });
   }
 });
@@ -5389,4 +5390,65 @@ test('read-only MCP snapshots preserve unset defaults and whole-list overrides',
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+function claimedEvidenceDispatch(context: { after(cleanup: () => void): void }) {
+  const story = store.createStory(slug, { title: "Evidence dispatch story" });
+  const ticket = store.createTicket(slug, { title: "Evidence roots and done", category: "research.evidence", storyId: story.ref, source: "test" });
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sq-lifecycle-evidence-data-"));
+  const previousDataRoots = store.boardConfig(slug).investigationDataRoots;
+  context.after(() => {
+    store.releaseTicket(slug, ticket.ref, 'evidence-cleanup', { status: 'todo', source: 'test', force: true });
+    store.deleteTicket(slug, ticket.ref);
+    store.deleteStory(slug, story.ref);
+    store.setBoardConfig(slug, { investigationDataRoots: previousDataRoots });
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  });
+  store.setBoardConfig(slug, { investigationDataRoots: [dataRoot] });
+  const sessionId = "evidence-session-" + ticket.id;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId, runtimeCwd: PROJECT });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentId = "evidence-agent-" + ticket.id;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName: agentId }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+  const by = "evidence-owner-" + ticket.id;
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+  return { ticket: store.getTicket(slug, ticket.ref), story, dataRoot, sessionId, executor, agentId, by };
+}
+
+test("evidence dispatch records dispatch story and data roots in its snapshot", (context: { after(cleanup: () => void): void }) => {
+  const fixture = claimedEvidenceDispatch(context);
+  const dispatch = fixture.ticket.dispatch;
+  assert.equal(fixture.executor, 'sidequest-exec-evidence-medium');
+  assert.equal(dispatch.evidenceMode, true);
+  assert.equal(dispatch.readonly, true);
+  const canonical = worktreeLease.canonicalPath;
+  assert.deepEqual(dispatch.evidenceWriteRoots, [canonical(dispatch.evidenceDirectory), canonical(path.join(path.dirname(dispatch.evidenceDirectory), fixture.story.ref)), canonical(fixture.dataRoot)]);
+  for (const root of dispatch.evidenceWriteRoots) assert.ok(fs.existsSync(root));
+  const snapshot = JSON.parse(fs.readFileSync(path.join(SIDEQUEST_HOME, "projects", slug, "dispatch-snapshot.json"), "utf8"));
+  assert.deepEqual(snapshot.dispatches.find((row: { ref: string }) => row.ref === fixture.ticket.ref).evidenceWriteRoots, dispatch.evidenceWriteRoots);
+  assert.equal(store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body: "Nothing was saved" }).ok, true);
+});
+
+test("evidence done refuses a report without a saved relative path or nothing-saved statement", (context: { after(cleanup: () => void): void }) => {
+  const fixture = claimedEvidenceDispatch(context);
+  const result = store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body: "Investigation finished" });
+  assert.equal(result.reason, "evidence_report_required");
+  assert.equal(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by);
+  assert.equal(store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body: "Nothing was saved" }).ok, true);
+});
+
+test("evidence done closes without a commit and SubagentStop adds no second report", (context: { after(cleanup: () => void): void }) => {
+  const fixture = claimedEvidenceDispatch(context);
+  const before = execFileSync("git", ["rev-parse", "HEAD"], { cwd: PROJECT, encoding: "utf8" });
+  fs.writeFileSync(path.join(fixture.dataRoot, "inventory.json"), "[]\n");
+  const body = "Saved evidence: inventory.json";
+  assert.equal(store.completeTicket(slug, fixture.ticket.ref, fixture.by, { sessionId: fixture.sessionId, body }).ok, true);
+  const closed = store.getTicket(slug, fixture.ticket.ref);
+  assert.equal(closed.status, "done");
+  assert.equal(closed.submission, undefined);
+  assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: PROJECT, encoding: "utf8" }), before);
+  const stop = runLifecycleHook(SUBAGENT_STOP, { session_id: fixture.sessionId, agent_type: fixture.executor, agent_id: fixture.agentId, agent_name: fixture.agentId });
+  assert.doesNotMatch(JSON.stringify(stop), /Saved evidence: inventory.json/);
+  assert.equal(store.getTicket(slug, fixture.ticket.ref).comments.filter((comment: { body: string }) => comment.body === body).length, 1);
 });

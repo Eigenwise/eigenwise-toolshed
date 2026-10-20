@@ -13,6 +13,9 @@ export type SnapshotRow = {
   worktree: string | null;
   sharedTree: boolean;
   readonly: boolean;
+  evidenceMode?: boolean;
+  evidenceWriteRoots?: string[];
+  evidenceRepositoryRoot?: string | null;
   state: string;
   deniedTools: string[];
   readOnlyDeniedTools?: string[] | null;
