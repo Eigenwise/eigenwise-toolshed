@@ -50,16 +50,30 @@ function scoredMetric(metric, report, input, lines) {
   return { ...metric, ...measurement, crap: crapScore(metric.complexity, measurement.coverage) };
 }
 
+// CRAP is never below complexity, so a body at the threshold fails whatever its coverage turns out to be;
+// an unverified coverage capture must not soften that into a measurement question.
+function failsRegardlessOfCoverage(metric) {
+  if (metric.informational || metric.classification === LEGACY_UNCHANGED) return false;
+  if (metric.complexity >= THRESHOLD) return true;
+  return !metric.unverified && metric.crap >= THRESHOLD;
+}
+
+const openCoverageQuestion = (metric) => Boolean(metric.unverified) && !failsRegardlessOfCoverage(metric);
+
+function verdictLabel(report, blockingUnverified) {
+  if (!report.changedMetrics.length) return 'nothing to score';
+  if (report.failures.length) return 'failed';
+  if (blockingUnverified || report.unverified.some((metric) => metric.informational)) return 'unverified';
+  return 'passed';
+}
+
 function verdict(report) {
   const enforced = enforcedMetrics(report.changedMetrics).filter((metric) => !metric.informational);
-  report.failures = enforced.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD);
-  report.unverified = report.changedMetrics.filter((metric) => metric.unverified);
-  const blockingUnverified = enforced.some((metric) => metric.unverified);
-  report.exitCode = Math.max(2 * Number(blockingUnverified), Number(report.failures.length > 0));
-  report.verdict = ['passed', 'failed'][Number(report.failures.length > 0)];
-  if (blockingUnverified) report.verdict = 'unverified';
-  if (!report.changedMetrics.length) report.verdict = 'nothing to score';
-  if (report.unverified.some((metric) => metric.informational)) report.verdict = 'unverified';
+  report.failures = enforced.filter(failsRegardlessOfCoverage);
+  report.unverified = report.changedMetrics.filter(openCoverageQuestion);
+  const blockingUnverified = enforced.some(openCoverageQuestion);
+  report.exitCode = report.failures.length ? 1 : 2 * Number(blockingUnverified);
+  report.verdict = verdictLabel(report, blockingUnverified);
   return report;
 }
 
@@ -165,10 +179,15 @@ function coverageNoteSuffix(metric) {
   return metric.coverageNote ? `; ${metric.coverageNote}` : '';
 }
 
+function unverifiedLine(metric, label, legacy) {
+  if (!legacy && metric.complexity >= THRESHOLD) return `FAIL ${label} cc=${metric.complexity} coverage unverified source=${metric.source}${complexityFailureAdvice(metric)}; ${metric.unverified}`;
+  return `${legacy ? 'LEGACY UNVERIFIED' : 'UNVERIFIED'} ${label}: ${metric.unverified}`;
+}
+
 function metricLine(metric, ccOnly) {
   const label = `${metric.relativePath}:${metric.line} ${metric.name}${pythonClassificationLabel(metric)}`;
   const legacy = metric.classification === LEGACY_UNCHANGED;
-  if (metric.unverified) return `${legacy ? 'LEGACY UNVERIFIED' : 'UNVERIFIED'} ${label}: ${metric.unverified}`;
+  if (metric.unverified) return unverifiedLine(metric, label, legacy);
   const prefix = legacy ? 'LEGACY' : ['PASS', 'FAIL'][Number(metric.crap >= THRESHOLD)];
   const measured = ccOnly ? ' (cc-only, no coverage)' : ` coverage=${(metric.coverage * 100).toFixed(2)}%`;
   const advice = complexityFailureAdvice(metric);
