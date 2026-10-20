@@ -921,7 +921,7 @@ function parentEvidencePacket(links = [], slug) {
   return parents.length ? "Parent evidence:\n" + parents.map(parentEvidenceLine).join("\n") : "";
 }
 function storyEvidencePacket(storyId, slug) {
-  if (!storyId) return "";
+  if (!storyId || !slug) return "";
   const story = store.getStory(slug, storyId);
   if (!story) return "";
   const directory = store.ticketEvidenceDirectory(slug, story.ref, store.readMeta(slug).path);
