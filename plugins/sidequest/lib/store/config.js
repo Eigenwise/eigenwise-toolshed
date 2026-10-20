@@ -26,7 +26,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     return normalized;
   }
   function normalizeReadOnlyDeniedTools(value) {
-    if (value == null) return [];
+    if (value == null) return null;
     if (!Array.isArray(value)) throw new Error("readOnlyDeniedTools must be an array of tool patterns.");
     const seen = /* @__PURE__ */ new Set();
     const normalized = [];
