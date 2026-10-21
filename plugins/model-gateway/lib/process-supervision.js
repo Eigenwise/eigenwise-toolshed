@@ -752,20 +752,34 @@ async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.
   } catch (error) { return { ok: false, reason: error.message }; }
 }
 function spawnDetached(name, command, cmdArgs, env) {
-  if (WIN) {
-    const { spawnWindowsDetached } = require('./windows-detached.js');
-    const pid = spawnWindowsDetached(command, cmdArgs, {
-      env: { ...process.env, ...env }, logPath: path.join(LOGS, name + '.log'), state: STATE,
-    });
-    writePidRecord(name, pid);
-    return pid;
+  const logPath = path.join(LOGS, name + '.log');
+  const pid = WIN
+    ? spawnWindowsSupervisor(command, cmdArgs, env, logPath)
+    : spawnPosixSupervisor(command, cmdArgs, env, logPath);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`${name} launch produced no process id for ${command}; see ${logPath}`);
   }
-  const out = fs.openSync(path.join(LOGS, name + '.log'), 'a');
-  const child = spawn(command, cmdArgs, { detached: true, stdio: ['ignore', out, out], env: { ...process.env, ...env }, windowsHide: true });
-  writePidRecord(name, child.pid);
-  child.unref();
-  fs.closeSync(out);
-  return child.pid;
+  writePidRecord(name, pid);
+  return pid;
+}
+
+function spawnWindowsSupervisor(command, cmdArgs, env, logPath) {
+  const { spawnWindowsDetached } = require('./windows-detached.js');
+  return spawnWindowsDetached(command, cmdArgs, { env: { ...process.env, ...env }, logPath, state: STATE });
+}
+
+// A spawn that fails (ENOENT, EAGAIN, ENOMEM) hands back a child with no pid and reports the cause
+// on a later 'error' event, so that event goes to the launch log instead of crashing the caller.
+function spawnPosixSupervisor(command, cmdArgs, env, logPath) {
+  const out = fs.openSync(logPath, 'a');
+  try {
+    const child = spawn(command, cmdArgs, { detached: true, stdio: ['ignore', out, out], env: { ...process.env, ...env }, windowsHide: true });
+    child.once('error', (error) => fs.appendFileSync(logPath, `launch error: ${error.message}\n`));
+    child.unref();
+    return child.pid;
+  } finally {
+    fs.closeSync(out);
+  }
 }
 
 async function proxyModelsAnswering(port = PROXY_PORT, fetch = fetchUrl) {

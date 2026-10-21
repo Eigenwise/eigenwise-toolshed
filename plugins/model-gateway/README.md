@@ -4,6 +4,16 @@ Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Cl
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/model-gateway/) · [Toolshed marketplace](../../README.md)
 
+## Recovery
+
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
+
+Wiring installs stable SessionStart startup/resume recovery and a synchronous UserPromptSubmit readiness gate in the same settings scope. Project wiring adds no global hooks. Updater `setup --preserve-wiring` migrates registered wiring without wiring new directories; restart Claude Code to load the hooks. SessionStart cannot block; failed prompt readiness blocks locally with recovery guidance (25-second child deadline, 35-second hook timeout, `onFailure: block`).
+
+Use the stable launcher with `recover` for settings-free readiness recovery, `doctor` for gate/stop/log diagnostics, or `start` to resume. `stop` persists across reboots and upgrades; automatic recovery honors it. Disabled hooks and failures inside an active turn remain outside prompt-gate coverage. Unwire each project with `env --remove`, and user fallback with `env --remove --write-user`, before removing the plugin.
+
+Maintenance `setup --preserve-wiring` preserves intentional stop even when acquisition fails, and never starts a stopped gateway. Intentional stop is cleared once an explicit `start` or `setup` creates the supervisor process and writes its guardian PID record; a launch that fails before that point, including a spawn that yields no PID, leaves it stopped, and a PID-record failure after a successful spawn leaves both the marker and the process, so the next automatic path still refuses. A non-gateway effective endpoint is a cheap no-op before CLI resolution, even without an install. An absent plugin entry leaves recovery active. An explicit effective `enabledPlugins: {"model-gateway@eigenwise-toolshed": false}` disables recovery without starting, stopping or touching gateway state; re-enable the plugin or unwire with `env --remove`. Project-local settings win over project settings, then user settings; process endpoint env wins over settings endpoints. `doctor` reports explicit plugin disable.
+
 ## Install
 
 Model Gateway uses your supported ChatGPT/Codex or Grok subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { syncReadinessHooks } = require('./readiness-hooks.js');
 const os = require('node:os');
 const path = require('node:path');
 const { writeFileAtomically } = require('./atomic-file.js');
@@ -105,6 +106,7 @@ function assertTestSafeSettingsPath(file) {
 
 function writeSettings(file, settings) {
   assertTestSafeSettingsPath(file);
+  syncReadinessHooks(settings, ourBaseUrls().includes(settings.env?.ANTHROPIC_BASE_URL));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
 }

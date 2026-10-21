@@ -49,13 +49,34 @@ function currentModelGatewayCli() {
   }
 }
 
+const gate = process.argv[2] === 'readiness-gate';
+let input;
+if (gate) {
+  input = fs.readFileSync(0, 'utf8');
+  const payload = JSON.parse(input);
+  if (typeof payload.cwd === 'string') process.chdir(payload.cwd);
+  const { recoveryPolicy, pluginDisabledNotice } = (() => {
+    const module = { exports: {} };
+    ${fs.readFileSync(path.join(__dirname, '../lib/recovery-policy.js'), 'utf8')}
+    return module.exports;
+  })();
+  const policy = recoveryPolicy();
+  if (policy === 'unwired') process.exit(0);
+  if (policy === 'disabled') {
+    console.error(pluginDisabledNotice());
+    process.exit(0);
+  }
+}
 const script = currentModelGatewayCli();
 if (!script) {
-  console.error('model-gateway: no installed Model Gateway CLI was found in Claude Code\\'s plugin registry.');
-  process.exit(1);
+  console.error('model-gateway: no installed Model Gateway CLI was found in Claude Code\\'s plugin registry. Reinstall Model Gateway, then run the stable launcher with start or doctor. Unwire with env --remove before removing the plugin. Resubmit your prompt after recovery.');
+  process.exit(gate ? 2 : 1);
 }
-const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
-if (result.error) throw result.error;
+const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: gate ? ['pipe', 'inherit', 'inherit'] : 'inherit', input, windowsHide: true, ...(gate ? { timeout: 25000, killSignal: 'SIGKILL' } : {}) });
+if (result.error) {
+  console.error('model-gateway: recovery failed or exceeded its 25s deadline. Run this stable launcher with start, recover, doctor, or env --remove, then resubmit your prompt.');
+  process.exit(gate ? 2 : 1);
+}
 process.exit(result.status == null ? 1 : result.status);
 `;
 

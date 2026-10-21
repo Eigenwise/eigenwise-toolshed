@@ -894,13 +894,17 @@ test('migration preserves user settings that resolve to the legacy file', (t) =>
   assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes, 'home migration preserves deliberate user-scope gateway wiring byte-for-byte');
   assert.equal(fs.existsSync(localFile), false);
   assert.equal(runHook(home, home).code, 0);
-  assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes);
+  const migrated = JSON.parse(fs.readFileSync(userFile, 'utf8'));
+  assert.match(migrated.hooks.UserPromptSubmit[0].hooks[0].command, /readiness-gate$/);
+  delete migrated.hooks;
+  assert.deepEqual(migrated, JSON.parse(userBytes), 'readiness migration preserves user wiring and unrelated values');
+  const migratedBytes = fs.readFileSync(userFile, 'utf8');
   assert.equal(fs.existsSync(localFile), false);
 
   const homeAlias = path.join(path.dirname(home), 'home-alias');
   fs.symlinkSync(home, homeAlias, 'junction');
   assert.deepEqual(migrateLegacyProjectSettings(home, homeAlias), { migrated: false });
-  assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes, 'junction migration preserves deliberate user-scope gateway wiring byte-for-byte');
+  assert.equal(fs.readFileSync(userFile, 'utf8'), migratedBytes, 'junction migration preserves deliberate user-scope gateway wiring byte-for-byte');
   assert.equal(fs.existsSync(localFile), false);
 });
 
