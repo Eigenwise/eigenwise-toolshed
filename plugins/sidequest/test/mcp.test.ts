@@ -2986,7 +2986,9 @@ test('SQ-2638: dispatch-recorded targets govern submit, waves, MCP delivery, and
   assert.equal(cliDelivery.status, 0, cliDelivery.stdout + cliDelivery.stderr);
   assert.equal(JSON.parse(cliDelivery.stdout).delivery.targetBranch, 'branch-a');
   assert.equal(gitAt(repository, ['branch', '--show-current']), 'branch-b');
+});
 
+test('SQ-2638: wave assembly rejects different branches and accepts local and remote targets on the same branch', async () => {
   const modeRepository = createGitWorktree();
   gitAt(modeRepository, ['switch', '-c', 'branch-a']);
   gitAt(modeRepository, ['push', '-u', 'origin', 'branch-a']);

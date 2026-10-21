@@ -934,12 +934,15 @@ ${verify.outputTail}` : null
       return { ok: true, ticket };
     });
   }
-  function persistSubmissionIntegration(slug, ticket) {
+  function assertRecordedIntegrationBranch(slug, ticket) {
     const branch = ticket.submission.integration.targetBranch;
     const expectedBranch = ticket.dispatch?.integrationTarget?.branch || boardConfig(slug).integrationBranch;
     if (branch && branch !== expectedBranch) {
       throw new Error(`Integration record targetBranch ${branch} differs from the recorded integration branch ${expectedBranch}.`);
     }
+  }
+  function persistSubmissionIntegration(slug, ticket) {
+    assertRecordedIntegrationBranch(slug, ticket);
     const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
     putTicket(slug, ticket);
     if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
