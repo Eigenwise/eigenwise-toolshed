@@ -5655,7 +5655,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
 test('a subagent session start preserves a fresh re-dispatch and stale attempt authority stays refused', () => {
   const ticket = addStopTicket('fresh launch after failed worktree creation', { files: ['src/fresh-reprepare.ts'] });
   const sessionId = `fresh-reprepare-${++sqSeq}`;
-  const first = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: false });
+  const first = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const replacement = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   assert.notEqual(first.token, replacement.token);
   const launch = runHookOutput(FORCE_BYPASS, {

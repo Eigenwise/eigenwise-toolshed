@@ -407,7 +407,7 @@ function isolatedDispatchWorktree(dispatch: any): boolean {
 }
 
 function closedTicketCleanupApplies(slug: string, ticket: any): boolean {
-  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+  return isolatedDispatchWorktree(ticket?.dispatch);
 }
 
 // remove deletes the ticket before its cleanup runs, so it passes the deleted ticket in as

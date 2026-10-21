@@ -1279,13 +1279,13 @@ test('disjoint candidate changes integrate while an automatic scope grant overla
     executorAttestationArtifact: 'access-tier-revision-3',
     source: 'test',
   });
-  const siblingDispatch = store.prepareDispatch(board, sibling.ref, { sharedTree: false });
+  const siblingDispatch = store.prepareDispatch(board, sibling.ref, { sharedTree: true });
   assert.strictEqual(store.claimTicket(board, sibling.ref, 'access-tiers-worker', {
     token: siblingDispatch.token,
     executor: siblingDispatch.ticket.dispatchExecutor,
     source: 'test',
   }).ok, true);
-  const prepared = store.prepareDispatch(board, participant.ref, { sharedTree: false });
+  const prepared = store.prepareDispatch(board, participant.ref, { sharedTree: true });
   assert.strictEqual(store.claimTicket(board, participant.ref, 'guide-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -1332,13 +1332,13 @@ test('candidate changes overlapping a live sibling declared file refuse with the
     executorAttestationArtifact: 'store-revision-9',
     source: 'test',
   });
-  const siblingDispatch = store.prepareDispatch(board, sibling.ref, { sharedTree: false });
+  const siblingDispatch = store.prepareDispatch(board, sibling.ref, { sharedTree: true });
   assert.strictEqual(store.claimTicket(board, sibling.ref, 'overlapping-store-worker', {
     token: siblingDispatch.token,
     executor: siblingDispatch.ticket.dispatchExecutor,
     source: 'test',
   }).ok, true);
-  const prepared = store.prepareDispatch(board, participant.ref, { sharedTree: false });
+  const prepared = store.prepareDispatch(board, participant.ref, { sharedTree: true });
   assert.strictEqual(store.claimTicket(board, participant.ref, 'store-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -1393,7 +1393,7 @@ test('a no-Git document submission uses source revision through submit and integ
     executorAttestationArtifact: 'wiki-revision-42',
     source: 'mcp',
   });
-  const prepared = store.prepareDispatch(noGitBoard, created.ref, { sharedTree: false });
+  const prepared = store.prepareDispatch(noGitBoard, created.ref, { sharedTree: true });
   const claimed = store.claimTicket(noGitBoard, created.ref, 'wiki-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,

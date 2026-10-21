@@ -89,7 +89,7 @@ claim's token and exact executor name are the evidence.
 
 A board selects one profile plus local ADD/OVERRIDE/DETACH/DISABLE rows. Mutations take one of
 `--profile`/`--project`; details: `references/routing-details.md`. Category `readonly` selects the
-restricted executor and `done` closeout. `--readonly true|false` overrides it for a prepared dispatch.
+restricted executor and `done` closeout. `--readonly` and `--no-shared-tree` override a prepared dispatch.
 Read-only files or changes warn before dispatch. Resolve or override.
 
 ## Open the dashboard

@@ -182,6 +182,69 @@ function writePayload(agentId: string, executor: string, sessionId: string, file
   };
 }
 
+test('SQ-3794: explicit isolation on a shared board provisions from develop without touching the registered checkout', () => {
+  const project = initRepo('sq-explicit-isolation-');
+  const git = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: project, encoding: 'utf8', windowsHide: true }).trim();
+  git(['checkout', '-b', 'develop']);
+  fs.writeFileSync(path.join(project, 'develop.txt'), 'integration tip\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'integration tip']);
+  const developTip = git(['rev-parse', 'HEAD']);
+  git(['checkout', 'main']);
+  const registeredTip = git(['rev-parse', 'HEAD']);
+  git(['remote', 'add', 'origin', project]);
+  git(['update-ref', 'refs/remotes/origin/develop', developTip]);
+  git(['update-ref', 'refs/remotes/origin/main', registeredTip]);
+  fs.writeFileSync(path.join(project, 'README.md'), 'occupied checkout\n');
+  const projectSlug = store.ensureProject(project).slug;
+  store.setBoardConfig(projectSlug, { worktreeIsolation: false, integrationBranch: 'develop', worktreeDependencyPaths: [] });
+  const ticket = store.createTicket(projectSlug, { title: 'explicit isolated checkout', category: 'coding.normal', files: ['README.md'] });
+  const sessionId = `explicit-isolation-${Date.now()}`;
+  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId, sharedTree: false });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false, 'explicit false overrides the shared board');
+  assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: 'explicit-isolation' }).ok, true);
+  const created = createWorktree(sessionId, 'explicit-isolation', project);
+  assert.equal(created.ok, true, created.output);
+  try {
+    assert.equal(store.getTicket(projectSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(created.output));
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.output, encoding: 'utf8', windowsHide: true }).trim(), developTip);
+    assert.equal(git(['rev-parse', 'HEAD']), registeredTip);
+    assert.equal(git(['branch', '--show-current']), 'main');
+    assert.equal(fs.readFileSync(path.join(project, 'README.md'), 'utf8'), 'occupied checkout\n');
+  } finally {
+    git(['worktree', 'remove', '--force', created.output]);
+  }
+});
+
+test('SQ-3794: unavailable explicit isolation refuses before creating a token on either board default', () => {
+  for (const worktreeIsolation of [false, true]) {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-explicit-non-git-'));
+    const projectSlug = store.ensureProject(project).slug;
+    store.setBoardConfig(projectSlug, { worktreeIsolation });
+    const ticket = store.createTicket(projectSlug, { title: 'non-Git isolation refusal', category: 'codebase-exploration', files: ['README.md'] });
+    assert.throws(() => store.prepareDispatch(projectSlug, ticket.ref, { sharedTree: false }), /requires sharedTree:false isolation/);
+    const refused = store.getTicket(projectSlug, ticket.ref);
+    assert.equal(refused.dispatch, undefined, 'refusal leaves no dispatch or live token');
+    assert.equal(refused.claim, undefined, 'refusal leaves no claim');
+  }
+});
+
+test('SQ-3794: redispatch inherits explicit isolation until explicit shared clears it', () => {
+  const project = initRepo('sq-explicit-retry-');
+  const projectSlug = store.ensureProject(project).slug;
+  store.setBoardConfig(projectSlug, { worktreeIsolation: false });
+  const ticket = store.createTicket(projectSlug, { title: 'isolation retry', category: 'codebase-exploration', files: ['README.md'] });
+  const first = store.prepareDispatch(projectSlug, ticket.ref, { sharedTree: false });
+  assert.equal(first.ticket.dispatch.explicitIsolation, true);
+  const retried = store.prepareDispatch(projectSlug, ticket.ref, {});
+  assert.equal(retried.ticket.dispatch.sharedTree, false);
+  assert.equal(retried.ticket.dispatch.explicitIsolation, true);
+  const shared = store.prepareDispatch(projectSlug, ticket.ref, { sharedTree: true });
+  assert.equal(shared.ticket.dispatch.sharedTree, true);
+  assert.equal(shared.ticket.dispatch.explicitIsolation, false);
+  assert.equal(store.prepareDispatch(projectSlug, ticket.ref, {}).ticket.dispatch.sharedTree, true);
+});
+
 test('a write into the shared checkout is refused when the dispatch promised a worktree', () => {
   const agentId = 'a1isolated';
   const { ticket, sessionId, executor } = dispatched(agentId);

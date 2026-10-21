@@ -9,6 +9,7 @@
       "Usage:",
       "sidequest add ",
       "sidequest dispatch ",
+      "--no-shared-tree",
       "record an advisory checkpoint while claim and dispatch stay active; no final acceptance"
     ],
     "stderr": ""

@@ -155,7 +155,7 @@ async function cmdNativeAgent(opts: any, positional: any) {
   const executorClaimRefusal = store.executorClaimDispatchRefusal(slug, sessionId);
   if (executorClaimRefusal) fail(executorClaimRefusal);
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
-  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || opts['shared-tree'] === true;
+  const sharedTree = opts['shared-tree'] ?? (store.boardConfig(slug)?.worktreeIsolation === false);
   const runtimeRefusal = sharedTree ? store.sharedTreeRuntimeRefusal(ticket, meta.path, process.cwd()) : null;
   if (runtimeRefusal) fail(runtimeRefusal);
   const created = agentsync.createNativeAgent({
