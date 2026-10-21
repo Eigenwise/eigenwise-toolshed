@@ -1151,8 +1151,41 @@ function attributeOwnChanges(slug: any, ticket: any, workspace: any, working: an
 // since its dispatch base, never what a merge carried in from the integration branch.
 function negativeControlChanges(slug: any, ticket: any, delta: any, changedPaths: string[]) {
   const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] as string[] };
-  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  if (!workspace?.base) return { paths: changedPaths, testNames: [] as string[], inheritedTests: [] as InheritedTestClassification[] };
+  const own = attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  const inheritedTests = inheritedTestClassifications(slug, ticket, workspace.root, changedPaths, own.testNames);
+  const inheritedNames = new Set(inheritedTests.flatMap((entry) => entry.tests));
+  return { ...own, testNames: own.testNames.filter((name) => !inheritedNames.has(name)), inheritedTests };
+}
+
+type InheritedTestClassification = { classification: 'inherited-unchanged'; sourceRef: string; candidate: string; tests: string[] };
+
+function inheritedCandidateTests(root: string, candidate: string, files: string[]): string[] {
+  const testFiles = files.filter(isTestSidePath);
+  const changed = new Set(testFiles.flatMap((file) => fileTestNames(root, { from: candidate, to: null }, file)));
+  return testFiles.flatMap((file) => testDefinitions(sourceAt(root, candidate, file)).map((entry) => entry.name))
+    .filter((name) => !changed.has(name));
+}
+
+function rejectedAncestor(root: string, source: { submission?: { commit?: string; review?: { outcome?: string } } } | null): string | null {
+  const submission = source?.submission;
+  if (submission?.review?.outcome !== 'rejected' || !submission.commit) return null;
+  try {
+    gitOutput(root, ['merge-base', '--is-ancestor', submission.commit, 'HEAD']);
+    return submission.commit;
+  } catch {
+    return null;
+  }
+}
+
+function inheritedTestClassifications(slug: string, ticket: { links?: { type: string; ref: string }[] }, root: string, files: string[], expected: string[]): InheritedTestClassification[] {
+  return (ticket.links || []).filter((link) => link.type === 'related').flatMap((link) => {
+    const candidate = rejectedAncestor(root, getTicket(slug, link.ref));
+    if (!candidate) return [];
+    const unchanged = new Set(inheritedCandidateTests(root, candidate, files));
+    const tests = expected.filter((name) => unchanged.has(name));
+    return tests.length ? [{ classification: 'inherited-unchanged' as const, sourceRef: link.ref, candidate, tests }] : [];
+  });
 }
 
 // diff-tree prints nothing for a merge, so the committed paths miss a file that only a merge's
@@ -1398,11 +1431,12 @@ function mixedChange(paths: string[]) {
 // integration branch was written and tested there (GH-160).
 function ownedControlCheck(slug: string, ticket: ProvenanceCompletionTicket, delta: unknown, ownedPaths: string[]) {
   const kind = ticket.dispatch?.workProvenance?.kind;
-  if (['behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only'].includes(String(kind))) return { ok: true as const, negativeControl: 'not_required(' + kind + ')' };
+  if (['behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only'].includes(String(kind))) return { ok: true as const, inheritedTests: [] as InheritedTestClassification[], negativeControl: 'not_required(' + kind + ')' };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
-  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(no changed source under changed tests)' };
+  const inheritedTests = own.inheritedTests;
+  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(no changed source under changed tests)', inheritedTests };
   const control = negativeControlResult(ticket, own.testNames);
-  return ['failed', 'waived'].includes(control.kind) ? { ok: true as const, negativeControl: control.kind } : negativeControlRefusal(ticket, control);
+  return ['failed', 'waived'].includes(control.kind) ? { ok: true as const, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 
 function completionTreeCheck(slug: string, ticket: ProvenanceCompletionTicket, opts?: { explicitNoOp?: boolean }) {
@@ -1414,7 +1448,8 @@ function completionTreeCheck(slug: string, ticket: ProvenanceCompletionTicket, o
   const control = ownedControlCheck(slug, ticket, facts.delta, facts.ownedPaths);
   if (!control.ok) return control;
   return { ok: true, applicable: true, changedPaths: facts.changedPaths, ownedPaths: facts.ownedPaths,
-    noOp: !facts.changedPaths.length, workProvenance: facts.provenance, negativeControl: control.negativeControl };
+    noOp: !facts.changedPaths.length, workProvenance: facts.provenance, negativeControl: control.negativeControl,
+    inheritedTests: control.inheritedTests };
 }
 
 const {

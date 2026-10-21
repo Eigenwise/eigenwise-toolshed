@@ -1107,8 +1107,35 @@ function attributeOwnChanges(slug, ticket, workspace, working, changedPaths) {
 }
 function negativeControlChanges(slug, ticket, delta, changedPaths) {
   const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
-  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  if (!workspace?.base) return { paths: changedPaths, testNames: [], inheritedTests: [] };
+  const own = attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  const inheritedTests = inheritedTestClassifications(slug, ticket, workspace.root, changedPaths, own.testNames);
+  const inheritedNames = new Set(inheritedTests.flatMap((entry) => entry.tests));
+  return { ...own, testNames: own.testNames.filter((name) => !inheritedNames.has(name)), inheritedTests };
+}
+function inheritedCandidateTests(root, candidate, files) {
+  const testFiles = files.filter(isTestSidePath);
+  const changed = new Set(testFiles.flatMap((file) => fileTestNames(root, { from: candidate, to: null }, file)));
+  return testFiles.flatMap((file) => testDefinitions(sourceAt(root, candidate, file)).map((entry) => entry.name)).filter((name) => !changed.has(name));
+}
+function rejectedAncestor(root, source) {
+  const submission = source?.submission;
+  if (submission?.review?.outcome !== "rejected" || !submission.commit) return null;
+  try {
+    gitOutput(root, ["merge-base", "--is-ancestor", submission.commit, "HEAD"]);
+    return submission.commit;
+  } catch {
+    return null;
+  }
+}
+function inheritedTestClassifications(slug, ticket, root, files, expected) {
+  return (ticket.links || []).filter((link) => link.type === "related").flatMap((link) => {
+    const candidate = rejectedAncestor(root, getTicket(slug, link.ref));
+    if (!candidate) return [];
+    const unchanged = new Set(inheritedCandidateTests(root, candidate, files));
+    const tests = expected.filter((name) => unchanged.has(name));
+    return tests.length ? [{ classification: "inherited-unchanged", sourceRef: link.ref, candidate, tests }] : [];
+  });
 }
 function mergeResolvedPaths(workspace) {
   if (!workspace?.base) return [];
@@ -1280,11 +1307,12 @@ function mixedChange(paths) {
 }
 function ownedControlCheck(slug, ticket, delta, ownedPaths) {
   const kind = ticket.dispatch?.workProvenance?.kind;
-  if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, negativeControl: "not_required(" + kind + ")" };
+  if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, inheritedTests: [], negativeControl: "not_required(" + kind + ")" };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
-  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)" };
+  const inheritedTests = own.inheritedTests;
+  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)", inheritedTests };
   const control = negativeControlResult(ticket, own.testNames);
-  return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind } : negativeControlRefusal(ticket, control);
+  return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 function completionTreeCheck(slug, ticket, opts) {
   const facts = completionWorkFacts(slug, ticket);
@@ -1301,7 +1329,8 @@ function completionTreeCheck(slug, ticket, opts) {
     ownedPaths: facts.ownedPaths,
     noOp: !facts.changedPaths.length,
     workProvenance: facts.provenance,
-    negativeControl: control.negativeControl
+    negativeControl: control.negativeControl,
+    inheritedTests: control.inheritedTests
   };
 }
 const {

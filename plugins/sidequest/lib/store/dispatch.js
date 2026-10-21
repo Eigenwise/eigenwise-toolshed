@@ -2978,7 +2978,7 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
-  function recordDispatchWorktreeProvisioned(slug, sessionId, worktree, attempt) {
+  function recordDispatchWorktreeProvisioned(slug, sessionId, worktree, attempt, evidence = []) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -2995,6 +2995,7 @@ function createDispatch(dependencies) {
         if (!current || current.sessionId !== normalizedSessionId || current.terminalAt || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
           return { ok: false, reason: "dispatch_binding_unavailable" };
         }
+        current.worktreeProvisioningEvidence = evidence;
         current.worktreeProvisionedAt = (/* @__PURE__ */ new Date()).toISOString();
         stampDispatchEvent(ticket, "worktree-provisioned", current.worktreeProvisionedAt);
         putTicket(slug, ticket);
