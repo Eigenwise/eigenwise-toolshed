@@ -66,12 +66,38 @@ test('installed prompt gate blocks missing setup with local recovery guidance', 
   assert.match(result.stderr, /start.*recover.*doctor.*env --remove.*resubmit/s);
 });
 
-test('stable launcher fails locally when the installed plugin disappears', (t) => {
+test('stable wired gate fails with exit 2 when the installed plugin disappears', (t) => {
   const fixture = installedGateFixture(t);
   fs.writeFileSync(fixture.registry, JSON.stringify({ plugins: {} }));
-  const result = invokeGate(fixture, 'UserPromptSubmit');
-  assert.notEqual(result.status, 0);
+  const result = invokeGate(fixture, 'UserPromptSubmit', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' });
+  assert.equal(result.status, 2);
   assert.match(result.stderr, /Reinstall Model Gateway/);
+});
+
+test('stable non-gateway gate succeeds without an installed CLI or spawn', (t) => {
+  const fixture = installedGateFixture(t);
+  fs.rmSync(fixture.registry);
+  const result = invokeGate(fixture, 'UserPromptSubmit');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
+test('absent plugin entry still attempts wired recovery', (t) => {
+  const fixture = installedGateFixture(t);
+  const result = invokeGate(fixture, 'UserPromptSubmit', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /proxy binary missing/);
+});
+
+test('explicit effective plugin false skips recovery before CLI resolution or spawn', (t) => {
+  const fixture = installedGateFixture(t);
+  fs.writeFileSync(path.join(fixture.home, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'model-gateway@eigenwise-toolshed': false } }));
+  fs.rmSync(fixture.registry);
+  const result = invokeGate(fixture, 'UserPromptSubmit', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /explicitly disabled.*re-enable.*env --remove/);
+  assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'lifecycle.lock')), false);
 });
 
 test('stable gate follows upgrade and downgrade registry entries after old caches disappear', (t) => {
@@ -81,7 +107,7 @@ test('stable gate follows upgrade and downgrade registry entries after old cache
     fs.mkdirSync(path.join(installPath, 'bin'), { recursive: true });
     fs.writeFileSync(path.join(installPath, 'bin', 'model-gateway.js'), `process.stdin.resume(); process.stdin.on('end', () => console.log(${JSON.stringify(version)}));`);
     fs.writeFileSync(fixture.registry, JSON.stringify({ plugins: { 'model-gateway@test': [{ version, installPath }] } }));
-    const result = invokeGate(fixture, 'UserPromptSubmit');
+    const result = invokeGate(fixture, 'UserPromptSubmit', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), version);
     fs.rmSync(installPath, { recursive: true });
@@ -94,6 +120,7 @@ test('installed gate waits for delayed recovery and kills its CLI at the finite 
   const script = path.join(installPath, 'bin', 'model-gateway.js');
   fs.mkdirSync(path.dirname(script), { recursive: true });
   fs.writeFileSync(fixture.registry, JSON.stringify({ plugins: { 'model-gateway@test': [{ version: '1.0.0', installPath }] } }));
+  fixture.environment.ANTHROPIC_BASE_URL = 'http://127.0.0.1:18764';
   fs.writeFileSync(script, "process.stdin.resume(); setTimeout(() => console.log('recovery complete'), 250);");
   const ready = invokeGate(fixture, 'UserPromptSubmit');
   assert.equal(ready.status, 0, ready.stderr);
@@ -144,17 +171,18 @@ test('migration adds gates only to registered wiring and preserves pins and unre
   assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.json')), false);
 });
 
-test('explicit setup clears persistent stop before a bounded acquisition failure without wiring new projects', (t) => {
+test('maintenance setup preserves persistent stop through a bounded acquisition failure', (t) => {
   const fixture = installedGateFixture(t);
   const script = `
     require(${JSON.stringify(require.resolve('../lib/lifecycle-lock.js'))}).recordIntentionalStop();
     require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))}).fetchUrl = async () => ({ status: 503 });
+    process.argv = [process.execPath, ${JSON.stringify(require.resolve('../bin/model-gateway.js'))}, 'setup', '--preserve-wiring'];
     require(${JSON.stringify(require.resolve('../lib/commands.js'))}).commands.setup();
   `;
   const result = spawnSync(process.execPath, ['-e', script], { cwd: fixture.home, env: fixture.environment, encoding: 'utf8', timeout: 10000, windowsHide: true });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /GitHub API returned 503/);
-  assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'intentionally-stopped.json')), false);
+  assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'intentionally-stopped.json')), true);
   assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.local.json')), false);
 });
 

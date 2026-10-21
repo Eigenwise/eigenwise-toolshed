@@ -1,8 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
-const { effectiveBaseUrl } = require('./settings-wiring.js');
-const { ourBaseUrls } = require('./pins.js');
+const { recoveryPolicy, pluginDisabledNotice } = require('./recovery-policy.js');
 const { resolveStableCommandPath } = require('./runtime.js');
 
 function recoveryGuidance(reason) {
@@ -18,7 +17,9 @@ function readHookPayload() {
 
 async function readinessGate({ recover = () => require('./commands.js').recoverGateway() } = {}) {
   const payload = readHookPayload();
-  if (!ourBaseUrls().includes(effectiveBaseUrl().value)) return;
+  const policy = recoveryPolicy();
+  if (policy === 'unwired') return;
+  if (policy === 'disabled') return console.error(pluginDisabledNotice());
   try { await recover(); }
   catch (error) {
     const message = recoveryGuidance(error.message);
