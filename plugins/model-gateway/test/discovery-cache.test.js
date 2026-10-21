@@ -277,7 +277,7 @@ test('a shim that starts before its proxy serves the fallback catalog without pe
   assert.equal((await getJson(`${baseUrl}/healthz`)).catalog, 'proxy');
 });
 
-test('ensure writes the discovery cache before reporting missing ChatGPT auth', async (testContext) => {
+test('ensure writes the discovery cache with missing ChatGPT auth without refusing the router', async (testContext) => {
   const proxy = http.createServer((request, response) => {
     if (request.url !== '/v1/models') return response.end();
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -314,8 +314,8 @@ test('ensure writes the discovery cache before reporting missing ChatGPT auth', 
     discoveryProcessOverrides(shimPort, workerPort, proxyPort),
   );
 
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /ChatGPT sign-in is required/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /ChatGPT sign-in is required/);
   await waitUntil(() => fs.existsSync(cache), 'ensure did not write the discovery cache');
   assert.match(result.stdout, /discovery cache: (?:wrote 2 models|unchanged)/);
 
