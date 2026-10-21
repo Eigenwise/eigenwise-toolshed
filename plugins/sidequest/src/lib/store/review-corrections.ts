@@ -1,5 +1,6 @@
 import type { ReviewCandidate, OracleVerdictOutcome, ReviewMirror } from '../kernel/review-binding';
 import { mainAttestedReviewOutcome, sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory, reviewProvenance } from '../kernel/review-binding';
+import { oracleRoundRefusal } from './review-verdict-routes';
 
 export type ReviewVerdictCorrection = Readonly<{
   from: 'accepted'; to: 'rejected'; verdictAt: string; sourceTicketId: string; sourceRef: string;
@@ -86,7 +87,7 @@ export function undispatchedReviewRefusal(review: CorrectionTicket): Refusal | u
 }
 
 export function completedNormalReviewRefusal(review: CorrectionTicket): Refusal | undefined {
-  if (review.oracle) return refuse('use_verdict', 'Use the separate oracle verdict lifecycle for an experimental review.');
+  if (review.oracle) return oracleRoundRefusal(review);
   if (activeCorrectionTicket(review)) return refuse('review_active', 'A claimed or actively dispatched review cannot be finalized.');
   if (correctionReviewCategory(review.category) !== 'review-audit') return refuse('review_unbound', 'Finalization requires a bound review-audit ticket.');
   if (review.reviewDecision?.verdict?.authority === 'main-attestation') return undispatchedReviewRefusal(review);

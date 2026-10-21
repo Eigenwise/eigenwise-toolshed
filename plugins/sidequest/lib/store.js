@@ -40,6 +40,7 @@ const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
 const { createReviewCorrections } = require("./store/review-corrections.js");
 const { createReviewFinalization } = require("./store/review-finalization.js");
+const { pendingOracleVerdictRefusal } = require("./store/review-verdict-routes.js");
 const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
@@ -3531,15 +3532,19 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
     return { ok: true, ticket };
   });
 }
+function dispatchAlreadyTerminal(ticket) {
+  return Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+}
 function groomCloseRecovery(slug, idOrRef, opts) {
   const evidence = String(opts?.evidence || "").trim();
   const reason = String(opts?.reason || "");
-  if (!evidence) return { ok: true, reason };
   const ticket = getTicket(slug, idOrRef);
+  const pendingVerdict = pendingOracleVerdictRefusal(ticket);
+  if (pendingVerdict) return { ok: false, recovered: pendingVerdict };
+  if (!evidence) return { ok: true, reason };
   const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
   if (recovered.ok) return { ok: true, reason };
-  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
-  if (!terminalDispatch) return { ok: false, recovered };
+  if (!dispatchAlreadyTerminal(ticket)) return { ok: false, recovered };
   return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 function unconsumedPreparedDispatch(ticket, state) {

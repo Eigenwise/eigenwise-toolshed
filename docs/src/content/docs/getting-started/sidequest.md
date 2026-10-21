@@ -66,7 +66,9 @@ Copy the original review's source and candidate from `reviewTarget`. Finalizatio
 
 For a bound review that was never dispatched, add `"authority": "main-attestation"` inside `finalize`. The main thread must supply `by`, `text` and evidence naming where the external review happened. Accepted permits integration, rejected blocks it. Sidequest records `reviewerRuntimeProvenance: false` and preserves the absent dispatch/completion. An active, released or partially completed reviewer cannot use this path.
 
-CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
+`ref` is always the review ticket (`SQ-12` above); the reviewed source only appears as `finalize.sourceRef`. Pass the source as `ref` and the refusal names the review and the shape it takes next.
+
+CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow: a review released with kind `oracle` takes plain `verdict {ref, outcome, by, text}`, never `finalize`. `groomClose` refuses such a bound review with `oracle_verdict_pending` until its verdict exists, so the outcome can't be dropped by closing it first. A review that was closed with its oracle round still unanswered (before that guard existed) refuses both verdict shapes with `oracle_round_closed`; reopen it with `update {ref, status: "awaiting-oracle"}`, then record the plain verdict. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
 
 ## Integration branches in linked worktrees
 

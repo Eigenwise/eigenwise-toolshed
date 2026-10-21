@@ -23,6 +23,7 @@ __export(review_finalization_exports, {
 module.exports = __toCommonJS(review_finalization_exports);
 var import_review_binding = require("../kernel/review-binding");
 var import_review_corrections = require("./review-corrections");
+var import_review_verdict_routes = require("./review-verdict-routes");
 function refuse(reason, message) {
   return { ok: false, reason, message };
 }
@@ -121,12 +122,16 @@ function createReviewFinalization(dependencies) {
     dependencies.putTicket(slug, review);
     return { ok: true, decision, reviewOutcome: { sourceRef: source.ref, outcome: input.outcome } };
   }
+  function unboundReviewRefusal(slug, ticket) {
+    const reviewId = ticket.submission?.review?.ticketId;
+    return (0, import_review_verdict_routes.reviewedSourceRefusal)(ticket, reviewId ? dependencies.getTicket(slug, reviewId) : null) ?? refuse("review_unbound", "Finalization requires the original source binding.");
+  }
   function finalizeCompletedReview(slug, idOrRef, input, grant = {}) {
     const invalid = requestRefusal(input, grant.allowCompletedReviewFinalization === true);
     if (invalid) return invalid;
     const review = dependencies.getTicket(slug, idOrRef);
     if (!review) return refuse("not_found", "Review ticket not found.");
-    if (!review.reviewTarget?.ticketId) return refuse("review_unbound", "Finalization requires the original source binding.");
+    if (!review.reviewTarget?.ticketId) return unboundReviewRefusal(slug, review);
     try {
       return dependencies.withSourceTicketLock(
         slug,

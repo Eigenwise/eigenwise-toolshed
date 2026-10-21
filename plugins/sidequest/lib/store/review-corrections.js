@@ -29,6 +29,7 @@ __export(review_corrections_exports, {
 });
 module.exports = __toCommonJS(review_corrections_exports);
 var import_review_binding = require("../kernel/review-binding");
+var import_review_verdict_routes = require("./review-verdict-routes");
 function refuse(reason, message) {
   return { ok: false, reason, message };
 }
@@ -66,7 +67,7 @@ function undispatchedReviewRefusal(review) {
   if (unavailable.includes(true)) return refuse("review_dispatched", "External main-attestation requires a never-dispatched bound review in todo, without invented completion or runtime provenance.");
 }
 function completedNormalReviewRefusal(review) {
-  if (review.oracle) return refuse("use_verdict", "Use the separate oracle verdict lifecycle for an experimental review.");
+  if (review.oracle) return (0, import_review_verdict_routes.oracleRoundRefusal)(review);
   if (activeCorrectionTicket(review)) return refuse("review_active", "A claimed or actively dispatched review cannot be finalized.");
   if (correctionReviewCategory(review.category) !== "review-audit") return refuse("review_unbound", "Finalization requires a bound review-audit ticket.");
   if (review.reviewDecision?.verdict?.authority === "main-attestation") return undispatchedReviewRefusal(review);
