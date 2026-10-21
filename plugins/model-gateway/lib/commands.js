@@ -2746,6 +2746,7 @@ const commands = {
       finish(1);
     }
     const readiness = await getCodexReadiness();
+    if (quiet && !readiness.ok) noticeForUser(readiness.message, { toStderr: true });
     warnIfProxyOutdated();
     const effectiveWiring = effectiveBaseUrl();
     if (!wired) {

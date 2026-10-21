@@ -47,7 +47,7 @@ The first-run order matters:
 A plugin reload alone does not reload settings or the picker cache. Do not tell the user to select a new row until that full restart is complete.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
-state; act on it. The user sees that same line in the transcript, because a state only they can fix used to
+state; act on it. The nudge still appears for a Codex auth problem, and does not block prompts. The user sees that same line in the transcript, because a state only they can fix used to
 reach the model alone. Anything routine stays out of it, and the hook always exits 0 so the line survives:
 run `ensure` yourself when you need an exit code. SessionStart waits at most 12 seconds for a newly started
 gateway, then leaves its supervisor to finish in the background so it stays inside Claude Code's hook budget. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
