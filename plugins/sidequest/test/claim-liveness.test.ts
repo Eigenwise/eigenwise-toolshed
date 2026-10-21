@@ -1337,6 +1337,55 @@ test('negative controls allow a plainly identified unaffected test', () => {
   git(['commit', '-m', 'negative control unaffected test fixture']);
 });
 
+function inheritedRepairFixture() {
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test/fixture.test.js'), 'module.exports = 1;\n');
+  git(['add', '.']);
+  git(['commit', '--allow-empty', '-m', 'baseline before inherited tests']);
+  const baseline = git(['rev-parse', 'HEAD']);
+  const source = store.createTicket(slug, { title: 'rejected inherited source', category: 'coding.normal', files: ['lib/fixture.js', 'test/fixture.test.js'], source: 'cli' });
+  const tests = "test('inherited first assertion', () => { assert.equal(1, 1); });\ntest('inherited second assertion', () => { assert.equal(2, 2); });\n";
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test/fixture.test.js'), tests);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib/fixture.js'), 'module.exports = 3836;\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'inherited rejected candidate']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  source.submission = { commit: candidate, review: { outcome: 'rejected' } };
+  persist(source);
+  const by = `inherited-repair-${source.ref}`;
+  const repair = addNegativeControlTicket('repair preserves inherited tests', by);
+  const current = store.getTicket(slug, repair.ref);
+  current.links = [{ type: 'related', ref: source.ref }];
+  current.dispatch.baseCommit = baseline;
+  persist(current);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test/fixture.test.js'), tests);
+  return { ticket: store.getTicket(slug, repair.ref), by, candidate, source, tests };
+}
+
+function commitInheritedRepairFixture() {
+  git(['add', '.']);
+  git(['commit', '-m', 'finish inherited repair fixture']);
+}
+
+test('inherited unchanged tests need zero hand-written control markers', () => {
+  const { ticket, candidate, source } = inheritedRepairFixture();
+  const result = store.completionTreeCheck(slug, ticket);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.inheritedTests, [{ classification: 'inherited-unchanged', sourceRef: source.ref, candidate, tests: ['inherited first assertion', 'inherited second assertion'] }]);
+  commitInheritedRepairFixture();
+});
+
+test('a modified inherited test alone still requires its control', () => {
+  const { ticket, by, tests } = inheritedRepairFixture();
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test/fixture.test.js'), tests.replace('assert.equal(1, 1);', ''));
+  const refused = store.completionTreeCheck(slug, ticket);
+  assert.equal(refused.reason, 'negative_control_required');
+  store.addComment(slug, ticket.ref, { by, source: 'mcp', body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=inherited first assertion; node --test test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed inherited first assertion' });
+  const admitted = store.completionTreeCheck(slug, store.getTicket(slug, ticket.ref));
+  assert.equal(admitted.ok, true, JSON.stringify(admitted));
+  assert.deepEqual(admitted.inheritedTests[0].tests, ['inherited second assertion']);
+  commitInheritedRepairFixture();
+});
+
 test('a valid negative-control waiver accepts a mixed source and test diff', () => {
   const by = 'negative-control-waiver-executor';
   const ticket = addNegativeControlTicket('negative control waiver', by);

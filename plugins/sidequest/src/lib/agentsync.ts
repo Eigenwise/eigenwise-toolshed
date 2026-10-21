@@ -1059,6 +1059,9 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     readOnlyScratchSpace,
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join('\n\n'),
+    `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`,
+    'Verification concurrency: bounded runs need no resource slot unless board configuration declares one; the board grants any declared slot, never a chat handoff.',
+    'When isolated worktrees cannot import the coverage gate, the orchestrator captures coverage in the main checkout. Report that standing measurement boundary without retrying the import.',
     verify,
     executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === 'shared'

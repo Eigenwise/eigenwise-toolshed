@@ -1160,11 +1160,30 @@ function negativeControlChanges(slug: any, ticket: any, delta: any, changedPaths
 
 type InheritedTestClassification = { classification: 'inherited-unchanged'; sourceRef: string; candidate: string; tests: string[] };
 
+function inheritedTestBodies(source: string) {
+  const lines = source.split(/(?<=\n)/);
+  const definitions = testDefinitions(source, true);
+  return definitions.map((entry, index) => ({
+    name: entry.name,
+    bytes: lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1]!.line - 1 : lines.length).join(''),
+  }));
+}
+
+function uniqueInheritedTestBodies(root: string, revision: string | null, files: string[]) {
+  const bodies = files.flatMap((file) => inheritedTestBodies(sourceAt(root, revision, file)).map((entry) => ({ ...entry, file })));
+  const counts = new Map<string, number>();
+  for (const body of bodies) counts.set(body.name, (counts.get(body.name) || 0) + 1);
+  return new Map(bodies.filter((body) => counts.get(body.name) === 1).map((body) => [body.name, body]));
+}
+
 function inheritedCandidateTests(root: string, candidate: string, files: string[]): string[] {
   const testFiles = files.filter(isTestSidePath);
-  const changed = new Set(testFiles.flatMap((file) => fileTestNames(root, { from: candidate, to: null }, file)));
-  return testFiles.flatMap((file) => testDefinitions(sourceAt(root, candidate, file)).map((entry) => entry.name))
-    .filter((name) => !changed.has(name));
+  const inherited = uniqueInheritedTestBodies(root, candidate, testFiles);
+  const current = uniqueInheritedTestBodies(root, null, testFiles);
+  return [...current].filter(([name, body]) => {
+    const previous = inherited.get(name);
+    return previous?.file === body.file && previous.bytes === body.bytes;
+  }).map(([name]) => name);
 }
 
 function rejectedAncestor(root: string, source: { submission?: { commit?: string; review?: { outcome?: string } } } | null): string | null {
@@ -1434,6 +1453,7 @@ function ownedControlCheck(slug: string, ticket: ProvenanceCompletionTicket, del
   if (['behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only'].includes(String(kind))) return { ok: true as const, inheritedTests: [] as InheritedTestClassification[], negativeControl: 'not_required(' + kind + ')' };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
   const inheritedTests = own.inheritedTests;
+  if ([inheritedTests.length, !own.testNames.length].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(inherited-unchanged)', inheritedTests };
   if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(no changed source under changed tests)', inheritedTests };
   const control = negativeControlResult(ticket, own.testNames);
   return ['failed', 'waived'].includes(control.kind) ? { ok: true as const, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
