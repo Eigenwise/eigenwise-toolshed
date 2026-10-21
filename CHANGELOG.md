@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.607.0 (2026-10-21)
+
+### sidequest 6.1.0 → 6.1.1
+
+#### Fixes
+
+- Honor explicit isolated dispatches on shared-tree boards (SQ-3806)
+  Explicit `sharedTree:false` overrides the board default and refuses when isolation is unavailable. Redispatches retain that request until `sharedTree:true` clears it.
+- Treat heredoc and here-string input as shell data (SQ-3808)
+  Read-only and evidence shell guards no longer mistake heredoc body text for output redirects. Real repository write targets stay protected.
+- Test fixtures stop requesting isolation on non-Git projects; skill text trimmed under its budget (SQ-3815)
+  Fixtures that only ever ran in the shared tree no longer pass `sharedTree:false`, which now refuses when isolation is unavailable. The dispatch-isolation detail lives in `references/routing-details.md`; SKILL.md points there and stays under its session-load budget.
+
 ## v3.606.0 (2026-10-20)
 
 ### sidequest 6.0.2 → 6.1.0
