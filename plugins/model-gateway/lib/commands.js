@@ -58,6 +58,8 @@ const {
   setUpstreamBlocked, setUpstreamUnavailable,
 } = require('./codex-upstream-state.js');
 
+const { withLifecycleLock, intentionallyStopped, recordIntentionalStop, resumeIntentionalStop } = require('./lifecycle-lock.js');
+
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
 const LOGS = path.join(STATE, 'logs');
@@ -137,7 +139,8 @@ const USAGE = `usage: model-gateway.js <command>
   setup            download the claude-code-proxy binary (v-latest) into ${BIN_DIR}
   login [--device] run the ChatGPT OAuth flow (--device for headless device-code)
   start | stop     start/stop the proxy + shim (detached, logs in ${LOGS})
-  ensure [--quiet] start whatever isn't running; used by the SessionStart hook
+  ensure [--quiet] maintain installed wiring and start unless intentionally stopped
+  recover          restore readiness without settings, pin or cache maintenance
   status           show what's running
   models           show the model list the shim advertises to Claude Code
   catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')});
@@ -412,6 +415,7 @@ async function restartProxyIfOutdated({
 
 async function setup({ preserveWiring = false } = {}) {
   mkdirs();
+  migrateReadinessGates();
   sweepOldProxyBinaries();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
   const plat = WIN ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
@@ -559,19 +563,83 @@ function startupWaitMsFor(quiet) {
     : Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
 }
 
+async function automaticLifecycle(operation) {
+  return withLifecycleLock(() => {
+    if (intentionallyStopped()) {
+      noticeForUser('model-gateway is intentionally stopped; run start to resume.', { toStderr: true });
+      return;
+    }
+    return operation();
+  });
+}
+
+function reportReadinessGate() {
+  const effective = effectiveBaseUrl();
+  const file = effective.file || effective.shadowed.find((definition) => definition.file)?.file;
+  const settings = file ? readSettingsForWrite(file) : {};
+  const present = require('./readiness-hooks.js').readinessHookPresent(settings);
+  log(`readiness gate installed: ${present}; hooks disabled: ${settings.disableAllHooks === true}; settings: ${file || 'none'}`);
+  log(`intentional stop: ${intentionallyStopped()}; state: ${require('./lifecycle-lock.js').STOP_PATH}`);
+  log(`recovery diagnostics: ${LOGS}; startup failures: ${SHIM_FAILURE_PATH}`);
+}
+
+function migrateReadinessGates() {
+  require('../hooks/registry-writer.js').writeCommandLauncher();
+  const files = registeredProjectWirings().map((wiring) => wiring.file);
+  files.push(settingsPath('user'));
+  for (const file of files) migrateReadinessGate(file);
+}
+
+function migrateReadinessGate(file) {
+  const settings = readSettingsForWrite(file);
+  if (!ourBaseUrls().includes(settings.env?.ANTHROPIC_BASE_URL)) return;
+  const original = JSON.stringify(settings);
+  require('./readiness-hooks.js').syncReadinessHooks(settings, true);
+  if (JSON.stringify(settings) !== original) writeSettings(file, settings);
+}
+
+function startupFailureFor(supervisorPid, startupGeneration) {
+  try {
+    const failure = JSON.parse(fs.readFileSync(SHIM_FAILURE_PATH, 'utf8'));
+    if (failure.supervisorPid !== supervisorPid) return null;
+    if (startupGeneration && failure.generation !== startupGeneration) return null;
+    return failure.message;
+  } catch { return null; }
+}
+
+function writeStartupFailure(message) {
+  writeFileAtomically(SHIM_FAILURE_PATH, JSON.stringify({ supervisorPid: process.pid, generation: process.env.MODEL_GATEWAY_STARTUP_GENERATION, message }));
+}
+
+async function recoverGateway() {
+  const result = await startAll({ quiet: true, lifecycleOperation: 'recover', refreshCatalog: async () => {} });
+  if (!result.ok) throw new Error(result.reason);
+  const readiness = await getCodexReadiness();
+  if (!readiness.ready) throw new Error(readiness.message);
+  return result;
+}
+
+function readObservedStartupFailure(exists, read) {
+  if (!exists()) return null;
+  return read();
+}
+
 async function waitForStartupReadiness({
   timeout,
   proxyAnswers = proxyModelsAnswering,
   shimReady = shimHealthy,
   shimFailureExists = () => fs.existsSync(SHIM_FAILURE_PATH),
-  readShimFailure = () => fs.readFileSync(SHIM_FAILURE_PATH, 'utf8').trim(),
+  readShimFailure = () => startupFailureFor(supervisorPid, startupGeneration),
+  supervisorPid = null,
+  startupGeneration = null,
   now = Date.now,
   pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 } = {}) {
   const deadline = now() + timeout;
   while (now() < deadline) {
     if ((await proxyAnswers()) && (await shimReady())) return { ok: true };
-    if (shimFailureExists()) return { ok: false, reason: readShimFailure(), timedOut: false };
+    const failure = readObservedStartupFailure(shimFailureExists, readShimFailure);
+    if (failure) return { ok: false, reason: failure, timedOut: false };
     await pause(300);
   }
   return { ok: false, timedOut: true };
@@ -671,14 +739,16 @@ async function clearShimForStart(shim, { quiet, lifecycleOperation, reapOrphans,
   return null;
 }
 
-function launchSupervisor({ recovery, spawnSupervisor }) {
+function launchSupervisor(context) {
+  const { recovery, spawnSupervisor } = context;
+  context.startupGeneration = crypto.randomUUID();
   recovery.begin();
   try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-  return spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
+  return spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], { MODEL_GATEWAY_STARTUP_GENERATION: context.startupGeneration });
 }
 
 async function finishStartingShim(started, context, supervisorPid) {
-  const readiness = await context.awaitReadiness({ timeout: context.timeout });
+  const readiness = await context.awaitReadiness({ timeout: context.timeout, supervisorPid, startupGeneration: context.startupGeneration });
   if (readiness.ok) return reportShimReady(started, context);
   if (!readiness.timedOut) return context.recovery.finish({ ok: false, reason: readiness.reason });
   const waited = `${Math.ceil(context.timeout / 1000)}s`;
@@ -716,7 +786,11 @@ function noticeStaleSession(health) {
   if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
 }
 
-async function startAll({
+async function startAll(options = {}) {
+  return withLifecycleLock(() => startAllLocked(options));
+}
+
+async function startAllLocked({
   quiet = false,
   lifecycleOperation = null,
   proxyExists = () => fs.existsSync(PROXY_BIN),
@@ -734,6 +808,7 @@ async function startAll({
   report = log,
   preserveRunningSupervisor = false,
 } = {}) {
+  if (intentionallyStopped()) return { ok: false, reason: 'gateway intentionally stopped; run start to resume' };
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   ensureState();
   const context = {
@@ -1096,8 +1171,10 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
     if (scope === 'project') recordProjectWiring();
     return { changed: false, file };
   }
+  require('../hooks/registry-writer.js').writeCommandLauncher();
   const settings = readSettingsForWrite(file);
   const original = JSON.stringify(settings);
+  require('./readiness-hooks.js').syncReadinessHooks(settings, !remove);
   settings.env = settings.env || {};
   delete settings.env.ANTHROPIC_UNIX_SOCKET;
   if (remove) {
@@ -1300,6 +1377,7 @@ function reportRegisteredProjectPinDisagreements() {
 }
 
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
+  reportReadinessGate();
   recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
@@ -2131,7 +2209,7 @@ function runShim() {
       outcome: origin,
       errorType,
     });
-    try { fs.writeFileSync(SHIM_FAILURE_PATH, `model-gateway: shim supervisor stopped after an uncaught ${errorType}`); } catch {}
+    try { writeStartupFailure(`model-gateway: shim supervisor stopped after an uncaught ${errorType}`); } catch {}
   });
   const configuredWorkerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || 0);
   const workerPortReportTimeoutMs = 5000;
@@ -2539,7 +2617,7 @@ function runShim() {
         ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`
         : `run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`;
       const message = `model-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
-      try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
+      try { writeStartupFailure(message); } catch {}
       console.error(message);
       await stopSupervisor(1);
     })();
@@ -2582,7 +2660,10 @@ function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
 }
 
 const commands = {
-  setup: () => setup({ preserveWiring: flag('--preserve-wiring') }),
+  setup: () => withLifecycleLock(() => {
+    resumeIntentionalStop();
+    return setup({ preserveWiring: flag('--preserve-wiring') });
+  }),
   login: async () => {
     if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
     const mode = flag('--device') ? 'device' : 'login';
@@ -2590,12 +2671,16 @@ const commands = {
     if (result.status === 0) log(loginSuccessMessage({ health: await fetchShimHealth() }));
     process.exitCode = result.status == null ? 1 : result.status;
   },
-  start: async () => {
+  start: () => withLifecycleLock(async () => {
+    resumeIntentionalStop();
     const result = await startAll({ lifecycleOperation: 'start' });
     if (!result.ok) die(result.reason);
     await statusReport();
-  },
-  stop: async () => {
+  }),
+  recover: () => recoverGateway(),
+  'readiness-gate': () => require('./readiness-gate.js').readinessGate(),
+  stop: () => withLifecycleLock(async () => {
+    recordIntentionalStop();
     const result = await stopAll();
     if (!result.ok) {
       console.error(`model-gateway: ${result.reason}.`);
@@ -2603,7 +2688,7 @@ const commands = {
       return;
     }
     log('stopped');
-  },
+  }),
   ensure: async () => {
     const quiet = flag('--quiet');
     if (quiet) bufferedHookLines = [];
@@ -2612,6 +2697,7 @@ const commands = {
     // this ticket's whole complaint (SQ-1901). A direct `ensure` still fails loudly for the updater and for a
     // person running it by hand.
     const finish = (code) => { flushHookOutput(); process.exit(quiet ? 0 : code); };
+    migrateReadinessGates();
     cleanLegacyEnvSettings();
     cleanLegacyGatewayModelCache();
     sweepOldProxyBinaries();
@@ -2686,8 +2772,15 @@ const commands = {
   'serve-worker': () => runWorker(),
 };
 
+const ensureCommand = commands.ensure;
+commands.ensure = () => automaticLifecycle(ensureCommand);
+
 module.exports = {
   commands,
+  recoverGateway,
+  migrateReadinessGates,
+  startupFailureFor,
+  writeStartupFailure,
   usage: USAGE,
   parseHostsCompatEntry,
   parseHostsCompatBlock,

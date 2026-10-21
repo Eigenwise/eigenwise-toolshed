@@ -51,11 +51,15 @@ function currentModelGatewayCli() {
 
 const script = currentModelGatewayCli();
 if (!script) {
-  console.error('model-gateway: no installed Model Gateway CLI was found in Claude Code\\'s plugin registry.');
+  console.error('model-gateway: no installed Model Gateway CLI was found in Claude Code\\'s plugin registry. Reinstall Model Gateway, then run the stable launcher with start or doctor. Unwire with env --remove before removing the plugin. Resubmit your prompt after recovery.');
   process.exit(1);
 }
-const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
-if (result.error) throw result.error;
+const gate = process.argv[2] === 'readiness-gate';
+const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true, ...(gate ? { timeout: 25000, killSignal: 'SIGKILL' } : {}) });
+if (result.error) {
+  console.error('model-gateway: recovery failed or exceeded its 25s deadline. Run this stable launcher with start, recover, doctor, or env --remove, then resubmit your prompt.');
+  process.exit(gate ? 2 : 1);
+}
 process.exit(result.status == null ? 1 : result.status);
 `;
 
