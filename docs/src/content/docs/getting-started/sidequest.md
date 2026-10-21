@@ -44,6 +44,8 @@ When an executor hands back a clean committed checkpoint in a retained worktree,
 
 Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.
 
+Read-only and isolated executors can inspect the shared checkout with read-only Git commands, including `git -C <shared> worktree list` and `git -C <shared> status --porcelain -- <paths>`. This lets an executor check that it left the shared paths untouched. Git mutations against that checkout still refuse.
+
 ## Completed review decisions
 
 A completed independent review can say ACCEPTED while its source submission still shows a planned review outcome. The orchestrator records that decision explicitly through the main-thread MCP `verdict` tool:

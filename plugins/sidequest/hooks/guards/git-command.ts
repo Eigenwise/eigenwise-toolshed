@@ -11,7 +11,7 @@ const DESTRUCTIVE: Array<{ pattern: RegExp; label: string }> = [
   { pattern: new RegExp(`${GIT}(?:checkout|restore)\\s+(?:[^\\n;|&]*\\s)?(?:--\\s+)?(?:\\.|:/)(?:\\s|$|;|&|\\|)`, 'i'), label: 'a whole-tree checkout/restore' },
   { pattern: new RegExp(`${GIT}(?:checkout|switch)\\s+[^\\n;|&]*(?:--force|\\s-f)\\b`, 'i'), label: 'a forced checkout/switch' },
 ];
-const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env)\s+${WORD}\s+)*)([a-z][a-z-]*)\b([^\n;|&]*)`, 'gi');
+const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix)\s+${WORD}\s+|--?[^\s]+\s+)*)([a-z][a-z-]*)\b([^\n;|&]*)`, 'gi');
 // Case-sensitive: `-c name=value` sets config, only `-C` names a directory.
 const DASH_C = new RegExp(String.raw`(?:^|\s)-C\s+(${WORD})`, 'g');
 const CD = new RegExp(String.raw`(?:^|[\n;&|])\s*cd\s+(${WORD})`, 'gi');
