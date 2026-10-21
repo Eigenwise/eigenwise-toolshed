@@ -4,6 +4,18 @@ Sidequest routes formal candidate reviews, repository audits, and shortcut-debt 
 
 These reports need Sidequest installed in the host. When it is unavailable, say the routed report capability is unavailable rather than pretending to have board integration.
 
+## Shared-checkout reads
+
+Read-only guards allow read-only Git against the shared checkout from isolated and read-only
+executors. Verify untouched paths with `git -C <shared> status --porcelain -- <paths>`;
+`git -C <shared> worktree list` is also allowed. Mutations still require the assigned worktree
+and write authority.
+
+Between dispatch and submission, avoid routine pulses, comment reads and source peeks. Explicitly
+assigned builders and readonly advisors may exchange direct native messages and inspect authorized
+snapshots as described below. Draft findings are advisory, never acceptance or claim release;
+this does not authorize orchestrator source peeking or self-review.
+
 ## Bounded live advice
 
 For a named architectural risk or contested approach worth the cost, the orchestrator may assign a

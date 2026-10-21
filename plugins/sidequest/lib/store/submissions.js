@@ -17,7 +17,7 @@ const worktrees = require("../worktrees.js");
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require("./composition-admission.js");
 const { stillSpawnsInsideItsWrite } = require("../db");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, afterCommit, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, afterCommit, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, recordedTicketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   let heldCompositionDelivery = null;
   function withTicketLock(slug, id, callback) {
@@ -923,26 +923,28 @@ ${verify.outputTail}` : null
       delivery: { state: "delivered", revision, verification }
     };
   }
-  function updateSubmissionIntegration(slug, id, patch, submissionPatch) {
+  function updateSubmissionIntegration(slug, id, patch, submissionPatch, resolvedRecordingBranch) {
     return withTicketLock(slug, id, () => {
       const ticket = getTicket(slug, id);
       if (!ticket || !ticket.submission) return { ok: false, reason: "submission_required", ticket };
       ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
       if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      persistSubmissionIntegration(slug, ticket);
+      persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch);
       return { ok: true, ticket };
     });
   }
-  function assertRecordedIntegrationBranch(slug, ticket) {
+  function assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch) {
     const branch = ticket.submission.integration.targetBranch;
-    const expectedBranch = ticket.dispatch?.integrationTarget?.branch || boardConfig(slug).integrationBranch;
-    if (branch && branch !== expectedBranch) {
+    if (!branch) return;
+    const previous = getTicket(slug, ticket.id);
+    const expectedBranch = resolvedRecordingBranch ?? recordedTicketIntegrationTarget(previous)?.branch ?? boardConfig(slug).integrationBranch;
+    if (branch !== expectedBranch) {
       throw new Error(`Integration record targetBranch ${branch} differs from the recorded integration branch ${expectedBranch}.`);
     }
   }
-  function persistSubmissionIntegration(slug, ticket) {
-    assertRecordedIntegrationBranch(slug, ticket);
+  function persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch) {
+    assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch);
     const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
     putTicket(slug, ticket);
     if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
@@ -1601,6 +1603,10 @@ ${verify.outputTail}` : null
       return false;
     }
   }
+  function manualDeliveryIntegrationBranch(slug, idOrRef, target) {
+    if (!getTicket(slug, idOrRef)?.dispatch?.integrationTarget) return void 0;
+    return target?.branch;
+  }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
@@ -1618,7 +1624,7 @@ ${verify.outputTail}` : null
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       completingApplyDelivery: opts.completingApplyDelivery === true,
       deliveryMethod: opts.deliveryMethod,
-      integrationBranch: opts.target?.branch
+      integrationBranch: manualDeliveryIntegrationBranch(slug, idOrRef, opts.target)
     });
     if (!preflight.ok) return preflight;
     const preflightTicket = preflight.ticket;
@@ -1820,7 +1826,7 @@ ${verify.outputTail}` : null
         recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
         deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
         verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { wave: reconciledDeliveryWave(slug, ticket, observedIntegrationRevision, verify) });
+      }, { wave: reconciledDeliveryWave(slug, ticket, observedIntegrationRevision, verify) }, target.branch);
       return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
     } catch (error) {
       return { ok: false, reason: "delivery_evidence_unavailable", ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
@@ -1937,7 +1943,7 @@ ${verify.outputTail}` : null
       });
       ticket.submission.integratedAt = now;
       ticket.updatedAt = now;
-      persistSubmissionIntegration(slug, ticket);
+      persistSubmissionIntegration(slug, ticket, target.branch);
       return { ok: true, ticket, integration: ticket.submission.integration };
     });
   }
