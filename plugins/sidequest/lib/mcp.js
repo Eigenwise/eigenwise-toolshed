@@ -303,7 +303,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   verdict: {
     outcome: "Explicit candidate outcome, not reviewer prose.",
-    finalize: "ref=the review. {sourceRef: reviewed source, commit|sourceRevision: its reviewTarget candidate, evidence}; by/text. Done bound review without oracle round (that takes plain verdict), or undispatched with authority=main-attestation.",
+    finalize: "ref=review. {sourceRef: reviewed source, commit|sourceRevision: reviewTarget candidate, evidence}. Done bound review, no oracle round (oracle: plain verdict); or undispatched + authority=main-attestation.",
     correct: "Main-only accepted->rejected; by/text/evidence; expectedVerdictAt from list({ref}) reviewDecision|oracle verdict.at."
   },
   scopeRequest: {
