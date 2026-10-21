@@ -22,6 +22,13 @@ test('quiet ensure stops waiting inside its hook budget when the proxy never ans
   assert.equal(timeout, 12000);
   assert.deepEqual(result, { ok: false, timedOut: true });
   assert.equal(now, timeout);
+  const routerOnly = await gateway.waitForStartupReadiness({
+    timeout,
+    proxyAnswers: async () => false,
+    shimReady: async () => true,
+    shimFailureExists: () => false,
+  });
+  assert.deepEqual(routerOnly, { ok: true }, 'a healthy router is ready even when the Codex proxy is down');
 
   const hookManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8'));
   const verifySkill = fs.readFileSync(path.join(__dirname, '..', '.claude', 'skills', 'verify', 'SKILL.md'), 'utf8');

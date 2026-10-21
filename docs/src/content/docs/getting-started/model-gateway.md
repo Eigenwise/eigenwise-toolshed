@@ -32,6 +32,24 @@ A process `ANTHROPIC_BASE_URL` has higher precedence than either settings file. 
 
 You may need to complete a browser sign-in or restart Claude Code. Claude will ask only when either step is actually needed.
 
+## Recover after reboot
+
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
+
+Wiring now installs readiness hooks alongside the endpoint in the same settings file. Project wiring stays in `.claude/settings.local.json` and adds no global hooks. The opt-in user fallback gets its hooks in user settings. These hooks use the stable launcher and don't require the plugin to be enabled in the project.
+
+Maintenance `setup --preserve-wiring` preserves intentional stop even if acquisition fails, and never starts a stopped gateway. Intentional stop is cleared once an explicit `start` or `setup` creates the supervisor process and records its PID; a launch that fails before that, including a spawn that yields no PID, leaves it stopped, and a PID-record failure after a successful spawn leaves both the marker and the process, so the next automatic path still refuses. Run the stable launcher with `setup --preserve-wiring` after updating to migrate registered projects and existing user fallback without wiring a new directory. `ensure` also migrates existing wiring. Restart Claude Code after migration so it loads those settings. The launcher resolves the installed version from the plugin registry, so old cache removal and installed downgrades don't pin hooks to a deleted path.
+
+On startup or resume, SessionStart attempts early recovery. SessionStart cannot block. Before a submitted prompt reaches the model, UserPromptSubmit checks readiness and tries to recover. Its child has a 25-second deadline, with a 35-second hook timeout and `onFailure: block`. Failed recovery blocks locally with instructions; fix the reported issue and resubmit the prompt.
+
+Use `node ~/.claude/model-gateway/model-gateway.js recover` without model access to restore readiness without settings, pin or cache maintenance. `stop` persists across reboot and upgrades; automatic recovery honors that choice. Explicit `start` or `setup` resumes it. A healthy gateway is left running, including active streams.
+
+Run `doctor` to see hook presence, the persistent stop file, startup failure evidence and logs under `~/.claude/model-gateway/logs/`. Missing installation, unavailable authentication and unknown port ownership require local attention; recovery leaves foreign listeners untouched. Keep auth files and the control token private.
+
+Recovery is a cheap no-op before CLI resolution when the effective endpoint isn't Model Gateway, even without an install. An absent plugin entry leaves recovery active. An explicit effective `enabledPlugins: {"model-gateway@eigenwise-toolshed": false}` disables recovery without starting, stopping or touching gateway state, and prints how to re-enable the plugin or unwire. Project-local settings win over project settings, then user settings; process endpoint env wins over settings endpoints. `doctor` reports explicit plugin disable. Host-disabled hooks remain disabled. A supervisor dying inside an active turn, subagent, compaction or discovery step is outside prompt-gate coverage. No OS service or scheduled task is installed. Simulated process recovery tests don't prove an actual reboot or real-provider inference.
+
+Before uninstalling the plugin, run `env --remove` in each wired project and `env --remove --write-user` if you opted into user fallback. This removes only owned wiring and hooks. Removing the plugin first leaves a gate that reports a missing install until you restore it or remove its owned wiring.
+
 ## Pick a model
 
 Setup now requires the proxy release's checksum file and stops before extraction if verification fails. Keep that refusal in place and report the error rather than running the downloaded archive manually.

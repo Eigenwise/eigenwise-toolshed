@@ -58,6 +58,9 @@ const {
   setUpstreamBlocked, setUpstreamUnavailable,
 } = require('./codex-upstream-state.js');
 
+const { effectivePluginEnabled, pluginDisabledNotice } = require('./recovery-policy.js');
+const { withLifecycleLock, intentionallyStopped, recordIntentionalStop, resumeIntentionalStop } = require('./lifecycle-lock.js');
+
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
 const LOGS = path.join(STATE, 'logs');
@@ -137,7 +140,8 @@ const USAGE = `usage: model-gateway.js <command>
   setup            download the claude-code-proxy binary (v-latest) into ${BIN_DIR}
   login [--device] run the ChatGPT OAuth flow (--device for headless device-code)
   start | stop     start/stop the proxy + shim (detached, logs in ${LOGS})
-  ensure [--quiet] start whatever isn't running; used by the SessionStart hook
+  ensure [--quiet] maintain installed wiring and start unless intentionally stopped
+  recover          restore readiness without settings, pin or cache maintenance
   status           show what's running
   models           show the model list the shim advertises to Claude Code
   catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')});
@@ -315,13 +319,6 @@ function noteCodexRequestSuccess() {
   clearUpstreamUnavailable();
 }
 
-async function proxyModelsAnswering() {
-  try {
-    const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2000 });
-    return response.status === 200;
-  } catch { return false; }
-}
-
 function providerReadiness(readiness) {
   return {
     ready: Boolean(readiness?.ready),
@@ -410,8 +407,23 @@ async function restartProxyIfOutdated({
   return { restarted, onDisk, serving };
 }
 
+async function restartSetupProxy({ previousVersion }) {
+  if (intentionallyStopped()) return false;
+  return restartProxyForVersionChange({ previousVersion });
+}
+
+async function restartAfterSetup(proxyRecoveryHandoff) {
+  if (proxyRecoveryHandoff || intentionallyStopped()) return null;
+  const supervisorRestart = await restartShimIfOutdated({ operation: 'setup' });
+  if (supervisorRestart) return supervisorRestart;
+  const restarting = await restartWorkerWithDrain();
+  if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
+  return null;
+}
+
 async function setup({ preserveWiring = false } = {}) {
   mkdirs();
+  migrateReadinessGates();
   sweepOldProxyBinaries();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
   const plat = WIN ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
@@ -443,30 +455,28 @@ async function setup({ preserveWiring = false } = {}) {
   const stagedVersion = parseSemver((spawnSync(stagedProxy, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
   const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
 
+  const maintenanceStopped = preserveWiring && intentionallyStopped();
   let proxyRecoveryHandoff = false;
   if (proxyChanged) {
     const previousVersion = proxyVersion(currentVersion);
     const installedVersion = proxyVersion(stagedVersion);
     replaceProxyBinary({ stagedPath: stagedProxy, currentVersion });
-    proxyRecoveryHandoff = await restartProxyForVersionChange({ previousVersion });
+    proxyRecoveryHandoff = await restartSetupProxy({ previousVersion });
     if (!proxyRecoveryHandoff) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
-  const supervisorRestart = proxyRecoveryHandoff ? null : await restartShimIfOutdated({ operation: 'setup' });
-  if (supervisorRestart && !supervisorRestart.ok && !supervisorRestart.stillStarting) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
-  if (!supervisorRestart && !proxyRecoveryHandoff) {
-    const restarting = await restartWorkerWithDrain();
-    if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
-  }
   fs.rmSync(stage, { recursive: true, force: true });
+  if (maintenanceStopped) return log('Model Gateway updated; intentional stop preserved. Run start to resume.');
+  const supervisorRestart = await restartAfterSetup(proxyRecoveryHandoff);
+  if (supervisorRestart && !supervisorRestart.ok && !supervisorRestart.stillStarting) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
 
   const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
   if (supervisorRestart?.stillStarting) return warnShimStillStarting(supervisorRestart);
   // one-shot: start everything, and finish the wiring when auth already works
-  const r = await startAll({ lifecycleOperation: 'setup', preserveRunningSupervisor: proxyRecoveryHandoff });
+  const r = await startAll({ lifecycleOperation: 'setup', resumeIntent: !preserveWiring, preserveRunningSupervisor: proxyRecoveryHandoff });
   if (r.stillStarting) return warnShimStillStarting(r);
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
@@ -559,19 +569,95 @@ function startupWaitMsFor(quiet) {
     : Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
 }
 
+async function ensureWiredGateway(wired, quiet) {
+  if (!wired || recoveryExplicitlyDisabled()) return { ok: true, started: [] };
+  const proxyRestart = await restartProxyIfOutdated({ quiet });
+  return startAll({ quiet, lifecycleOperation: 'ensure', preserveRunningSupervisor: proxyRestart.restarted });
+}
+
+async function automaticLifecycle(operation) {
+  if (recoveryExplicitlyDisabled()) return;
+  return withLifecycleLock(() => {
+    if (intentionallyStopped()) {
+      noticeForUser('model-gateway is intentionally stopped; run start to resume.', { toStderr: true });
+      return;
+    }
+    return operation();
+  });
+}
+
+function reportReadinessGate() {
+  const effective = effectiveBaseUrl();
+  const file = effective.file || effective.shadowed.find((definition) => definition.file)?.file;
+  const settings = file ? readSettingsForWrite(file) : {};
+  const present = require('./readiness-hooks.js').readinessHookPresent(settings);
+  log(`readiness gate installed: ${present}; hooks disabled: ${settings.disableAllHooks === true}; settings: ${file || 'none'}`);
+  log(`intentional stop: ${intentionallyStopped()}; state: ${require('./lifecycle-lock.js').STOP_PATH}`);
+  log(`explicit plugin disable: ${effectivePluginEnabled() === false}`);
+  log(`recovery diagnostics: ${LOGS}; startup failures: ${SHIM_FAILURE_PATH}`);
+}
+
+function migrateReadinessGates() {
+  require('../hooks/registry-writer.js').writeCommandLauncher();
+  const files = registeredProjectWirings().map((wiring) => wiring.file);
+  files.push(settingsPath('user'));
+  for (const file of files) migrateReadinessGate(file);
+}
+
+function migrateReadinessGate(file) {
+  const settings = readSettingsForWrite(file);
+  if (!ourBaseUrls().includes(settings.env?.ANTHROPIC_BASE_URL)) return;
+  const original = JSON.stringify(settings);
+  require('./readiness-hooks.js').syncReadinessHooks(settings, true);
+  if (JSON.stringify(settings) !== original) writeSettings(file, settings);
+}
+
+function startupFailureFor(supervisorPid, startupGeneration) {
+  try {
+    const failure = JSON.parse(fs.readFileSync(SHIM_FAILURE_PATH, 'utf8'));
+    if (failure.supervisorPid !== supervisorPid) return null;
+    if (startupGeneration && failure.generation !== startupGeneration) return null;
+    return failure.message;
+  } catch { return null; }
+}
+
+function writeStartupFailure(message) {
+  writeFileAtomically(SHIM_FAILURE_PATH, JSON.stringify({ supervisorPid: process.pid, generation: process.env.MODEL_GATEWAY_STARTUP_GENERATION, message }));
+}
+
+function recoveryExplicitlyDisabled() {
+  if (effectivePluginEnabled() !== false) return false;
+  noticeForUser(pluginDisabledNotice(), { toStderr: true });
+  return true;
+}
+
+async function recoverGateway() {
+  if (recoveryExplicitlyDisabled()) return { ok: true, started: [] };
+  const result = await startAll({ quiet: true, lifecycleOperation: 'recover', refreshCatalog: async () => {} });
+  if (!result.ok) throw new Error(result.reason);
+  return result;
+}
+
+function readObservedStartupFailure(exists, read) {
+  if (!exists()) return null;
+  return read();
+}
+
 async function waitForStartupReadiness({
   timeout,
-  proxyAnswers = proxyModelsAnswering,
   shimReady = shimHealthy,
   shimFailureExists = () => fs.existsSync(SHIM_FAILURE_PATH),
-  readShimFailure = () => fs.readFileSync(SHIM_FAILURE_PATH, 'utf8').trim(),
+  readShimFailure = () => startupFailureFor(supervisorPid, startupGeneration),
+  supervisorPid = null,
+  startupGeneration = null,
   now = Date.now,
   pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 } = {}) {
   const deadline = now() + timeout;
   while (now() < deadline) {
-    if ((await proxyAnswers()) && (await shimReady())) return { ok: true };
-    if (shimFailureExists()) return { ok: false, reason: readShimFailure(), timedOut: false };
+    if (await shimReady()) return { ok: true };
+    const failure = readObservedStartupFailure(shimFailureExists, readShimFailure);
+    if (failure) return { ok: false, reason: failure, timedOut: false };
     await pause(300);
   }
   return { ok: false, timedOut: true };
@@ -618,7 +704,7 @@ async function readSettledShimState(probe, { quiet, report, awaitReadiness, time
   const shim = await probe();
   if (!quiet) report(describeShimState(shim));
   if (shim.state !== 'starting') return shim;
-  await awaitReadiness({ timeout, proxyAnswers: async () => true, shimFailureExists: () => false });
+  await awaitReadiness({ timeout, shimFailureExists: () => false });
   return probe();
 }
 
@@ -671,14 +757,19 @@ async function clearShimForStart(shim, { quiet, lifecycleOperation, reapOrphans,
   return null;
 }
 
-function launchSupervisor({ recovery, spawnSupervisor }) {
+function launchSupervisor(context) {
+  const { recovery, spawnSupervisor } = context;
+  context.startupGeneration = crypto.randomUUID();
   recovery.begin();
   try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-  return spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
+  const supervisorArguments = [resolveNewestInstalledCliPath(), 'serve-shim'];
+  const supervisorPid = spawnSupervisor('guardian', process.execPath, supervisorArguments, { MODEL_GATEWAY_STARTUP_GENERATION: context.startupGeneration });
+  if (context.resumeIntent) resumeIntentionalStop();
+  return supervisorPid;
 }
 
 async function finishStartingShim(started, context, supervisorPid) {
-  const readiness = await context.awaitReadiness({ timeout: context.timeout });
+  const readiness = await context.awaitReadiness({ timeout: context.timeout, supervisorPid, startupGeneration: context.startupGeneration });
   if (readiness.ok) return reportShimReady(started, context);
   if (!readiness.timedOut) return context.recovery.finish({ ok: false, reason: readiness.reason });
   const waited = `${Math.ceil(context.timeout / 1000)}s`;
@@ -716,7 +807,11 @@ function noticeStaleSession(health) {
   if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
 }
 
-async function startAll({
+async function startAll(options = {}) {
+  return withLifecycleLock(() => startAllLocked(options));
+}
+
+async function startAllLocked({
   quiet = false,
   lifecycleOperation = null,
   proxyExists = () => fs.existsSync(PROXY_BIN),
@@ -733,12 +828,14 @@ async function startAll({
   refreshCatalog = writeCatalog,
   report = log,
   preserveRunningSupervisor = false,
+  resumeIntent = false,
 } = {}) {
+  if (intentionallyStopped() && !resumeIntent) return { ok: false, reason: 'gateway intentionally stopped; run start to resume' };
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   ensureState();
   const context = {
     quiet, lifecycleOperation, recordLifecycle, reapOrphans, stopSupervisor, spawnSupervisor, supervisorAlive, awaitReadiness, refreshCatalog, report,
-    preserveRunningSupervisor, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
+    preserveRunningSupervisor, resumeIntent, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
   };
   const shim = await readSettledShimState(() => probeShim({ resolveOwner, fetchHealth }), context);
   return shimStartPlan(shim, preserveRunningSupervisor)(shim, context);
@@ -1096,8 +1193,10 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
     if (scope === 'project') recordProjectWiring();
     return { changed: false, file };
   }
+  require('../hooks/registry-writer.js').writeCommandLauncher();
   const settings = readSettingsForWrite(file);
   const original = JSON.stringify(settings);
+  require('./readiness-hooks.js').syncReadinessHooks(settings, !remove);
   settings.env = settings.env || {};
   delete settings.env.ANTHROPIC_UNIX_SOCKET;
   if (remove) {
@@ -1300,6 +1399,7 @@ function reportRegisteredProjectPinDisagreements() {
 }
 
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
+  reportReadinessGate();
   recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
@@ -2131,7 +2231,7 @@ function runShim() {
       outcome: origin,
       errorType,
     });
-    try { fs.writeFileSync(SHIM_FAILURE_PATH, `model-gateway: shim supervisor stopped after an uncaught ${errorType}`); } catch {}
+    try { writeStartupFailure(`model-gateway: shim supervisor stopped after an uncaught ${errorType}`); } catch {}
   });
   const configuredWorkerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || 0);
   const workerPortReportTimeoutMs = 5000;
@@ -2539,7 +2639,7 @@ function runShim() {
         ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`
         : `run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`;
       const message = `model-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
-      try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
+      try { writeStartupFailure(message); } catch {}
       console.error(message);
       await stopSupervisor(1);
     })();
@@ -2582,7 +2682,7 @@ function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
 }
 
 const commands = {
-  setup: () => setup({ preserveWiring: flag('--preserve-wiring') }),
+  setup: () => withLifecycleLock(() => setup({ preserveWiring: flag('--preserve-wiring') })),
   login: async () => {
     if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
     const mode = flag('--device') ? 'device' : 'login';
@@ -2590,12 +2690,15 @@ const commands = {
     if (result.status === 0) log(loginSuccessMessage({ health: await fetchShimHealth() }));
     process.exitCode = result.status == null ? 1 : result.status;
   },
-  start: async () => {
-    const result = await startAll({ lifecycleOperation: 'start' });
+  start: () => withLifecycleLock(async () => {
+    const result = await startAll({ lifecycleOperation: 'start', resumeIntent: true });
     if (!result.ok) die(result.reason);
     await statusReport();
-  },
-  stop: async () => {
+  }),
+  recover: () => recoverGateway(),
+  'readiness-gate': () => require('./readiness-gate.js').readinessGate(),
+  stop: () => withLifecycleLock(async () => {
+    recordIntentionalStop();
     const result = await stopAll();
     if (!result.ok) {
       console.error(`model-gateway: ${result.reason}.`);
@@ -2603,7 +2706,7 @@ const commands = {
       return;
     }
     log('stopped');
-  },
+  }),
   ensure: async () => {
     const quiet = flag('--quiet');
     if (quiet) bufferedHookLines = [];
@@ -2612,6 +2715,7 @@ const commands = {
     // this ticket's whole complaint (SQ-1901). A direct `ensure` still fails loudly for the updater and for a
     // person running it by hand.
     const finish = (code) => { flushHookOutput(); process.exit(quiet ? 0 : code); };
+    migrateReadinessGates();
     cleanLegacyEnvSettings();
     cleanLegacyGatewayModelCache();
     sweepOldProxyBinaries();
@@ -2625,8 +2729,7 @@ const commands = {
       noticeForUser('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
       finish(0);
     }
-    const proxyRestart = await restartProxyIfOutdated({ quiet });
-    const result = await startAll({ quiet, lifecycleOperation: 'ensure', preserveRunningSupervisor: proxyRestart.restarted });
+    const result = await ensureWiredGateway(wired, quiet);
     if (!result.ok) {
       if (quiet && result.waitCutShort) {
         if (result.started?.includes('shim')) {
@@ -2643,10 +2746,7 @@ const commands = {
       finish(1);
     }
     const readiness = await getCodexReadiness();
-    if (wired && !readiness.ready) {
-      noticeForUser(readiness.message, { toStderr: true });
-      finish(1);
-    }
+    if (quiet && !readiness.ready) noticeForUser(readiness.message, { toStderr: true });
     warnIfProxyOutdated();
     const effectiveWiring = effectiveBaseUrl();
     if (!wired) {
@@ -2686,8 +2786,15 @@ const commands = {
   'serve-worker': () => runWorker(),
 };
 
+const ensureCommand = commands.ensure;
+commands.ensure = () => automaticLifecycle(ensureCommand);
+
 module.exports = {
   commands,
+  recoverGateway,
+  migrateReadinessGates,
+  startupFailureFor,
+  writeStartupFailure,
   usage: USAGE,
   parseHostsCompatEntry,
   parseHostsCompatBlock,
