@@ -1964,7 +1964,7 @@ type GuardedDispatch = {
 type CrossBoundWorktree = { sibling: string; worktree: string; message: string; parkedCheckout?: Record<string, unknown> };
 type DispatchIsolation = {
   readonly: boolean; wholeTreeScope: boolean; reducedAgentSchema: boolean; reviewTargetState: StoredRecord | null;
-  sharedTree: boolean; nonRepoOutput: boolean; worktreeWarning: string | null;
+  sharedTree: boolean; explicitIsolation: boolean; nonRepoOutput: boolean; worktreeWarning: string | null;
 };
 type ConfiguredIntegration = { integrationMode: string; worktreeBase: string };
 type DirtyBaselines = { artifactDirtyBaseline: StoredRecord | null; dirtyBaselineCapture: StoredRecord | null; workingTreeDirtyBaseline: StoredRecord | null };
@@ -2353,8 +2353,12 @@ function requestedReducedAgentSchema(opts: DispatchOptions, current: StoredRecor
   return opts.reducedAgentSchema === true || (!Object.hasOwn(opts, 'reducedAgentSchema') && current?.reducedAgentSchema === true);
 }
 
-function initialSharedTree(reviewTargetState: StoredRecord | null, worktreeIsolation: boolean, requested: boolean): boolean {
-  if (reviewTargetState) return false;
+function requestedIsolation(opts: DispatchOptions, current: StoredRecord): boolean {
+  return opts.sharedTree === false || (!Object.hasOwn(opts, 'sharedTree') && current?.explicitIsolation === true);
+}
+
+function initialSharedTree(reviewTargetState: StoredRecord | null, worktreeIsolation: boolean, requested: boolean, explicitIsolation: boolean): boolean {
+  if (reviewTargetState || explicitIsolation) return false;
   return worktreeIsolation ? requested : true;
 }
 
@@ -2362,11 +2366,10 @@ function isolatedCheckoutWarning(slug: string, sharedTree: boolean, readonly: bo
   return !sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null;
 }
 
-function isolationWarning(slug: string, worktreeIsolation: boolean, explicitIsolation: boolean, sharedTree: boolean, readonly: boolean, effectiveFiles: readonly string[]): string | null {
-  if (!worktreeIsolation && explicitIsolation) {
-    return `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}`;
+function assertRequestedIsolation(t: StoredRecord, explicitIsolation: boolean, worktreeWarning: string | null): void {
+  if (explicitIsolation && worktreeWarning) {
+    throw new Error(`prepare dispatch: ${t.ref} requires sharedTree:false isolation. ${worktreeWarning}`);
   }
-  return isolatedCheckoutWarning(slug, sharedTree, readonly, effectiveFiles);
 }
 
 function assertReviewCheckoutIsolation(t: StoredRecord, reviewTargetState: StoredRecord | null, opts: DispatchOptions, worktreeWarning: string | null): void {
@@ -2381,9 +2384,12 @@ function dispatchIsolation(slug: string, t: StoredRecord, current: StoredRecord,
   const readonly = dispatchReadOnly(t) || investigationWithoutRepositoryWrites(t);
   const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
   const reviewTargetState = reviewDispatchTarget(slug, t);
-  const sharedTree = initialSharedTree(reviewTargetState, worktreeIsolation, requestedSharedTree(opts, current));
-  const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;
-  const worktreeWarning = isolationWarning(slug, worktreeIsolation, explicitIsolation, sharedTree, readonly, effectiveFiles);
+  const explicitIsolation = requestedIsolation(opts, current);
+  const sharedTree = initialSharedTree(reviewTargetState, worktreeIsolation, requestedSharedTree(opts, current), explicitIsolation);
+  const worktreeWarning = explicitIsolation
+    ? worktreeIsolationWarning(slug, readonly)
+    : isolatedCheckoutWarning(slug, sharedTree, readonly, effectiveFiles);
+  assertRequestedIsolation(t, explicitIsolation, worktreeWarning);
   assertReviewCheckoutIsolation(t, reviewTargetState, opts, worktreeWarning);
   return {
     readonly,
@@ -2391,6 +2397,7 @@ function dispatchIsolation(slug: string, t: StoredRecord, current: StoredRecord,
     reducedAgentSchema: requestedReducedAgentSchema(opts, current),
     reviewTargetState,
     sharedTree: sharedTree || Boolean(worktreeWarning),
+    explicitIsolation,
     nonRepoOutput: nonRepoExternalOutput(t, effectiveFiles),
     worktreeWarning,
   };
@@ -2685,6 +2692,7 @@ function runtimeEnvironmentFields(pythonIoEncoding: { written: boolean }, opts: 
 function checkoutPlacementFields(plan: PreparedDispatchPlan, preflight: DispatchPreflight, opts: DispatchOptions) {
   return {
     sharedTree: plan.isolation.sharedTree,
+    explicitIsolation: plan.isolation.explicitIsolation,
     ...(plan.isolation.reducedAgentSchema ? { reducedAgentSchema: true } : {}),
     ...(plan.isolation.worktreeWarning ? { worktreeWarning: plan.isolation.worktreeWarning } : {}),
     ...(plan.guarded.crossBoundWorktree ? { crossBoundWorktree: plan.guarded.crossBoundWorktree } : {}),

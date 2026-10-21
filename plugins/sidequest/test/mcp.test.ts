@@ -1561,7 +1561,7 @@ test('board_config sets the unintegrated worktree salvage age', async () => {
   await assert.rejects(() => callTool('board_config', { project, notIntegratedSalvageAgeHours: 24 }), /at least 168 hours/);
 });
 
-test('board worktree isolation defaults on and overrides dispatch isolation when disabled', async () => {
+test('board worktree isolation defaults on and permits explicit isolation when disabled', async () => {
   const isolatedRoot = committedRepo('sq-mcp-worktree-isolation-default-');
   const isolatedProject = store.ensureProject(isolatedRoot, 'SQ default isolation').slug;
   assert.equal((await callTool('board_config', { project: isolatedProject })).worktreeIsolation, true);
@@ -1630,13 +1630,13 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const legacyShared = await callHandler('native_agent', { project: sharedProject, ref: sharedTicket.ref, prompt: 'Implement the ticket.' });
   assert.equal(legacyShared.spawn.isolation, undefined);
 
-  const overriddenTicket = store.createTicket(sharedProject, {
-    title: 'forced shared tree', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/other.ts'],
+  const explicitIsolationTicket = store.createTicket(sharedProject, {
+    title: 'explicit isolated tree', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/other.ts'],
   });
-  const overridden = await callTool('dispatch', { allowUnscoped: true, project: sharedProject, ref: overriddenTicket.ref, sharedTree: false, full: true });
-  assert.equal(overridden.spawn.isolation, undefined);
-  assert.equal(store.getTicket(sharedProject, overriddenTicket.ref).dispatch.sharedTree, true);
-  assert.match(store.getTicket(sharedProject, overriddenTicket.ref).dispatch.worktreeWarning, /explicit sharedTree:false was overridden/);
+  const explicitIsolation = await callTool('dispatch', { allowUnscoped: true, project: sharedProject, ref: explicitIsolationTicket.ref, sharedTree: false, full: true });
+  assert.equal(explicitIsolation.spawn.isolation, 'worktree');
+  assert.equal(store.getTicket(sharedProject, explicitIsolationTicket.ref).dispatch.sharedTree, false);
+  assert.equal(store.getTicket(sharedProject, explicitIsolationTicket.ref).dispatch.worktreeWarning, undefined);
 });
 
 
