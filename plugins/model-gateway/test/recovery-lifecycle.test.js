@@ -32,6 +32,15 @@ function invoke(testContext, environment, launcher, command, event = 'UserPrompt
   });
 }
 
+async function waitForProcessDeath(pid) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch { return; }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`fixture process ${pid} did not exit after SIGKILL`);
+}
+
 async function streamedMessage(port) {
   const response = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -115,6 +124,7 @@ test('installed gates recover stale boot state once, preserve streaming, recover
   await stream;
   assert.equal(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), supervisor, `healthy prompt recovery leaves supervisor identity unchanged: ${fs.readFileSync(path.join(state, 'logs', 'lifecycle.jsonl'), 'utf8')}`);
   process.kill(Number(supervisor), 'SIGKILL');
+  await waitForProcessDeath(Number(supervisor));
   const recovered = await invoke(testContext, environment, launcher, 'readiness-gate');
   assert.equal(recovered.status, 0, recovered.output);
   assert.notEqual(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), supervisor);
