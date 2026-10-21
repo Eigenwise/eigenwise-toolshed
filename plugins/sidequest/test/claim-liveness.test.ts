@@ -1367,10 +1367,23 @@ function commitInheritedRepairFixture() {
 }
 
 test('inherited unchanged tests need zero hand-written control markers', () => {
-  const { ticket, candidate, source } = inheritedRepairFixture();
+  const { ticket, by, candidate, source } = inheritedRepairFixture();
   const result = store.completionTreeCheck(slug, ticket);
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(result.inheritedTests, [{ classification: 'inherited-unchanged', sourceRef: source.ref, candidate, tests: ['inherited first assertion', 'inherited second assertion'] }]);
+  commitInheritedRepairFixture();
+  const submitted = store.submitTicket(slug, ticket.ref, by, { commit: git(['rev-parse', 'HEAD']) });
+  assert.equal(submitted.ok, true, JSON.stringify(submitted));
+  assert.deepEqual(store.getTicket(slug, ticket.ref).submission.inheritedTests, result.inheritedTests);
+});
+
+test('related repair briefing restores the pinned candidate with a merge', () => {
+  const { ticket, candidate } = inheritedRepairFixture();
+  const agentsync = require('../lib/agentsync.js');
+  const briefing = agentsync.renderTicketBriefing(ticket, 'fixture-token', slug, PROJECT_DIR);
+  assert.ok(briefing.includes(`git merge --no-ff ${candidate}`));
+  assert.doesNotMatch(briefing, /git cherry-pick/);
+  assert.ok(briefing.includes(`refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket`));
   commitInheritedRepairFixture();
 });
 

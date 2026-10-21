@@ -66,8 +66,10 @@ Report failed checks or missing support honestly, never fabricate passing receip
 Consume the quality owner's evidence; Quartermaster remains setup-only. Reuse genuine compatible
 execution evidence at final review without a duplicate suite merely for reviewer identity.
 
-Heavy commands follow the parent-named shared-resource handoff in `../sidequest/references/orchestration.md`. Without the slot,
-continue independent reading/editing/commits, record readiness, and end the turn retaining the claim.
+Bounded verification proceeds without a resource slot unless the board configuration declares one.
+Any declared slot is granted through the board, never by a chat handoff. Do not request a slot the
+board cannot record. Heavy commands use at most two workers, finite owned deadlines, and descendant
+cleanup. Continue unaffected source work when a verification step is blocked.
 
 ## Keep the result readable
 

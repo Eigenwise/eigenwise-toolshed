@@ -3687,7 +3687,7 @@ test('GH-125: a committed checkpoint on a newer base replays onto an explicitly 
     );
     assert.equal(spawn.isolation, 'worktree');
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
-    assert.ok(briefing.includes(`git cherry-pick ${checkpoint}`));
+    assert.ok(briefing.includes(`git merge --no-ff ${checkpoint}`));
     assert.match(briefing, /Validation evidence: the dispatch explicitly names integration base/);
     assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim(), checkpoint, 'the retained checkout is left as it was');
   });
@@ -3712,7 +3712,7 @@ test('GH-125: uncommitted work on a newer base stays retained, names the explici
   });
 });
 
-test('dirty released worktrees with checkpoints fall back to cherry-picking the commit range', () => {
+test('dirty released worktrees with checkpoints fall back to merging the candidate', () => {
   const ticket = createFixture('dirty checkpoint fallback fixture');
   const sessionId = `dirty-checkpoint-${Date.now()}`;
   const agentId = `dirty-checkpoint-${Date.now()}`;
@@ -3754,7 +3754,7 @@ test('dirty released worktrees with checkpoints fall back to cherry-picking the 
     assert.equal(continued.ticket.dispatch.continuation, undefined);
     assert.deepEqual(continued.ticket.dispatch.continuationFallback.commits, [checkpoint]);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
-    assert.match(briefing, new RegExp(`git cherry-pick ${checkpoint}`));
+    assert.match(briefing, new RegExp(`git merge --no-ff ${checkpoint}`));
   } finally {
     store.releaseTicket(slug, ticket.ref, 'dirty-checkpoint-cleanup', { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });

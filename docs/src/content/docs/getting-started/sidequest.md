@@ -40,6 +40,8 @@ Once this save-and-read check works, use the story workflow below when the task 
 
 When an executor hands back a clean committed checkpoint in a retained worktree, its replacement gets a Resume section first. It names the checkout, pinned commit, handback reason, and last recorded verification result and log. After claiming, the replacement confirms HEAD and runs the pinned verifier on that candidate before continuing (shared-environment checks still wait for delivery). It reads new instructions or missing evidence rather than starting over with the full thread. The complete description, contract, scope, and verifier remain in the briefing.
 
+A repair linked to a rejected candidate restores it with `git merge --no-ff`, preserving its commit ancestry. Byte-identical inherited tests are recorded as `inherited-unchanged` on submission and need no new negative-control markers; changed tests still need their controls. Provisioning installs locked dependencies for scoped plugins before verification. Bounded verification needs no resource slot unless board configuration declares one, and any declared slot comes through the board.
+
 ## Read-only shell writes
 
 Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.
