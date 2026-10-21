@@ -100,6 +100,33 @@ function holdWriteLock(homeRoot: string, durationMs: number): Promise<ReturnType
   });
 }
 
+// Back-to-back committed transactions with no gap between them: the lock keeps changing hands but is never
+// free long enough for a waiter's busy handler to catch it, like a burst of CLI writers.
+function relayWriteLock(homeRoot: string, holdMs: number, totalMs: number): Promise<ReturnType<typeof spawn>> {
+  const databasePath = path.join(homeRoot, 'sidequest.db');
+  const childProcess = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const database = new DatabaseSync(${JSON.stringify(databasePath)}, { timeout: 5000 });
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    const startedAt = Date.now();
+    let relay = 0;
+    while (Date.now() - startedAt < ${totalMs}) {
+      database.exec('BEGIN IMMEDIATE');
+      database.prepare('INSERT OR REPLACE INTO globals (key, data) VALUES (?, ?)').run('relay', String(relay));
+      if (relay === 0) process.stdout.write('locked');
+      Atomics.wait(pause, 0, 0, ${holdMs});
+      database.exec('COMMIT');
+      relay += 1;
+    }
+    database.close();
+  `], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  return new Promise((resolve, reject) => {
+    childProcess.once('error', reject);
+    childProcess.stdout.once('data', () => resolve(childProcess));
+    childProcess.stderr.once('data', (data) => reject(new Error(String(data))));
+  });
+}
+
 function waitForProcessExit(childProcess: ReturnType<typeof spawn>): Promise<void> {
   return new Promise((resolve, reject) => {
     childProcess.once('error', reject);
@@ -283,6 +310,24 @@ test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
     );
   } finally {
     childProcess.kill();
+    await waitForProcessExit(childProcess);
+    db.close();
+  }
+});
+
+test('txn keeps waiting while other writers keep committing', async () => {
+  const { db, homeRoot } = makeDb();
+  db.exec('PRAGMA busy_timeout=50');
+  const relayMs = 800;
+  const childProcess = await relayWriteLock(homeRoot, 20, relayMs);
+  const startedAt = Date.now();
+
+  try {
+    txn(db, () => putRow(db, 'globals', { key: 'after-relay', data: {} }));
+    const elapsedMs = Date.now() - startedAt;
+    assert.deepStrictEqual(getRow(db, 'globals', 'after-relay'), {});
+    assert.ok(elapsedMs >= relayMs / 2, `the write must have queued behind the committing relay, took ${elapsedMs}ms`);
+  } finally {
     await waitForProcessExit(childProcess);
     db.close();
   }

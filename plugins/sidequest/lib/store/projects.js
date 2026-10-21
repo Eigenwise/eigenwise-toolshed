@@ -28,66 +28,81 @@ function createProjects({ assetsDir, claudeHome, homeRoot, os, claimReclaimable,
       return adapterSwitch;
     });
   }
+  function newProjectMeta(resolved, name, sourceRevisionAdapter) {
+    return {
+      path: resolved,
+      name: name || defaultProjectName(resolved),
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      seq: 0,
+      storySeq: 0,
+      alwaysInScope: defaultAlwaysInScope(resolved),
+      sourceRevisionAdapter,
+      worktreeIsolation: true
+    };
+  }
+  function refreshProjectIdentity(meta, resolved, name) {
+    let changed = false;
+    if (meta.path !== resolved) {
+      meta.path = resolved;
+      changed = true;
+    }
+    if (name && meta.name !== name) {
+      meta.name = name;
+      changed = true;
+    }
+    if (!meta.name) {
+      meta.name = defaultProjectName(resolved);
+      changed = true;
+    }
+    return changed;
+  }
+  function refreshProjectCounters(meta, sourceRevisionAdapter) {
+    let changed = adoptDerivedSourceRevisionAdapter(meta, sourceRevisionAdapter);
+    if (typeof meta.seq !== "number") {
+      meta.seq = 0;
+      changed = true;
+    }
+    if (typeof meta.storySeq !== "number") {
+      meta.storySeq = 0;
+      changed = true;
+    }
+    return changed;
+  }
+  function reconciledProjectMeta(stored, resolved, name, sourceRevisionAdapter) {
+    if (!stored || typeof stored !== "object") return { meta: newProjectMeta(resolved, name, sourceRevisionAdapter), changed: true };
+    const identityChanged = refreshProjectIdentity(stored, resolved, name);
+    const countersChanged = refreshProjectCounters(stored, sourceRevisionAdapter);
+    return { meta: stored, changed: identityChanged || countersChanged };
+  }
+  function assignMissingRoutingPointer(handle, slug) {
+    if (db.hasRow(handle, "project_routing_profiles", slug)) return false;
+    const settings = handle.prepare("SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1").get();
+    if (!settings?.new_project_profile_id) throw new Error("The new-board routing profile is not configured.");
+    db.putRow(handle, "project_routing_profiles", {
+      project: slug,
+      profile_id: settings.new_project_profile_id,
+      assigned_at: (/* @__PURE__ */ new Date()).toISOString(),
+      assigned_by: "ensure-project"
+    });
+    return true;
+  }
   function ensureProject(absPath, name) {
     const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
     const sourceRevisionAdapter = sourceRevisionAdapterForPath(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));
+    const current = reconciledProjectMeta(db.getRow(database(), "projects", slug), resolved, name, sourceRevisionAdapter);
+    if (!current.changed && db.hasRow(database(), "project_routing_profiles", slug)) return { slug, dir, meta: current.meta };
     let meta;
     let changed = false;
     transaction(() => {
       const handle = database();
-      meta = db.getRow(handle, "projects", slug);
-      if (!meta || typeof meta !== "object") {
-        meta = {
-          path: resolved,
-          name: name || defaultProjectName(resolved),
-          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-          seq: 0,
-          storySeq: 0,
-          alwaysInScope: defaultAlwaysInScope(resolved),
-          sourceRevisionAdapter,
-          worktreeIsolation: true
-        };
-        db.putRow(handle, "projects", { slug, data: meta });
-        changed = true;
-      } else {
-        if (meta.path !== resolved) {
-          meta.path = resolved;
-          changed = true;
-        }
-        if (name && meta.name !== name) {
-          meta.name = name;
-          changed = true;
-        }
-        if (!meta.name) {
-          meta.name = defaultProjectName(resolved);
-          changed = true;
-        }
-        if (adoptDerivedSourceRevisionAdapter(meta, sourceRevisionAdapter)) changed = true;
-        if (typeof meta.seq !== "number") {
-          meta.seq = 0;
-          changed = true;
-        }
-        if (typeof meta.storySeq !== "number") {
-          meta.storySeq = 0;
-          changed = true;
-        }
-        if (changed) db.putRow(handle, "projects", { slug, data: meta });
-      }
-      const pointer = handle.prepare("SELECT project FROM project_routing_profiles WHERE project = ?").get(slug);
-      if (!pointer) {
-        const settings = handle.prepare("SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1").get();
-        if (!settings?.new_project_profile_id) throw new Error("The new-board routing profile is not configured.");
-        db.putRow(handle, "project_routing_profiles", {
-          project: slug,
-          profile_id: settings.new_project_profile_id,
-          assigned_at: (/* @__PURE__ */ new Date()).toISOString(),
-          assigned_by: "ensure-project"
-        });
-        changed = true;
-      }
+      const reconciled = reconciledProjectMeta(db.getRow(handle, "projects", slug), resolved, name, sourceRevisionAdapter);
+      meta = reconciled.meta;
+      if (reconciled.changed) db.putRow(handle, "projects", { slug, data: meta });
+      const pointerAssigned = assignMissingRoutingPointer(handle, slug);
+      changed = reconciled.changed || pointerAssigned;
     });
     if (changed) invalidateStoreCaches();
     return { slug, dir, meta };
