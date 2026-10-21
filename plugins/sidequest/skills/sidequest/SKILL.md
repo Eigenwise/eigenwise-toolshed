@@ -80,11 +80,6 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-Dispatch defaults to isolated worktrees unless the board sets `worktreeIsolation:false`.
-`sharedTree:false` (`--no-shared-tree`) overrides that default and refuses before issuing a token
-when isolation is unavailable. Redispatch inherits that request until `sharedTree:true` clears it.
-Pass the returned `spawn.isolation` unchanged; the dispatch record controls worktree cleanup.
-
 **Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent` in Agent: `model` and `subagentType` when set, `promptPrefix + prompt`. Never hand-translate route, gateway, marker or effort fields. For a ticketless read-only investigation spawn `recipe.research` (`references/routing-guide.md`). A user-named model for one ticket is that ticket's `route` override; never edit the category route (`references/routing-guide.md`).
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
@@ -94,7 +89,7 @@ Pass the returned `spawn.isolation` unchanged; the dispatch record controls work
 
 A board selects one profile plus local ADD/OVERRIDE/DETACH/DISABLE rows. Mutations take one of
 `--profile`/`--project`; details: `references/routing-details.md`. Category `readonly` selects the
-restricted executor and `done` closeout. `--readonly true|false` overrides it for a prepared dispatch.
+restricted executor and `done` closeout. `--readonly` and `--no-shared-tree` override a prepared dispatch.
 Read-only files or changes warn before dispatch. Resolve or override.
 
 ## Open the dashboard
