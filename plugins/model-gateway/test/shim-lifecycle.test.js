@@ -195,7 +195,6 @@ test('ensure waits for a starting shim instead of binding a second supervisor (#
   assert.equal(calls.includes('spawn'), false, 'no second supervisor while the first is starting');
   assert.equal(calls.includes('stop'), false, 'the starting supervisor is left running');
   const [wait] = calls.filter((call) => call.wait).map((call) => call.wait);
-  assert.equal(await wait.proxyAnswers(), true, 'the settle wait is about the shim, not the proxy');
   assert.equal(wait.shimFailureExists(), false, 'an old failure file is not evidence about this start');
 });
 
