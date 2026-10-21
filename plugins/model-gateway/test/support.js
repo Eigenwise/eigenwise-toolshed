@@ -27,12 +27,13 @@ function gatewayPidFile(home, name) {
   return path.join(home, '.claude', 'model-gateway', `${name}.pid`);
 }
 
-function processIsRunning(pid) {
+function processIsRunning(pid, { kill = process.kill, platform = process.platform } = {}) {
   if (!pid) return false;
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
     return true;
   } catch (error) {
+    if (platform === 'win32' && error.code === 'EPERM') return false;
     return error.code !== 'ESRCH';
   }
 }
@@ -397,10 +398,12 @@ async function requestFixtureWorkerDrain(child, deadline) {
   return result;
 }
 
-function requireFixtureShutdown(home, shutdown) {
+function requireFixtureShutdown(home, shutdown, isRunning = processIsRunning) {
   if (shutdown.children.some(fixtureControlFailed)) throw fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_CONTROL_FAILED', home);
   if (!shutdown.closed) throw fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_CLOSE_TIMEOUT', home);
-  if (shutdown.pids.some(processIsRunning)) throw fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_PROCESS_ALIVE', home);
+  const closedPids = new Set(shutdown.children.filter((child) => gatewayFixtureChildClosures.get(child)?.closed === true)
+    .map((child) => child.pid));
+  if (shutdown.pids.some((pid) => !closedPids.has(pid) && isRunning(pid))) throw fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_PROCESS_ALIVE', home);
 }
 
 function removalDeadlineError(context) {
@@ -852,4 +855,5 @@ async function startCountingProxy(t) {
 }
 
 module.exports = { gatewayTestEnvironment, isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild, waitForFixtureProxy,
-  removeOwnedGatewayTestHome, observeGatewayChildClose, waitForGatewayChildClose, requestFixtureWorkerDrain };
+  removeOwnedGatewayTestHome, observeGatewayChildClose, waitForGatewayChildClose, requestFixtureWorkerDrain,
+  processIsRunning, requireFixtureShutdown };

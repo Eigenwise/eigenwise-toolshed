@@ -64,7 +64,7 @@ function unforwardedRelay() {
 }
 
 function createResponseRecorder() {
-  return {
+  return Object.assign(new EventEmitter(), {
     statusCode: null,
     headers: null,
     body: null,
@@ -72,10 +72,13 @@ function createResponseRecorder() {
       this.statusCode = statusCode;
       this.headers = headers;
     },
+    flushHeaders() {},
+    destroy() { this.destroyed = true; this.emit('close'); },
     end(body) {
       this.body = body;
+      this.emit('close');
     },
-  };
+  });
 }
 
 test('shim resends a request after the worker instance that took it is gone', async () => {

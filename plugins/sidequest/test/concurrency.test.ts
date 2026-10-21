@@ -12,14 +12,27 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-concurrency-tes
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-concurrency-project-'));
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const WORKER_COUNT = 12;
+const WRITE_LOCK_TIMING_PRELOAD = path.join(__dirname, '_write-lock-timing-preload.js');
+const WRITE_LOCK_TIMING_LOG = path.join(SIDEQUEST_HOME, 'write-lock-timing.jsonl');
+
+function writeLockTimingSummary() {
+  const timings = fs.existsSync(WRITE_LOCK_TIMING_LOG)
+    ? fs.readFileSync(WRITE_LOCK_TIMING_LOG, 'utf8').trim().split('\n').filter(Boolean).map((line: string) => JSON.parse(line))
+    : [];
+  const waits = timings.map((timing: any) => timing.waitMs);
+  const holds = timings.map((timing: any) => timing.holdMs);
+  const total = holds.reduce((sum: number, hold: number) => sum + hold, 0);
+  return `write transactions so far: ${timings.length}, max wait ${Math.max(0, ...waits)}ms, max hold ${Math.max(0, ...holds)}ms, total hold ${total}ms`;
+}
 
 function runCli(args?: any, extraEnv?: any) {
   const env = Object.assign({}, process.env, {
     SIDEQUEST_HOME,
     CLAUDE_PROJECT_DIR: PROJECT_DIR,
+    SIDEQUEST_TEST_WRITE_LOCK_TIMING_LOG: WRITE_LOCK_TIMING_LOG,
   }, extraEnv);
   return new Promise<any>((resolve?: any) => {
-    const child = spawn(process.execPath, [BIN, ...args], {
+    const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--require', WRITE_LOCK_TIMING_PRELOAD, BIN, ...args], {
       cwd: PROJECT_DIR,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -53,7 +66,7 @@ async function addTicket(index?: any) {
     '--label', 'direct-ok',
     '--json',
   ]);
-  assert.strictEqual(result.status, 0, `add ${index} failed\n${result.stderr}\n${result.stdout}`);
+  assert.strictEqual(result.status, 0, `add ${index} failed\n${result.stderr}\n${result.stdout}\n${writeLockTimingSummary()}`);
   return parseJson(result, `add ${index}`);
 }
 
@@ -70,11 +83,12 @@ async function claimDuringWriteContention(ref?: any, index?: any) {
   ]);
 }
 
-test('concurrent CLI writers keep sequential refs and claim exactly once', async () => {
+test('concurrent CLI writers keep sequential refs and claim exactly once', async (context: any) => {
   const initialized = await runCli(['list', '--json']);
   assert.strictEqual(initialized.status, 0, `board initialization failed\\n${initialized.stderr}\\n${initialized.stdout}`);
 
   const added = await Promise.all(Array.from({ length: WORKER_COUNT }, (_?: any, index?: any) => addTicket(index)));
+  context.diagnostic(`${WORKER_COUNT} concurrent adds: ${writeLockTimingSummary()}`);
 
   assert.strictEqual(added.length, WORKER_COUNT);
   assert.ok(added.every((entry?: any) => entry.ok === true), 'every add must report ok:true');
