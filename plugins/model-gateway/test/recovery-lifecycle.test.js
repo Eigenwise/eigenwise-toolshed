@@ -17,9 +17,9 @@ async function freePort() {
   return port;
 }
 
-function invoke(testContext, environment, launcher, command, event = 'UserPromptSubmit') {
+function invoke(testContext, environment, launcher, command, event = 'UserPromptSubmit', commandArguments = []) {
   return new Promise((resolve, reject) => {
-    const child = spawnGatewayProcess(testContext, process.execPath, [launcher, command], {
+    const child = spawnGatewayProcess(testContext, process.execPath, [launcher, command, ...commandArguments], {
       cwd: environment.HOME, env: environment, windowsHide: true, timeout: 45000,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -51,6 +51,35 @@ async function streamedMessage(port) {
   const body = await response.text();
   assert.match(body, /recovered fixture stream/);
   assert.match(body, /message_stop/);
+}
+
+function installSetupDownloadFixture(environment) {
+  const preload = path.join(environment.HOME, 'setup-download.cjs');
+  fs.writeFileSync(preload, `
+    if (process.argv.includes('setup')) {
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const children = require('node:child_process');
+      const spawnSync = children.spawnSync;
+      children.spawnSync = (command, arguments_, options) => {
+        if (arguments_[0] !== '-xf') return spawnSync(command, arguments_, options);
+        fs.copyFileSync(process.execPath, path.join(options.cwd, ${JSON.stringify(process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy')}));
+        return { status: 0 };
+      };
+      const supervision = require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))});
+      const fetchUrl = supervision.fetchUrl;
+      supervision.fetchUrl = async (url, options) => url.startsWith('https://api.github.com/') ? { status: 200, body: Buffer.from('{}') } : fetchUrl(url, options);
+      require(${JSON.stringify(require.resolve('../lib/release-verification.js'))}).downloadVerifiedArchive = async () => Buffer.from('fixture archive');
+      const writeFile = fs.writeFileSync;
+      fs.writeFileSync = (file, ...arguments_) => {
+        if (path.basename(String(file)) === 'guardian.pid') {
+          require('node:assert/strict').equal(fs.existsSync(path.join(path.dirname(file), 'intentionally-stopped.json')), true, 'real supervisor spawn preserves stop until guardian record');
+        }
+        return writeFile(file, ...arguments_);
+      };
+    }
+  `);
+  environment.NODE_OPTIONS = `${environment.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}`;
 }
 
 test('installed prompt gate leaves a foreign listener untouched and reports local recovery', { timeout: 45000 }, async (testContext) => {
@@ -146,7 +175,19 @@ test('installed gates recover stale boot state once, preserve streaming, recover
   const refused = await invoke(testContext, environment, launcher, 'readiness-gate');
   assert.equal(refused.status, 2, refused.output);
   assert.match(refused.output, /intentionally stopped/);
-  const resumed = await invoke(testContext, environment, launcher, 'start');
+  installSetupDownloadFixture(environment);
+  fs.writeFileSync(authentication, "if (require('node:path').basename(process.argv[1] || '') === 'codex') { process.exit(1); }\n");
+  const maintenance = await invoke(testContext, environment, launcher, 'setup', 'UserPromptSubmit', ['--preserve-wiring']);
+  assert.equal(maintenance.status, 0, maintenance.output);
+  assert.equal(fs.existsSync(path.join(state, 'intentionally-stopped.json')), true, 'maintenance setup retains stop');
+  assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), false, 'maintenance setup creates no supervisor');
+  const resumed = await invoke(testContext, environment, launcher, 'setup');
   assert.equal(resumed.status, 0, resumed.output);
+  assert.equal(fs.existsSync(path.join(state, 'intentionally-stopped.json')), false, 'explicit setup resumes after real guardian record');
+  assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), true);
+  await streamedMessage(shimPort);
+  const runningSetup = await invoke(testContext, environment, launcher, 'setup');
+  assert.equal(runningSetup.status, 0, runningSetup.output);
+  assert.match(runningSetup.output, /restarting shim without dropping its listener/);
   await streamedMessage(shimPort);
 });

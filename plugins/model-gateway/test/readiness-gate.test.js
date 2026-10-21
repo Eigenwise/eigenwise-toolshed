@@ -186,10 +186,8 @@ test('maintenance setup preserves persistent stop through a bounded acquisition 
   assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.local.json')), false);
 });
 
-for (const scenario of ['maintenance', 'cleanup-failure', 'setup', 'start', 'foreign-owner']) {
-  test(`intentional stop launch handoff: ${scenario}`, (t) => {
-    const maintenance = scenario === 'maintenance';
-    const fixture = installedGateFixture(t);
+function launchHandoffFixture(testContext, scenario) {
+    const fixture = installedGateFixture(testContext);
     const script = `
       const fs = require('node:fs');
       const path = require('node:path');
@@ -212,39 +210,45 @@ for (const scenario of ['maintenance', 'cleanup-failure', 'setup', 'start', 'for
       const remove = fs.rmSync;
       fs.rmSync = (file, options) => {
         if (String(file).includes('stage-')) {
-          if (${JSON.stringify(scenario)} === 'cleanup-failure') throw Object.assign(new Error('fixture EPERM stage cleanup'), { code: 'EPERM' });
+          if (${JSON.stringify(scenario.name)} === 'cleanup-failure') throw Object.assign(new Error('fixture EPERM stage cleanup'), { code: 'EPERM' });
           assert.equal(fs.existsSync(marker), true, 'cleanup precedes resume');
         }
         return remove(file, options);
       };
       supervision.portListening = async () => {
-        if (${JSON.stringify(scenario)} === 'cleanup-failure') return false;
+        if (${JSON.stringify(scenario.name)} === 'cleanup-failure') return false;
         throw new Error('stopped gateway must not be probed');
       };
       supervision.resolvePortOwner = async () => {
-        if (${JSON.stringify(scenario)} === 'cleanup-failure') return { state: 'free' };
+        if (${JSON.stringify(scenario.name)} === 'cleanup-failure') return { state: 'free' };
         throw new Error('pre-start ownership probe');
       };
       supervision.shimHealthy = async () => true;
       supervision.restartWorkerWithDrain = async () => { throw new Error('stopped worker must not restart'); };
-      supervision.spawnDetached = (name) => {
-        assert.equal(fs.existsSync(marker), false, 'resume happens at launch');
+      const fakeLaunch = (name) => {
+        assert.equal(fs.existsSync(marker), true, 'stop persists between spawn and guardian record');
         fs.writeFileSync(guardian, '12345');
         return 12345;
+      };
+      if (!${JSON.stringify(scenario.launchFailure)}) supervision.spawnDetached = fakeLaunch;
+      const makeDirectory = fs.mkdtempSync;
+      fs.mkdtempSync = (prefix, options) => {
+        if (path.basename(String(prefix)).startsWith('launch-')) throw Object.assign(new Error('fixture EPERM detached launch directory'), { code: 'EPERM' });
+        return makeDirectory(prefix, options);
       };
       const shimState = require(${JSON.stringify(require.resolve('../lib/shim-state.js'))});
       shimState.fetchShimHealth = async () => { throw new Error('pre-start health probe'); };
       shimState.probeShimState = async () => {
         if (fs.existsSync(guardian)) return { state: 'stopped', owner: { state: 'free' } };
         assert.equal(fs.existsSync(marker), true, 'ownership decision precedes resume');
-        if (${JSON.stringify(scenario)} === 'foreign-owner') return { state: 'running-foreign', pid: 42, owner: { state: 'foreign-install', pid: 42 } };
+        if (${JSON.stringify(scenario.name)} === 'foreign-owner') return { state: 'running-foreign', pid: 42, owner: { state: 'foreign-install', pid: 42 } };
         return { state: 'stopped', owner: { state: 'free' } };
       };
       supervision.reapGatewayOrphans = () => {};
       require(${JSON.stringify(require.resolve('../lib/release-verification.js'))}).downloadVerifiedArchive = async () => Buffer.from('verified fixture');
       require(${JSON.stringify(require.resolve('../lib/lifecycle-lock.js'))}).recordIntentionalStop();
-      const command = ${JSON.stringify(scenario)};
-      process.argv = [process.execPath, 'fixture', command === 'start' || command === 'foreign-owner' ? 'start' : 'setup', ...${JSON.stringify(maintenance ? ['--preserve-wiring'] : [])}];
+      const command = ${JSON.stringify(scenario.name)};
+      process.argv = [process.execPath, 'fixture', command === 'start' || command === 'foreign-owner' ? 'start' : 'setup', ...${JSON.stringify(scenario.arguments)}];
       const commands = require(${JSON.stringify(require.resolve('../lib/commands.js'))});
       if (command === 'start' || command === 'foreign-owner') {
         commands.commands.start().catch(error => { console.error(error); process.exitCode = 1; });
@@ -253,14 +257,28 @@ for (const scenario of ['maintenance', 'cleanup-failure', 'setup', 'start', 'for
       }
     `;
     const result = spawnSync(process.execPath, ['-e', script], { cwd: fixture.home, env: fixture.environment, encoding: 'utf8', timeout: 10000, windowsHide: true });
-    const stopped = maintenance || scenario === 'cleanup-failure' || scenario === 'foreign-owner';
-    const failed = scenario === 'cleanup-failure' || scenario === 'foreign-owner';
-    assert.equal(result.status, failed ? 1 : 0, result.stderr);
-    if (scenario === 'cleanup-failure') assert.match(result.stderr, /EPERM stage cleanup/);
+    return { fixture, result };
+}
+
+const launchHandoffScenarios = [
+  { name: 'maintenance', arguments: ['--preserve-wiring'], stopped: true, status: 0 },
+  { name: 'cleanup-failure', arguments: [], stopped: true, status: 1, error: /EPERM stage cleanup/ },
+  { name: 'setup', arguments: [], stopped: false, status: 0 },
+  { name: 'start', arguments: [], stopped: false, status: 0 },
+  { name: 'foreign-owner', arguments: [], stopped: true, status: 1 },
+  { name: 'start', label: 'start launch failure', arguments: [], launchFailure: true, stopped: true, status: 1, error: /EPERM detached launch directory/ },
+  { name: 'setup', label: 'setup launch failure', arguments: [], launchFailure: true, stopped: true, status: 1, error: /EPERM detached launch directory/ },
+];
+
+for (const scenario of launchHandoffScenarios) {
+  test(`intentional stop launch handoff: ${scenario.label || scenario.name}`, { skip: scenario.launchFailure && process.platform !== 'win32' }, (testContext) => {
+    const { fixture, result } = launchHandoffFixture(testContext, scenario);
+    assert.equal(result.status, scenario.status, result.stderr);
+    if (scenario.error) assert.match(result.stderr, scenario.error);
     const state = path.join(fixture.home, '.claude', 'model-gateway');
-    assert.equal(fs.existsSync(path.join(state, 'intentionally-stopped.json')), stopped);
-    assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), !stopped);
-    if (!stopped) assert.equal(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), '12345');
+    assert.equal(fs.existsSync(path.join(state, 'intentionally-stopped.json')), scenario.stopped, 'failed launch preserves intentional stop');
+    assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), !scenario.stopped, 'only a created supervisor has a guardian record');
+    if (!scenario.stopped) assert.equal(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), '12345');
   });
 }
 

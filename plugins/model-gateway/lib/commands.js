@@ -773,8 +773,9 @@ function launchSupervisor(context) {
   recovery.begin();
   try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
   const supervisorArguments = [resolveNewestInstalledCliPath(), 'serve-shim'];
+  const supervisorPid = spawnSupervisor('guardian', process.execPath, supervisorArguments, { MODEL_GATEWAY_STARTUP_GENERATION: context.startupGeneration });
   if (context.resumeIntent) resumeIntentionalStop();
-  return spawnSupervisor('guardian', process.execPath, supervisorArguments, { MODEL_GATEWAY_STARTUP_GENERATION: context.startupGeneration });
+  return supervisorPid;
 }
 
 async function finishStartingShim(started, context, supervisorPid) {
