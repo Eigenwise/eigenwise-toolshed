@@ -19,6 +19,7 @@ const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require
 const { stillSpawnsInsideItsWrite } = require('../db');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
+import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
 
@@ -840,6 +841,50 @@ function skippedVerification(requirement: any, waiver: any) {
   };
 }
 
+interface QualityTicket {
+  id: string;
+  ref: string;
+  submission: { base?: string; commit?: string; changedPaths?: string[] };
+}
+
+function qualityInput(slug: string, ticket: QualityTicket, project: string, timeoutMilliseconds: number): QualityInput {
+  const baseline = sourceRevisionBaseline(ticket);
+  return {
+    project,
+    registeredProject: readMeta(slug).path,
+    directory: path.join(path.dirname(integrationVerifyLogPath(slug, ticket)), 'quality-' + crypto.randomUUID()),
+    base: baseline?.revision.value || ticket.submission.base || '',
+    changedPaths: ticket.submission.changedPaths || [],
+    timeoutMilliseconds,
+  };
+}
+
+function recordQualityDebt(slug: string, ticket: QualityTicket, quality: IntegrationQuality) {
+  if (!quality.unverified.length) return;
+  const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
+  transaction(() => {
+    if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
+    dependencies.createTicket(slug, {
+      title,
+      description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
+      category: 'coding.normal',
+      complexity: 2,
+      complexityWhy: 'Capture missing native quality evidence for an existing candidate',
+      files: ticket.submission.changedPaths || [],
+      executorVerifyKind: 'manual',
+      executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
+      source: 'integration-quality',
+    });
+  });
+}
+
+function verifyCandidateQuality(slug: string, tickets: QualityTicket[], project: string, timeoutMilliseconds: number, verify: (environment: NodeJS.ProcessEnv) => VerificationResult) {
+  const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
+  const result = runIntegrationQuality(inputs, verify);
+  result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index]!, quality));
+  return result;
+}
+
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const requirement = opts?.requirement || pinnedVerificationRequirement(ticket);
   const submitted = ticket.submission?.verificationResult;
@@ -888,9 +933,10 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
     environment,
   });
-  return isFullSuiteCommand(requirement.command)
-    ? runFullSuiteVerification(requirement.command, project, verify)
-    : verify(process.env);
+  const run = (environment: NodeJS.ProcessEnv) => isFullSuiteCommand(requirement.command)
+    ? runFullSuiteVerification(requirement.command, project, () => verify(environment))
+    : verify(environment);
+  return verifyCandidateQuality(slug, opts?.qualityTickets || [ticket], project, timeoutMilliseconds, run);
 }
 
 function verificationFailureComment(verify: any) {
@@ -2626,7 +2672,7 @@ function deliverLockedGitWave(slug: string | undefined, assembled: AssembledWave
   const mergeFailure = mergeWaveCandidates(repo, prepared, before, assembled.tickets);
   if (mergeFailure) return mergeFailure;
   const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
-  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], { ...opts, cwd: repo });
+  const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], { ...opts, cwd: repo, qualityTickets: assembled.tickets });
   if (!verificationAccepted(verification)) return rollBackUnverifiedWave(slug, assembled, repo, { before, resultingHead }, prepared.dirt, verification);
   return recordGitWaveDelivery(slug, assembled, target, prepared, resultingHead, verification);
 }

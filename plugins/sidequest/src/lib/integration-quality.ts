@@ -85,8 +85,15 @@ function runNativeReport(gate: string, input: QualityInput, command: string[], n
   return report;
 }
 
+function generatedCounterpart(file: string, files: string[]): boolean {
+  const source = file.replace(/\/(lib|bin)\//, '/src/$1/').replace(/\.js$/, '.ts');
+  return source !== file && files.includes(source);
+}
+
 function sourceFiles(input: QualityInput): string[] {
-  return input.changedPaths.filter((file) => /\.[cm]?[jt]sx?$/.test(file)).filter((file) => fs.existsSync(path.resolve(input.project, file)));
+  return input.changedPaths.filter((file) => /\.[cm]?[jt]sx?$/.test(file))
+    .filter((file) => !generatedCounterpart(file, input.changedPaths))
+    .filter((file) => fs.existsSync(path.resolve(input.project, file)));
 }
 
 function emptyQuality(status: IntegrationQuality['status']): IntegrationQuality {
@@ -119,7 +126,7 @@ function qualityStatus(failures: unknown[], unverified: QualityRow[]): Integrati
 function measuredQuality(gate: string, input: QualityInput, captureDirectory: string): IntegrationQuality {
   const files = sourceFiles(input);
   if (!files.length) return emptyQuality('measured');
-  const report = runNativeReport(gate, input, ['measure', '--project', input.project, '--base', input.base, '--coverage', captureDirectory, ...files], 'measure');
+  const report = runNativeReport(gate, input, ['measure', '--json', '--project', input.project, '--base', input.base, '--coverage', captureDirectory, ...files], 'measure');
   return reportQuality(report, input.base);
 }
 
@@ -146,9 +153,22 @@ function participantQuality(gate: string, input: QualityInput, captureDirectory:
   return persistQuality(input, quality);
 }
 
+function unavailableQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, error: unknown) {
+  const quality = inputs.map((input) => {
+    fs.mkdirSync(input.directory, { recursive: true });
+    return persistQuality(input, unverifiedQuality(error));
+  });
+  return { ...verify(process.env), quality };
+}
+
 export function runIntegrationQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult): VerificationResult & { quality: IntegrationQuality[] } {
   const primary = inputs[0]!;
-  const gate = configuredIntegrationGate(primary.registeredProject);
+  let gate: string | undefined;
+  try {
+    gate = configuredIntegrationGate(primary.registeredProject);
+  } catch (error) {
+    return unavailableQuality(inputs, verify, error);
+  }
   if (!gate) return { ...verify(process.env), quality: [emptyQuality('none')] };
   const captureDirectory = path.join(primary.directory, 'coverage');
   fs.mkdirSync(captureDirectory, { recursive: true });
