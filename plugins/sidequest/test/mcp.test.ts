@@ -4663,7 +4663,7 @@ test('MCP update refuses claim-holder live scope changes and admits a control-pl
 });
 
 test('MCP update handler grants live scope changes without deriving authority from session identity', async () => {
-  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-update-'))).slug;
+  const project = store.ensureProject(committedRepo('sq-mcp-scope-update-')).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP active claim scope update', files: ['lib/allowed.js'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'the PreToolUse hook keeps subagents away from this main-thread handler grant',
