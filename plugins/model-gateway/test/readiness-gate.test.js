@@ -188,7 +188,17 @@ test('maintenance setup preserves persistent stop through a bounded acquisition 
 
 function launchHandoffFixture(testContext, scenario) {
     const fixture = installedGateFixture(testContext);
+    const spawnWithoutPid = scenario.spawnFailure ? `
+      require(${JSON.stringify(require.resolve('../lib/runtime.js'))}).WIN = false;
+      require(${JSON.stringify(require.resolve('../lib/lifecycle-lock.js'))}).withLifecycleLock = async (operation) => operation();
+      const children = require('node:child_process');
+      const nativeSpawn = children.spawn;
+      children.spawn = (command, arguments_, options) => (arguments_.includes('serve-shim')
+        ? nativeSpawn(${JSON.stringify(path.join(fixture.home, 'sq3816-nonexistent-executable'))}, [], options)
+        : nativeSpawn(command, arguments_, options));
+    ` : '';
     const script = `
+      ${spawnWithoutPid}
       const fs = require('node:fs');
       const path = require('node:path');
       const home = require('node:os').homedir();
@@ -230,7 +240,7 @@ function launchHandoffFixture(testContext, scenario) {
         fs.writeFileSync(guardian, '12345');
         return 12345;
       };
-      if (!${JSON.stringify(scenario.launchFailure)}) supervision.spawnDetached = fakeLaunch;
+      if (!${JSON.stringify(Boolean(scenario.launchFailure || scenario.spawnFailure))}) supervision.spawnDetached = fakeLaunch;
       const makeDirectory = fs.mkdtempSync;
       fs.mkdtempSync = (prefix, options) => {
         if (path.basename(String(prefix)).startsWith('launch-')) throw Object.assign(new Error('fixture EPERM detached launch directory'), { code: 'EPERM' });
@@ -268,6 +278,8 @@ const launchHandoffScenarios = [
   { name: 'foreign-owner', arguments: [], stopped: true, status: 1 },
   { name: 'start', label: 'start launch failure', arguments: [], launchFailure: true, stopped: true, status: 1, error: /EPERM detached launch directory/ },
   { name: 'setup', label: 'setup launch failure', arguments: [], launchFailure: true, stopped: true, status: 1, error: /EPERM detached launch directory/ },
+  { name: 'start', label: 'start spawn without a pid', arguments: [], spawnFailure: true, stopped: true, status: 1, error: /launch produced no process id/ },
+  { name: 'setup', label: 'setup spawn without a pid', arguments: [], spawnFailure: true, stopped: true, status: 1, error: /launch produced no process id/ },
 ];
 
 for (const scenario of launchHandoffScenarios) {
