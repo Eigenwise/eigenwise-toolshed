@@ -90,6 +90,13 @@ function writePayload(agentId: string, executor: string, sessionId: string, file
   };
 }
 
+test('SQ-3808: admission hook ignores heredoc data but still checks real writes', () => {
+  const { needsDecision } = require('../hooks/guards/executor-admission.ts');
+  const caller = { agentId: '', type: 'sidequest-exec-readonly-high', sessionId: '', row: null, fresh: true };
+  assert.equal(needsDecision('Bash', { command: "cat <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF" }, caller), false);
+  assert.equal(needsDecision('Bash', { command: "cat > probe.py <<'EOF'\ndef f() -> int:\nEOF" }, caller), true);
+});
+
 test('a write into the dispatch evidence directory is allowed when the board home sits inside a foreign checkout', () => {
   const agentId = 'e1evidence';
   const { ticket, sessionId, executor } = dispatched(agentId, { sharedTree: true });
