@@ -338,6 +338,48 @@ test('ensure writes the discovery cache with missing ChatGPT auth without refusi
   assert.equal(stopped.status, 0, stopped.stderr);
 });
 
+test('healthy quiet ensure emits only the discovery-cache context without a readiness nudge', async (testContext) => {
+  const proxy = http.createServer((request, response) => {
+    assert.equal(request.url, '/v1/models');
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ data: [{ id: 'gpt-6-astra' }] }));
+  });
+  const proxyPort = await listen(proxy);
+  testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
+  const shimPort = await freePort();
+  const workerPort = await freePort();
+  const baseUrl = `http://127.0.0.1:${shimPort}`;
+  const environment = {
+    ...discoveryEnvironment(testContext, baseUrl, shimPort, workerPort, proxyPort),
+    NODE_OPTIONS: `--require=${JSON.stringify(path.join(__dirname, 'codex-authenticated-preload.cjs'))}`,
+  };
+  const overrides = discoveryProcessOverrides(shimPort, workerPort, proxyPort);
+  installProxyStub(environment.HOME);
+  fs.writeFileSync(path.join(environment.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: baseUrl } }));
+  const cache = path.join(environment.CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
+  assert.equal(fs.existsSync(cache), false, 'the isolated discovery cache starts empty');
+
+  const directResult = await runGatewayCommand(testContext, 'ensure', environment, overrides);
+  assert.equal(directResult.status, 0, directResult.stderr);
+  assert.match(directResult.stdout, /Codex readiness: ready/);
+  assert.equal(fs.existsSync(cache), true);
+
+  const quietResult = await runGatewayCommand(
+    testContext,
+    'ensure',
+    environment,
+    { ...overrides, CLAUDE_CODE_SESSION_START: '1' },
+    ['--quiet'],
+  );
+  assert.equal(quietResult.status, 0, quietResult.stderr);
+  const hookOutput = JSON.parse(quietResult.stdout);
+  assert.equal(hookOutput.systemMessage, undefined, 'healthy Codex must not emit a readiness nudge');
+  assert.deepEqual(hookOutput.hookSpecificOutput, {
+    hookEventName: 'SessionStart',
+    additionalContext: 'discovery cache: unchanged',
+  });
+});
+
 test('cleanLegacyGatewayModelCache upgrades a legacy bare Codex id whose window exceeds 200k', () => {
   const file = cachePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
