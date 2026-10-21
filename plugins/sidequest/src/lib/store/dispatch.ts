@@ -2513,12 +2513,7 @@ function explicitIntegrationTargetRequested(opts: DispatchOptions): boolean {
 }
 
 function isolatedRepositoryDispatch(isolation: DispatchIsolation): boolean {
-  return !isolation.sharedTree && !isolation.readonly && !isolation.nonRepoOutput;
-}
-
-function automaticWorktreeBaseEligible(isolation: DispatchIsolation, worktreeBase: string): boolean {
-  return isolatedRepositoryDispatch(isolation)
-    || (!isolation.sharedTree && isolation.readonly && !isolation.nonRepoOutput && worktreeBase !== 'auto');
+  return !isolation.sharedTree && !isolation.nonRepoOutput;
 }
 
 function remoteIntegrationTarget(slug: string, worktreeBase: string) {
@@ -2559,7 +2554,7 @@ function configuredWorktreeBaseTarget(slug: string, worktreeBase: string) {
 }
 
 function automaticWorktreeBase(slug: string, isolation: DispatchIsolation, configured: ConfiguredIntegration) {
-  return automaticWorktreeBaseEligible(isolation, configured.worktreeBase) && configured.integrationMode === 'auto'
+  return isolatedRepositoryDispatch(isolation) && configured.integrationMode === 'auto'
     ? configuredWorktreeBaseTarget(slug, configured.worktreeBase)
     : null;
 }
