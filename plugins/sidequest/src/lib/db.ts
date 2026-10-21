@@ -30,6 +30,10 @@ export const SQLITE_BUSY_TIMEOUT_MS = 2_000;
 export const SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 15_000;
 export const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
 export const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
+// SQLite's busy handler is not first-come-first-served, so in a burst one writer can wait out every other
+// writer's transactions (SQ-3844). While other writers keep committing the lock is moving, not stuck, so a
+// write keeps waiting up to this ceiling; like the migration wait, refusing would only drop the write.
+export const SQLITE_BUSY_MOVING_QUEUE_CEILING_MS = 15_000;
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
 
 // Pre-v5 default text; the v5 migration only refreshes rows the user never customized.
@@ -205,29 +209,52 @@ function isSqliteBusy(error: unknown): boolean {
   return isSqliteBusy(Reflect.get(error, 'cause'));
 }
 
-function sqliteBusyError(operation: string, startedAt: number, cause: unknown, timeoutMs: number): Error {
-  const elapsedMs = Date.now() - startedAt;
+interface BusyRetryProgress {
+  startedAt: number;
+  attempts: number;
+  stalledAttempts: number;
+}
+
+function sqliteBusyError(operation: string, progress: BusyRetryProgress, cause: unknown, timeoutMs: number): Error {
+  const elapsedMs = Date.now() - progress.startedAt;
   const originalMessage = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${timeoutMs}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
+    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${progress.attempts} attempts, each waiting up to ${timeoutMs}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
     { cause },
   );
 }
 
-function retryWhenSqliteBusy<T>(operation: string, work: () => T, timeoutMs = SQLITE_BUSY_TIMEOUT_MS): T {
-  const startedAt = Date.now();
-  for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
+function busyRetryExhausted(progress: BusyRetryProgress, otherWriterCommitted: () => boolean): boolean {
+  progress.stalledAttempts = otherWriterCommitted() ? 0 : progress.stalledAttempts + 1;
+  const pastMovingQueueCeiling = progress.attempts >= SQLITE_BUSY_RETRY_ATTEMPTS && Date.now() - progress.startedAt >= SQLITE_BUSY_MOVING_QUEUE_CEILING_MS;
+  return progress.stalledAttempts >= SQLITE_BUSY_RETRY_ATTEMPTS || pastMovingQueueCeiling;
+}
+
+function retryWhenSqliteBusy<T>(operation: string, work: () => T, timeoutMs = SQLITE_BUSY_TIMEOUT_MS, otherWriterCommitted: () => boolean = () => false): T {
+  const progress: BusyRetryProgress = { startedAt: Date.now(), attempts: 0, stalledAttempts: 0 };
+  for (;;) {
+    progress.attempts += 1;
     try {
       return work();
     } catch (error) {
-      if (!isSqliteBusy(error) || attempt === SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
-        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error, timeoutMs);
-        throw error;
-      }
-      Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[attempt] ?? 0);
+      if (!isSqliteBusy(error)) throw error;
+      if (busyRetryExhausted(progress, otherWriterCommitted)) throw sqliteBusyError(operation, progress, error, timeoutMs);
+      Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[progress.stalledAttempts - 1] ?? 0);
     }
   }
-  throw new Error(`SQLite busy retry exhausted without an error while ${operation}.`);
+}
+
+// PRAGMA data_version changes only when a different connection commits, so a change between two failed
+// attempts proves the lock was released and taken again rather than held by one stuck writer.
+function otherWriterCommittedSince(database: DatabaseSync): () => boolean {
+  const readDataVersion = () => Number(prepareCached(database, 'PRAGMA data_version').get()?.data_version);
+  let seen = readDataVersion();
+  return () => {
+    const current = readDataVersion();
+    const moved = current !== seen;
+    seen = current;
+    return moved;
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -999,5 +1026,5 @@ export function txn<T>(database: DatabaseSync, fn: () => T, timeoutMs = SQLITE_B
       }
       throw error;
     }
-  }, timeoutMs);
+  }, timeoutMs, otherWriterCommittedSince(database));
 }
