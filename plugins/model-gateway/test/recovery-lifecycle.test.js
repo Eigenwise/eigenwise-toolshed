@@ -125,6 +125,12 @@ test('installed gates recover stale boot state once, preserve streaming, recover
   assert.match(unauthenticated.output, /auth|login|sign.in/i);
   assert.match(unauthenticated.output, /resubmit/);
   fs.writeFileSync(authentication, "if (require('node:path').basename(process.argv[1] || '') === 'codex') { console.log('fixture account'); process.exit(0); }\n");
+  const unavailableFile = path.join(state, 'codex-upstream-unavailable.json');
+  fs.writeFileSync(unavailableFile, JSON.stringify({ state: 'upstream-unavailable', observedAtMs: Date.now(), statusCode: 503 }));
+  const unavailable = await invoke(testContext, environment, launcher, 'readiness-gate');
+  assert.equal(unavailable.status, 2, unavailable.output);
+  assert.match(unavailable.output, /unavailable|503/i);
+  fs.unlinkSync(unavailableFile);
   const stopped = await invoke(testContext, environment, launcher, 'stop');
   assert.equal(stopped.status, 0, stopped.output);
   const refused = await invoke(testContext, environment, launcher, 'readiness-gate');

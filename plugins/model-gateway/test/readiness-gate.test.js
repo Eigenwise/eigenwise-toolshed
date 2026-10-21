@@ -144,6 +144,20 @@ test('migration adds gates only to registered wiring and preserves pins and unre
   assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.json')), false);
 });
 
+test('explicit setup clears persistent stop before a bounded acquisition failure without wiring new projects', (t) => {
+  const fixture = installedGateFixture(t);
+  const script = `
+    require(${JSON.stringify(require.resolve('../lib/lifecycle-lock.js'))}).recordIntentionalStop();
+    require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))}).fetchUrl = async () => ({ status: 503 });
+    require(${JSON.stringify(require.resolve('../lib/commands.js'))}).commands.setup();
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { cwd: fixture.home, env: fixture.environment, encoding: 'utf8', timeout: 10000, windowsHide: true });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /GitHub API returned 503/);
+  assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'intentionally-stopped.json')), false);
+  assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.local.json')), false);
+});
+
 test('startup failure evidence is scoped to its supervisor and generation', () => {
   writeStartupFailure('owned failure');
   assert.equal(startupFailureFor(process.pid, null), 'owned failure');
