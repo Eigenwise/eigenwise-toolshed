@@ -74,6 +74,40 @@ test('stable launcher fails locally when the installed plugin disappears', (t) =
   assert.match(result.stderr, /Reinstall Model Gateway/);
 });
 
+test('stable gate follows upgrade and downgrade registry entries after old caches disappear', (t) => {
+  const fixture = installedGateFixture(t);
+  for (const version of ['1.0.0', '2.0.0', '0.9.0']) {
+    const installPath = path.join(fixture.home, 'cache', version);
+    fs.mkdirSync(path.join(installPath, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(installPath, 'bin', 'model-gateway.js'), `process.stdin.resume(); process.stdin.on('end', () => console.log(${JSON.stringify(version)}));`);
+    fs.writeFileSync(fixture.registry, JSON.stringify({ plugins: { 'model-gateway@test': [{ version, installPath }] } }));
+    const result = invokeGate(fixture, 'UserPromptSubmit');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), version);
+    fs.rmSync(installPath, { recursive: true });
+  }
+});
+
+test('installed gate waits for delayed recovery and kills its CLI at the finite deadline', { timeout: 40000 }, (t) => {
+  const fixture = installedGateFixture(t);
+  const installPath = path.join(fixture.home, 'delayed-install');
+  const script = path.join(installPath, 'bin', 'model-gateway.js');
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(fixture.registry, JSON.stringify({ plugins: { 'model-gateway@test': [{ version: '1.0.0', installPath }] } }));
+  fs.writeFileSync(script, "process.stdin.resume(); setTimeout(() => console.log('recovery complete'), 250);");
+  const ready = invokeGate(fixture, 'UserPromptSubmit');
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.match(ready.stdout, /recovery complete/);
+  const pidFile = path.join(fixture.home, 'delayed.pid');
+  fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
+  const started = Date.now();
+  const expired = invokeGate(fixture, 'UserPromptSubmit');
+  assert.equal(expired.status, 2, expired.stderr);
+  assert.match(expired.stderr, /25s deadline.*start, recover, doctor.*resubmit/s);
+  assert.ok(Date.now() - started < 30000, 'internal deadline finishes below the installed 35s hook timeout');
+  assert.throws(() => process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 0), { code: 'ESRCH' });
+});
+
 test('persistent intentional stop prevents automatic start before any launch or ownership probe', async () => {
   recordIntentionalStop();
   try {

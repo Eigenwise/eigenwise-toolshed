@@ -44,6 +44,30 @@ async function streamedMessage(port) {
   assert.match(body, /message_stop/);
 }
 
+test('installed prompt gate leaves a foreign listener untouched and reports local recovery', { timeout: 45000 }, async (testContext) => {
+  const foreign = http.createServer((request, response) => response.end('foreign fixture'));
+  await new Promise((resolve) => foreign.listen(0, '127.0.0.1', resolve));
+  testContext.after(() => new Promise((resolve) => foreign.close(resolve)));
+  const port = foreign.address().port;
+  const environment = gatewayTestEnvironment(testContext, { ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}` }, {
+    CODEX_GATEWAY_PORT: String(port), CODEX_GATEWAY_PROXY_PORT: String(await freePort()),
+  });
+  delete environment.CODEX_GATEWAY_WORKER_PORT;
+  const state = path.join(environment.HOME, '.claude', 'model-gateway');
+  fs.mkdirSync(path.join(state, 'bin'), { recursive: true });
+  fs.copyFileSync(process.execPath, path.join(state, 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy'));
+  const registry = path.join(environment.HOME, '.claude', 'plugins', 'installed_plugins.json');
+  fs.mkdirSync(path.dirname(registry), { recursive: true });
+  fs.writeFileSync(registry, JSON.stringify({ plugins: { 'model-gateway@fixture': [{ version: '1.0.0', installPath: path.resolve(__dirname, '..') }] } }));
+  const launcher = writeCommandLauncher({ home: environment.HOME }).file;
+  const refused = await invoke(testContext, environment, launcher, 'readiness-gate');
+  assert.equal(refused.status, 2, refused.output);
+  assert.match(refused.output, /could not confirm the owner.*left the listener untouched/s);
+  assert.match(refused.output, /doctor.*resubmit/s);
+  assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'foreign fixture');
+  assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), false);
+});
+
 test('installed gates recover stale boot state once, preserve streaming, recover death and honor persistent stop', { timeout: 150000 }, async (testContext) => {
   const shimPort = await freePort();
   const proxy = http.createServer((request, response) => {
@@ -95,6 +119,12 @@ test('installed gates recover stale boot state once, preserve streaming, recover
   assert.equal(recovered.status, 0, recovered.output);
   assert.notEqual(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), supervisor);
   await streamedMessage(shimPort);
+  fs.writeFileSync(authentication, "if (require('node:path').basename(process.argv[1] || '') === 'codex') { console.error('fixture login required'); process.exit(1); }\n");
+  const unauthenticated = await invoke(testContext, environment, launcher, 'readiness-gate');
+  assert.equal(unauthenticated.status, 2, unauthenticated.output);
+  assert.match(unauthenticated.output, /auth|login|sign.in/i);
+  assert.match(unauthenticated.output, /resubmit/);
+  fs.writeFileSync(authentication, "if (require('node:path').basename(process.argv[1] || '') === 'codex') { console.log('fixture account'); process.exit(0); }\n");
   const stopped = await invoke(testContext, environment, launcher, 'stop');
   assert.equal(stopped.status, 0, stopped.output);
   const refused = await invoke(testContext, environment, launcher, 'readiness-gate');
