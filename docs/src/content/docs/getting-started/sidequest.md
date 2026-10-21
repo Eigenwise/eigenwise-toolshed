@@ -70,7 +70,7 @@ CLI, dashboard, report prose and generic ticket links cannot grant this decision
 
 ## Integration branches in linked worktrees
 
-If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. It merges and runs the delivery verifier there, leaving the registered checkout alone. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
+If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. Singleton and wave integration always deliver onto the ticket's recorded branch. If that branch has no checkout, `integrate` creates a separate worktree under the board worktree root, leaving the registered checkout's branch and files unchanged. Clean temporary worktrees are removed after delivery; apply mode retains staged changes in the integration record's `worktree` path. Passing a different `integrationBranch` refuses, so changing the delivery target requires redispatch. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
 
 ## Your first workflow
 

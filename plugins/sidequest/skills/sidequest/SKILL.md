@@ -142,7 +142,10 @@ report comment; the terminal comment keeps only commit hash + verification. **Su
 submitted ticket cannot be amended by messaging the executor that produced it, however small the
 follow-up looks. File a follow-up ticket for changes. Redispatch the existing ticket only when it was
 released without a pending submission. The orchestrator is the integrator: choose
-`sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default, then run the
+`sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default. Singleton and
+wave delivery always target the ticket-recorded integration branch, preserving a different registered
+checkout through a separate branch-owning worktree. `integrationBranch` cannot override that target.
+Then run the
 publish transaction (lock → delivery → merged-tree gate → central version → review → push → reachability → `done`):
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, avoid routine pulses, comment reads and
