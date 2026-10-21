@@ -7,6 +7,8 @@ import path from 'node:path';
 import { SourceMap } from 'node:module';
 import { fileURLToPath as fromFileUrl } from 'node:url';
 import { loadCompiler } from './compiler.mjs';
+import { conditionalDescriptors, conditionResult, inChangedLines } from './branches.mjs';
+import { observeCaptureGaps } from './capture-gaps.mjs';
 
 export async function createAnalyzer(projectRoot) {
   const { ast, SyncParserApi, AsyncParserApi, createVirtualFileSystem } = await loadCompiler(projectRoot);
@@ -134,7 +136,7 @@ export async function createAnalyzer(projectRoot) {
         const start = node.getStart();
         const end = node.end;
         const lines = executableLines(node, sourceFile, text);
-        functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex'), ownedLines: lines, executableLines: lines });
+        functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), conditions: conditionalDescriptors(ast, node, forEachOwnNode), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex'), ownedLines: lines, executableLines: lines });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }
@@ -317,11 +319,12 @@ export function startCoverageCapture(directory) {
   inspectorResult(session, 'Profiler.enable');
   inspectorResult(session, 'Profiler.startPreciseCoverage', { callCount: true, detailed: true });
   const captureId = crypto.randomUUID();
+  const uncapturedChildren = observeCaptureGaps();
   process.once('exit', () => {
     const { result } = inspectorResult(session, 'Profiler.takePreciseCoverage');
     const scripts = result.filter((script) => pathFromCoverageUrl(script.url)).map((script) => ({ ...script, source: inspectorResult(session, 'Debugger.getScriptSource', { scriptId: script.scriptId }).scriptSource }));
     mkdirSync(directory, { recursive: true });
-    writeFileSync(path.join(directory, `owned-${captureId}.json`), JSON.stringify({ qualityGate: { version: 'v8-owned-1', captureId, pid: process.pid }, result: scripts }));
+    writeFileSync(path.join(directory, `owned-${captureId}.json`), JSON.stringify({ qualityGate: { version: 'v8-owned-1', captureId, pid: process.pid, branchCapture: 1, uncapturedChildren: [...uncapturedChildren] }, result: scripts }));
     session.disconnect();
   });
 }
@@ -336,6 +339,7 @@ function capturedScript(report, script) {
 export async function readCoverage(coverageDirectory) {
   const reports = await Promise.all((await fs.readdir(coverageDirectory)).filter((file) => file.endsWith('.json')).map(async (file) => JSON.parse(await fs.readFile(path.join(coverageDirectory, file), 'utf8'))));
   const scripts = new Map();
+  scripts.branchUnverified = branchCaptureProblem(reports);
   const entries = reports.flatMap((report) => (report.result ?? []).map((script) => [pathFromCoverageUrl(script.url), capturedScript(report, script)]));
   for (const [scriptPath, capture] of entries) {
     if (scriptPath) scripts.set(scriptPath, [...(scripts.get(scriptPath) ?? []), capture]);
@@ -437,6 +441,28 @@ export function functionCoverage(descriptor, outputs) {
   const total = owned.reduce((length, [start, end]) => length + end - start, 0);
   const coveredLength = owned.reduce((length, [start, end]) => length + covered.reduce((sum, [left, right]) => sum + Math.max(0, Math.min(end, right) - Math.max(start, left)), 0), 0);
   return { coverage: coveredLength / total };
+}
+
+function branchCaptureProblem(reports) {
+  if (reports.some((report) => report.qualityGate?.branchCapture !== 1)) return 'branch capture completeness UNVERIFIED: recapture with child-gap observation enabled';
+  const commands = reports.flatMap((report) => report.qualityGate.uncapturedChildren ?? []);
+  return commands.length ? `branch capture completeness UNVERIFIED: child environment dropped the core preload or capture directory (${[...new Set(commands)].join(', ')})` : undefined;
+}
+
+function branchRecords(descriptor, source, output) {
+  return output.captures.map((capture) => {
+    const owned = runtimeBodyRecords(descriptor, source, capture);
+    if (owned.unverified) return owned;
+    const records = remapRecords(owned.records, (offset, isEnd) => isEnd ? mappedEnd(offset, owned.toOriginal) : owned.toOriginal(offset));
+    return records.length === owned.records.length ? { records } : { unverified: 'branch boundary has no exact source-map correspondence' };
+  });
+}
+
+export function functionBranches(descriptor, outputs, changedLines, captureProblem) {
+  const results = outputs.flatMap((output) => branchRecords(descriptor, outputs[0], output));
+  const records = results.flatMap((result) => result.records ?? []);
+  const unverified = captureProblem ?? results.find((result) => result.unverified)?.unverified ?? (records.length ? undefined : 'no captured exact runtime range for branch outcomes');
+  return descriptor.conditions.filter((condition) => inChangedLines(condition, changedLines)).map((condition) => conditionResult(condition, records, unverified)).filter(Boolean);
 }
 
 if (process.env.QUALITY_GATE_V8_CAPTURE) startCoverageCapture(process.env.QUALITY_GATE_V8_CAPTURE);

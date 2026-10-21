@@ -4,7 +4,8 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { resolveCompiler } from './compiler.mjs';
 import { spawnSync } from 'node:child_process';
-import { createAnalyzer, changedMetricsAgainstBase, readCoverage, functionCoverage, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
+import { createAnalyzer, changedMetricsAgainstBase, readCoverage, functionCoverage, functionBranches, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
+import { changedLineRanges } from './branches.mjs';
 
 const NO_COVERAGE_RECORD = 'no suite loaded this file, so it has no coverage record (a child process needs QUALITY_GATE_V8_CAPTURE and the shared core preload in NODE_OPTIONS; see scripts/quality/README.md)';
 export const THRESHOLD = 6;
@@ -16,9 +17,14 @@ export function enforcedMetrics(changedMetrics) {
 export function gateVerdict(changedMetrics) {
   const enforced = enforcedMetrics(changedMetrics);
   return {
-    failures: enforced.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric),
-    unverified: enforced.filter((metric) => metric.unverified),
+    failures: enforced.filter(measuredFailure).map(formatMetric),
+    unverified: enforced.filter((metric) => metric.unverified || metric.branches?.some((branch) => branch.unverified)),
   };
+}
+
+function measuredFailure(metric) {
+  if (metric.unverified) return false;
+  return metric.crap >= THRESHOLD || metric.branches?.some((branch) => branch.untaken.length > 0);
 }
 
 export function crapScore(complexity, coverage) {
@@ -40,7 +46,7 @@ export async function readOutput(outputPath, coverageScripts, needsFunctions, { 
   };
 }
 
-export async function measureSource(sourcePath, coverageScripts, { projectRoot, analyzer, outputPaths = [sourcePath], sourceText, relativePath = path.relative(projectRoot, sourcePath).replaceAll('\\', '/') }) {
+export async function measureSource(sourcePath, coverageScripts, { projectRoot, analyzer, outputPaths = [sourcePath], sourceText, changedLines = [], relativePath = path.relative(projectRoot, sourcePath).replaceAll('\\', '/') }) {
   sourceText ??= await fs.readFile(sourcePath, 'utf8');
   const descriptors = await analyzer.collectFunctions(sourceText, sourcePath);
   const source = await readOutput(sourcePath, coverageScripts, false, { projectRoot, analyzer, text: sourceText });
@@ -57,6 +63,7 @@ export async function measureSource(sourcePath, coverageScripts, { projectRoot, 
       name: descriptor.name,
       complexity: descriptor.complexity,
       relativePath,
+      branches: functionBranches(descriptor, outputs, changedLines, coverageScripts.branchUnverified),
     };
     const { coverage, unverified } = loaded ? functionCoverage(descriptor, outputs) : { unverified: NO_COVERAGE_RECORD };
     if (unverified) return { ...metric, unverified };
@@ -139,7 +146,8 @@ async function measureWithAnalyzer(analyzer, { projectRoot, base, coverageDirect
   const metrics = (await Promise.all(relativePaths.map(async (file) => {
     const sourcePath = path.resolve(projectRoot, file);
     const external = externalSources.get(normalizedPath(sourcePath));
-    const measured = await measureSource(sourcePath, coverageScripts, { projectRoot, analyzer, ...external });
+    const changedLines = changedLineRanges(projectRoot, base, file, Boolean(external));
+    const measured = await measureSource(sourcePath, coverageScripts, { projectRoot, analyzer, changedLines, ...external });
     return external ? measured.map((metric) => ({ ...metric, admission: external.admission, sourceHash: external.sourceHash, evaluatorVersions })) : measured;
   }))).flat();
   const readBaseline = async (revision, relativePath) => {
@@ -149,9 +157,17 @@ async function measureWithAnalyzer(analyzer, { projectRoot, base, coverageDirect
     return analyzer.collectFunctions(result.stdout, relativePath);
   };
   const changedMetrics = await changedMetricsAgainstBase(metrics, relativePaths, base, readBaseline);
-  return { metrics, changedMetrics, ...gateVerdict(changedMetrics) };
+  return { metrics, changedMetrics, ...gateVerdict(changedMetrics), summary: branchSummary(changedMetrics) };
+}
+
+export function branchSummary(metrics) {
+  const conditions = metrics.flatMap((metric) => (metric.branches ?? []).map((branch) => ({ ...branch, classification: metric.classification })));
+  const failures = conditions.filter((branch) => branch.untaken.length && branch.classification !== LEGACY_UNCHANGED).length;
+  const informational = conditions.filter((branch) => branch.untaken.length && branch.classification === LEGACY_UNCHANGED).length;
+  return `branches: ${failures} failures, ${informational} informational, ${conditions.filter((branch) => branch.unverified).length} UNVERIFIED`;
 }
 
 export function formatMetric(metric) {
-  return `${metric.relativePath}:${metric.line} ${metric.name} cc=${metric.complexity} coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}`;
+  const branches = (metric.branches ?? []).filter((branch) => branch.untaken.length).map((branch) => `${metric.relativePath}:${branch.line} ${branch.text} untaken=${branch.untaken.join(',')}`);
+  return `${metric.relativePath}:${metric.line} ${metric.name} cc=${metric.complexity} coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}${branches.length ? '; branches: ' + branches.join('; ') : ''}`;
 }
