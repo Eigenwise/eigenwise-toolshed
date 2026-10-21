@@ -139,7 +139,7 @@ test('installed gates recover stale boot state once, preserve streaming, recover
   fs.writeFileSync(unavailableFile, JSON.stringify({ state: 'upstream-unavailable', observedAtMs: Date.now(), statusCode: 503 }));
   const unavailable = await invoke(testContext, environment, launcher, 'readiness-gate');
   assert.equal(unavailable.status, 2, unavailable.output);
-  assert.match(unavailable.output, /unavailable|503/i);
+  assert.match(unavailable.output, /terminal upstream failure/);
   fs.unlinkSync(unavailableFile);
   const stopped = await invoke(testContext, environment, launcher, 'stop');
   assert.equal(stopped.status, 0, stopped.output);
