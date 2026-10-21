@@ -18,6 +18,14 @@ is decided by the backend family segment (`claude-gpt-*`, `claude-grok-*`), neve
 
 All commands: `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart recreates this stable launcher from Claude Code's installed-plugin registry, so it follows upgrades and falls back to an installed downgrade; it reports a missing install directly.
 
+## Recovery before a model request
+
+Wiring installs owned readiness hooks in that wiring's settings scope. Project wiring adds no global hooks; opt-in user fallback gets user-scope hooks. They use the stable launcher even when the project has no enabled plugin. `setup`, updater `setup --preserve-wiring`, and `ensure` migrate registered wiring without wiring new directories. Restart Claude Code after migration so it loads the hooks.
+
+SessionStart `startup|resume` attempts early recovery but cannot block a prompt. UserPromptSubmit synchronously checks readiness and attempts bounded recovery before model access. The recovery child has a 25-second deadline; the hook has a 35-second timeout and `onFailure: block`. A refusal asks the user to fix the local problem and resubmit. `recover` restores readiness without changing settings, pins or caches; `start` and `setup` explicitly resume an intentional stop. `stop` persists across reboot and upgrades, and automatic recovery honors it.
+
+A non-gateway effective endpoint bypasses recovery. Host-disabled hooks and supervisor death inside an active turn, including subagents or compaction, are outside prompt-gate coverage. Do not promise recovery for those paths. Use stable `start`, `recover`, `doctor`, or `env --remove` locally when model access is unavailable. `doctor` reports gate presence, stop state and diagnostic paths. Unwire every registered scope before removing the plugin; remove project wiring with `env --remove` and user fallback with `env --remove --write-user`.
+
 ## First-time setup
 
 Project-local wiring is the standard setup. `env --write-project` writes the current project's `.claude/settings.local.json`, so the gateway stays configured for this project's sessions and executor worktrees without putting a machine-local endpoint in a committed file. `setup` uses the same project-local target by default.

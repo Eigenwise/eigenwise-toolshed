@@ -4,6 +4,12 @@ Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Cl
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/model-gateway/) · [Toolshed marketplace](../../README.md)
 
+## Recovery
+
+Wiring installs stable SessionStart startup/resume recovery and a synchronous UserPromptSubmit readiness gate in the same settings scope. Project wiring adds no global hooks. Updater `setup --preserve-wiring` migrates registered wiring without wiring new directories; restart Claude Code to load the hooks. SessionStart cannot block; failed prompt readiness blocks locally with recovery guidance (25-second child deadline, 35-second hook timeout, `onFailure: block`).
+
+Use the stable launcher with `recover` for settings-free readiness recovery, `doctor` for gate/stop/log diagnostics, or `start` to resume. `stop` persists across reboots and upgrades; automatic recovery honors it. Disabled hooks and failures inside an active turn remain outside prompt-gate coverage. Unwire each project with `env --remove`, and user fallback with `env --remove --write-user`, before removing the plugin.
+
 ## Install
 
 Model Gateway uses your supported ChatGPT/Codex or Grok subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.

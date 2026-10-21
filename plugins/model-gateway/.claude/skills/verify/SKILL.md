@@ -17,3 +17,7 @@ Drive these surfaces:
 6. DNS-recursion guard: require `lib/request-worker.js` directly and call `createHostsBypassResolver({ resolve4, resolve6 })` with injected fake resolvers to confirm it never falls back to a hosts-aware lookup and errors closed when both resolvers fail.
 
 Keep the real gateway and user settings untouched. Capture response bodies and resulting settings JSON inline.
+
+Exercise the installed stable hook command with JSON stdin, not just its helpers. Use isolated HOME/Claude state and ephemeral ports with at most two workers. Check startup/resume without enabled plugins, concurrent recover/ensure callers sharing one supervisor, delayed readiness and deadline refusal, stale records after simulated shutdown, supervisor death, and fake-backend streamed inference after recovery. Keep a healthy concurrent stream open during repeated gates and assert its output and supervisor identity stay intact.
+
+Check registry upgrade/downgrade after deleting the old fixture install, missing install, unavailable/auth failure and foreign listener safety. Check exact owned-hook merge/dedup/removal, user fallback and process precedence, disabled hooks, intentional stop across new processes, explicit start resumption, and unwire. The gate child deadline is 25 seconds, below its 35-second hook timeout with `onFailure: block`; SessionStart attempts recovery but cannot block. Actual reboot and credentialed provider inference are separate acceptance evidence and must be reported separately.

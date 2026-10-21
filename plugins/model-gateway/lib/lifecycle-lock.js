@@ -73,7 +73,7 @@ async function waitForLock(prepared, directory, timeout, inspect) {
 }
 
 async function acquireLifecycleLock({ directory = LOCK_PATH, timeout = 15000, inspectProcess } = {}) {
-  const inspect = inspectProcess || require('./process-supervision.js').processInfoAsync;
+  const inspect = inspectProcess || ((identifier) => require('./process-supervision.js').processInfoAsync(identifier, { timeout: 8000 }));
   const identity = await inspect(process.pid);
   if (!identity?.startedAt) throw new Error('could not establish lifecycle lock process identity; run doctor');
   const { token, prepared } = prepareLock(directory, identity);

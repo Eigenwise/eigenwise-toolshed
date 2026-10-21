@@ -563,6 +563,12 @@ function startupWaitMsFor(quiet) {
     : Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
 }
 
+async function ensureWiredGateway(wired, quiet) {
+  if (!wired) return { ok: true, started: [] };
+  const proxyRestart = await restartProxyIfOutdated({ quiet });
+  return startAll({ quiet, lifecycleOperation: 'ensure', preserveRunningSupervisor: proxyRestart.restarted });
+}
+
 async function automaticLifecycle(operation) {
   return withLifecycleLock(() => {
     if (intentionallyStopped()) {
@@ -2711,8 +2717,7 @@ const commands = {
       noticeForUser('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
       finish(0);
     }
-    const proxyRestart = await restartProxyIfOutdated({ quiet });
-    const result = await startAll({ quiet, lifecycleOperation: 'ensure', preserveRunningSupervisor: proxyRestart.restarted });
+    const result = await ensureWiredGateway(wired, quiet);
     if (!result.ok) {
       if (quiet && result.waitCutShort) {
         if (result.started?.includes('shim')) {
