@@ -2043,13 +2043,25 @@ function sendUploadError(req, res, statusCode) {
   }) : undefined);
 }
 
+function rejectOversizedUpload(req, res) {
+  if (uploadResponseUnavailable(req, res)) return;
+  res.writeHead(413, { 'connection': 'close', 'content-length': '0', 'x-should-retry': 'false' });
+  // Closing with unread upload bytes can reset even a locally flushed response.
+  const drainTimeout = setTimeout(() => res.destroy(), 250);
+  drainTimeout.unref();
+  res.once('close', () => clearTimeout(drainTimeout));
+  req.once('end', () => res.end());
+  res.flushHeaders();
+  req.resume();
+}
+
 async function collectShimRequestBody(req, res) {
   const chunks = [];
   let size = 0;
-  for await (const chunk of req) {
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
     if (size > 64 * 1024 * 1024) {
-      sendUploadError(req, res, 413);
+      rejectOversizedUpload(req, res);
       return null;
     }
     chunks.push(chunk);
