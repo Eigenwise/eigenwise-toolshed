@@ -204,13 +204,13 @@ function completeCreation(repository: string, sessionId: string, worktree: strin
   return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree, attempt);
 }
 
-function recordProvisioned(repository: string, sessionId: string, worktree: string, attempt: string): CreationBinding {
+function recordProvisioned(repository: string, sessionId: string, worktree: string, attempt: string, evidence: string[]): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    recordDispatchWorktreeProvisioned: (slug: string, sessionId: string, worktree: string, attempt: string) => CreationBinding;
+    recordDispatchWorktreeProvisioned: (slug: string, sessionId: string, worktree: string, attempt: string, evidence: string[]) => CreationBinding;
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
-  return store.recordDispatchWorktreeProvisioned(project.slug, sessionId, worktree, attempt);
+  return store.recordDispatchWorktreeProvisioned(project.slug, sessionId, worktree, attempt, evidence);
 }
 
 function recordProvisioningFailure(repository: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }, attempt: string): CreationBinding {
@@ -258,6 +258,15 @@ function preparedWorktreeLease(binding: Required<Pick<CreationBinding, 'ref' | '
     liveness: { status: 'live', evidence: `dispatch ${binding.ref} reserved this creation` },
     provisioning: 'host',
   });
+}
+
+function declaredProvisioningFiles(repository: string, ref: string): string[] {
+  const store = require(runtimeModule('store')) as WorktreeStore & {
+    getTicket: (slug: string, ref: string) => { files?: string[] } | null;
+  };
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) throw new Error('dependency provisioning requires a registered project');
+  return store.getTicket(project.slug, ref)?.files || [];
 }
 
 function provisioningConfig(repository: string): { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null } {
@@ -341,7 +350,7 @@ async function createWorktreeMain(): Promise<void> {
       repo: string,
       worktree: string,
       config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null },
-      options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string; mode: string }) => void },
+      options: { setupTimeoutMs?: number; declaredFiles?: string[]; evidence?: string[]; onDependencyLink?: (link: { relativePath: string; target: string; mode: string }) => void },
     ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
   const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, 'cwd'), sessionId), sessionId, name, worktrees.namedWorktreePath);
@@ -366,11 +375,14 @@ async function createWorktreeMain(): Promise<void> {
       leaseKernel.createCheckoutInstanceMarker(identity.gitDirectory);
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
       if (!completed.ok) throw new Error(recordingRefusal('completed creation', completed.reason, 'completion binding is incomplete'));
+      const evidence: string[] = [];
       const provisioningFailure = await worktrees.provisionWorktree(
         boundCreation.repository,
         boundCreation.worktree,
         provisioningConfig(boundCreation.repository),
         {
+          declaredFiles: declaredProvisioningFiles(boundCreation.repository, boundCreation.ref),
+          evidence,
           setupTimeoutMs: worktreeSetupDeadlineMs(),
           onDependencyLink: (link) => {
             const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link, attempt);
@@ -380,7 +392,7 @@ async function createWorktreeMain(): Promise<void> {
       );
       // Completion above is recorded before provisioning, so this stamp is the only board fact saying the
       // hook is done. Without it a cold `npm ci` looks identical to a dead WorktreeCreate (SQ-2934).
-      const provisioned = recordProvisioned(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
+      const provisioned = recordProvisioned(boundCreation.repository, sessionId, boundCreation.worktree, attempt, evidence);
       if (!provisioned.ok) throw new Error(recordingRefusal('finished provisioning', provisioned.reason));
       if (provisioningFailure) {
         const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure, attempt);

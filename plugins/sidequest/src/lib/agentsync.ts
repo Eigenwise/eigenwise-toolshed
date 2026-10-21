@@ -639,12 +639,35 @@ function ticketContinuationPacket(ticket?: any) {
   if (continuation && !resume.allowed) return `Continuation fallback: the retained worktree lease refused resume (${resume.reason}). This dispatch uses a fresh worktree.`;
   const fallback = ticket?.dispatch?.continuationFallback;
   if (!fallback?.reason) return null;
-  const replay = Array.isArray(fallback.commits) && fallback.commits.length
-    ? ` After claiming and before any other work, run \`git cherry-pick ${fallback.commits.join(' ')}\`. If the cherry-pick fails, stop and report the failure. Do not rediscover or rewrite the checkpointed work.`
+  const replay = fallback.commit
+    ? ` After claiming and synchronizing the dispatch baseline, run \`git merge --no-ff ${fallback.commit}\`. If the merge fails, stop and report the failure. Preserve inherited commit identities; do not rewrite the checkpointed work.`
     : '';
   const cause = String(fallback.cause || '').trim();
   const evidence = cause ? ` Validation evidence: ${cause}.` : '';
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${evidence}${replay}`.trim();
+}
+
+type RestoreTicket = { ref: string; links?: { type: string; ref: string }[]; dispatch?: { continuation?: { mode?: string } } };
+
+function ownPinnedCandidate(project: string, ref: string): string | null {
+  try {
+    return execFileSync('git', ['rev-parse', '--verify', `refs/sidequest/${ref}^{commit}`], { cwd: project, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function candidateRestorePacket(ticket: RestoreTicket, slug: string, project: string): string {
+  if (ticket.dispatch?.continuation) return '';
+  const related = (ticket.links || []).filter((link) => link.type === 'related')
+    .map((link) => store.getTicket(slug, link.ref)?.submission?.commit).filter(Boolean);
+  const candidates = [...new Set([...related, ownPinnedCandidate(project, ticket.ref)].filter(Boolean))];
+  if (!candidates.length) return '';
+  return [
+    'Inherited candidate restore (first step after claiming and synchronizing the dispatch baseline):',
+    ...candidates.map((candidate) => `Run \`git merge --no-ff ${candidate}\`. If it fails, stop and report the failure. Preserve the inherited commits as ancestors.`),
+    `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`,
+  ].join('\n');
 }
 
 const syncCheckRun = (commit: string, flags = ''): string => syncCheckCommand(quotedShellArgument(dispatchLauncherPath()), commit, flags);
@@ -1036,6 +1059,9 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     readOnlyScratchSpace,
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join('\n\n'),
+    `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`,
+    'Verification concurrency: bounded runs need no resource slot unless board configuration declares one; the board grants any declared slot, never a chat handoff.',
+    'When isolated worktrees cannot import the coverage gate, the orchestrator captures coverage in the main checkout. Report that standing measurement boundary without retrying the import.',
     verify,
     executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === 'shared'
@@ -1267,7 +1293,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const planDocument = planDocumentPacket(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
-  const continuation = checkpointContinuationPacket(ticket);
+  const continuation = [checkpointContinuationPacket(ticket), candidateRestorePacket(ticket, slug, project)].filter(Boolean).join('\n\n');
   const taskAndScope = taskAndScopeBody(ticket, slug);
   const rejectionHistory = rejectedSubmissionHistoryBody(ticket);
   const snapshot = storySnapshot(ticket, slug);
