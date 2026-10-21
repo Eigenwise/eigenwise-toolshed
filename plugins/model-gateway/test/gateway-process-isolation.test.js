@@ -1187,7 +1187,7 @@ test('isolated ensure preserves a foreign serve-shim process and cleans its own 
 
   const result = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
     encoding: 'utf8',
-    env: { HOME: home, USERPROFILE: home },
+    env: { HOME: home, USERPROFILE: home, ANTHROPIC_BASE_URL: 'http://127.0.0.1:0' },
     isolatedOverrides: {
       CODEX_GATEWAY_PORT: '0',
       CODEX_GATEWAY_WORKER_PORT: '0',
@@ -1213,7 +1213,7 @@ test('sibling ensure retires dead records without deleting replacement worker an
   const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
   installNodeProxy(home);
   fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
-  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
+  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home, ANTHROPIC_BASE_URL: `http://127.0.0.1:${shimPort}` }, {
     CODEX_GATEWAY_PORT: String(shimPort),
     CODEX_GATEWAY_WORKER_PORT: '0',
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
@@ -1333,7 +1333,7 @@ async function versionChangeRestartScenario(t, startupDelayMs = 0) {
     killProcessTree(replacementProxyPid);
     await waitForProcessesToExit([supervisor?.pid, replacementProxyPid].filter(Boolean), 5000);
   });
-  const environment = gatewayTestEnvironment(t, {}, {
+  const environment = gatewayTestEnvironment(t, { ANTHROPIC_BASE_URL: `http://127.0.0.1:${shimPort}` }, {
     CODEX_GATEWAY_PORT: String(shimPort),
     CODEX_GATEWAY_WORKER_PORT: '',
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
@@ -1585,7 +1585,7 @@ test('ensure and stop discard a stale guardian PID without killing its reused pr
 
   const ensured = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
     encoding: 'utf8',
-    env: { HOME: ensureHome, USERPROFILE: ensureHome },
+    env: { HOME: ensureHome, USERPROFILE: ensureHome, ANTHROPIC_BASE_URL: 'http://127.0.0.1:0' },
     isolatedOverrides: {
       CODEX_GATEWAY_PORT: '0',
       CODEX_GATEWAY_WORKER_PORT: '0',
