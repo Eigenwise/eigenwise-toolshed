@@ -83,6 +83,10 @@ Invalid UTF-8, Python syntax errors and lone surrogates produce an informational
 
 `quality-gate measure --project <root> --base <revision> --coverage <V8-directory> <files...>` checks changed condition lines as well as function CRAP. Untaken if/else, ternary, short-circuit, switch-arm and loop outcomes fail new and complexity-raised functions. Equal/lowered legacy functions report them informationally. Untouched condition lines stay outside the check, and function-level coverage stays unchanged.
 
+`measure` also fails new or complexity-raised functions at complexity 6 or more when coverage is UNVERIFIED. Its failure row says `failure: complexity floor` and keeps the missing-coverage reason. Below that floor, unverified coverage stays measurement debt. Equal/lowered legacy functions remain informational.
+
+Both `crap` and `measure` accept `--receipts-dir <path>` or `QUALITY_GATE_RECEIPTS_DIR` to write Git receipts outside the measured project. The flag wins; relative paths resolve from cwd. Without either, receipts stay under `.claude/quality-gate/receipts/<head-sha>.json`.
+
 JSON function rows include `branches: [{line, text, untaken}]`; the JSON and stderr summaries count branch failures, informational conditions and UNVERIFIED conditions. Test the other side, or delete the dead branch, to clear a measured failure.
 
 The core preload records child environments that drop its canonical import or capture directory. A gap makes changed conditions conservatively UNVERIFIED by name, since the uncaptured child might have exercised them. Older captures need recapture for branch evidence. Loop outcomes that cannot be separated from `break`, `return` or `throw` also remain UNVERIFIED.
