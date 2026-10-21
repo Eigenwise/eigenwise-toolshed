@@ -8,6 +8,33 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.609.0 (2026-10-21)
+
+### model-gateway 0.55.0 → 0.55.1
+
+#### Fixes
+
+- Trust observed child closure in gateway test cleanup (SQ-3821)
+  Keep gateway test teardown from treating an observed closed child as alive. Ignore Windows EPERM responses for remaining fixture PID probes while preserving live-process rejection.
+- Skip recovery CLI loading for healthy prompt gates (SQ-3845)
+  Healthy readiness gates check the recorded router and its serving version directly, avoiding CLI loading and the lifecycle lock. Recovery and blocking behavior stay unchanged when the check fails.
+- Keep oversized upload rejection readable before closing the connection (SQ-3846)
+  Flush the shim's HTTP 413 response before closing an oversized upload, with a 250 ms drain grace. Keep the 64 MiB limit and never forward rejected bodies to a worker.
+
+### quality-gate 1.1.0 → 1.2.0
+
+#### Features
+
+- Report unexecuted changed-hunk branches in native V8 measurement (SQ-3841)
+  Quality Gate's `measure` command reports untaken changed-hunk branches and fails new or complexity-raised bodies for them. Legacy rows stay informational. Child capture gaps and ambiguous loop outcomes stay named UNVERIFIED.
+
+### sidequest 6.1.1 → 6.1.2
+
+#### Fixes
+
+- Stop board writers failing as "locked" while the queue is still moving (SQ-3844)
+  Registering an already-current board no longer takes the SQLite write lock, so every CLI and hook call stops queueing behind other writers just to find nothing changed. A write transaction now keeps waiting while other writers keep committing (up to 15s) and only reports "stayed locked" after three busy waits in a row with no other writer committing, which is what a stuck holder looks like. A burst of 12 concurrent `add` calls on Windows CI had failed after 7s because SQLite's busy handler lets newer writers jump ahead of an old one.
+
 ## v3.608.0 (2026-10-21)
 
 ### model-gateway 0.54.5 → 0.55.0
