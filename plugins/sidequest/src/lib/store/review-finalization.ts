@@ -1,8 +1,7 @@
 import { effectiveOracleVerdictOutcome, reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
 import type { ReviewCandidate } from '../kernel/review-binding';
-import { undispatchedReviewRefusal, activeCorrectionTicket, correctionReviewCategory, completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
+import { undispatchedReviewRefusal, activeCorrectionTicket, correctionReviewCategory, completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal, reviewedSourceRefusal } from './review-corrections';
 import type { CorrectionTicket, CorrectionComment, Refusal, Relation } from './review-corrections';
-import { reviewedSourceRefusal } from './review-verdict-routes';
 
 export type ReviewDecision = Readonly<{
   outcome: 'accepted' | 'rejected'; text: string; evidence: string; by: string; sessionId: string;

@@ -1,8 +1,7 @@
-import type { CorrectionInput } from './store/review-corrections';
+import type { CorrectionInput, RoutedTicket } from './store/review-corrections';
 import type { ReviewCandidate } from './kernel/review-binding';
 import { isReviewCommit } from './kernel/review-binding';
-import type { RoutedTicket } from './store/review-verdict-routes';
-import { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } from './store/review-verdict-routes';
+import { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } from './store/review-corrections';
 
 const store = require('./store');
 type Request = {

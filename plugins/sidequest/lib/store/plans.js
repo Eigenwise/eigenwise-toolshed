@@ -1,6 +1,6 @@
 "use strict";
 const { reviewCandidateFromSubmission, reviewOutcomeFromOracleVerdict, sameReviewCandidate } = require("../kernel/review-binding");
-const { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } = require("./review-verdict-routes");
+const { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } = require("./review-corrections");
 function createPlans(dependencies) {
   const {
     assetPath,

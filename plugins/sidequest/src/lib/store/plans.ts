@@ -4,7 +4,7 @@ import type { CorrectionTicket } from './review-corrections';
 import type { ReviewCandidate, ReviewOutcome } from '../kernel/review-binding';
 
 const { reviewCandidateFromSubmission, reviewOutcomeFromOracleVerdict, sameReviewCandidate } = require('../kernel/review-binding');
-const { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } = require('./review-verdict-routes');
+const { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } = require('./review-corrections');
 
 function createPlans(dependencies: any) {
   const {

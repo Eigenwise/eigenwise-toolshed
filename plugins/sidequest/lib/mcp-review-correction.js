@@ -23,7 +23,7 @@ __export(mcp_review_correction_exports, {
 });
 module.exports = __toCommonJS(mcp_review_correction_exports);
 var import_review_binding = require("./kernel/review-binding");
-var import_review_verdict_routes = require("./store/review-verdict-routes");
+var import_review_corrections = require("./store/review-corrections");
 const store = require("./store");
 function correctionObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -49,12 +49,12 @@ function misroutedFinalizationRefusal(slug, ref) {
   const ticket = store.getTicket(slug, ref);
   if (!ticket) return void 0;
   const reviewId = ticket.submission?.review?.ticketId;
-  return (0, import_review_verdict_routes.oracleRoundRefusal)(ticket) ?? (0, import_review_verdict_routes.reviewedSourceRefusal)(ticket, reviewId ? store.getTicket(slug, reviewId) : null);
+  return (0, import_review_corrections.oracleRoundRefusal)(ticket) ?? (0, import_review_corrections.reviewedSourceRefusal)(ticket, reviewId ? store.getTicket(slug, reviewId) : null);
 }
 function finalizationShapeRefusal(problem, slug, ref) {
   const review = store.getTicket(slug, ref);
   const { reviewTarget: target = {} } = review ?? {};
-  return { ok: false, reason: "invalid_finalization", message: `${problem} ref is the review ticket; finalize names the reviewed source: ${(0, import_review_verdict_routes.finalizeShape)(ref, target.ref, target.candidate)}.` };
+  return { ok: false, reason: "invalid_finalization", message: `${problem} ref is the review ticket; finalize names the reviewed source: ${(0, import_review_corrections.finalizeShape)(ref, target.ref, target.candidate)}.` };
 }
 function finalizeReviewVerdict(slug, args, sessionId) {
   const misrouted = misroutedFinalizationRefusal(slug, args.ref);

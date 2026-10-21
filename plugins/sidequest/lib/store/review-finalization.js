@@ -23,7 +23,6 @@ __export(review_finalization_exports, {
 module.exports = __toCommonJS(review_finalization_exports);
 var import_review_binding = require("../kernel/review-binding");
 var import_review_corrections = require("./review-corrections");
-var import_review_verdict_routes = require("./review-verdict-routes");
 function refuse(reason, message) {
   return { ok: false, reason, message };
 }
@@ -124,7 +123,7 @@ function createReviewFinalization(dependencies) {
   }
   function unboundReviewRefusal(slug, ticket) {
     const reviewId = ticket.submission?.review?.ticketId;
-    return (0, import_review_verdict_routes.reviewedSourceRefusal)(ticket, reviewId ? dependencies.getTicket(slug, reviewId) : null) ?? refuse("review_unbound", "Finalization requires the original source binding.");
+    return (0, import_review_corrections.reviewedSourceRefusal)(ticket, reviewId ? dependencies.getTicket(slug, reviewId) : null) ?? refuse("review_unbound", "Finalization requires the original source binding.");
   }
   function finalizeCompletedReview(slug, idOrRef, input, grant = {}) {
     const invalid = requestRefusal(input, grant.allowCompletedReviewFinalization === true);
