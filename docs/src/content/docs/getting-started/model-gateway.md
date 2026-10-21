@@ -34,7 +34,7 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 ## Recover after reboot
 
-The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors. A healthy current router costs one local health request (750 ms timeout) and PID-record reads, without loading the recovery CLI or taking its lifecycle lock.
 
 Wiring now installs readiness hooks alongside the endpoint in the same settings file. Project wiring stays in `.claude/settings.local.json` and adds no global hooks. The opt-in user fallback gets its hooks in user settings. These hooks use the stable launcher and don't require the plugin to be enabled in the project.
 

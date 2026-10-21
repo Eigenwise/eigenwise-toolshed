@@ -2,7 +2,34 @@
 
 const fs = require('node:fs');
 const { recoveryPolicy, pluginDisabledNotice } = require('./recovery-policy.js');
-const { resolveStableCommandPath } = require('./runtime.js');
+const { resolveStableCommandPath, PLUGIN_VERSION } = require('./runtime.js');
+const { intentionallyStopped } = require('./lifecycle-lock.js');
+const { readPidRecord, gatewayInstallRootFromCommand, installBelongsToThisPlugin } = require('./process-supervision.js');
+const { fetchShimHealth, servingCurrentVersion, servingShimVersion } = require('./shim-state.js');
+
+function ownedSupervisorRecord(record) {
+  return Boolean(record && installBelongsToThisPlugin(gatewayInstallRootFromCommand(record.command || '')));
+}
+
+async function recoverUnlessHealthy(recover) {
+  if (await healthyRecordedShim()) return;
+  await recover();
+}
+
+async function healthyRecordedShim() {
+  if (intentionallyStopped()) return false;
+  const record = readPidRecord('guardian');
+  if (!ownedSupervisorRecord(record)) return false;
+  const health = await fetchShimHealth({ timeout: 750 });
+  if (health?.supervisorPid !== record.pid) return false;
+  return currentHealthyShim(health);
+}
+
+function currentHealthyShim(health) {
+  const installedVersion = PLUGIN_VERSION;
+  if (servingShimVersion(health) !== installedVersion) return false;
+  return servingCurrentVersion({ state: health?.ok ? 'running-ours' : 'stopped', health }, installedVersion);
+}
 
 function recoveryGuidance(reason) {
   const command = `node "${resolveStableCommandPath()}"`;
@@ -20,7 +47,7 @@ async function readinessGate({ recover = () => require('./commands.js').recoverG
   const policy = recoveryPolicy();
   if (policy === 'unwired') return;
   if (policy === 'disabled') return console.error(pluginDisabledNotice());
-  try { await recover(); }
+  try { await recoverUnlessHealthy(recover); }
   catch (error) {
     const message = recoveryGuidance(error.message);
     console.error(message);
