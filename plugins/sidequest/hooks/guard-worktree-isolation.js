@@ -94,7 +94,21 @@ function canonicalPath(value) {
 }
 
 // src/hooks/shared/shell-writes.ts
-var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
+var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)|(<<<|<<-?)[ \t]*("[^"\r\n]*"|'[^'\r\n]*'|[^\s|;&<>"']+)?/g;
+function unquote(word) {
+  return word.replace(/^(["'])([\s\S]*)\1$/, "$2");
+}
+function heredocEnd(command, start, heredoc) {
+  const terminator = heredoc.terminator.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const indentation = heredoc.stripTabs ? "\\t*" : "";
+  const ending = new RegExp(`^${indentation}${terminator}\\r?(?:\\n|$)`, "m");
+  const match = ending.exec(command.slice(start));
+  return match ? start + match.index + match[0].length : command.length;
+}
+function recordHeredoc(match, heredocs) {
+  if (match[4] === "<<<" || match[5] === void 0) return;
+  heredocs.push({ terminator: unquote(match[5]), stripTabs: match[4] === "<<-" });
+}
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
 var MUTATING_GIT = /* @__PURE__ */ new Set([
@@ -177,8 +191,26 @@ function commandWriteTargets(words) {
   const reader = WRITE_TARGET_READERS.get(commandName(words));
   return reader ? reader(words) : [];
 }
+function shellToken(match) {
+  return match[2] ? { operator: match[2] } : { word: unquote(match[1] || match[3]) };
+}
 function shellTokens(command) {
-  return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => match[2] ? { operator: match[2] } : { word: (match[1] || match[3]).replace(/^(["'])([\s\S]*)\1$/, "$2") });
+  const lexer = new RegExp(SHELL_TOKEN_RE);
+  const tokens = [];
+  const heredocs = [];
+  let match;
+  while ((match = lexer.exec(command)) !== null) {
+    if (match[4]) {
+      recordHeredoc(match, heredocs);
+      continue;
+    }
+    tokens.push(shellToken(match));
+    if (match[2] === "\n") {
+      lexer.lastIndex = heredocs.reduce((start, heredoc) => heredocEnd(command, start, heredoc), lexer.lastIndex);
+      heredocs.length = 0;
+    }
+  }
+  return tokens;
 }
 function shellSegments(command) {
   const segments = [{ words: [], redirects: [] }];

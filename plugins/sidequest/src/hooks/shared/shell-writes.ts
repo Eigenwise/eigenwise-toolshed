@@ -4,7 +4,25 @@ type ShellToken = { operator: string } | { word: string };
 export type ShellSegment = { words: string[]; redirects: string[] };
 type WriteTargetReader = (words: string[]) => string[];
 
-const SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
+const SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)|(<<<|<<-?)[ \t]*("[^"\r\n]*"|'[^'\r\n]*'|[^\s|;&<>"']+)?/g;
+type Heredoc = { terminator: string; stripTabs: boolean };
+
+function unquote(word: string): string {
+  return word.replace(/^(["'])([\s\S]*)\1$/, '$2');
+}
+
+function heredocEnd(command: string, start: number, heredoc: Heredoc): number {
+  const terminator = heredoc.terminator.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const indentation = heredoc.stripTabs ? '\\t*' : '';
+  const ending = new RegExp(`^${indentation}${terminator}\\r?(?:\\n|$)`, 'm');
+  const match = ending.exec(command.slice(start));
+  return match ? start + match.index + match[0].length : command.length;
+}
+
+function recordHeredoc(match: RegExpExecArray, heredocs: Heredoc[]): void {
+  if (match[4] === '<<<' || match[5] === undefined) return;
+  heredocs.push({ terminator: unquote(match[5]), stripTabs: match[4] === '<<-' });
+}
 const SEGMENT_OPERATORS = new Set(['&&', '||', '|', ';', '\n']);
 const NULL_SINKS = new Set(['/dev/null', 'nul', '$null']);
 const MUTATING_GIT = new Set([
@@ -67,10 +85,27 @@ export function commandWriteTargets(words: string[]): string[] {
   return reader ? reader(words) : [];
 }
 
+function shellToken(match: RegExpExecArray): ShellToken {
+  return match[2] ? { operator: match[2] } : { word: unquote(match[1] || match[3]!) };
+}
+
 function shellTokens(command: string): ShellToken[] {
-  return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => (
-    match[2] ? { operator: match[2] } : { word: (match[1] || match[3]!).replace(/^(["'])([\s\S]*)\1$/, '$2') }
-  ));
+  const lexer = new RegExp(SHELL_TOKEN_RE);
+  const tokens: ShellToken[] = [];
+  const heredocs: Heredoc[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = lexer.exec(command)) !== null) {
+    if (match[4]) {
+      recordHeredoc(match, heredocs);
+      continue;
+    }
+    tokens.push(shellToken(match));
+    if (match[2] === '\n') {
+      lexer.lastIndex = heredocs.reduce((start, heredoc) => heredocEnd(command, start, heredoc), lexer.lastIndex);
+      heredocs.length = 0;
+    }
+  }
+  return tokens;
 }
 
 // A dup such as `2>&1` names a descriptor, not a file, so only a plain redirect captures the next word.
