@@ -34,6 +34,8 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 ## Recover after reboot
 
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
+
 Wiring now installs readiness hooks alongside the endpoint in the same settings file. Project wiring stays in `.claude/settings.local.json` and adds no global hooks. The opt-in user fallback gets its hooks in user settings. These hooks use the stable launcher and don't require the plugin to be enabled in the project.
 
 Maintenance `setup --preserve-wiring` preserves intentional stop even if acquisition fails, and never starts a stopped gateway. Intentional stop is cleared once an explicit `start` or `setup` creates the supervisor process and records its PID; a launch that fails before that, including a spawn that yields no PID, leaves it stopped, and a PID-record failure after a successful spawn leaves both the marker and the process, so the next automatic path still refuses. Run the stable launcher with `setup --preserve-wiring` after updating to migrate registered projects and existing user fallback without wiring a new directory. `ensure` also migrates existing wiring. Restart Claude Code after migration so it loads those settings. The launcher resolves the installed version from the plugin registry, so old cache removal and installed downgrades don't pin hooks to a deleted path.

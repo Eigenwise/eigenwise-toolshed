@@ -20,6 +20,8 @@ All commands: `node ~/.claude/model-gateway/model-gateway.js <command>`. Session
 
 ## Recovery before a model request
 
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
+
 Wiring installs owned readiness hooks in that wiring's settings scope. Project wiring adds no global hooks; opt-in user fallback gets user-scope hooks. They use the stable launcher even when the project has no enabled plugin. `setup`, updater `setup --preserve-wiring`, and `ensure` migrate registered wiring without wiring new directories. Restart Claude Code after migration so it loads the hooks.
 
 SessionStart `startup|resume` attempts early recovery but cannot block a prompt. UserPromptSubmit synchronously checks readiness and attempts bounded recovery before model access. The recovery child has a 25-second deadline; the hook has a 35-second timeout and `onFailure: block`. A refusal asks the user to fix the local problem and resubmit. `recover` restores readiness without changing settings, pins or caches; `start` and `setup` explicitly resume an intentional stop. `stop` persists across reboot and upgrades, and automatic recovery honors it.

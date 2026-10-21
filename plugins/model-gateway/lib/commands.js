@@ -319,13 +319,6 @@ function noteCodexRequestSuccess() {
   clearUpstreamUnavailable();
 }
 
-async function proxyModelsAnswering() {
-  try {
-    const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2000 });
-    return response.status === 200;
-  } catch { return false; }
-}
-
 function providerReadiness(readiness) {
   return {
     ready: Boolean(readiness?.ready),
@@ -642,8 +635,6 @@ async function recoverGateway() {
   if (recoveryExplicitlyDisabled()) return { ok: true, started: [] };
   const result = await startAll({ quiet: true, lifecycleOperation: 'recover', refreshCatalog: async () => {} });
   if (!result.ok) throw new Error(result.reason);
-  const readiness = await getCodexReadiness();
-  if (!readiness.ready) throw new Error(readiness.message);
   return result;
 }
 
@@ -654,7 +645,6 @@ function readObservedStartupFailure(exists, read) {
 
 async function waitForStartupReadiness({
   timeout,
-  proxyAnswers = proxyModelsAnswering,
   shimReady = shimHealthy,
   shimFailureExists = () => fs.existsSync(SHIM_FAILURE_PATH),
   readShimFailure = () => startupFailureFor(supervisorPid, startupGeneration),
@@ -665,7 +655,7 @@ async function waitForStartupReadiness({
 } = {}) {
   const deadline = now() + timeout;
   while (now() < deadline) {
-    if ((await proxyAnswers()) && (await shimReady())) return { ok: true };
+    if (await shimReady()) return { ok: true };
     const failure = readObservedStartupFailure(shimFailureExists, readShimFailure);
     if (failure) return { ok: false, reason: failure, timedOut: false };
     await pause(300);
@@ -714,7 +704,7 @@ async function readSettledShimState(probe, { quiet, report, awaitReadiness, time
   const shim = await probe();
   if (!quiet) report(describeShimState(shim));
   if (shim.state !== 'starting') return shim;
-  await awaitReadiness({ timeout, proxyAnswers: async () => true, shimFailureExists: () => false });
+  await awaitReadiness({ timeout, shimFailureExists: () => false });
   return probe();
 }
 
@@ -2756,10 +2746,6 @@ const commands = {
       finish(1);
     }
     const readiness = await getCodexReadiness();
-    if (wired && !readiness.ready) {
-      noticeForUser(readiness.message, { toStderr: true });
-      finish(1);
-    }
     warnIfProxyOutdated();
     const effectiveWiring = effectiveBaseUrl();
     if (!wired) {
