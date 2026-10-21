@@ -130,6 +130,14 @@ node plugins/quality-gate/bin/quality-gate.js measure --project <root> --base <r
 
 This command consumes an existing same-session V8 capture and prints JSON. It runs no tests and installs no hooks. Capture with `QUALITY_GATE_V8_CAPTURE=<empty directory>` and the canonical realpath file URL of `lib/core.mjs` in `NODE_OPTIONS=--import=<file URL>`. Children must inherit both environment values; a command-line `--import` alone does not preload children. The preload uses Node's inspector to save precise coverage and `Debugger.getScriptSource` bytes from the same session. Keep that capture unchanged. In the inspected Claude Code 2.1.295, a direct worktree-isolated Bash startup assignment `NODE_OPTIONS=--import=<url>` followed by a Node-family command is refused by the host guard, because startup code cannot be shown not to be Git. Quality Gate does not issue that refusal, an immutable URL or hash did not change it, and no shipped capture-launch command supports that exact boundary. Other contexts, capture methods and versions were not assessed. After that actual refusal, stop: the measurement stays UNVERIFIED, and do not retry, reword, split the command or route around it. Raw `NODE_V8_COVERAGE` reports lack executed-byte binding and return UNVERIFIED; hashing today's files alongside old reports does not repair them.
 
+### Changed-hunk branch checks
+
+`measure` keeps function coverage unchanged and also reads precise block counts for conditions in `--base` changed hunks. New and complexity-raised bodies fail when an if/else, ternary, logical short-circuit, switch arm or loop outcome never executed. Legacy bodies with equal/lowered complexity report the same evidence informationally. Untouched condition lines do not enter this check. Explicit external-new files check every condition.
+
+Each JSON row includes `branches: [{line, text, untaken}]`. Only untaken or UNVERIFIED conditions appear. The JSON `summary` and stderr summary count branch failures, informational conditions and UNVERIFIED conditions. Add a test for the other side, or delete the dead branch, to clear a measured failure.
+
+The preload observes child environments without changing them. If any child drops the canonical core preload or capture directory, changed conditions are conservatively named UNVERIFIED across the capture, because the missing process might have exercised them. Captures from before this observation was added also need recapture for branch evidence. Loops containing `break`, `return` or `throw` have ambiguous condition outcomes and stay named UNVERIFIED. These limits do not change function-level coverage.
+
 ### Explicit new external JavaScript
 
 ```text
