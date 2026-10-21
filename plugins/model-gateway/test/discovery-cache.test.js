@@ -52,9 +52,9 @@ async function waitUntil(check, message) {
   throw new Error(message);
 }
 
-function runGatewayCommand(testContext, command, environment, isolatedOverrides) {
+function runGatewayCommand(testContext, command, environment, isolatedOverrides, argumentsAfterCommand = []) {
   return new Promise((resolve) => {
-    const child = spawnGatewayProcess(testContext, process.execPath, [CLI, command], {
+    const child = spawnGatewayProcess(testContext, process.execPath, [CLI, command, ...argumentsAfterCommand], {
       cwd: environment.HOME,
       env: environment,
       isolatedOverrides,
@@ -277,7 +277,7 @@ test('a shim that starts before its proxy serves the fallback catalog without pe
   assert.equal((await getJson(`${baseUrl}/healthz`)).catalog, 'proxy');
 });
 
-test('ensure writes the discovery cache before reporting missing ChatGPT auth', async (testContext) => {
+test('ensure writes the discovery cache with missing ChatGPT auth without refusing the router', async (testContext) => {
   const proxy = http.createServer((request, response) => {
     if (request.url !== '/v1/models') return response.end();
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -314,10 +314,20 @@ test('ensure writes the discovery cache before reporting missing ChatGPT auth', 
     discoveryProcessOverrides(shimPort, workerPort, proxyPort),
   );
 
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /ChatGPT sign-in is required/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /ChatGPT sign-in is required/);
   await waitUntil(() => fs.existsSync(cache), 'ensure did not write the discovery cache');
   assert.match(result.stdout, /discovery cache: (?:wrote 2 models|unchanged)/);
+
+  const quietResult = await runGatewayCommand(
+    testContext,
+    'ensure',
+    environment,
+    { ...discoveryProcessOverrides(shimPort, workerPort, proxyPort), CLAUDE_CODE_SESSION_START: '1' },
+    ['--quiet'],
+  );
+  assert.equal(quietResult.status, 0, quietResult.stderr);
+  assert.match(quietResult.stdout, /ChatGPT sign-in is required/);
 
   const stopped = await runGatewayCommand(
     testContext,
