@@ -1,4 +1,6 @@
-// The lexical half of the read-only shell guard. It imports nothing, so the guards hooks module can
+import { gitWordsReadOnly } from './read-only-git.js';
+
+// The lexical half of the read-only shell guard. It imports no runtime modules, so the guards hooks module can
 // tell a read-only executor's plain read from a command that names a write target without a process.
 type ShellToken = { operator: string } | { word: string };
 export type ShellSegment = { words: string[]; redirects: string[] };
@@ -25,10 +27,6 @@ function recordHeredoc(match: RegExpExecArray, heredocs: Heredoc[]): void {
 }
 const SEGMENT_OPERATORS = new Set(['&&', '||', '|', ';', '\n']);
 const NULL_SINKS = new Set(['/dev/null', 'nul', '$null']);
-const MUTATING_GIT = new Set([
-  'add', 'am', 'apply', 'checkout', 'cherry-pick', 'clean', 'commit', 'merge', 'mv', 'pull', 'push',
-  'rebase', 'reset', 'restore', 'revert', 'rm', 'stash', 'switch',
-]);
 
 function operands(words: string[]): string[] {
   return words.slice(1).filter((word) => !word.startsWith('-'));
@@ -37,8 +35,7 @@ function operands(words: string[]): string[] {
 function gitWriteTargets(words: string[]): string[] {
   const flagIndex = words.indexOf('-C');
   const directory = flagIndex > 0 ? words[flagIndex + 1] : '.';
-  const subcommand = operands(words).find((word) => word !== directory);
-  return MUTATING_GIT.has(String(subcommand)) ? [directory || '.'] : [];
+  return gitWordsReadOnly(words) ? [] : [directory || '.'];
 }
 
 const SED_SCRIPT_FLAGS = new Set(['-e', '--expression', '-f', '--file']);

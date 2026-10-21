@@ -46,6 +46,8 @@ accessibility, permissions and immutable candidate/review authority.
 
 Answer direct questions and operational requests inline. Small bounded fixes in a few known files may stay inline without tickets; read-only investigations use `route_recipe(category).research` as above.
 
+Read-only guards allow read-only git against the shared checkout from isolated and read-only executors. Verify untouched paths with `git -C <shared> status --porcelain -- <paths>`; `git -C <shared> worktree list` is also allowed. Mutations still require the assigned worktree and write authority.
+
 ### INLINE-SAFE direct work
 
 If inline-safe work was already ticketed, the orchestrator may claim `--direct` and edit inline after annotating the ticket, giving a 20+ character reason, and matching this allowlist:
