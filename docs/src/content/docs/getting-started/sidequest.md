@@ -330,6 +330,18 @@ If you run one session from a parent directory holding several independent repos
 
 The parent directory doesn't have to be a git repo. An isolated dispatch's worktree is cut from the ticket's own repository even when the session is rooted in a plain folder. The one case Sidequest can't resolve is a session that holds live isolated dispatches on two boards at once, because the worktree hook is told a session and not a ticket; dispatch refuses that up front and names the other board, so let those finish first.
 
+### Choosing dispatch isolation
+
+Boards default to isolated worktrees. Setting `worktreeIsolation:false` makes omitted dispatch
+requests use the registered checkout. For one isolated task on that board, pass `sharedTree:false`
+to MCP dispatch or `--no-shared-tree` to CLI dispatch. The explicit request wins over the board
+default and refuses before issuing a token if isolation is unavailable, including a non-Git project.
+Omitted requests keep the existing warning and shared-checkout fallback when isolation is unavailable.
+
+Redispatch preserves an explicit isolation request when you omit `sharedTree`. Pass `sharedTree:true`
+(or `--shared-tree`) to clear it. The recorded dispatch decides close-time worktree cleanup, so an
+isolated override still gets cleaned up on a shared-default board.
+
 ### Making isolated worktrees buildable
 
 A fresh worktree only has what git checks out. Anything gitignored, like `node_modules`, a `.venv`, or real env files next to their committed `*.example` twins, is missing. The board setting `worktreeDependencyPaths` fills that gap when each worktree is created, and `worktreeSetup` runs one command afterwards. Each entry is `{ path, mode }`, with `path` relative to the repo:

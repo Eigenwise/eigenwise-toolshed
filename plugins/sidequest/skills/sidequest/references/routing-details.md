@@ -98,8 +98,12 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
 - **Haiku routes:** spawn the stable executor returned in `exec.agent` with
   `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`, like every other Claude
   route. A plain generic Agent is denied by the Sidequest gate.
-- Worktree isolation: tickets with declared files carry `isolation: "worktree"` in `spawn`; pass it
-  unchanged. `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
+- Worktree isolation defaults on; pass `spawn.isolation` unchanged. A board with
+  `worktreeIsolation:false` defaults to shared execution. `--no-shared-tree` / `{sharedTree:false}`
+  overrides that default and refuses before issuing a token if isolation is unavailable. Redispatch
+  inherits the explicit isolation request until `--shared-tree` / `{sharedTree:true}` clears it.
+  An isolated dispatch record also controls close-time cleanup, regardless of the board default.
+  `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
   on uncommitted local state, and its reason belongs in a ticket comment before spawning. A bounded
   documentation artifact may close with `done` only when its category has a structured `artifactRoots`
   capability, its one declared scope is under an approved root, it was dispatched with shared-tree enabled,
