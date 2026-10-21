@@ -2185,8 +2185,6 @@ test('integration closure consumes an in-scope submission with control-plane pro
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });
 
-// SQ-3144: dispatch freezes the integration branch it saw, but the orchestrator may
-// fast-forward another branch past it and stay there, or deliberately name another one.
 function sq3144SubmittedOnRecordedBranch(label: string) {
   const stamp = `${process.pid}-${Date.now()}`;
   const recorded = `sq3144-develop-${label}-${stamp}`;
@@ -2215,7 +2213,7 @@ function sq3144SubmittedOnRecordedBranch(label: string) {
   return { t, recorded, commit, stamp };
 }
 
-test('SQ-3144: integrate delivers onto a branch fast-forwarded past the dispatch-recorded one and records it as the target', () => {
+test('SQ-3843: integrate keeps its recorded target when the checkout descends from it', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   try {
@@ -2223,25 +2221,21 @@ test('SQ-3144: integrate delivers onto a branch fast-forwarded past the dispatch
     const current = `sq3144-main-ff-${stamp}`;
     git(['checkout', '-f', '-B', current, 'origin/main']);
     git(['merge', '--ff-only', recorded]);
-    const recordedHead = git(['rev-parse', recorded]);
-
+    const checkoutHead = git(['rev-parse', 'HEAD']);
     const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
     assert.strictEqual(delivered.ok, true, delivered.message);
-    assert.strictEqual(delivered.integration.targetBranch, current);
-    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, current]), '');
-    assert.strictEqual(git(['rev-parse', recorded]), recordedHead, 'the recorded branch is left where it was');
-
-    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${current}.`]);
+    assert.strictEqual(delivered.integration.targetBranch, recorded);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, recorded]), '');
+    assert.strictEqual(git(['rev-parse', current]), checkoutHead, 'the checkout branch stays unchanged');
+    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${recorded}.`]);
     assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
-    const after = store.getTicket(slug, t.ref);
-    assert.strictEqual(after.status, 'done');
-    assert.strictEqual(after.submission.integration.targetBranch, current);
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.targetBranch, recorded);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
   }
 });
 
-test('SQ-3144: integrate refuses a checkout that does not descend from the recorded branch unless integrationBranch names it', () => {
+test('SQ-3843: integrate rejects target overrides and delivers from an unrelated checkout', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   try {
@@ -2249,29 +2243,17 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
     const unrelated = `sq3144-unrelated-${stamp}`;
     git(['checkout', '-f', '-B', unrelated, 'origin/main']);
     git(['commit', '--allow-empty', '-m', 'unrelated branch work']);
-    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
-    assert.strictEqual(refused.ok, false);
-    assert.strictEqual(refused.reason, 'branch_not_checked_out');
-    assert.ok(refused.message.startsWith(`${recorded} must be checked out in the registered checkout or a linked worktree before integration; currently on ${unrelated}.`), refused.message);
-    assert.match(refused.message, /pass integrationBranch \(CLI --integration-branch\)/);
-
-    // The recorded branch moved on after another branch was fast-forwarded to its old
-    // tip: no longer a fast-forward, so only an explicit integrationBranch delivers there.
-    const current = `sq3144-main-unrelated-${stamp}`;
-    git(['checkout', '-f', '-B', current, recorded]);
-    git(['checkout', '-f', recorded]);
-    git(['commit', '--allow-empty', '-m', 'recorded branch moves on']);
-    git(['checkout', '-f', current]);
-    const stillRefused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
-    assert.strictEqual(stillRefused.reason, 'branch_not_checked_out');
-
-    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge', integrationBranch: current });
+    const checkoutHead = git(['rev-parse', 'HEAD']);
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', integrationBranch: unrelated });
+    assert.strictEqual(refused.reason, 'integration_target_unavailable');
+    assert.match(refused.message, /cannot override it/);
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
     assert.strictEqual(delivered.ok, true, delivered.message);
-    assert.strictEqual(delivered.integration.targetBranch, current);
-    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, current]), '');
-    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${current}.`]);
-    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
-    assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.targetBranch, current);
+    assert.strictEqual(delivered.integration.targetBranch, recorded);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, recorded]), '');
+    assert.strictEqual(git(['rev-parse', 'HEAD']), checkoutHead);
+    assert.strictEqual(git(['branch', '--show-current']), unrelated);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
   }

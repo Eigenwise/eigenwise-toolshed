@@ -65,11 +65,13 @@ wave (including an environment-bound deferred wave) delivers its exact Git parti
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
-Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
-(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
-`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
-The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
-refuses `branch_not_checked_out`.
+Delivery lands only on the ticket's recorded integration branch, for singletons and assembled waves
+in every mode. A different registered checkout stays unchanged: delivery uses the branch's existing
+worktree or creates a separate worktree under the board worktree root. Clean temporary checkouts are
+removed; dirty apply checkouts are retained at the integration record's `worktree` path so staged
+content is preserved. `targetBranch` always names the recorded branch. `integrationBranch` (CLI
+`--integration-branch`) can confirm that branch, but a different value refuses; redispatch to change
+the recorded target.
 
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
