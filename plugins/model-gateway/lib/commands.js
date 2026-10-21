@@ -585,6 +585,7 @@ async function ensureWiredGateway(wired, quiet) {
 }
 
 async function automaticLifecycle(operation) {
+  if (recoveryExplicitlyDisabled()) return;
   return withLifecycleLock(() => {
     if (intentionallyStopped()) {
       noticeForUser('model-gateway is intentionally stopped; run start to resume.', { toStderr: true });
@@ -2723,7 +2724,6 @@ const commands = {
     // this ticket's whole complaint (SQ-1901). A direct `ensure` still fails loudly for the updater and for a
     // person running it by hand.
     const finish = (code) => { flushHookOutput(); process.exit(quiet ? 0 : code); };
-    if (recoveryExplicitlyDisabled()) return finish(0);
     migrateReadinessGates();
     cleanLegacyEnvSettings();
     cleanLegacyGatewayModelCache();

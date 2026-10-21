@@ -186,6 +186,39 @@ test('maintenance setup preserves persistent stop through a bounded acquisition 
   assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.local.json')), false);
 });
 
+for (const maintenance of [true, false]) {
+  test(`${maintenance ? 'maintenance' : 'explicit'} setup reaches verified acquisition before preserving or resuming stop`, (t) => {
+    const fixture = installedGateFixture(t);
+    const script = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const home = require('node:os').homedir();
+      const binary = process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy';
+      const bin = path.join(home, '.claude', 'model-gateway', 'bin');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(path.join(bin, binary), 'fixture');
+      require('node:child_process').spawnSync = (command, arguments_, options) => {
+        if (arguments_[0] === '-xf') fs.writeFileSync(path.join(options.cwd, binary), 'fixture');
+        const version = ${maintenance} && command.includes('stage-') ? '2.0.0' : '1.0.0';
+        return { status: 0, stdout: version, stderr: '' };
+      };
+      const supervision = require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))});
+      supervision.fetchUrl = async () => ({ status: 200, body: Buffer.from('{}') });
+      supervision.restartWorkerWithDrain = async () => ({ ok: false, reason: 'fixture restart refusal' });
+      require(${JSON.stringify(require.resolve('../lib/shim-state.js'))}).fetchShimHealth = async () => { throw new Error('fixture offline'); };
+      require(${JSON.stringify(require.resolve('../lib/release-verification.js'))}).downloadVerifiedArchive = async () => Buffer.from('verified fixture');
+      require(${JSON.stringify(require.resolve('../lib/lifecycle-lock.js'))}).recordIntentionalStop();
+      process.argv = [process.execPath, 'fixture', 'setup', ...${JSON.stringify(maintenance ? ['--preserve-wiring'] : [])}];
+      require(${JSON.stringify(require.resolve('../lib/commands.js'))}).commands.setup();
+    `;
+    const result = spawnSync(process.execPath, ['-e', script], { cwd: fixture.home, env: fixture.environment, encoding: 'utf8', timeout: 10000, windowsHide: true });
+    assert.equal(result.status, maintenance ? 0 : 1, result.stderr);
+    assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'intentionally-stopped.json')), maintenance);
+    assert.match(result.stdout + result.stderr, maintenance ? /intentional stop preserved/ : /fixture restart refusal/);
+    assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'guardian.pid')), false);
+  });
+}
+
 test('startup failure evidence is scoped to its supervisor and generation', () => {
   writeStartupFailure('owned failure');
   assert.equal(startupFailureFor(process.pid, null), 'owned failure');

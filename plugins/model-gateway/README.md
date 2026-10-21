@@ -10,6 +10,8 @@ Wiring installs stable SessionStart startup/resume recovery and a synchronous Us
 
 Use the stable launcher with `recover` for settings-free readiness recovery, `doctor` for gate/stop/log diagnostics, or `start` to resume. `stop` persists across reboots and upgrades; automatic recovery honors it. Disabled hooks and failures inside an active turn remain outside prompt-gate coverage. Unwire each project with `env --remove`, and user fallback with `env --remove --write-user`, before removing the plugin.
 
+Maintenance `setup --preserve-wiring` preserves intentional stop even when acquisition fails, and never starts a stopped gateway. Explicit `setup` without that flag and `start` resume only at their start step. A non-gateway effective endpoint is a cheap no-op before CLI resolution, even without an install. An absent plugin entry leaves recovery active. An explicit effective `enabledPlugins: {"model-gateway@eigenwise-toolshed": false}` disables recovery without starting, stopping or touching gateway state; re-enable the plugin or unwire with `env --remove`. Project-local settings win over project settings, then user settings; process endpoint env wins over settings endpoints. `doctor` reports explicit plugin disable.
+
 ## Install
 
 Model Gateway uses your supported ChatGPT/Codex or Grok subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.
