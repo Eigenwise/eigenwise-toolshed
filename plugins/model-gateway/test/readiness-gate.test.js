@@ -212,13 +212,19 @@ for (const scenario of ['maintenance', 'cleanup-failure', 'setup', 'start', 'for
       const remove = fs.rmSync;
       fs.rmSync = (file, options) => {
         if (String(file).includes('stage-')) {
-          assert.equal(fs.existsSync(marker), true, 'cleanup precedes resume');
           if (${JSON.stringify(scenario)} === 'cleanup-failure') throw Object.assign(new Error('fixture EPERM stage cleanup'), { code: 'EPERM' });
+          assert.equal(fs.existsSync(marker), true, 'cleanup precedes resume');
         }
         return remove(file, options);
       };
-      supervision.portListening = async () => { throw new Error('stopped gateway must not be probed'); };
-      supervision.resolvePortOwner = async () => { throw new Error('pre-start ownership probe'); };
+      supervision.portListening = async () => {
+        if (${JSON.stringify(scenario)} === 'cleanup-failure') return false;
+        throw new Error('stopped gateway must not be probed');
+      };
+      supervision.resolvePortOwner = async () => {
+        if (${JSON.stringify(scenario)} === 'cleanup-failure') return { state: 'free' };
+        throw new Error('pre-start ownership probe');
+      };
       supervision.shimHealthy = async () => true;
       supervision.restartWorkerWithDrain = async () => { throw new Error('stopped worker must not restart'); };
       supervision.spawnDetached = (name) => {
@@ -250,11 +256,11 @@ for (const scenario of ['maintenance', 'cleanup-failure', 'setup', 'start', 'for
     const stopped = maintenance || scenario === 'cleanup-failure' || scenario === 'foreign-owner';
     const failed = scenario === 'cleanup-failure' || scenario === 'foreign-owner';
     assert.equal(result.status, failed ? 1 : 0, result.stderr);
+    if (scenario === 'cleanup-failure') assert.match(result.stderr, /EPERM stage cleanup/);
     const state = path.join(fixture.home, '.claude', 'model-gateway');
     assert.equal(fs.existsSync(path.join(state, 'intentionally-stopped.json')), stopped);
     assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), !stopped);
     if (!stopped) assert.equal(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), '12345');
-    if (scenario === 'cleanup-failure') assert.match(result.stderr, /EPERM stage cleanup/);
   });
 }
 
