@@ -2969,17 +2969,23 @@ test('SQ-2638: dispatch-recorded targets govern submit, waves, MCP delivery, and
     mode: 'merge',
     ...waivedDelivery(wrongCheckout.ticket.ref),
   });
-  assert.equal(wrongCheckoutDelivery.reason, 'branch_not_checked_out');
-  assert.match(wrongCheckoutDelivery.message, /branch-a must be checked out/);
+  assert.equal(wrongCheckoutDelivery.ok, true, wrongCheckoutDelivery.message || wrongCheckoutDelivery.reason);
+  assert.equal(wrongCheckoutDelivery.delivery.targetBranch, 'branch-a');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'branch-b');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', wrongCheckout.commit, 'branch-a']), '');
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-a' });
+  const cliCandidate = await submittedTargetCandidate(repository, project, 'branch-a', 'cli-checkout.js');
+  gitAt(repository, ['switch', 'branch-b']);
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
-  const cliRefusal = spawnSync(process.execPath, [cli, 'integrate', wrongCheckout.ticket.ref, '--project', repository, '--by', 'target-cli-integrator', '--mode', 'merge', '--skip-verify', '--waiver-authority', 'fixture release manager', '--waiver-reason', 'the target routing fixture checks the delivery policy itself', '--waiver-gate', 'manual: verified the isolated target fixture', '--waiver-scope', wrongCheckout.ticket.ref, '--json'], {
+  const cliDelivery = spawnSync(process.execPath, [cli, 'integrate', cliCandidate.ticket.ref, '--project', repository, '--by', 'target-cli-integrator', '--mode', 'merge', '--skip-verify', '--waiver-authority', 'fixture release manager', '--waiver-reason', 'the target routing fixture checks the delivery policy itself', '--waiver-gate', 'manual: verified the isolated target fixture', '--waiver-scope', cliCandidate.ticket.ref, '--json'], {
     cwd: repository,
     encoding: 'utf8',
     windowsHide: true,
     env: process.env,
   });
-  assert.equal(cliRefusal.status, 1, cliRefusal.stdout + cliRefusal.stderr);
-  assert.equal(JSON.parse(cliRefusal.stdout).reason, 'branch_not_checked_out');
+  assert.equal(cliDelivery.status, 0, cliDelivery.stdout + cliDelivery.stderr);
+  assert.equal(JSON.parse(cliDelivery.stdout).delivery.targetBranch, 'branch-a');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'branch-b');
 
   const modeRepository = createGitWorktree();
   gitAt(modeRepository, ['switch', '-c', 'branch-a']);
@@ -7475,6 +7481,53 @@ test('SQ-3843: singleton merge and replay move only the recorded integration bra
     assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead, 'delivery never moves the checkout branch');
     assert.equal(gitAt(repository, ['show', `develop:${mode}.txt`]), candidate.marker, 'the candidate content reaches develop');
   }
+});
+
+test('SQ-3843: apply retains staged delivery in the recorded integration checkout', async () => {
+  const repository = createGitWorktree();
+  gitAt(repository, ['branch', 'develop']);
+  const project = store.ensureProject(repository).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+  const candidate = await submittedTargetCandidate(repository, project, 'develop', 'applied.js');
+  gitAt(repository, ['switch', '-c', 'release/next']);
+  const checkoutHead = gitAt(repository, ['rev-parse', 'HEAD']);
+  const delivered = await callTool('integrate', {
+    project, ref: candidate.ticket.ref, by: 'target-integrator', mode: 'apply', ...waivedDelivery(candidate.ticket.ref),
+  });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.delivery.targetBranch, 'develop');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next');
+  assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead);
+  const checkout = store.getTicket(project, candidate.ticket.ref).submission.integration.worktree;
+  assert.ok(fs.existsSync(checkout), 'apply keeps the checkout holding the staged content');
+  assert.equal(gitAt(checkout, ['show', ':applied.js']), candidate.ticket.ref);
+  assert.equal(gitAt(checkout, ['diff', '--cached', '--name-only']), 'applied.js');
+});
+
+test('SQ-3843: configured dependencies are provisioned and cleanup failures preserve delivery', async () => {
+  const repository = landedProofWorktree();
+  gitAt(repository, ['branch', 'develop']);
+  const project = store.ensureProject(repository).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+  const candidate = await submittedLandedProofCandidate(repository, project, 'dependency.txt', 'configured dependency delivery');
+  const dependency = 'fixture-dependency.txt';
+  fs.writeFileSync(path.join(repository, dependency), 'configured dependency bytes\n');
+  const exclude = gitAt(repository, ['rev-parse', '--git-path', 'info/exclude']);
+  fs.appendFileSync(path.resolve(repository, exclude), `\n${dependency}\n`);
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [{ path: dependency, mode: 'copy' }],
+    worktreeSetup: 'git worktree lock .',
+  });
+  gitAt(repository, ['switch', '-c', 'release/next']);
+  const delivered = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'target-integrator', mode: 'merge' });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  const integration = store.getTicket(project, candidate.ticket.ref).submission.integration;
+  assert.equal(integration.targetBranch, 'develop');
+  assert.equal(integration.outcome, 'verified', 'cleanup failure cannot hide durable delivery');
+  assert.equal(fs.readFileSync(path.join(integration.worktree, dependency), 'utf8'), 'configured dependency bytes\n');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next');
+  assert.equal(gitAt(repository, ['show', 'develop:dependency.txt']), candidate.marker);
+  gitAt(repository, ['worktree', 'unlock', integration.worktree]);
 });
 
 test('SQ-3843: wave delivery moves develop while the release checkout stays unchanged', async () => {

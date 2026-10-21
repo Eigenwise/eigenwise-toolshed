@@ -980,7 +980,7 @@ ${verify.outputTail}` : null
     const checkedOut = currentBranch || "detached HEAD";
     return `${action} requires the recorded integration branch ${targetBranch}; currently on ${checkedOut}. Run git switch ${JSON.stringify(targetBranch)} in the delivery worktree before retrying.`;
   }
-  function withIntegrationCheckout(repository, branch, deliver) {
+  function withIntegrationCheckout(slug, repository, branch, deliver) {
     const checkout = worktrees.branchOwningWorktree(repository, branch);
     if (integrationGit(checkout, ["branch", "--show-current"]) === branch) return deliver(checkout);
     const root = worktrees.worktreeRoot(repository);
@@ -988,15 +988,22 @@ ${verify.outputTail}` : null
     const temporary = fs.mkdtempSync(path.join(root, "integration-"));
     integrationGit(repository, ["worktree", "add", temporary, branch]);
     try {
+      const provisioning = provisionWaveGateWorktree(slug, temporary);
+      if (!provisioning.ok) throw new Error(provisioning.message);
       return deliver(temporary);
     } finally {
       removeCleanIntegrationCheckout(repository, temporary);
     }
   }
   function removeCleanIntegrationCheckout(repository, checkout) {
-    if (integrationGit(checkout, ["status", "--porcelain", "--untracked-files=all"])) return;
-    if (integrationOperationResidue(checkout).length) return;
-    integrationGit(repository, ["worktree", "remove", checkout]);
+    try {
+      if (integrationGit(checkout, ["status", "--porcelain", "--untracked-files=all"])) return;
+      if (integrationOperationResidue(checkout).length) return;
+      integrationGit(repository, ["worktree", "remove", checkout]);
+    } catch (error) {
+      process.stderr.write(`Integration checkout retained at ${checkout}: ${integrationGitError(error)}
+`);
+    }
   }
   function integrationTargetCheckoutState(repo) {
     return integrationGit(repo, ["status", "--porcelain=v2", "--untracked-files=all"]).split(/\r?\n/).filter(Boolean);
@@ -1975,7 +1982,7 @@ ${verify.outputTail}` : null
     const lockLease = acquireLock(lock, { wait: false, holder });
     if (!lockLease) return deliveryInProgress(ticket, lock);
     try {
-      return withIntegrationCheckout(readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () => deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }))));
+      return withIntegrationCheckout(slug, readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () => deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }))));
     } finally {
       lockLease.refresh();
       releaseLock(lock, lockLease);
@@ -2110,7 +2117,7 @@ ${verify.outputTail}` : null
     const lockLease = acquireLock(lock, { wait: false, holder });
     if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
     try {
-      return withIntegrationCheckout(repo, target.branch, (checkout) => deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, checkout, target));
+      return withIntegrationCheckout(slug, repo, target.branch, (checkout) => deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, checkout, target));
     } catch (error) {
       return { ok: false, reason: "wave_delivery_error", tickets: assembled.tickets, message: integrationGitError(error) };
     } finally {
