@@ -7459,6 +7459,45 @@ async function submittedLandedProofCandidate(repository: string, project: string
   return { ticket, by, worktree, commit: committed.commit, marker, file };
 }
 
+test('SQ-3843: singleton merge and replay move only the recorded integration branch', async () => {
+  for (const mode of ['merge', 'replay']) {
+    const repository = landedProofWorktree();
+    const project = store.ensureProject(repository).slug;
+    gitAt(repository, ['branch', 'develop']);
+    store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+    const candidate = await submittedLandedProofCandidate(repository, project, `${mode}.txt`, `sq3843-${mode}`);
+    gitAt(repository, ['switch', '-c', 'release/next']);
+    const checkoutHead = gitAt(repository, ['rev-parse', 'HEAD']);
+    const delivered = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'target-integrator', mode });
+    assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+    assert.equal(delivered.delivery.targetBranch, 'develop', 'delivery records the frozen branch');
+    assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next', 'delivery never switches the checkout');
+    assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead, 'delivery never moves the checkout branch');
+    assert.equal(gitAt(repository, ['show', `develop:${mode}.txt`]), candidate.marker, 'the candidate content reaches develop');
+  }
+});
+
+test('SQ-3843: wave delivery moves develop while the release checkout stays unchanged', async () => {
+  const repository = landedProofWorktree();
+  const project = store.ensureProject(repository).slug;
+  gitAt(repository, ['branch', 'develop']);
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+  const first = await submittedLandedProofCandidate(repository, project, 'wave-first.txt', 'sq3843-first');
+  const second = await submittedLandedProofCandidate(repository, project, 'wave-second.txt', 'sq3843-second');
+  gitAt(repository, ['switch', '-c', 'release/next']);
+  const checkoutHead = gitAt(repository, ['rev-parse', 'HEAD']);
+  const refs = `${first.ticket.ref},${second.ticket.ref}`;
+  const assembled = await callTool('integrate', { project, ref: refs, by: 'target-integrator', wave: {} });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  const delivered = await callTool('integrate', { project, ref: refs, by: 'target-integrator', mode: 'merge' });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.delivery.targetBranch, 'develop', 'the wave record names develop');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next');
+  assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead, 'the wave leaves the release tip unchanged');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', first.commit, 'develop']), '');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', second.commit, 'develop']), '');
+});
+
 test('SQ-2717: default auto integration merges single and wave candidates into the local branch and never touches origin', async () => {
   const repository = landedProofWorktree();
   const project = store.ensureProject(repository).slug;

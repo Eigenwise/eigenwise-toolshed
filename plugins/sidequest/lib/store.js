@@ -3407,24 +3407,10 @@ function sameBranchWaveTarget(slug, targets) {
   return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
-  const repository = branchOwningWorktree(readMeta(slug)?.path, recorded.branch);
-  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(repository, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
-  if (!branch || branch === recorded.branch) return recorded;
-  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
-}
-function deliveryBranchMode(slug, recordedMode, branch) {
-  return recordedMode === "remote" && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? "remote" : "local";
-}
-function checkedOutBranchDescendingFrom(repo, ref) {
-  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: "pipe" }).trim();
-  const currentBranch = git(["branch", "--show-current"]);
-  try {
-    git(["merge-base", "--is-ancestor", ref, "HEAD"]);
-    return currentBranch;
-  } catch (error) {
-    if (error?.status === 1) return "";
-    throw error;
+  if (integrationBranch != null && normalizeIntegrationBranch(integrationBranch) !== recorded.branch) {
+    throw new Error(`Delivery targets the recorded integration branch ${recorded.branch}; integrationBranch ${integrationBranch} cannot override it. Redispatch on the intended integration branch before submitting.`);
   }
+  return recorded;
 }
 function recordedDelivery(slug, ticket, commit, evidence) {
   const requestedCommit = String(commit || "").trim();

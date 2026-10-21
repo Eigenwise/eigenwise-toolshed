@@ -111,7 +111,7 @@ type AssembledWave = Extract<ExactWaveAdmission, { ok: true }>;
 
 type PinnedWaveCandidate = { ticket: WaveTicket; submission: WaveSubmission; gitRef: string; pinnedCommit: string; changedPaths: string[] };
 
-type PreparedGitWave = { mode: string; candidates: PinnedWaveCandidate[]; dirt: { blocking: string[]; ignoredDirtyPaths: string[] } };
+type PreparedGitWave = { worktree: string; mode: string; candidates: PinnedWaveCandidate[]; dirt: { blocking: string[]; ignoredDirtyPaths: string[] } };
 
 type SourceRevision = NonNullable<ReturnType<typeof sourceRevisionMetadata>>;
 
@@ -1161,6 +1161,7 @@ type DeliveryTicket = {
   id: string;
   ref: string;
   externalRefs?: import('../external-refs').ExternalReference[];
+  dispatch?: { integrationTarget?: { branch: string } };
   submission: {
     integration: {
       deliveredAt?: string;
@@ -1173,6 +1174,11 @@ type DeliveryTicket = {
 };
 
 function persistSubmissionIntegration(slug: string, ticket: DeliveryTicket) {
+  const branch = ticket.submission.integration.targetBranch;
+  const expectedBranch = ticket.dispatch?.integrationTarget?.branch || boardConfig(slug).integrationBranch;
+  if (branch && branch !== expectedBranch) {
+    throw new Error(`Integration record targetBranch ${branch} differs from the recorded integration branch ${expectedBranch}.`);
+  }
   const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
   putTicket(slug, ticket);
   if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
@@ -1215,7 +1221,27 @@ function deliveryRecordFailure(ticket: any, delivery: any, error: any) {
 
 function branchNotCheckedOutMessage(targetBranch: string, currentBranch: string, action: string) {
   const checkedOut = currentBranch || 'detached HEAD';
-  return `${targetBranch} must be checked out in the registered checkout or a linked worktree before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
+  return `${action} requires the recorded integration branch ${targetBranch}; currently on ${checkedOut}. Run git switch ${JSON.stringify(targetBranch)} in the delivery worktree before retrying.`;
+}
+
+function withIntegrationCheckout<Result>(repository: string, branch: string, deliver: (checkout: string) => Result): Result {
+  const checkout = worktrees.branchOwningWorktree(repository, branch);
+  if (integrationGit(checkout, ['branch', '--show-current']) === branch) return deliver(checkout);
+  const root: string = worktrees.worktreeRoot(repository);
+  ensureDir(root);
+  const temporary = fs.mkdtempSync(path.join(root, 'integration-'));
+  integrationGit(repository, ['worktree', 'add', temporary, branch]);
+  try {
+    return deliver(temporary);
+  } finally {
+    removeCleanIntegrationCheckout(repository, temporary);
+  }
+}
+
+function removeCleanIntegrationCheckout(repository: string, checkout: string): void {
+  if (integrationGit(checkout, ['status', '--porcelain', '--untracked-files=all'])) return;
+  if (integrationOperationResidue(checkout).length) return;
+  integrationGit(repository, ['worktree', 'remove', checkout]);
 }
 
 function integrationTargetCheckoutState(repo: string): string[] {
@@ -2409,7 +2435,8 @@ function integrateUnderDeliveryLease(slug: string, idOrRef: string, opts: { inte
   const lockLease = acquireLock(lock, { wait: false, holder });
   if (!lockLease) return deliveryInProgress(ticket, lock);
   try {
-    return deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath })));
+    return withIntegrationCheckout(readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () =>
+      deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }))));
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
@@ -2565,7 +2592,8 @@ function deliverGitWaveUnderLease(slug: string | undefined, assembled: Assembled
   const lockLease = acquireLock(lock, { wait: false, holder });
   if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
   try {
-    return deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, repo, target);
+    return withIntegrationCheckout(repo, target.branch, (checkout) =>
+      deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, checkout, target));
   } catch (error: any) {
     return { ok: false, reason: 'wave_delivery_error', tickets: assembled.tickets, message: integrationGitError(error) };
   } finally {
@@ -2621,7 +2649,7 @@ function cleanWaveCheckout(repo: string, tickets: WaveTicket[], mode: string, ca
       message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths),
     };
   }
-  return { ok: true as const, mode, candidates, dirt };
+  return { ok: true as const, worktree: repo, mode, candidates, dirt };
 }
 
 function mergeWaveCandidates(repo: string, prepared: PreparedGitWave, before: string, tickets: WaveTicket[]) {
@@ -2674,6 +2702,7 @@ function recordGitWaveDelivery(slug: string | undefined, assembled: AssembledWav
     mode,
     targetBranch: target.branch,
     targetUpstream: target.upstream,
+    worktree: prepared.worktree,
     pinnedRef: candidate.gitRef,
     pinnedCommit: candidate.pinnedCommit,
     changedPaths: candidate.changedPaths,
@@ -2761,6 +2790,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
     mode,
     targetBranch: target.branch,
     targetUpstream: target.upstream,
+    worktree: repo,
     pinnedRef: gitRef,
     pinnedCommit,
     changedPaths,
