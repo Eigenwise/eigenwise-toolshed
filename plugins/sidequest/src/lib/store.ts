@@ -64,7 +64,7 @@ const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
-const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createReviewCorrections, pendingOracleVerdictRefusal } = require('./store/review-corrections.js');
 const { createReviewFinalization } = require('./store/review-finalization.js');
 const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
@@ -4161,17 +4161,23 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
 // completeTicketAsControlPlane, which refuses a bound unclaimed attempt as `active_dispatch` both inside and
 // past the deadline - while MCP counted down and then retired and closed in one call. So the CLI's advertised
 // recovery door could never open (SQ-2959 finding 3). Both surfaces now call this and print what it returns.
+function dispatchAlreadyTerminal(ticket?: any) {
+  return Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+}
+
 function groomCloseRecovery(slug?: any, idOrRef?: any, opts?: any) {
   const evidence = String(opts?.evidence || '').trim();
   const reason = String(opts?.reason || '');
-  if (!evidence) return { ok: true, reason };
   const ticket = getTicket(slug, idOrRef);
+  // Closing a bound review before its oracle verdict leaves the outcome unrecorded (SQ-3840).
+  const pendingVerdict = pendingOracleVerdictRefusal(ticket);
+  if (pendingVerdict) return { ok: false, recovered: pendingVerdict };
+  if (!evidence) return { ok: true, reason };
   const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
   if (recovered.ok) return { ok: true, reason };
   // A dispatch that is ALREADY terminal needs no retirement, so evidence arriving after the fact is recorded
   // in the closure reason rather than refused.
-  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
-  if (!terminalDispatch) return { ok: false, recovered };
+  if (!dispatchAlreadyTerminal(ticket)) return { ok: false, recovered };
   return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 

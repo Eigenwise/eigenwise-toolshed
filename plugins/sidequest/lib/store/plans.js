@@ -1,5 +1,6 @@
 "use strict";
 const { reviewCandidateFromSubmission, reviewOutcomeFromOracleVerdict, sameReviewCandidate } = require("../kernel/review-binding");
+const { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } = require("./review-corrections");
 function createPlans(dependencies) {
   const {
     assetPath,
@@ -347,6 +348,21 @@ ${block}
     ticket.updatedAt = now;
     return comment;
   }
+  function closedOracleRoundRefusal(ticket) {
+    const refusal = oracleRoundRefusal(ticket);
+    return refusal?.reason === "oracle_round_closed" ? refusal : null;
+  }
+  function noOracleRefusal(slug, ticket) {
+    const reviewId = ticket.submission?.review?.ticketId;
+    const routed = closedOracleRoundRefusal(ticket) || reviewedSourceRefusal(ticket, reviewId ? getTicket(slug, reviewId) : null);
+    if (routed) return routed;
+    const { reviewTarget: target = {} } = ticket;
+    return {
+      ok: false,
+      reason: "no_oracle",
+      message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict. For an already-done bound normal review with no oracle round, the main thread finalizes it with ${finalizeShape(ticket.ref, target.ref, target.candidate)}; ref is the review, finalize.sourceRef the reviewed source. A high-stakes integration needs that decision or a linked completed review-audit ticket.`
+    };
+  }
   function applyExperimentVerdict(slug, idOrRef, input) {
     const text = String(input?.text == null ? "" : input.text);
     if (!text.trim()) throw new Error("Verdict text is required and must preserve the user's words.");
@@ -359,13 +375,7 @@ ${block}
       const ticket = getTicket(slug, found.id);
       if (!ticket) return { ok: false, reason: "not_found" };
       const oracle = ticket.oracle;
-      if (!oracle || ticket.status !== "awaiting-oracle") {
-        return {
-          ok: false,
-          reason: "no_oracle",
-          message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict. For an already-done bound normal review, the main thread uses MCP verdict with finalize (explicit accepted/rejected, exact source/candidate and evidence); a high-stakes integration needs that decision or a linked completed review-audit ticket.`
-        };
-      }
+      if (!oracle || ticket.status !== "awaiting-oracle") return noOracleRefusal(slug, ticket);
       const existing = readExperimentLog(slug, ticket);
       let log = existing ? existing.log : experimentLogTemplate(ticket);
       let entry = experimentEntries(log).find((current) => current.round === oracle.round);

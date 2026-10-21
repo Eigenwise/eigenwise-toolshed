@@ -6038,6 +6038,82 @@ test('MCP verdict creates a missing oracle round and refuses a ticket with no or
   assert.match(refused.message, /not awaiting an oracle verdict/i);
 });
 
+// SQ-3840: a readonly bound review released with kind oracle, groomClosed before its verdict, then every
+// verdict shape the main thread tried that day. The refusals used to point at each other in a loop.
+test('MCP verdict routes every shape on an oracle review closed before its verdict to one working recovery', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const candidate = gitAt(worktree, ['rev-parse', 'HEAD']);
+  const source = store.createTicket(project, { title: 'oracle-reviewed source', files: ['README.md'] });
+  const terminalAt = new Date().toISOString();
+  Object.assign(source, {
+    status: 'doing', claim: null,
+    dispatch: { terminalAt, outcome: 'submitted', agentId: 'source-agent', attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'source-agent', terminalAt }] },
+    submission: { by: 'implementer', at: terminalAt, commit: candidate, verify: 'manual: fixture', changedPaths: ['README.md'], integratedAt: null },
+  });
+  persistTicket(project, source);
+  const created = store.createTicket(project, { title: 'readonly oracle review', category: 'review-audit', files: ['README.md'] }, { ref: source.ref, commit: candidate });
+  const review = store.getTicket(project, created.ref);
+  Object.assign(review, {
+    status: 'doing', claim: { by: 'oracle-reviewer', at: terminalAt },
+    dispatch: { launchSeq: 1, readonly: true, executor: 'sidequest-exec-dispatch-readonly', agentId: 'reviewer-agent' },
+  });
+  persistTicket(project, review);
+  assert.equal((await callTool('release', {
+    project, ref: review.ref, by: 'oracle-reviewer', kind: 'oracle', oracle: 'Accept or reject the reproduced defect on this candidate.',
+  })).ok, true);
+
+  const prematureClose = await callTool('groomClose', { project, ref: review.ref, by: 'orchestrator', reason: 'closing before the verdict' });
+  assert.equal(prematureClose.reason, 'oracle_verdict_pending');
+  assert.match(prematureClose.message, new RegExp(`verdict \\{ref: "${review.ref}"`));
+  assert.equal(store.getTicket(project, review.ref).status, 'awaiting-oracle', 'groomClose leaves the pending verdict reachable');
+
+  // The state the pre-fix groomClose left behind.
+  const closed = store.getTicket(project, review.ref);
+  Object.assign(closed, { status: 'done', completion: { key: `${closed.id}:groomed`, by: 'orchestrator', state: 'done', at: terminalAt, purpose: 'grooming' } });
+  persistTicket(project, closed);
+
+  const evidence = 'Reproduced on the exact candidate.';
+  const shapes: Record<string, any> = {
+    'plain verdict on the source': { ref: source.ref, outcome: 'rejected', by: 'main', why: 'defect', text: 'Reject.' },
+    'finalize true on the source': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: true },
+    'finalize without sourceRef': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { candidate, evidence } },
+    'finalize with swapped refs and candidate': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { sourceRef: review.ref, candidate, evidence } },
+    'finalize with swapped refs and commit': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { sourceRef: review.ref, commit: candidate, evidence } },
+    'finalize on the review': { ref: review.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { sourceRef: source.ref, commit: candidate, evidence } },
+    'plain verdict on the review': { ref: review.ref, outcome: 'rejected', by: 'main', text: 'Reject.' },
+  };
+  const before = JSON.stringify([store.getTicket(project, source.ref), store.getTicket(project, review.ref)]);
+  const results: Record<string, any> = {};
+  for (const [shape, args] of Object.entries(shapes)) {
+    try {
+      results[shape] = await callTool('verdict', { project, ...args });
+    } catch (error: any) {
+      results[shape] = { thrown: error.message };
+    }
+  }
+  const recovery = `update {ref: "${review.ref}", status: "awaiting-oracle"}`;
+  for (const [shape, result] of Object.entries(results)) {
+    assert.equal(result.ok, false, `${shape} records nothing`);
+    assert.ok(String(result.message).includes(recovery), `${shape} names the one recovery: ${result.message ?? result.thrown}`);
+  }
+  assert.deepEqual(Object.values(results).map((result) => result.reason), [
+    'review_ref_required', 'review_ref_required', 'review_ref_required', 'review_ref_required', 'review_ref_required',
+    'oracle_round_closed', 'oracle_round_closed',
+  ]);
+  assert.equal(JSON.stringify([store.getTicket(project, source.ref), store.getTicket(project, review.ref)]), before, 'refusals write nothing');
+
+  assert.equal((await callTool('update', { project, ref: review.ref, status: 'awaiting-oracle' })).ok, true);
+  const recorded = await callTool('verdict', { project, ref: review.ref, outcome: 'rejected', by: 'main', text: 'Reject the candidate.' });
+  assert.equal(recorded.ok, true, recorded.message);
+  assert.equal(store.getTicket(project, source.ref).submission.review.outcome, 'rejected');
+  const answered = store.getTicket(project, review.ref);
+  assert.equal(answered.reviewTarget.outcome, 'rejected');
+  assert.equal(answered.oracle.verdict.outcome, 'rejected');
+  assert.equal(answered.status, 'todo');
+  assert.equal((await callTool('groomClose', { project, ref: review.ref, by: 'orchestrator', reason: 'verdict recorded' })).ok, true);
+});
+
 test('MCP executor comments without an author keep the active claim holder identity', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-comment-claim-holder')).slug;
   const ticket = store.createTicket(project, {
