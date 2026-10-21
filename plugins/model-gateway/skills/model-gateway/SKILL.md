@@ -20,7 +20,7 @@ All commands: `node ~/.claude/model-gateway/model-gateway.js <command>`. Session
 
 ## Recovery before a model request
 
-The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors. A healthy current router costs one local health request (750 ms timeout) and PID-record reads, without loading the recovery CLI or taking its lifecycle lock.
 
 Wiring installs owned readiness hooks in that wiring's settings scope. Project wiring adds no global hooks; opt-in user fallback gets user-scope hooks. They use the stable launcher even when the project has no enabled plugin. `setup`, updater `setup --preserve-wiring`, and `ensure` migrate registered wiring without wiring new directories. Restart Claude Code after migration so it loads the hooks.
 

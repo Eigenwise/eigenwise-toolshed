@@ -24,6 +24,10 @@ need no Git repository or base; every owned body is enforced. Declarations must 
 canonical regular files outside --project, with strict UTF-8 (BOM offsets unsupported).
 External rows include admission=external-new, absolute identity, raw SHA-256 and evaluator versions.
 Capture children through inherited NODE_OPTIONS with the canonical lib/core.mjs file URL, plus QUALITY_GATE_V8_CAPTURE.
+measure fails new/modified-raised bodies for an untaken changed-hunk branch, even with CRAP below 6.
+Clear it with a test for the other side, or delete the dead branch. Legacy branch rows are informational.
+JSON rows include branches: [{line, text, untaken}]; stderr summarizes branch failures and UNVERIFIED conditions.
+Child environments that drop capture, old captures, and ambiguous loop outcomes leave named branches UNVERIFIED.
 In the inspected Claude Code 2.1.295, a direct worktree-isolated Bash startup assignment NODE_OPTIONS=--import=<url>
 followed by a Node-family command is refused by the host guard (startup code cannot be shown not to be Git); no shipped
 capture-launch command supports that exact boundary. Stop after that actual refusal; missing measurements stay UNVERIFIED.
@@ -86,6 +90,7 @@ async function runMeasure(values, files) {
   if (files.length + externalNewFiles.length === 0) throw new Error('measure requires repository files or --new-external-file <absolute path>');
   const report = await measureFiles(files, { projectRoot: path.resolve(values.project || process.cwd()), base: values.base, coverageDirectory: path.resolve(values.coverage), externalNewFiles });
   process.stdout.write(JSON.stringify(report) + '\n');
+  process.stderr.write(report.summary + '\n');
   process.exitCode = Number(report.failures.length + report.unverified.length > 0);
 }
 

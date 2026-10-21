@@ -235,7 +235,7 @@ const {
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcessAsync, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
-const { describeShimState, fetchShimHealth, probeShimState, servingShimVersion } = require('./shim-state.js');
+const { describeShimState, fetchShimHealth, parseSemver, probeShimState, semverLt, servingCurrentVersion, servingShimVersion, shimNeedsRestart } = require('./shim-state.js');
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
@@ -513,22 +513,6 @@ async function setup({ preserveWiring = false } = {}) {
 
 // ------------------------------------------------------- process management
 
-// Parse the first "x.y.z" out of a --version line into [major, minor, patch]
-// ints, ignoring a leading 'v' or any pre-release/build suffix. null when none.
-function parseSemver(text) {
-  const m = String(text || '').match(/(\d+)\.(\d+)\.(\d+)/);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-}
-
-// true when semver a is strictly less than b, comparing major/minor/patch as
-// ints (never lexicographically: '0.1.9' must read as older than '0.1.14').
-function semverLt(a, b) {
-  for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) return a[i] < b[i];
-  }
-  return false;
-}
-
 function servingVersionIsCurrentOrNewer(servingVersion, installedVersion) {
   if (servingVersion === installedVersion) return true;
   const serving = parseSemver(servingVersion);
@@ -708,10 +692,6 @@ async function readSettledShimState(probe, { quiet, report, awaitReadiness, time
   return probe();
 }
 
-function servingCurrentVersion(shim) {
-  return shim.state === 'running-ours' && !shimNeedsRestart(PLUGIN_VERSION, shim.health);
-}
-
 function shimStartPlan(shim, preserveRunningSupervisor) {
   if (shim.state === 'running-foreign') return refuseForeignShim;
   if (servingCurrentVersion(shim)) return keepRunningShim;
@@ -886,13 +866,6 @@ async function requestServingCompatibility({ action = 'probe', expectedSuperviso
   } catch (error) {
     return unknownServingCompatibility(error?.message || 'serving control did not respond');
   }
-}
-
-function shimNeedsRestart(installedVersion, health) {
-  if (health?.proxyRecovery !== true) return true;
-  const running = parseSemver(servingShimVersion(health));
-  const installed = parseSemver(installedVersion);
-  return !running || !installed || semverLt(running, installed);
 }
 
 async function restartSupervisorForVersionMismatch({ quiet = false, operation = 'restart', health = null, fetchHealth = fetchShimHealth, start = startAll } = {}) {
@@ -2043,13 +2016,25 @@ function sendUploadError(req, res, statusCode) {
   }) : undefined);
 }
 
+function rejectOversizedUpload(req, res) {
+  if (uploadResponseUnavailable(req, res)) return;
+  res.writeHead(413, { 'connection': 'close', 'content-length': '0', 'x-should-retry': 'false' });
+  // Closing with unread upload bytes can reset even a locally flushed response.
+  const drainTimeout = setTimeout(() => res.destroy(), 250);
+  drainTimeout.unref();
+  res.once('close', () => clearTimeout(drainTimeout));
+  req.once('end', () => res.end());
+  res.flushHeaders();
+  req.resume();
+}
+
 async function collectShimRequestBody(req, res) {
   const chunks = [];
   let size = 0;
-  for await (const chunk of req) {
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
     if (size > 64 * 1024 * 1024) {
-      sendUploadError(req, res, 413);
+      rejectOversizedUpload(req, res);
       return null;
     }
     chunks.push(chunk);

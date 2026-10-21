@@ -23,6 +23,10 @@ Before findings, print one row per changed body (all selected bodies for repo):
 
 Use actual numbers only. Show `legacy-unchanged` as LEGACY (informational, not a failure). Show missing measurements as UNVERIFIED; a cc-only value is CC, never a measured CRAP score. Keep LEGACY and UNVERIFIED visible together when both apply.
 
+## Native V8 branch evidence
+
+When an existing same-session V8 capture is available, `quality-gate measure --base <hash> --coverage <directory> <files...>` also checks conditions in changed hunks. Its `branches: [{line, text, untaken}]` rows name untaken if/else, ternary, short-circuit, switch-arm and loop outcomes. An untaken branch fails new and complexity-raised bodies even when CRAP is below 6; equal/lowered legacy bodies remain informational. Clear a failure with a test for the other side, or delete the dead branch. Function coverage is unchanged. Keep named UNVERIFIED branches visible when capture is incomplete, child environments drop the preload, or loop exits cannot be distinguished from abrupt control flow. Existing captures without child-gap observation need recapture for branch evidence. Never generate coverage during an unasked review.
+
 ## Read connected code
 
 Read the diff, complete changed bodies, callers, tests, exports, fixtures and relevant config. For repo, inspect the named project scope. Priorities: correct, safe, holds under load, tested, fast, lean. Trace a concrete input or execution path for every finding and cite file:line. Check intent-revealing names, no abbreviations, comments only for why, concrete types without Any/casts/bare ignores, and splitting new/raised bodies at complexity 6. Equal/lowered legacy complexity is informational. A `shortcut:` marker naming its limit and upgrade trigger records a decision; report a demonstrated defect or missing trigger, not the marker itself. Label opinions `(judgment)`.
