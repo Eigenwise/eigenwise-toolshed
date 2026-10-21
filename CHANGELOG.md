@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.608.0 (2026-10-21)
+
+### model-gateway 0.54.5 → 0.55.0
+
+#### Features
+
+- Recover wired gateway sessions after reboot without model access (SQ-3839)
+  Add process-identity lifecycle coordination and persistent intentional-stop state for gateway recovery. Wired projects install SessionStart and UserPromptSubmit recovery hooks with the gateway wiring, and a settings-free `recover` command restarts a dead router before the first model request. Preserve intentional stop until explicit resume creates the supervisor and records a real PID; a spawn without one is a failed launch. Gate prompts on router health only, so Codex authentication and upstream failures stay per-request and never block a healthy router's prompts. Quiet SessionStart keeps the one-line Codex sign-in nudge when readiness is not ready and stays silent for a healthy session.
+
 ## v3.607.0 (2026-10-21)
 
 ### sidequest 6.1.0 → 6.1.1
