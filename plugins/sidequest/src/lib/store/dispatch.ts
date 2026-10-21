@@ -3714,7 +3714,7 @@ function completeDispatchWorktreeCreation(slug: string, sessionId?: string, work
 
 // Creation completion is recorded before provisioning starts, so without this the board had no way to tell
 // a cold `npm ci` still running from a WorktreeCreate that died, and retired live ones (SQ-2932 finding 2).
-function recordDispatchWorktreeProvisioned(slug?: any, sessionId?: any, worktree?: any, attempt?: any) {
+function recordDispatchWorktreeProvisioned(slug?: any, sessionId?: any, worktree?: any, attempt?: any, evidence: string[] = []) {
   if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
@@ -3734,6 +3734,7 @@ function recordDispatchWorktreeProvisioned(slug?: any, sessionId?: any, worktree
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
         return { ok: false, reason: 'dispatch_binding_unavailable' };
       }
+      current.worktreeProvisioningEvidence = evidence;
       current.worktreeProvisionedAt = new Date().toISOString();
       stampDispatchEvent(ticket, 'worktree-provisioned', current.worktreeProvisionedAt);
       putTicket(slug, ticket);

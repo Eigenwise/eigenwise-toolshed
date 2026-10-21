@@ -3038,6 +3038,10 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
   return evidenceSubmissionVerification(requirement, evidence);
 }
 
+function inheritedTestEvidence(completion: { ok: boolean }) {
+  return 'inheritedTests' in completion ? completion.inheritedTests : [];
+}
+
 function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: any, sourceRevision: any, pinnedBaseline: any, range: any, verify: any, changedSurfaces: string[]) {
   const adapterFacts = opts.admissionFacts || {};
   const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts)
@@ -3121,7 +3125,7 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
       ...(readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]),
     ],
   });
-  return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+  return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths, inheritedTests: inheritedTestEvidence(completion) };
 }
 
 // Record verified, committed work as ready for integration and release the
@@ -3238,6 +3242,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       by,
       at: submittedAt,
       ...(sourceRevision ? { sourceRevision, changedPaths: changedSurfaces, projectCapabilities } : { commit, gitRef: gitRef || submissionGitRef(t) }),
+      inheritedTests: admission.inheritedTests,
       commentId: comment ? comment.id : null,
       verify,
       verificationResult: submissionVerification.result,

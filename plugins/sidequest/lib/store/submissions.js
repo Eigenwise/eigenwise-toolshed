@@ -2522,6 +2522,9 @@ ${verify.outputTail}` : null
     if (requirement.command) return commandSubmissionVerification(ticket, requirement, evidence, candidateCommit, directCaptureInvocation);
     return evidenceSubmissionVerification(requirement, evidence);
   }
+  function inheritedTestEvidence(completion) {
+    return "inheritedTests" in completion ? completion.inheritedTests : [];
+  }
   function submissionAdmissionDecision(slug, ticket, by, opts, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
@@ -2589,7 +2592,7 @@ ${verify.outputTail}` : null
         ...readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]
       ]
     });
-    return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+    return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths, inheritedTests: inheritedTestEvidence(completion) };
   }
   function submitTicket(slug, idOrRef, by, opts) {
     opts = opts || {};
@@ -2685,6 +2688,7 @@ ${verify.outputTail}` : null
         by,
         at: submittedAt,
         ...sourceRevision ? { sourceRevision, changedPaths: changedSurfaces, projectCapabilities } : { commit, gitRef: gitRef || submissionGitRef(t) },
+        inheritedTests: admission.inheritedTests,
         commentId: comment ? comment.id : null,
         verify,
         verificationResult: submissionVerification.result,

@@ -391,16 +391,47 @@ function runWorktreeSetup(setup, worktree, timeoutMs) {
     });
   });
 }
+function scopedPluginDirectories(files) {
+  return [...new Set(files.flatMap((file) => {
+    const plugin = /^plugins\/([A-Za-z0-9_-]+)(?:\/|$)/.exec(file.replace(/\\/g, "/"));
+    return plugin ? [`plugins/${plugin[1]}`] : [];
+  }))];
+}
+function linkedPluginDependencies(repository, directory, plugin) {
+  const modules = path.join(directory, "node_modules");
+  if (!nativeFs.existsSync(modules) || !nativeFs.lstatSync(modules).isSymbolicLink()) return false;
+  const source = path.join(repository, plugin);
+  const sameLock = nativeFs.readFileSync(path.join(source, "package-lock.json")).equals(nativeFs.readFileSync(path.join(directory, "package-lock.json")));
+  if (!sameLock || canonicalPath(modules) !== canonicalPath(path.join(source, "node_modules"))) throw new Error(`unverified locked dependency link: ${plugin}`);
+  return true;
+}
+async function installScopedPluginDependencies(repository, worktree, files, deadline, evidence) {
+  for (const plugin of scopedPluginDirectories(files)) {
+    const directory = path.join(worktree, plugin);
+    if (!nativeFs.existsSync(path.join(directory, "package-lock.json"))) continue;
+    if (linkedPluginDependencies(repository, directory, plugin)) {
+      evidence.push(`${plugin}: retained dependency link with matching lockfile`);
+      continue;
+    }
+    const command = "npm ci --ignore-scripts --no-audit --no-fund";
+    const failure = await runWorktreeSetup(command, directory, Math.max(1, deadline - Date.now()));
+    if (failure) return { ...failure, command: `${plugin}: ${failure.command}` };
+    evidence.push(`${plugin}: installed locked dependencies (${command})`);
+  }
+  return null;
+}
 async function provisionWorktree(repository, worktree, config, options = {}) {
   for (const dependency of config.worktreeDependencyPaths || []) {
     const createdLink = provisionDependencyPath(repository, worktree, dependency);
     if (createdLink) options.onDependencyLink?.(createdLink);
   }
+  const { declaredFiles = [], evidence = [], setupTimeoutMs = 12e4 } = options;
+  const deadline = Date.now() + setupTimeoutMs;
+  const dependencyFailure = await installScopedPluginDependencies(repository, worktree, declaredFiles, deadline, evidence);
+  if (dependencyFailure) return dependencyFailure;
   const setup = String(config.worktreeSetup || "").trim();
   if (!setup) return null;
-  const configuredTimeoutMs = Number(options.setupTimeoutMs);
-  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? Math.floor(configuredTimeoutMs) : void 0;
-  return runWorktreeSetup(setup, worktree, timeoutMs);
+  return runWorktreeSetup(setup, worktree, Math.max(1, deadline - Date.now()));
 }
 function gitBashPath(value) {
   const drive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
