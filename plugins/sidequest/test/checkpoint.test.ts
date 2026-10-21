@@ -47,7 +47,7 @@ function addDirect(title?: any) {
 }
 
 function claimRouted(ticket?: any, by?: any) {
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true });
   const claimed = store.claimTicket(slug, ticket.ref, by, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -160,7 +160,7 @@ test('release and redispatch preserve checkpoint evidence for recovery', () => {
   assert.strictEqual(recoveredTicket.checkpoint.id, created.checkpoint.id);
   assert.strictEqual(store.checkpointProjection(recoveredTicket).state, 'recoverable');
 
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true });
   const claimed = store.claimTicket(slug, ticket.ref, 'replacement-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,

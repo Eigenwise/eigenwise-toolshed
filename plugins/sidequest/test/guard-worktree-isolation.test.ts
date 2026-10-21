@@ -102,6 +102,18 @@ test('agent worktrees sit where the module looks for another executor\'s checkou
 });
 
 
+test('SQ-3808: evidence hook treats heredoc bodies as data', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-heredoc-evidence-'));
+  const target = path.join(directory, 'probe.py').replaceAll('\\', '/');
+  const scope = { evidenceMode: true, evidenceWriteRoots: [directory], evidenceRepositoryRoot: PROJECT };
+  const guard = path.resolve(__dirname, '../hooks/guard-evidence-write.js');
+  const command = `cat > "${target}" <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF`;
+  const output = execFileSync(process.execPath, [guard], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: PROJECT, scope }), encoding: 'utf8' });
+  assert.equal(output, '');
+  const refused = execFileSync(process.execPath, [guard], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: command.replace(target, 'probe.py') }, cwd: PROJECT, scope }), encoding: 'utf8' });
+  assert.match(refused, /"permissionDecision":"deny"/);
+});
+
 test('evidence guard admits Write Edit and Bash under dispatch story and data roots', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-roots-'));
   const roots = ['SQ-1', 'US-1', 'data'].map((name) => path.join(directory, name));

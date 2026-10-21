@@ -40,6 +40,10 @@ Once this save-and-read check works, use the story workflow below when the task 
 
 When an executor hands back a clean committed checkpoint in a retained worktree, its replacement gets a Resume section first. It names the checkout, pinned commit, handback reason, and last recorded verification result and log. After claiming, the replacement confirms HEAD and runs the pinned verifier on that candidate before continuing (shared-environment checks still wait for delivery). It reads new instructions or missing evidence rather than starting over with the full thread. The complete description, contract, scope, and verifier remain in the briefing.
 
+## Read-only shell writes
+
+Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.
+
 ## Completed review decisions
 
 A completed independent review can say ACCEPTED while its source submission still shows a planned review outcome. The orchestrator records that decision explicitly through the main-thread MCP `verdict` tool:
@@ -329,6 +333,18 @@ A new isolated native checkout starts at the candidate; the original base remain
 If you run one session from a parent directory holding several independent repos, each registered as its own board, an executor working a sibling repo's ticket doesn't have to name the board on its lifecycle calls. Sidequest resolves the board from the executor's own binding: a call that carries a `worktree` (commit, submit, checkpoint) is matched to the worktree its dispatch reserved for it, and a call without one (comment, release, done, plan, scope requests) is matched to the claim owner named by `by`. Reads that carry neither, like `pulse`, stay on the session's own board, so the executor briefing tells executors to pass `project` on every call. Nothing else selects a board, so a caller without a claim stays on the session's own board and gets that board's usual refusal. Passing `project` explicitly still wins, and two boards that both fit the same binding are refused by name rather than picked for you.
 
 The parent directory doesn't have to be a git repo. An isolated dispatch's worktree is cut from the ticket's own repository even when the session is rooted in a plain folder. The one case Sidequest can't resolve is a session that holds live isolated dispatches on two boards at once, because the worktree hook is told a session and not a ticket; dispatch refuses that up front and names the other board, so let those finish first.
+
+### Choosing dispatch isolation
+
+Boards default to isolated worktrees. Setting `worktreeIsolation:false` makes omitted dispatch
+requests use the registered checkout. For one isolated task on that board, pass `sharedTree:false`
+to MCP dispatch or `--no-shared-tree` to CLI dispatch. The explicit request wins over the board
+default and refuses before issuing a token if isolation is unavailable, including a non-Git project.
+Omitted requests keep the existing warning and shared-checkout fallback when isolation is unavailable.
+
+Redispatch preserves an explicit isolation request when you omit `sharedTree`. Pass `sharedTree:true`
+(or `--shared-tree`) to clear it. The recorded dispatch decides close-time worktree cleanup, so an
+isolated override still gets cleaned up on a shared-default board.
 
 ### Making isolated worktrees buildable
 

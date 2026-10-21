@@ -442,7 +442,7 @@ const tools = [
         integrationBranch: { type: "string", minLength: 1, description: "Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>." },
         delivery: { type: "string", description: "Default submission delivery mode. Defaults to merge." },
         integrationVerifyTimeoutMs: { type: "integer" },
-        worktreeIsolation: { type: "boolean", description: "false runs executors in the shared checkout (default true)." },
+        worktreeIsolation: { type: "boolean", description: "Default isolation (true). false defaults to shared; explicit dispatch sharedTree:false still requires isolation." },
         verifyEnvironment: { type: "string", enum: ["isolated", "shared"], description: "shared: the pinned verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated)." },
         worktreeBase: { type: "string", enum: ["auto", "origin-main", "local-main"], description: "Isolated-worktree base." },
         notIntegratedSalvageAgeHours: { type: "integer", minimum: 168, description: "Default 168 hours." },

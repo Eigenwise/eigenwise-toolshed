@@ -5,6 +5,44 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { shellSegments, namesShellWrite } from '../src/hooks/shared/shell-writes.js';
+
+test('SQ-3808: heredoc bodies never become shell write targets', () => {
+  assert.deepEqual(shellSegments("cat > /scratch/probe.py <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF").flatMap((segment) => segment.redirects), ['/scratch/probe.py']);
+  assert.deepEqual(shellSegments('cat > repo/probe.py <<"EOF"\ndef f() -> int:\nEOF').flatMap((segment) => segment.redirects), ['repo/probe.py']);
+  for (const command of [
+    'cat <<-EOF\n\tdef f() -> int:\n\tEOF',
+    'cat <<FIRST <<"SECOND"\nx > fake\nFIRST\ny > other\nSECOND',
+    'cat <<EOF\ndef f() -> int:',
+    'cat <<< "x > fake"',
+    'cat <<<bare',
+    'cat <<',
+    "cat <<'E.O[F]'\r\nx > fake\r\nE.O[F]\r\n",
+    "cat <<''\nx > fake\n\n",
+  ]) assert.equal(namesShellWrite(command), false, command);
+  assert.equal(namesShellWrite('cat <<EOF\nx > fake\nEOF\necho x > real'), true);
+  assert.equal(namesShellWrite('cat <<EOF\nx > fake\nEOF\ngit reset --hard'), true);
+  assert.deepEqual(shellSegments('cat <<-EOF\nx > fake\n EOF\n\tEOF\necho x > real').flatMap((segment) => segment.redirects), ['real']);
+  assert.deepEqual(shellSegments('cat <<FIRST <<SECOND\nx > fake\nFIRST\ny > other\nSECOND\necho x > real').flatMap((segment) => segment.redirects), ['real']);
+  assert.deepEqual(shellSegments('cat <<<"data > fake" > real 2>&1').flatMap((segment) => segment.redirects), ['real']);
+});
+
+test('SQ-3808: force-exec-bypass allows scratch heredocs and refuses the real repository redirect', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-heredoc-repo-'));
+  fs.mkdirSync(path.join(root, '.git'));
+  const scratch = path.join(os.tmpdir(), 'sq-heredoc-probe.py').replaceAll('\\', '/');
+  const command = `cat > "${scratch}" <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF`;
+  const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
+  for (const [input, denied] of [[command, false], [command.replace(scratch, 'probe.py'), true]] as const) {
+    const result = spawnSync(process.execPath, [hook], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', agent_id: 'heredoc-reader', agent_type: 'sidequest-exec-readonly-high', cwd: root, tool_name: 'Bash', tool_input: { command: input } }),
+      encoding: 'utf8', windowsHide: true, timeout: 30_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.includes('"permissionDecision":"deny"'), denied, result.stdout);
+    if (denied) assert.ok(result.stdout.includes('probe.py'));
+  }
+});
 
 test('correction host hook denies subagents including malformed correct and permits trusted main', () => {
   const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
