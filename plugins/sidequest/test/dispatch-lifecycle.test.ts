@@ -4514,7 +4514,7 @@ test('a dispatch records the configured local integration branch without an over
   }
 });
 
-test('configured worktree bases apply to readonly isolated dispatches without changing current-tree defaults', () => {
+test('readonly isolated dispatches default to the integration branch and honor configured worktree bases', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-remote-'));
   const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-executor-'));
@@ -4602,8 +4602,9 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
     store.setBoardConfig(baseSlug, { worktreeBase: 'auto' });
     const writerAuto = prepare('writer auto worktree base', 'dispatch.lifecycle', localMain);
     assert.deepEqual(writerAuto.ticket.dispatch.integrationTarget, localTarget);
-    const readonlyAuto = prepare('readonly auto worktree base', 'research', featureHead);
-    assert.equal(readonlyAuto.ticket.dispatch.integrationTarget, undefined);
+    const readonlyAuto = prepare('readonly auto worktree base', 'research', localMain);
+    assert.deepEqual(readonlyAuto.ticket.dispatch.integrationTarget, localTarget);
+    assert.notEqual(readonlyAuto.ticket.dispatch.baseCommit, featureHead);
 
     store.setBoardConfig(baseSlug, { worktreeBase: 'origin-main' });
     const writerExplicitLocal = prepare('writer explicit local override', 'dispatch.lifecycle', localMain, { integrationMode: 'local' });
