@@ -1726,6 +1726,7 @@ const {
   integrationTarget,
   integrationTargetCommit,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   listTickets,
@@ -3958,7 +3959,20 @@ function commitReachedRef(repo: string, commit: string, ref: string) {
 }
 
 function ticketIntegrationTarget(slug?: any, ticket?: any) {
-  return integrationTarget(slug, ticket?.dispatch?.integrationTarget || undefined);
+  return integrationTarget(slug, recordedTicketIntegrationTarget(ticket));
+}
+
+function recordedTicketIntegrationTarget(ticket: {
+  dispatch?: { integrationTarget?: { branch: string; mode?: string } };
+  submission?: { integration?: { deliveredAt?: string; targetBranch?: string; targetUpstream?: string } };
+} | null | undefined) {
+  return ticket?.dispatch?.integrationTarget || deliveredIntegrationTarget(ticket?.submission?.integration);
+}
+
+function deliveredIntegrationTarget(delivery: { deliveredAt?: string; targetBranch?: string; targetUpstream?: string } | undefined) {
+  if (!delivery?.deliveredAt) return undefined;
+  if (!delivery.targetBranch) return undefined;
+  return { branch: delivery.targetBranch, mode: delivery.targetUpstream === `origin/${delivery.targetBranch}` ? 'remote' : 'local' };
 }
 
 function abandonmentFallbackTarget(slug: string) {
@@ -4744,6 +4758,7 @@ module.exports = {
   setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   normalizeDeliveryMode,

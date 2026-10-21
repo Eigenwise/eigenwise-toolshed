@@ -9,6 +9,25 @@ ready-for-integration with `sidequest submit` (claim released, status stays `doi
 verification, completing tickets in the control plane, then gating, assigning versions, and pushing
 main — is ONE serialized transaction owned by the orchestrator. This file is that transaction.
 
+`submit.body` is the canonical report, so no separate pre-submit report comment; the terminal
+comment keeps only commit hash + verification. Submit is terminal for the executor: a submitted
+ticket cannot be amended by messaging its producer. File a follow-up ticket for changes.
+Redispatch the existing ticket only when released without a pending submission.
+
+Singleton and wave delivery target the ticket-recorded integration branch, preserving a different
+registered checkout through a separate branch-owning worktree. `integrationBranch` cannot override
+that target. The frozen dispatch target has priority, then a validated persisted delivery target,
+then the board default; a deleted frozen target may use the abandonment path's validated resolution.
+The publish transaction is lock → delivery → merged-tree gate → central version → review → push →
+reachability → `done`.
+
+At integration, read the submit report, deliver the range, and run the merged-tree gate once per
+wave. Judge by that oracle and the report, never by reading diffs. When sized risk or a weak oracle
+needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never re-review
+yourself. Never mark a submitted ticket done without integrating it; never re-dispatch one (refused
+as `submitted`). A dead executor's `done` proves only the board transition, never that work shipped:
+salvage and close it using this transaction.
+
 `submit` derives the admitted range from the base recorded on the ticket's dispatch, for isolated and shared-tree
 dispatches alike; the merge base replaces it only when upstream work was synced into the candidate after dispatch.
 Paths whose bytes at the tip already equal the integration target's do not count against scope, and a tip still at
