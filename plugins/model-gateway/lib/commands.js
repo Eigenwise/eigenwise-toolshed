@@ -414,14 +414,13 @@ async function restartProxyIfOutdated({
   return { restarted, onDisk, serving };
 }
 
-async function restartSetupProxy({ previousVersion, maintenanceStopped }) {
-  if (maintenanceStopped) return false;
-  resumeIntentionalStop();
+async function restartSetupProxy({ previousVersion }) {
+  if (intentionallyStopped()) return false;
   return restartProxyForVersionChange({ previousVersion });
 }
 
 async function restartAfterSetup(proxyRecoveryHandoff) {
-  if (proxyRecoveryHandoff) return null;
+  if (proxyRecoveryHandoff || intentionallyStopped()) return null;
   const supervisorRestart = await restartShimIfOutdated({ operation: 'setup' });
   if (supervisorRestart) return supervisorRestart;
   const restarting = await restartWorkerWithDrain();
@@ -469,14 +468,13 @@ async function setup({ preserveWiring = false } = {}) {
     const previousVersion = proxyVersion(currentVersion);
     const installedVersion = proxyVersion(stagedVersion);
     replaceProxyBinary({ stagedPath: stagedProxy, currentVersion });
-    proxyRecoveryHandoff = await restartSetupProxy({ previousVersion, maintenanceStopped });
+    proxyRecoveryHandoff = await restartSetupProxy({ previousVersion });
     if (!proxyRecoveryHandoff) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
   fs.rmSync(stage, { recursive: true, force: true });
   if (maintenanceStopped) return log('Model Gateway updated; intentional stop preserved. Run start to resume.');
-  resumeIntentionalStop();
   const supervisorRestart = await restartAfterSetup(proxyRecoveryHandoff);
   if (supervisorRestart && !supervisorRestart.ok && !supervisorRestart.stillStarting) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
 
@@ -485,7 +483,7 @@ async function setup({ preserveWiring = false } = {}) {
 
   if (supervisorRestart?.stillStarting) return warnShimStillStarting(supervisorRestart);
   // one-shot: start everything, and finish the wiring when auth already works
-  const r = await startAll({ lifecycleOperation: 'setup', preserveRunningSupervisor: proxyRecoveryHandoff });
+  const r = await startAll({ lifecycleOperation: 'setup', resumeIntent: !preserveWiring, preserveRunningSupervisor: proxyRecoveryHandoff });
   if (r.stillStarting) return warnShimStillStarting(r);
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
@@ -774,7 +772,9 @@ function launchSupervisor(context) {
   context.startupGeneration = crypto.randomUUID();
   recovery.begin();
   try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-  return spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], { MODEL_GATEWAY_STARTUP_GENERATION: context.startupGeneration });
+  const supervisorArguments = [resolveNewestInstalledCliPath(), 'serve-shim'];
+  if (context.resumeIntent) resumeIntentionalStop();
+  return spawnSupervisor('guardian', process.execPath, supervisorArguments, { MODEL_GATEWAY_STARTUP_GENERATION: context.startupGeneration });
 }
 
 async function finishStartingShim(started, context, supervisorPid) {
@@ -837,13 +837,14 @@ async function startAllLocked({
   refreshCatalog = writeCatalog,
   report = log,
   preserveRunningSupervisor = false,
+  resumeIntent = false,
 } = {}) {
-  if (intentionallyStopped()) return { ok: false, reason: 'gateway intentionally stopped; run start to resume' };
+  if (intentionallyStopped() && !resumeIntent) return { ok: false, reason: 'gateway intentionally stopped; run start to resume' };
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   ensureState();
   const context = {
     quiet, lifecycleOperation, recordLifecycle, reapOrphans, stopSupervisor, spawnSupervisor, supervisorAlive, awaitReadiness, refreshCatalog, report,
-    preserveRunningSupervisor, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
+    preserveRunningSupervisor, resumeIntent, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
   };
   const shim = await readSettledShimState(() => probeShim({ resolveOwner, fetchHealth }), context);
   return shimStartPlan(shim, preserveRunningSupervisor)(shim, context);
@@ -2699,8 +2700,7 @@ const commands = {
     process.exitCode = result.status == null ? 1 : result.status;
   },
   start: () => withLifecycleLock(async () => {
-    resumeIntentionalStop();
-    const result = await startAll({ lifecycleOperation: 'start' });
+    const result = await startAll({ lifecycleOperation: 'start', resumeIntent: true });
     if (!result.ok) die(result.reason);
     await statusReport();
   }),

@@ -186,8 +186,9 @@ test('maintenance setup preserves persistent stop through a bounded acquisition 
   assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'settings.local.json')), false);
 });
 
-for (const maintenance of [true, false]) {
-  test(`${maintenance ? 'maintenance' : 'explicit'} setup reaches verified acquisition before preserving or resuming stop`, (t) => {
+for (const scenario of ['maintenance', 'cleanup-failure', 'setup', 'start', 'foreign-owner']) {
+  test(`intentional stop launch handoff: ${scenario}`, (t) => {
+    const maintenance = scenario === 'maintenance';
     const fixture = installedGateFixture(t);
     const script = `
       const fs = require('node:fs');
@@ -198,24 +199,62 @@ for (const maintenance of [true, false]) {
       fs.mkdirSync(bin, { recursive: true });
       fs.writeFileSync(path.join(bin, binary), 'fixture');
       require('node:child_process').spawnSync = (command, arguments_, options) => {
+        if (arguments_[0] === 'codex') return { status: 1, stdout: '', stderr: '' };
         if (arguments_[0] === '-xf') fs.writeFileSync(path.join(options.cwd, binary), 'fixture');
-        const version = ${maintenance} && command.includes('stage-') ? '2.0.0' : '1.0.0';
+        const version = command.includes('stage-') ? '2.0.0' : '1.0.0';
         return { status: 0, stdout: version, stderr: '' };
       };
       const supervision = require(${JSON.stringify(require.resolve('../lib/process-supervision.js'))});
       supervision.fetchUrl = async () => ({ status: 200, body: Buffer.from('{}') });
-      supervision.restartWorkerWithDrain = async () => ({ ok: false, reason: 'fixture restart refusal' });
-      require(${JSON.stringify(require.resolve('../lib/shim-state.js'))}).fetchShimHealth = async () => { throw new Error('fixture offline'); };
+      const assert = require('node:assert/strict');
+      const marker = path.join(bin, '..', 'intentionally-stopped.json');
+      const guardian = path.join(bin, '..', 'guardian.pid');
+      const remove = fs.rmSync;
+      fs.rmSync = (file, options) => {
+        if (String(file).includes('stage-')) {
+          assert.equal(fs.existsSync(marker), true, 'cleanup precedes resume');
+          if (${JSON.stringify(scenario)} === 'cleanup-failure') throw Object.assign(new Error('fixture EPERM stage cleanup'), { code: 'EPERM' });
+        }
+        return remove(file, options);
+      };
+      supervision.portListening = async () => { throw new Error('stopped gateway must not be probed'); };
+      supervision.resolvePortOwner = async () => { throw new Error('pre-start ownership probe'); };
+      supervision.shimHealthy = async () => true;
+      supervision.restartWorkerWithDrain = async () => { throw new Error('stopped worker must not restart'); };
+      supervision.spawnDetached = (name) => {
+        assert.equal(fs.existsSync(marker), false, 'resume happens at launch');
+        fs.writeFileSync(guardian, '12345');
+        return 12345;
+      };
+      const shimState = require(${JSON.stringify(require.resolve('../lib/shim-state.js'))});
+      shimState.fetchShimHealth = async () => { throw new Error('pre-start health probe'); };
+      shimState.probeShimState = async () => {
+        if (fs.existsSync(guardian)) return { state: 'stopped', owner: { state: 'free' } };
+        assert.equal(fs.existsSync(marker), true, 'ownership decision precedes resume');
+        if (${JSON.stringify(scenario)} === 'foreign-owner') return { state: 'running-foreign', pid: 42, owner: { state: 'foreign-install', pid: 42 } };
+        return { state: 'stopped', owner: { state: 'free' } };
+      };
+      supervision.reapGatewayOrphans = () => {};
       require(${JSON.stringify(require.resolve('../lib/release-verification.js'))}).downloadVerifiedArchive = async () => Buffer.from('verified fixture');
       require(${JSON.stringify(require.resolve('../lib/lifecycle-lock.js'))}).recordIntentionalStop();
-      process.argv = [process.execPath, 'fixture', 'setup', ...${JSON.stringify(maintenance ? ['--preserve-wiring'] : [])}];
-      require(${JSON.stringify(require.resolve('../lib/commands.js'))}).commands.setup();
+      const command = ${JSON.stringify(scenario)};
+      process.argv = [process.execPath, 'fixture', command === 'start' || command === 'foreign-owner' ? 'start' : 'setup', ...${JSON.stringify(maintenance ? ['--preserve-wiring'] : [])}];
+      const commands = require(${JSON.stringify(require.resolve('../lib/commands.js'))});
+      if (command === 'start' || command === 'foreign-owner') {
+        commands.commands.start().catch(error => { console.error(error); process.exitCode = 1; });
+      } else {
+        commands.commands.setup().catch(error => { console.error(error); process.exitCode = 1; });
+      }
     `;
     const result = spawnSync(process.execPath, ['-e', script], { cwd: fixture.home, env: fixture.environment, encoding: 'utf8', timeout: 10000, windowsHide: true });
-    assert.equal(result.status, maintenance ? 0 : 1, result.stderr);
-    assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'intentionally-stopped.json')), maintenance);
-    assert.match(result.stdout + result.stderr, maintenance ? /intentional stop preserved/ : /fixture restart refusal/);
-    assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'guardian.pid')), false);
+    const stopped = maintenance || scenario === 'cleanup-failure' || scenario === 'foreign-owner';
+    const failed = scenario === 'cleanup-failure' || scenario === 'foreign-owner';
+    assert.equal(result.status, failed ? 1 : 0, result.stderr);
+    const state = path.join(fixture.home, '.claude', 'model-gateway');
+    assert.equal(fs.existsSync(path.join(state, 'intentionally-stopped.json')), stopped);
+    assert.equal(fs.existsSync(path.join(state, 'guardian.pid')), !stopped);
+    if (!stopped) assert.equal(fs.readFileSync(path.join(state, 'guardian.pid'), 'utf8'), '12345');
+    if (scenario === 'cleanup-failure') assert.match(result.stderr, /EPERM stage cleanup/);
   });
 }
 
