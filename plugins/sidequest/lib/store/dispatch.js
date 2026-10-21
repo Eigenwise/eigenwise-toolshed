@@ -1947,10 +1947,7 @@ function createDispatch(dependencies) {
     return opts.integrationBranch != null || opts.integrationMode != null;
   }
   function isolatedRepositoryDispatch(isolation) {
-    return !isolation.sharedTree && !isolation.readonly && !isolation.nonRepoOutput;
-  }
-  function automaticWorktreeBaseEligible(isolation, worktreeBase) {
-    return isolatedRepositoryDispatch(isolation) || !isolation.sharedTree && isolation.readonly && !isolation.nonRepoOutput && worktreeBase !== "auto";
+    return !isolation.sharedTree && !isolation.nonRepoOutput;
   }
   function remoteIntegrationTarget(slug, worktreeBase) {
     try {
@@ -1983,7 +1980,7 @@ function createDispatch(dependencies) {
     return autoSelectedIntegrationTarget(slug, worktreeBase);
   }
   function automaticWorktreeBase(slug, isolation, configured) {
-    return automaticWorktreeBaseEligible(isolation, configured.worktreeBase) && configured.integrationMode === "auto" ? configuredWorktreeBaseTarget(slug, configured.worktreeBase) : null;
+    return isolatedRepositoryDispatch(isolation) && configured.integrationMode === "auto" ? configuredWorktreeBaseTarget(slug, configured.worktreeBase) : null;
   }
   function explicitIntegrationTargetSelection(opts) {
     return {

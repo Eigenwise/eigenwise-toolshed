@@ -1750,7 +1750,8 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1300, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
-  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'writeScope']);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'worktreeBase', 'writeScope']);
+  assert.equal(dispatchPayload.worktreeBase, null);
   assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
   assert.equal(dispatchPayload.token, undefined);
   assert.equal(dispatchPayload.agent, undefined);

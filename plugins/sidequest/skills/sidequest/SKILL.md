@@ -46,6 +46,8 @@ accessibility, permissions and immutable candidate/review authority.
 
 Answer direct questions and operational requests inline. Small bounded fixes in a few known files may stay inline without tickets; read-only investigations use `route_recipe(category).research` as above.
 
+Read-only and write isolated dispatches base at the recorded integration branch under the board's `worktreeBase` policy. The dispatch result, spawn prompt, and briefing name the base commit and branch. Bound reviews still use their immutable candidate.
+
 Read-only guards allow read-only git against the shared checkout from isolated and read-only executors. Verify untouched paths with `git -C <shared> status --porcelain -- <paths>`; `git -C <shared> worktree list` is also allowed. Mutations still require the assigned worktree and write authority.
 
 ### INLINE-SAFE direct work

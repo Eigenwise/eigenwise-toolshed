@@ -263,7 +263,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
+    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Isolated read-only and write dispatches base at the recorded integration branch under the board worktreeBase policy; the result and briefing name the resolved commit and branch. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
     inputSchema: {
       type: "object",
       properties: {
@@ -346,6 +346,7 @@ const tools = [
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
+        worktreeBase: agentsync.ticketWorktreeBase(prepared.ticket),
         ...prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {},
         ...prepared.recovery?.worktreeCorrection ? { worktreeCorrection: prepared.recovery.worktreeCorrection } : {},
         ...boardAddedScope,

@@ -668,12 +668,7 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   const target = dispatch?.integrationTarget;
   const commit = String(dispatch?.baseCommit || '').trim();
   if (dispatch?.sharedTree !== false || !root) return null;
-  // A review's baseline is its candidate, and it used to get no synchronization line at all: the only emitter
-  // required an integrationTarget, and a readonly dispatch never has one, because `readonly` alone makes
-  // isolatedRepositoryDispatch false where that target is chosen. So the reviewer kept whatever commit the
-  // harness gave its worktree, ran the wrong tree's suite, and rejected a candidate whose own suite passed
-  // (SQ-2124, SQ-2203). Preparation has already resolved this commit in the project checkout, and a linked
-  // worktree shares that object database, so the candidate is reachable without a fetch.
+  // A review's baseline is its immutable candidate, reachable through the shared object database.
   const reviewCandidate = dispatch?.reviewTarget?.candidate;
   if (reviewCandidate?.source === 'git' && commit) {
     return [
@@ -1033,6 +1028,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     'Claim first with this exact call. Do not pass direct or replace the prepared executor:',
     ['```javascript', claimCall, '```'].join('\n'),
     worktreeIdentity,
+    formatWorktreeBase(ticketWorktreeBase(ticket)),
     readOnlyScratchSpace,
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join('\n\n'),
@@ -1418,6 +1414,18 @@ function dispatchTicketContext(ticket?: any, projectPath?: any) {
   ].join('\n\n');
 }
 
+function ticketWorktreeBase(ticket: { dispatch?: { sharedTree?: boolean; baseCommit?: string; reviewTarget?: unknown; integrationTarget?: { mode?: string; branch?: string } } }): string | null {
+  const dispatch = ticket.dispatch;
+  const target = dispatch?.integrationTarget;
+  if (dispatch?.sharedTree !== false || !target) return null;
+  const branch = target.mode === 'remote' ? `origin/${target.branch}` : target.branch;
+  return `${dispatch.baseCommit} (${dispatch.reviewTarget ? 'review candidate' : branch})`;
+}
+
+function formatWorktreeBase(base: string | null): string {
+  return base ? `worktreeBase: ${base}` : '';
+}
+
 function renderDispatchStub(ticket?: any, projectPath?: any) {
   const project = String(projectPath || '').trim();
   const tokenFile = String(ticket?.dispatch?.tokenFile || '').trim();
@@ -1446,6 +1454,7 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   // placement routes identically.
   return [
     label,
+    formatWorktreeBase(ticketWorktreeBase(ticket)),
     'Implementation context:',
     dispatchTicketContext(ticket, project),
     '',
@@ -1837,6 +1846,7 @@ module.exports = {
   nativeAgentSource,
   withProjectIdentity,
   renderDispatchStub,
+  ticketWorktreeBase,
   ensureDispatchLauncher,
   agentSpawn,
   spawnDescription,
