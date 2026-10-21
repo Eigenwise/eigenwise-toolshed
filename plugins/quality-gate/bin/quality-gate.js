@@ -6,7 +6,7 @@ import { pluginRoot } from '../lib/compiler.mjs';
 import { parseArgs } from 'node:util';
 import { measureFiles } from '../lib/measure.mjs';
 import { crapReport, formatCrapReport, writeReceipt } from '../lib/crap.mjs';
-import { projectRoot } from '../lib/crap-inputs.mjs';
+import { projectRoot, sourceHashes } from '../lib/crap-inputs.mjs';
 import { PYTHON_POLICIES, DEFAULT_PYTHON_POLICY } from '../lib/python.mjs';
 
 const HELP = `Usage:
@@ -69,12 +69,15 @@ Existing explicit or fallback output must be rewritten during the command. Missi
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
 Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 unverified/prerequisite.
-Receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
+crap and measure receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
+--receipts-dir <path> overrides QUALITY_GATE_RECEIPTS_DIR for both commands (relative to cwd).
+New or complexity-raised bodies at complexity 6 or more fail even with UNVERIFIED coverage.
+Coverage stays UNVERIFIED; the failure row says failure: complexity floor.
 --ratchet is deprecated; use --base. The threshold is fixed at 6; remove --max or config max overrides.
 `;
 
 function argumentsForCommand() {
-  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes'].map((name) => [name, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
   Object.assign(options, Object.fromEntries(['cc-only', 'json', 'help'].map((name) => [name, { type: 'boolean' }])));
   options.source = { type: 'string', multiple: true };
   options['new-external-file'] = { type: 'string', multiple: true };
@@ -84,11 +87,19 @@ function argumentsForCommand() {
   return parsed;
 }
 
+function recordMeasureReceipt(report, values) {
+  const root = path.resolve(values.project || process.cwd());
+  const files = [...new Set(report.metrics.map((metric) => metric.relativePath))];
+  const verdict = !report.changedMetrics.length ? 'nothing to score' : report.failures.length ? 'failed' : report.unverified.length ? 'unverified' : 'passed';
+  return writeReceipt({ ...report, root, base: values.base, files: sourceHashes(root, files), verdict, ccOnly: false }, values['receipts-dir']);
+}
+
 async function runMeasure(values, files) {
   const externalNewFiles = values['new-external-file'] ?? [];
   if (!values.coverage) throw new Error('Usage: quality-gate measure requires --coverage <V8-directory>; run quality-gate --help for capture instructions');
   if (files.length + externalNewFiles.length === 0) throw new Error('measure requires repository files or --new-external-file <absolute path>');
   const report = await measureFiles(files, { projectRoot: path.resolve(values.project || process.cwd()), base: values.base, coverageDirectory: path.resolve(values.coverage), externalNewFiles });
+  report.receipt = recordMeasureReceipt(report, values);
   process.stdout.write(JSON.stringify(report) + '\n');
   process.stderr.write(report.summary + '\n');
   process.exitCode = Number(report.failures.length + report.unverified.length > 0);
@@ -111,7 +122,7 @@ function validateCrapArguments(values, files) {
 async function runCrap(values, files) {
   validateCrapArguments(values, files);
   const report = await capturedReport(values);
-  report.receipt = writeReceipt(report);
+  report.receipt = writeReceipt(report, values['receipts-dir']);
   if (report.ccOnly && !values['cc-only']) process.stderr.write('coverage: not set up (complexity only); add an LCOV producer or --lcov to prove CRAP\n');
   for (const warning of report.warnings) process.stderr.write(`quality-gate crap: ${warning}\n`);
   process.stderr.write(`quality-gate crap: measured ${report.root}\n`);
