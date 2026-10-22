@@ -616,7 +616,7 @@ test('integration keeps a recorded verifier instead of re-deriving a plugin gate
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
-test('integration records exactly importing tests and runs only files outside the pinned verifier', (context) => {
+test('integration records exactly importing tests and runs only files outside the pinned verifier', (context: import('node:test').TestContext) => {
   const inheritedTestContext = process.env.NODE_TEST_CONTEXT;
   delete process.env.NODE_TEST_CONTEXT;
   context.after(() => {
