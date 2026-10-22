@@ -38,7 +38,8 @@ function recoveryGuidance(reason) {
 
 function readHookPayload() {
   const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
-  if (typeof payload.cwd === 'string') process.chdir(payload.cwd);
+  // A deleted session cwd (a removed worktree) keeps the inherited cwd instead of blocking every prompt.
+  if (typeof payload.cwd === 'string') try { process.chdir(payload.cwd); } catch {}
   return payload;
 }
 
