@@ -28,11 +28,14 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var integration_tests_exports = {};
 __export(integration_tests_exports, {
+  integrationTestBatches: () => integrationTestBatches,
+  runImportingIntegrationTests: () => runImportingIntegrationTests,
   selectIntegrationTests: () => selectIntegrationTests
 });
 module.exports = __toCommonJS(integration_tests_exports);
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
+var import_process = require("./ports/process.js");
 const MODULE_EXTENSIONS = ["", ".ts", ".tsx", ".js", ".mjs", ".cjs", "/index.ts", "/index.js"];
 const STATIC_MODULE_SPECIFIER = /\b(?:import\s+(?:[^;'"()]*?\s+from\s*)?|export\s+[^;'"()]*?\s+from\s*|require\s*\(\s*)['"]([^'"\r\n]+)['"]/g;
 function moduleIdentity(file) {
@@ -113,11 +116,58 @@ function pluginSelection(project, pluginName, changedPaths) {
     files: tests.filter((file) => affected.has(moduleIdentity(file))).map((file) => import_node_path.default.relative(plugin, file).replaceAll("\\", "/")).sort()
   };
 }
+function quoteArgument(value) {
+  if (process.platform === "win32") return '"' + value.replaceAll('"', '""') + '"';
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+function pinnedTestPatterns(command) {
+  return Array.from(command.matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g), (match) => (match[1] ?? match[2] ?? match[3]).replaceAll("\\", "/"));
+}
+function pinnedTestFile(selection, file, patterns) {
+  const pluginPaths = patterns.filter((pattern) => pattern.startsWith("plugins/"));
+  const localPathsApply = pluginPaths.length === 0 || pluginPaths.some((pattern) => pattern.startsWith(selection.plugin + "/")) || pluginPaths.includes(selection.plugin);
+  return patterns.some((pattern) => localPathsApply && import_node_path.default.matchesGlob(file, pattern) || import_node_path.default.matchesGlob(`${selection.plugin}/${file}`, pattern));
+}
+function testFileCommand(project, plugin, file) {
+  const manifestPath = import_node_path.default.join(project, plugin, "package.json");
+  const manifest = import_node_fs.default.existsSync(manifestPath) ? JSON.parse(import_node_fs.default.readFileSync(manifestPath, "utf8")) : {};
+  const runner = manifest.scripts?.["test:files"] ? "npm run test:files --" : "node --test";
+  return `${runner} --test-concurrency=1 ${quoteArgument(file.replaceAll("[", "[[]"))}`;
+}
+function integrationTestBatches(project, selections, pinnedCommand, timeoutMilliseconds) {
+  if (/\btest:full\b/.test(pinnedCommand)) return [];
+  const patterns = pinnedTestPatterns(pinnedCommand);
+  return selections.flatMap((selection) => selection.files.filter((file) => !pinnedTestFile(selection, file, patterns)).map((file) => ({
+    plugin: selection.plugin,
+    file,
+    command: testFileCommand(project, selection.plugin, file),
+    timeoutMilliseconds: Math.min(timeoutMilliseconds, 6e5)
+  })));
+}
+function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment) {
+  const selections = selectIntegrationTests(project, changedPaths);
+  const batches = integrationTestBatches(project, selections, pinned.command || "", timeoutMilliseconds);
+  const results = [];
+  for (const batch of batches) {
+    if (pinned.status !== "passed") break;
+    const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing test file passes on the merged tree" }, {
+      cwd: import_node_path.default.join(project, batch.plugin),
+      timeoutMilliseconds: batch.timeoutMilliseconds,
+      logPath: `${pinned.logPath}.import-${results.length}.log`,
+      environment
+    });
+    results.push(result);
+    if (result.status !== "passed") return { ...result, integrationTests: selections, importingTestResults: results };
+  }
+  return { ...pinned, integrationTests: selections, importingTestResults: results };
+}
 function selectIntegrationTests(project, changedPaths) {
   const pluginNames = changedPaths.map((file) => /^plugins\/([^/]+)\//.exec(file.replaceAll("\\", "/"))?.[1]).filter((name) => name !== void 0);
   return Array.from(new Set(pluginNames), (plugin) => pluginSelection(project, plugin, changedPaths));
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  integrationTestBatches,
+  runImportingIntegrationTests,
   selectIntegrationTests
 });
