@@ -616,7 +616,12 @@ test('integration keeps a recorded verifier instead of re-deriving a plugin gate
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
-test('integration records exactly importing tests and runs only files outside the pinned verifier', () => {
+test('integration records exactly importing tests and runs only files outside the pinned verifier', (context) => {
+  const inheritedTestContext = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  context.after(() => {
+    if (inheritedTestContext !== undefined) process.env.NODE_TEST_CONTEXT = inheritedTestContext;
+  });
   const pluginDirectory = path.join(PROJECT_DIR, 'plugins', 'importing-gate-fixture');
   fs.mkdirSync(path.join(pluginDirectory, 'lib'), { recursive: true });
   fs.mkdirSync(path.join(pluginDirectory, 'test'), { recursive: true });
@@ -650,7 +655,7 @@ test('integration records exactly importing tests and runs only files outside th
   failing.submission.integration = { outcome: 'delivered' };
   persist(failing);
   const refused = store.verifyIntegration(slug, ticket.ref);
-  assert.equal(refused.ok, false);
+  assert.equal(refused.ok, false, fs.readFileSync(refused.verify.importingTestResults[0].logPath, 'utf8'));
   assert.equal(refused.verify.status, 'failed_suite');
   assert.match(refused.verify.command, /second\.test\.js/);
 });
