@@ -4221,7 +4221,11 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   gitFixture(['config', 'user.name', 'Worktree Hook Test'], repo);
   fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
   fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n');
-  gitFixture(['add', 'tracked.txt', '.gitignore'], repo);
+  const plugin = path.join(repo, 'plugins', 'fixture');
+  fs.mkdirSync(path.join(plugin, 'node_modules'), { recursive: true });
+  fs.writeFileSync(path.join(plugin, 'package-lock.json'), '{"lockfileVersion":3}');
+  fs.writeFileSync(path.join(plugin, 'node_modules', 'ready.txt'), 'linked');
+  gitFixture(['add', 'tracked.txt', '.gitignore', 'plugins/fixture/package-lock.json'], repo);
   gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
   fs.mkdirSync(path.join(repo, 'cached-dependency'));
   fs.writeFileSync(path.join(repo, 'cached-dependency', 'cache.txt'), 'warm\n');
@@ -4239,7 +4243,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
     enabled: true,
   });
   const launch = (sessionId: string, title: string) => {
-    const ticket = store.createTicket(project, { title, category, files: ['tracked.txt'] });
+    const ticket = store.createTicket(project, { title, category, files: ['tracked.txt', 'plugins/fixture/src/index.ts'] });
     const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
     assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
       token: prepared.token,
@@ -4262,10 +4266,13 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.equal(worktrees.canonicalPath(gitFixture(['rev-parse', '--show-toplevel'], first)), worktrees.canonicalPath(expected));
   assert.equal(gitFixture(['branch', '--show-current'], first), `worktree-${name}`);
   assert.equal(fs.readFileSync(path.join(first, 'cached-dependency', 'cache.txt'), 'utf8'), 'warm\n');
+  assert.equal(store.getTicket(project, createdTicket.ref).dispatch.worktreeProvisioningFailure, undefined, 'scoped dependency linking completes without a hook-time npm install');
   assert.equal(fs.readFileSync(path.join(first, 'setup-ready.txt'), 'utf8'), 'ready');
 
   const createdDispatch = store.getTicket(project, createdTicket.ref).dispatch;
-  assert.deepEqual(createdDispatch.ownedDependencyLinks.map((record: any) => [record.relativePath, record.mode]), [['cached-dependency', 'copy']], 'the sweep reads the copy mode from this record (GH-370)');
+  assert.deepEqual(createdDispatch.ownedDependencyLinks.map((record: any) => [record.relativePath, record.mode]), [['cached-dependency', 'copy'], ['plugins/fixture/node_modules', 'link']], 'the sweep reads provisioning ownership and mode from this record');
+  assert.match(createdDispatch.worktreeProvisioningEvidence.join('\n'), /plugins\/fixture: linked locked dependencies/);
+  assert.equal(fs.readFileSync(path.join(first, 'plugins/fixture/node_modules/ready.txt'), 'utf8'), 'linked');
   runHook(SUBAGENT_START, {
     hook_event_name: 'SubagentStart',
     session_id: 'hook-test',
@@ -4291,6 +4298,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   gitFixture(['worktree', 'remove', '--force', expected], repo);
   gitFixture(['branch', '-D', `worktree-${name}`], repo);
 
+  fs.rmSync(path.join(plugin, 'node_modules'), { recursive: true });
   const timedOutSetup = 'node -e "process.stderr.write(\'setup audit notice\\n\'); setTimeout(() => process.exit(0), 5000)"';
   store.setBoardConfig(project, { worktreeDependencyPaths: [], worktreeSetup: timedOutSetup });
   const incompleteTicket = launch('hook-setup-timeout', 'bound worktree setup timeout');
@@ -4308,7 +4316,10 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.ok(incompleteDispatch.worktreeCreationCompletedAt, 'checkout creation must be recorded before setup runs');
   assert.equal(incompleteDispatch.worktreeProvisioningFailure.command, timedOutSetup);
   assert.match(incompleteDispatch.worktreeProvisioningFailure.reason, /timed out after 900ms/);
+  assert.match(incompleteDispatch.worktreeProvisioningEvidence.join('\n'), /plugins\/fixture: install deferred/);
+  assert.equal(fs.existsSync(path.join(incompleteTarget, 'plugins/fixture/node_modules')), false, 'hook leaves deferred dependencies absent');
   const incompleteBriefing = agentsync.renderTicketBriefing(incomplete, incomplete.dispatchNonce, project, repo);
+  assert.match(incompleteBriefing, /First step after claiming.*\n`npm ci --prefix plugins\/fixture --ignore-scripts --no-audit --no-fund`/);
   assert.match(incompleteBriefing, /worktree setup incomplete: node -e/);
   assert.match(incompleteBriefing, /Run it in .*agent-hook-setup-timeout before work/);
   assert.match(incompleteBriefing, /Setup stderr tail: setup audit notice/);

@@ -354,22 +354,17 @@ test('all shipped executor profiles budget final verification before the continu
   assert.doesNotMatch(orchestration, /100-tool-round|around 100 tool rounds/);
 });
 
-test('heavy resource handoffs preserve independent work and require the actual owner return', () => {
+test('executor verification concurrency follows recorded board configuration', () => {
   const sources = agentsync.bundledExecutorSources() as Map<string, string>;
   assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
   assert.equal(sources.size, 18);
   for (const [filename, source] of sources) {
-    assert.match(source, /Serialize heavy commands on the parent-named shared resource, not entire tickets/, filename);
-    assert.match(source, /continue independent reading, editing, and scoped commits/, filename);
-    assert.match(source, /readiness and end the turn retaining your claim/, filename);
-    assert.match(source, /actual owner must acknowledge that its owned heavy command and\s+descendants ended before the parent hands off/, filename);
-    assert.match(source, /authenticated explicit mid-claim return is valid too/, filename);
-    assert.match(source, /at most two\s+workers, finite owned deadlines, and descendant cleanup/, filename);
-    assert.match(source, /Never infer availability\s+from elapsed time, process counts, failed sends, model labels, or absence/, filename);
+    assert.match(source, /Bounded verification proceeds without a resource slot unless the board\s+configuration declares one/, filename);
+    assert.match(source, /declared slot is granted through the board, never by a chat handoff/, filename);
+    assert.match(source, /Do not request a slot the board cannot record/, filename);
+    assert.match(source, /at most two workers, finite owned\s+deadlines, and descendant cleanup/, filename);
+    assert.doesNotMatch(source, /SendMessage.*actual transfer|parent-named shared resource/, filename);
   }
-  assert.doesNotMatch(orchestration, /Serialize tickets that\s+share one/);
-  assert.match(orchestration, /parent `SendMessage` naming the resource and next holder/);
-  assert.match(userStory, /serialize commands using it,\s+not entire tickets/);
 });
 
 test('exclusive comment watermarks never stand in for processed instructions', () => {

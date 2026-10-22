@@ -23,6 +23,7 @@ export function gateVerdict(changedMetrics) {
 }
 
 function measuredFailure(metric) {
+  if (metric.complexity >= THRESHOLD) return true;
   if (metric.unverified) return false;
   return metric.crap >= THRESHOLD || metric.branches?.some((branch) => branch.untaken.length > 0);
 }
@@ -169,5 +170,7 @@ export function branchSummary(metrics) {
 
 export function formatMetric(metric) {
   const branches = (metric.branches ?? []).filter((branch) => branch.untaken.length).map((branch) => `${metric.relativePath}:${branch.line} ${branch.text} untaken=${branch.untaken.join(',')}`);
-  return `${metric.relativePath}:${metric.line} ${metric.name} cc=${metric.complexity} coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}${branches.length ? '; branches: ' + branches.join('; ') : ''}`;
+  const measurement = metric.unverified ? `coverage=UNVERIFIED (${metric.unverified}) CRAP=UNVERIFIED` : `coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}`;
+  const failure = metric.complexity >= THRESHOLD ? '; failure: complexity floor' : '';
+  return `${metric.relativePath}:${metric.line} ${metric.name} cc=${metric.complexity} ${measurement}${failure}${branches.length ? '; branches: ' + branches.join('; ') : ''}`;
 }

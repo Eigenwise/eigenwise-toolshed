@@ -182,7 +182,13 @@ function writePayload(agentId: string, executor: string, sessionId: string, file
   };
 }
 
-test('SQ-3794: explicit isolation on a shared board provisions from develop without touching the registered checkout', () => {
+for (const [category, worktreeBase] of [
+  ['coding.normal', 'auto'],
+  ['codebase-exploration', 'auto'],
+  ['codebase-exploration', 'origin-main'],
+  ['codebase-exploration', 'local-main'],
+]) {
+test(`SQ-3834: ${category} explicit isolation uses develop with ${worktreeBase} and names its base`, () => {
   const project = initRepo('sq-explicit-isolation-');
   const git = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: project, encoding: 'utf8', windowsHide: true }).trim();
   git(['checkout', '-b', 'develop']);
@@ -190,15 +196,18 @@ test('SQ-3794: explicit isolation on a shared board provisions from develop with
   git(['add', '.']);
   git(['commit', '-m', 'integration tip']);
   const developTip = git(['rev-parse', 'HEAD']);
-  git(['checkout', 'main']);
+  git(['checkout', '-b', 'feature', 'develop']);
+  fs.writeFileSync(path.join(project, 'feature.txt'), 'unrelated feature tip\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'unrelated feature tip']);
   const registeredTip = git(['rev-parse', 'HEAD']);
   git(['remote', 'add', 'origin', project]);
   git(['update-ref', 'refs/remotes/origin/develop', developTip]);
   git(['update-ref', 'refs/remotes/origin/main', registeredTip]);
   fs.writeFileSync(path.join(project, 'README.md'), 'occupied checkout\n');
   const projectSlug = store.ensureProject(project).slug;
-  store.setBoardConfig(projectSlug, { worktreeIsolation: false, integrationBranch: 'develop', worktreeDependencyPaths: [] });
-  const ticket = store.createTicket(projectSlug, { title: 'explicit isolated checkout', category: 'coding.normal', files: ['README.md'] });
+  store.setBoardConfig(projectSlug, { worktreeIsolation: false, worktreeBase, integrationBranch: 'develop', worktreeDependencyPaths: [] });
+  const ticket = store.createTicket(projectSlug, { title: 'explicit isolated checkout', category, files: ['README.md'] });
   const sessionId = `explicit-isolation-${Date.now()}`;
   const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId, sharedTree: false });
   assert.equal(prepared.ticket.dispatch.sharedTree, false, 'explicit false overrides the shared board');
@@ -209,12 +218,18 @@ test('SQ-3794: explicit isolation on a shared board provisions from develop with
     assert.equal(store.getTicket(projectSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(created.output));
     assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.output, encoding: 'utf8', windowsHide: true }).trim(), developTip);
     assert.equal(git(['rev-parse', 'HEAD']), registeredTip);
-    assert.equal(git(['branch', '--show-current']), 'main');
+    assert.equal(git(['branch', '--show-current']), 'feature');
     assert.equal(fs.readFileSync(path.join(project, 'README.md'), 'utf8'), 'occupied checkout\n');
+    const baseLabel = `${developTip} (${worktreeBase === 'local-main' ? 'develop' : 'origin/develop'})`;
+    assert.equal(agentsync.ticketWorktreeBase(prepared.ticket), baseLabel);
+    const spawnBaseLabel = `${developTip.slice(0, 12)} (${worktreeBase === 'local-main' ? 'develop' : 'origin/develop'})`;
+    assert.ok(agentsync.renderDispatchStub(prepared.ticket, project).includes(`worktreeBase: ${spawnBaseLabel}`), 'spawn names the develop base');
+    assert.ok(agentsync.renderTicketBriefing(prepared.ticket, prepared.token, projectSlug, project).includes(`worktreeBase: ${baseLabel}`), 'briefing names the develop base');
   } finally {
     git(['worktree', 'remove', '--force', created.output]);
   }
 });
+}
 
 test('SQ-3794: unavailable explicit isolation refuses before creating a token on either board default', () => {
   for (const worktreeIsolation of [false, true]) {

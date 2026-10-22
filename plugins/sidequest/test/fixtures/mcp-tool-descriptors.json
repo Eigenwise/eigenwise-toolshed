@@ -1320,7 +1320,7 @@
               ]
             }
           ],
-          "description": "Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate."
+          "description": "ref=review. {sourceRef: reviewed source, commit|sourceRevision: reviewTarget candidate, evidence}. Done bound review, no oracle round (oracle: plain verdict); or undispatched + authority=main-attestation."
         },
         "correct": {
           "type": "object",

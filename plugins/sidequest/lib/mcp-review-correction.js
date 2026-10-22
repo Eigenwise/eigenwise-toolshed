@@ -23,6 +23,7 @@ __export(mcp_review_correction_exports, {
 });
 module.exports = __toCommonJS(mcp_review_correction_exports);
 var import_review_binding = require("./kernel/review-binding");
+var import_review_corrections = require("./store/review-corrections");
 const store = require("./store");
 function correctionObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -44,19 +45,32 @@ function correctionCandidate(correct) {
   if (typeof correct.commit !== "string" || !(0, import_review_binding.isReviewCommit)(correct.commit)) return null;
   return { source: "git", value: correct.commit.trim().toLowerCase() };
 }
+function misroutedFinalizationRefusal(slug, ref) {
+  const ticket = store.getTicket(slug, ref);
+  if (!ticket) return void 0;
+  const reviewId = ticket.submission?.review?.ticketId;
+  return (0, import_review_corrections.oracleRoundRefusal)(ticket) ?? (0, import_review_corrections.reviewedSourceRefusal)(ticket, reviewId ? store.getTicket(slug, reviewId) : null);
+}
+function finalizationShapeRefusal(problem, slug, ref) {
+  const review = store.getTicket(slug, ref);
+  const { reviewTarget: target = {} } = review ?? {};
+  return { ok: false, reason: "invalid_finalization", message: `${problem} ref is the review ticket; finalize names the reviewed source: ${(0, import_review_corrections.finalizeShape)(ref, target.ref, target.candidate)}.` };
+}
 function finalizeReviewVerdict(slug, args, sessionId) {
+  const misrouted = misroutedFinalizationRefusal(slug, args.ref);
+  if (misrouted) return misrouted;
   const outcomes = ["accepted", "rejected"];
   const valid = [outcomes.includes(args.outcome), args.correct === void 0, args.constraint === void 0, args.why === void 0];
-  if (valid.includes(false)) return { ok: false, reason: "invalid_finalization", message: "Finalization requires accepted or rejected and accepts finalize evidence, not correct, why or constraint." };
+  if (valid.includes(false)) return finalizationShapeRefusal("Finalization requires accepted or rejected and takes no correct, why or constraint.", slug, args.ref);
   const finalize = args.finalize;
-  if (!correctionObject(finalize)) return { ok: false, reason: "invalid_finalization", message: "Finalization requires its exact source/candidate and evidence." };
+  if (!correctionObject(finalize)) return finalizationShapeRefusal("finalize must be an object.", slug, args.ref);
   return finalizeValidatedRequest(slug, args, finalize, sessionId);
 }
 function finalizeValidatedRequest(slug, args, finalize, sessionId) {
-  if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return { ok: false, reason: "invalid_finalization", message: "Finalization sourceRef and evidence must be nonempty text." };
+  if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return finalizationShapeRefusal("Finalization sourceRef and evidence must be nonempty text.", slug, args.ref);
   if (![void 0, "main-attestation"].some((authority) => authority === finalize.authority)) return { ok: false, reason: "invalid_finalization", message: "External authority must explicitly be main-attestation." };
   const candidate = correctionCandidate(finalize);
-  if (!candidate) return { ok: false, reason: "invalid_finalization", message: "Finalization requires exactly one valid commit or sourceRevision." };
+  if (!candidate) return finalizationShapeRefusal("Finalization requires exactly one valid commit or sourceRevision.", slug, args.ref);
   return store.finalizeCompletedReview(slug, args.ref, {
     by: args.by,
     sessionId: sessionId ?? "",

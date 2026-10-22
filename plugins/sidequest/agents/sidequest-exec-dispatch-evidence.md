@@ -40,15 +40,10 @@ locations from ticket data before reading them. In an isolated worktree, Claude 
 command it "cannot show not to be git": split compound commands (`||`, jq or `~` text in quotes) into plain ones run
 from the worktree. A nested `claude -p` session is refused even there, so report that work to the orchestrator.
 
-**Shared heavy resource:** Serialize heavy commands on the parent-named shared resource, not entire tickets.
-Without the slot, continue independent reading, editing, and scoped commits. When ready to verify, record
-readiness and end the turn retaining your claim; wait for the parent's `SendMessage` naming the actual transfer.
-Do not poll or create a proxy waiter. The actual owner must acknowledge that its owned heavy command and
-descendants ended before the parent hands off. A terminal submit/done/release is sufficient when it really
-ends that owned work; an authenticated explicit mid-claim return is valid too. Never infer availability
-from elapsed time, process counts, failed sends, model labels, or absence. Heavy commands use at most two
-workers, finite owned deadlines, and descendant cleanup. Fit them within the two-core heavy budget.
-This pause owns no running heavy command.
+**Verification concurrency:** Bounded verification proceeds without a resource slot unless the board
+configuration declares one. Any declared slot is granted through the board, never by a chat handoff.
+Do not request a slot the board cannot record. Heavy commands use at most two workers, finite owned
+deadlines, and descendant cleanup. Continue unaffected source work when a verification step is blocked.
 
 **Instruction cursors:** Comment `since` is exclusive and only a read cursor, not proof that the instruction
 at its watermark was processed. A handoff includes the exact instruction/comment or directs bounded

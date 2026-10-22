@@ -369,6 +369,31 @@ test('sweep leaves an owned link intact when salvage fails', async () => {
   }
 });
 
+test('scoped plugin provisioning defers locked dependencies to the executor before its test entry', async () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scoped-plugin-'));
+  const worktree = path.join(repository, 'checkout');
+  const plugin = path.join(worktree, 'plugins', 'model-gateway');
+  const dependency = path.join(plugin, 'vendor', 'locked-fixture');
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(path.join(dependency, 'package.json'), JSON.stringify({ name: 'locked-fixture', version: '1.0.0', main: 'index.js' }));
+  fs.writeFileSync(path.join(dependency, 'index.js'), 'module.exports = 3836;');
+  fs.writeFileSync(path.join(plugin, 'package.json'), JSON.stringify({ name: 'scoped-plugin', version: '1.0.0', dependencies: { 'locked-fixture': 'file:vendor/locked-fixture' } }));
+  fs.writeFileSync(path.join(plugin, 'package-lock.json'), JSON.stringify({ name: 'scoped-plugin', version: '1.0.0', lockfileVersion: 3, packages: { '': { name: 'scoped-plugin', version: '1.0.0', dependencies: { 'locked-fixture': 'file:vendor/locked-fixture' } }, 'node_modules/locked-fixture': { resolved: 'vendor/locked-fixture', link: true }, 'vendor/locked-fixture': { name: 'locked-fixture', version: '1.0.0' } } }));
+  fs.writeFileSync(path.join(plugin, 'test-entry.js'), "require('node:assert/strict').equal(require('locked-fixture'), 3836);");
+  const evidence: string[] = [];
+  try {
+    assert.equal(fs.existsSync(path.join(plugin, 'node_modules')), false, 'dependency state starts empty');
+    const failure = await worktrees.provisionWorktree(repository, worktree, {}, { declaredFiles: ['plugins/model-gateway/src/index.ts'], evidence });
+    assert.equal(failure, null);
+    assert.equal(fs.existsSync(path.join(plugin, 'node_modules')), false, 'hook defers installation without creating dependency state');
+    assert.deepEqual(evidence, ['plugins/model-gateway: install deferred (npm ci --prefix plugins/model-gateway --ignore-scripts --no-audit --no-fund)']);
+    execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--prefix', 'plugins/model-gateway', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: worktree, windowsHide: true, stdio: 'pipe', shell: process.platform === 'win32' });
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['test-entry.js'], { cwd: plugin, windowsHide: true, stdio: 'pipe' }), 'the scoped plugin test entry loads its locked dependency after the deferred install');
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test('provisionWorktree reports every created link before a setup failure', async () => {
   const { repository } = repositoryFixture();
   const target = dependencyTarget(repository, 'partial');

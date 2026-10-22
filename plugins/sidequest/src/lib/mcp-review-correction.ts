@@ -1,6 +1,7 @@
-import type { CorrectionInput } from './store/review-corrections';
+import type { CorrectionInput, RoutedTicket } from './store/review-corrections';
 import type { ReviewCandidate } from './kernel/review-binding';
 import { isReviewCommit } from './kernel/review-binding';
+import { finalizeShape, oracleRoundRefusal, reviewedSourceRefusal } from './store/review-corrections';
 
 const store = require('./store');
 type Request = {
@@ -36,20 +37,37 @@ function correctionCandidate(correct: Record<string, unknown>): ReviewCandidate 
   return { source: 'git', value: correct.commit.trim().toLowerCase() };
 }
 
+// Route before checking the request shape: an oracle review or a reviewed source never takes finalize,
+// so a shape error there would send the caller to a shape the next refusal rejects (SQ-3840).
+function misroutedFinalizationRefusal(slug: string, ref: string) {
+  const ticket: RoutedTicket | null = store.getTicket(slug, ref);
+  if (!ticket) return undefined;
+  const reviewId = ticket.submission?.review?.ticketId;
+  return oracleRoundRefusal(ticket) ?? reviewedSourceRefusal(ticket, reviewId ? store.getTicket(slug, reviewId) : null);
+}
+
+function finalizationShapeRefusal(problem: string, slug: string, ref: string) {
+  const review: RoutedTicket | null = store.getTicket(slug, ref);
+  const { reviewTarget: target = {} } = review ?? {};
+  return { ok: false, reason: 'invalid_finalization', message: `${problem} ref is the review ticket; finalize names the reviewed source: ${finalizeShape(ref, target.ref, target.candidate)}.` };
+}
+
 export function finalizeReviewVerdict(slug: string, args: Request, sessionId: string | null) {
+  const misrouted = misroutedFinalizationRefusal(slug, args.ref);
+  if (misrouted) return misrouted;
   const outcomes = ['accepted', 'rejected'];
   const valid = [outcomes.includes(args.outcome), args.correct === undefined, args.constraint === undefined, args.why === undefined];
-  if (valid.includes(false)) return { ok: false, reason: 'invalid_finalization', message: 'Finalization requires accepted or rejected and accepts finalize evidence, not correct, why or constraint.' };
+  if (valid.includes(false)) return finalizationShapeRefusal('Finalization requires accepted or rejected and takes no correct, why or constraint.', slug, args.ref);
   const finalize = args.finalize;
-  if (!correctionObject(finalize)) return { ok: false, reason: 'invalid_finalization', message: 'Finalization requires its exact source/candidate and evidence.' };
+  if (!correctionObject(finalize)) return finalizationShapeRefusal('finalize must be an object.', slug, args.ref);
   return finalizeValidatedRequest(slug, args, finalize, sessionId);
 }
 
 function finalizeValidatedRequest(slug: string, args: Request, finalize: Record<string, unknown>, sessionId: string | null) {
-  if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return { ok: false, reason: 'invalid_finalization', message: 'Finalization sourceRef and evidence must be nonempty text.' };
+  if (![finalize.sourceRef, finalize.evidence].every(nonemptyCorrectionText)) return finalizationShapeRefusal('Finalization sourceRef and evidence must be nonempty text.', slug, args.ref);
   if (![undefined, 'main-attestation'].some(authority => authority === finalize.authority)) return { ok: false, reason: 'invalid_finalization', message: 'External authority must explicitly be main-attestation.' };
   const candidate = correctionCandidate(finalize);
-  if (!candidate) return { ok: false, reason: 'invalid_finalization', message: 'Finalization requires exactly one valid commit or sourceRevision.' };
+  if (!candidate) return finalizationShapeRefusal('Finalization requires exactly one valid commit or sourceRevision.', slug, args.ref);
   return store.finalizeCompletedReview(slug, args.ref, {
     by: args.by, sessionId: sessionId ?? '', text: args.text, outcome: args.outcome, evidence: finalize.evidence, authority: finalize.authority,
     expected: { sourceRef: finalize.sourceRef, candidate },

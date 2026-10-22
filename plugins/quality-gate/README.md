@@ -116,7 +116,7 @@ Exit codes: 0 for passed, nothing to score or informational-only rows; 1 for a s
 
 ## Receipts for hook consumers
 
-Every completed Git gate run writes `.claude/quality-gate/receipts/<head-sha>.json`, replacing that HEAD's previous run atomically. Prerequisite and unverified runs also write a receipt when HEAD exists. No receipt is written outside a repository with a committed HEAD.
+Every completed Git `crap` or `measure` run writes `.claude/quality-gate/receipts/<head-sha>.json`, replacing that HEAD's previous run atomically. Set `--receipts-dir <path>` on either command to keep receipts outside the measured tree. It overrides `QUALITY_GATE_RECEIPTS_DIR`; relative paths resolve from cwd. The default directory is unchanged. Prerequisite and unverified `crap` runs also write a receipt when HEAD exists. No receipt is written outside a repository with a committed HEAD.
 
 Schema: `gateVersion` (`crap-1`), `pythonPolicy`, optional `pythonOracles`, `project` (measured root), `base`, `head`, `files` (relative path to SHA-256 map), `rowCounts` (`new`, `modified-raised`, `legacy-unchanged`, `unverified`), `verdict`, `timestamp`, `ccOnly` and `reasons`. Verdicts are `passed`, `failed`, `unverified` or `nothing to score`. Informational-unverified rows still produce an unverified receipt, even with exit 0. A prerequisite receipt has an empty file map and its reason.
 
@@ -131,6 +131,8 @@ node plugins/quality-gate/bin/quality-gate.js measure --project <root> --base <r
 This command consumes an existing same-session V8 capture and prints JSON. It runs no tests and installs no hooks. Capture with `QUALITY_GATE_V8_CAPTURE=<empty directory>` and the canonical realpath file URL of `lib/core.mjs` in `NODE_OPTIONS=--import=<file URL>`. Children must inherit both environment values; a command-line `--import` alone does not preload children. The preload uses Node's inspector to save precise coverage and `Debugger.getScriptSource` bytes from the same session. Keep that capture unchanged. In the inspected Claude Code 2.1.295, a direct worktree-isolated Bash startup assignment `NODE_OPTIONS=--import=<url>` followed by a Node-family command is refused by the host guard, because startup code cannot be shown not to be Git. Quality Gate does not issue that refusal, an immutable URL or hash did not change it, and no shipped capture-launch command supports that exact boundary. Other contexts, capture methods and versions were not assessed. After that actual refusal, stop: the measurement stays UNVERIFIED, and do not retry, reword, split the command or route around it. Raw `NODE_V8_COVERAGE` reports lack executed-byte binding and return UNVERIFIED; hashing today's files alongside old reports does not repair them.
 
 ### Changed-hunk branch checks
+
+`measure` fails every new or complexity-raised body at complexity 6 or more, including when coverage is UNVERIFIED. The failure row says `failure: complexity floor` and retains the coverage reason. Below that floor, unverified coverage remains measurement debt. Equal/lowered legacy bodies stay informational.
 
 `measure` keeps function coverage unchanged and also reads precise block counts for conditions in `--base` changed hunks. New and complexity-raised bodies fail when an if/else, ternary, logical short-circuit, switch arm or loop outcome never executed. Legacy bodies with equal/lowered complexity report the same evidence informationally. Untouched condition lines do not enter this check. Explicit external-new files check every condition.
 

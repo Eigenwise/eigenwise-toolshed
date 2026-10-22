@@ -82,7 +82,9 @@ test('measure consumes real V8 coverage, preserves report JSON and fails at six'
     assert.equal(report.changedMetrics[0].coverage, 1);
     const cli = runNode([path.join(pluginRoot, 'bin/quality-gate.js'), 'measure', '--project', project, '--base', base, '--coverage', coverage, 'subject.mjs']);
     assert.equal(cli.status, 1, cli.stderr);
-    assert.deepEqual(JSON.parse(cli.stdout), report);
+    const { receipt, ...cliReport } = JSON.parse(cli.stdout);
+    assert.equal(receipt, path.join(project, '.claude/quality-gate/receipts', base + '.json'));
+    assert.deepEqual(cliReport, report);
     assert.deepEqual(await measureFiles([subject], { projectRoot: project, base, coverageDirectory: coverage }), report);
     assert.equal(report.failures.length, 1);
     const emptyCoverage = path.join(root, 'empty-coverage');
@@ -141,7 +143,7 @@ test('an equal-complexity legacy edit is informational even without coverage', a
 test('a legacy function that gains a branch is modified-raised and fails at or above six', async () => {
   const { byName, verdict } = await classifiedAgainstLegacyBase(legacyAtBase.replace('  }\n  return', '    if (item.f) total += 6;\n  }\n  return'));
   assert.deepEqual(byName, { legacy: 'modified-raised' });
-  assert.deepEqual(verdict.failures, ['legacy.mjs:1 legacy cc=8 coverage=100.00% CRAP=8.0000']);
+  assert.deepEqual(verdict.failures, ['legacy.mjs:1 legacy cc=8 coverage=100.00% CRAP=8.0000; failure: complexity floor']);
 });
 
 test('a new helper is enforced while its equal-complexity legacy caller is informational', async () => {

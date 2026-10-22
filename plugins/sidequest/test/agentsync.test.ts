@@ -1100,11 +1100,10 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
   assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
   assert.equal(stub.match(/\[sidequest-route /g)!.length, 1);
-  assert.ok(stub.includes(stubDescription));
-  assert.doesNotMatch(stub, /excerpt capped|orientation capped/);
-  assert.match(stub, /Title: Instant dispatch/);
-  assert.match(stub, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
-  assert.match(stub, /Anchors:\nlib\/store\.js prepareDispatch/);
+  assert.ok(!stub.includes(stubDescription));
+  assert.doesNotMatch(stub, /excerpt capped|orientation capped|Title:|Declared files:|Anchors:/);
+  assert.match(briefing, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
+  assert.match(briefing, /lib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
   assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\\dispatch\\instant-token-334\.token" --project "C:\\dev\\fixture"`/);
 });

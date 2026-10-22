@@ -1,6 +1,6 @@
 import { effectiveOracleVerdictOutcome, reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
 import type { ReviewCandidate } from '../kernel/review-binding';
-import { undispatchedReviewRefusal, activeCorrectionTicket, correctionReviewCategory, completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
+import { undispatchedReviewRefusal, activeCorrectionTicket, correctionReviewCategory, completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal, reviewedSourceRefusal } from './review-corrections';
 import type { CorrectionTicket, CorrectionComment, Refusal, Relation } from './review-corrections';
 
 export type ReviewDecision = Readonly<{
@@ -133,12 +133,18 @@ export function createReviewFinalization(dependencies: Dependencies) {
     return { ok: true, decision, reviewOutcome: { sourceRef: source.ref, outcome: input.outcome } };
   }
 
+  function unboundReviewRefusal(slug: string, ticket: FinalizationTicket): Refusal {
+    const reviewId = ticket.submission?.review?.ticketId;
+    return reviewedSourceRefusal(ticket, reviewId ? dependencies.getTicket(slug, reviewId) : null)
+      ?? refuse('review_unbound', 'Finalization requires the original source binding.');
+  }
+
   function finalizeCompletedReview(slug: string, idOrRef: string, input: FinalizationInput, grant: { allowCompletedReviewFinalization?: boolean } = {}): LockedResult {
     const invalid = requestRefusal(input, grant.allowCompletedReviewFinalization === true);
     if (invalid) return invalid;
     const review = dependencies.getTicket(slug, idOrRef);
     if (!review) return refuse('not_found', 'Review ticket not found.');
-    if (!review.reviewTarget?.ticketId) return refuse('review_unbound', 'Finalization requires the original source binding.');
+    if (!review.reviewTarget?.ticketId) return unboundReviewRefusal(slug, review);
     try {
       return dependencies.withSourceTicketLock(slug, review.reviewTarget.ticketId,
         () => dependencies.withTicketLock(slug, review.id, () => finalizeUnderLocks(slug, review.id, input)), true);
