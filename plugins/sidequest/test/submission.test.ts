@@ -616,6 +616,74 @@ test('integration keeps a recorded verifier instead of re-deriving a plugin gate
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
+function installFixtureQualityGate(complexity: number, covered: boolean) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-integration-quality-home-'));
+  const gate = path.join(home, 'gate');
+  fs.mkdirSync(path.join(home, 'plugins'), { recursive: true });
+  fs.mkdirSync(path.join(gate, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(gate, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(gate, 'lib', 'core.mjs'), '');
+  const row = { relativePath: 'lib/quality.js', name: 'candidateBody', complexity, classification: 'new', line: 1,
+    ...(covered ? { coverage: 1, crap: complexity } : { unverified: 'TypeScript executed bytes have no authentic map' }) };
+  const report = { changedMetrics: [row], failures: [], unverified: covered ? [] : [row] };
+  fs.writeFileSync(path.join(gate, 'bin', 'quality-gate.js'), `process.stdout.write(${JSON.stringify(JSON.stringify(report))});`);
+  fs.writeFileSync(path.join(home, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: {
+    'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: PROJECT_DIR, installPath: gate }],
+  } }));
+  return home;
+}
+
+function qualityDeliveryCandidate() {
+  const commit = createCandidateCommit('quality.js', 'function candidateBody() { return true; }');
+  const ticket = addTicket('native integration quality', { files: ['lib/quality.js'] });
+  ticket.submission = { commit, base: git(['rev-parse', 'origin/main']), changedPaths: ['lib/quality.js'],
+    verify: 'node -e "process.exit(0)"', integration: { outcome: 'delivered' } };
+  persist(ticket);
+  return ticket;
+}
+
+function verifyFixtureQuality(complexity: number, covered: boolean) {
+  const ticket = qualityDeliveryCandidate();
+  const home = installFixtureQualityGate(complexity, covered);
+  const previous = process.env.SIDEQUEST_CLAUDE_HOME;
+  process.env.SIDEQUEST_CLAUDE_HOME = home;
+  try {
+    const first = store.verifyIntegration(slug, ticket.ref);
+    const stored = store.getTicket(slug, ticket.ref);
+    stored.submission.integration = { outcome: 'delivered' };
+    persist(stored);
+    return { ticket, first, second: store.verifyIntegration(slug, ticket.ref) };
+  } finally {
+    if (previous === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('integration native quality refuses CC seven with the failing body named', () => {
+  const { first } = verifyFixtureQuality(7, false);
+  assert.strictEqual(first.ok, false);
+  assert.match(first.verify.evidence, /candidateBody cc=7/);
+  assert.strictEqual(first.verify.quality[0].status, 'failed');
+});
+
+test('integration native quality records a covered CC three receipt on the delivery', () => {
+  const { first, ticket } = verifyFixtureQuality(3, true);
+  assert.strictEqual(first.ok, true);
+  const quality = store.getTicket(slug, ticket.ref).submission.integration.verify.quality[0];
+  assert.strictEqual(quality.status, 'measured');
+  assert.strictEqual(quality.worstBody.crap, 3);
+  assert.ok(fs.existsSync(quality.receipt));
+});
+
+test('integration native quality records unmapped evidence and files candidate debt once', () => {
+  const { first, second } = verifyFixtureQuality(3, false);
+  assert.strictEqual(first.ok, true);
+  assert.strictEqual(second.ok, true);
+  assert.strictEqual(first.verify.quality[0].status, 'unverified');
+  assert.strictEqual(store.listTickets(slug).filter((ticket: { source: string }) => ticket.source === 'integration-quality').length, 1);
+});
+
 test('SQ-1875: every rejected submission range reason gives a pinned-base remedy', () => {
   const ticket = { ref: 'SQ-1875', dispatch: { baseCommit: '1234567890abcdef1234567890abcdef12345678' } };
   const reasons = ['empty_range', 'base_not_reachable', 'range_changed', 'no_op_changed', 'reconciled_path_diverged'];

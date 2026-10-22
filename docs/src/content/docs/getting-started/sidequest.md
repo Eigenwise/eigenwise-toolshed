@@ -78,6 +78,10 @@ CLI, dashboard, report prose and generic ticket links cannot grant this decision
 
 If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. Singleton and wave integration always deliver onto the ticket's recorded branch. If that branch has no checkout, `integrate` creates a separate worktree under the board worktree root, leaving the registered checkout's branch and files unchanged. Clean temporary worktrees are removed after delivery; apply mode retains staged changes in the integration record's `worktree` path. Passing a different `integrationBranch` refuses, so changing the delivery target requires redispatch. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
 
+## Integration quality receipts
+
+When Quality Gate is registered for the project, integration captures the pinned verifier on the exact delivery tree and measures changed source against each participant's dispatch baseline. Measured failures refuse delivery and name the failing bodies. Missing coverage stays UNVERIFIED and creates one measurement-debt ticket per candidate. Receipts stay in the board's verification directory and appear in the recorded verification, including publish queue JSON. Without a configured gate, verification records quality status `none`.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
