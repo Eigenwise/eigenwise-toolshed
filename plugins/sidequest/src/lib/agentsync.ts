@@ -1029,6 +1029,14 @@ function executorVerificationDirectoryGuidance(directory?: string): string {
     : '';
 }
 
+function deferredDependencySetup(ticket: { dispatch?: { worktreeProvisioningEvidence?: string[] } }): string {
+  const commands = (ticket.dispatch?.worktreeProvisioningEvidence || []).flatMap((evidence) => {
+    const deferred = /^plugins\/[A-Za-z0-9_-]+: install deferred \((npm ci --prefix plugins\/[A-Za-z0-9_-]+ --ignore-scripts --no-audit --no-fund)\)$/.exec(evidence);
+    return deferred ? [deferred[1]] : [];
+  });
+  return commands.length ? `First step after claiming and confirming the worktree: run these deferred dependency installs in the worktree before any tests or source work:\n${commands.map((command) => `\`${command}\``).join('\n')}` : '';
+}
+
 function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?: any, executor?: any, closeout?: any, worktreeIdentity?: any, readOnlyScratchSpace?: any, worktreeSync?: any) {
   const claimCall = [
     'mcp__plugin_sidequest_board__claim({',
@@ -1051,6 +1059,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     'Claim first with this exact call. Do not pass direct or replace the prepared executor:',
     ['```javascript', claimCall, '```'].join('\n'),
     worktreeIdentity,
+    deferredDependencySetup(ticket),
     formatWorktreeBase(ticketWorktreeBase(ticket)),
     readOnlyScratchSpace,
     worktreeSync,

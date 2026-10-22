@@ -405,20 +405,22 @@ function linkedPluginDependencies(repository, directory, plugin) {
   if (!sameLock || canonicalPath(modules) !== canonicalPath(path.join(source, "node_modules"))) throw new Error(`unverified locked dependency link: ${plugin}`);
   return true;
 }
-async function installScopedPluginDependencies(repository, worktree, files, deadline, evidence) {
-  for (const plugin of scopedPluginDirectories(files)) {
-    const directory = path.join(worktree, plugin);
-    if (!nativeFs.existsSync(path.join(directory, "package-lock.json"))) continue;
-    if (linkedPluginDependencies(repository, directory, plugin)) {
-      evidence.push(`${plugin}: retained dependency link with matching lockfile`);
-      continue;
-    }
-    const command = "npm ci --ignore-scripts --no-audit --no-fund";
-    const failure = await runWorktreeSetup(command, directory, Math.max(1, deadline - Date.now()));
-    if (failure) return { ...failure, command: `${plugin}: ${failure.command}` };
-    evidence.push(`${plugin}: installed locked dependencies (${command})`);
-  }
-  return null;
+function linkScopedPluginDependencies(repository, worktree, plugin) {
+  const source = path.join(repository, plugin, "node_modules");
+  if (!nativeFs.existsSync(source)) return null;
+  const sourceLock = path.join(repository, plugin, "package-lock.json");
+  if (!nativeFs.existsSync(sourceLock)) return null;
+  if (!nativeFs.readFileSync(sourceLock).equals(nativeFs.readFileSync(path.join(worktree, plugin, "package-lock.json")))) return null;
+  return provisionDependencyPath(repository, worktree, { path: `${plugin}/node_modules`, mode: "link" });
+}
+function scopedPluginProvisioning(repository, worktree, plugin, onDependencyLink) {
+  const directory = path.join(worktree, plugin);
+  if (!nativeFs.existsSync(path.join(directory, "package-lock.json"))) return [];
+  if (linkedPluginDependencies(repository, directory, plugin)) return [`${plugin}: retained dependency link with matching lockfile`];
+  const link = linkScopedPluginDependencies(repository, worktree, plugin);
+  if (!link) return [`${plugin}: install deferred (npm ci --prefix ${plugin} --ignore-scripts --no-audit --no-fund)`];
+  onDependencyLink?.(link);
+  return [`${plugin}: linked locked dependencies with matching lockfile`];
 }
 async function provisionWorktree(repository, worktree, config, options = {}) {
   for (const dependency of config.worktreeDependencyPaths || []) {
@@ -426,12 +428,12 @@ async function provisionWorktree(repository, worktree, config, options = {}) {
     if (createdLink) options.onDependencyLink?.(createdLink);
   }
   const { declaredFiles = [], evidence = [], setupTimeoutMs = 12e4 } = options;
-  const deadline = Date.now() + setupTimeoutMs;
-  const dependencyFailure = await installScopedPluginDependencies(repository, worktree, declaredFiles, deadline, evidence);
-  if (dependencyFailure) return dependencyFailure;
+  for (const plugin of scopedPluginDirectories(declaredFiles)) {
+    evidence.push(...scopedPluginProvisioning(repository, worktree, plugin, options.onDependencyLink));
+  }
   const setup = String(config.worktreeSetup || "").trim();
   if (!setup) return null;
-  return runWorktreeSetup(setup, worktree, Math.max(1, deadline - Date.now()));
+  return runWorktreeSetup(setup, worktree, setupTimeoutMs);
 }
 function gitBashPath(value) {
   const drive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
