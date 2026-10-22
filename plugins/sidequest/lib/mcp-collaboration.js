@@ -346,7 +346,7 @@ const tools = [
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
-        worktreeBase: agentsync.ticketWorktreeBase(prepared.ticket),
+        worktreeBase: agentsync.ticketWorktreeBase(prepared.ticket, 12),
         ...prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {},
         ...prepared.recovery?.worktreeCorrection ? { worktreeCorrection: prepared.recovery.worktreeCorrection } : {},
         ...boardAddedScope,

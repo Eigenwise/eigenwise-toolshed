@@ -4563,6 +4563,13 @@ test('readonly isolated dispatches default to the integration branch and honor c
       const ticket = store.createTicket(baseSlug, { title, category, files: ['tracked.js'] });
       const dispatch = store.prepareDispatch(baseSlug, ticket.ref, { sessionId: `${title}-${Date.now()}-${worktreeSequence}`, ...options });
       assertCreatedWorktree(dispatch, expectedBase);
+      const target = dispatch.ticket.dispatch.integrationTarget;
+      const branch = target.mode === 'remote' ? `origin/${target.branch}` : target.branch;
+      const stub = agentsync.renderDispatchStub(dispatch.ticket, repository);
+      const briefing = agentsync.renderTicketBriefing(dispatch.ticket, dispatch.token, baseSlug, repository);
+      assert.ok(stub.includes(`worktreeBase: ${expectedBase.slice(0, 12)} (${branch})`));
+      assert.ok(!stub.includes(expectedBase), 'spawn keeps the full base SHA in the briefing only');
+      assert.ok(briefing.includes(`worktreeBase: ${expectedBase} (${branch})`));
       return dispatch;
     };
 
