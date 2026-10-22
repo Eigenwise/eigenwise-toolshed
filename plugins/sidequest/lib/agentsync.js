@@ -758,6 +758,14 @@ function highStakesVerificationGuidance(highStakes) {
 function executorVerificationDirectoryGuidance(directory) {
   return directory ? `verifyCwd: the wrapper runs it from ${directory}, relative to the checkout root; the integrate gate does the same.` : "";
 }
+function deferredDependencySetup(ticket) {
+  const commands = (ticket.dispatch?.worktreeProvisioningEvidence || []).flatMap((evidence) => {
+    const deferred = /^plugins\/[A-Za-z0-9_-]+: install deferred \((npm ci --prefix plugins\/[A-Za-z0-9_-]+ --ignore-scripts --no-audit --no-fund)\)$/.exec(evidence);
+    return deferred ? [deferred[1]] : [];
+  });
+  return commands.length ? `First step after claiming and confirming the worktree: run these deferred dependency installs in the worktree before any tests or source work:
+${commands.map((command) => `\`${command}\``).join("\n")}` : "";
+}
 function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
@@ -780,6 +788,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     "Claim first with this exact call. Do not pass direct or replace the prepared executor:",
     ["```javascript", claimCall, "```"].join("\n"),
     worktreeIdentity,
+    deferredDependencySetup(ticket),
     formatWorktreeBase(ticketWorktreeBase(ticket)),
     readOnlyScratchSpace,
     worktreeSync,
