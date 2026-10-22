@@ -1642,6 +1642,7 @@ const {
   recordSubmissionWaveDelivery,
   submissionsPayload
 } = createSubmissions({
+  createTicket,
   afterCommit,
   EXECUTOR_VERIFY_MAX,
   INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
