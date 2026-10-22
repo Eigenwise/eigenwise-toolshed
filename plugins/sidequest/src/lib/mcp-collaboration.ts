@@ -371,12 +371,8 @@ const tools: ToolDefinition[] = [
         ...unscopedWriteScope,
         spawn,
       };
+      if (!args.full) return compact;
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
-      if (!args.full) {
-        const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
-        // Compact dispatches must keep a bounded spawn payload. Warnings ride only when they fit the MCP ceiling.
-        return Buffer.byteLength(JSON.stringify(withWarnings, null, 2)) <= 1200 ? withWarnings : compact;
-      }
       return {
         project: slug,
         projectPath: meta.path,

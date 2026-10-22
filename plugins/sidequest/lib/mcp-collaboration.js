@@ -353,11 +353,8 @@ const tools = [
         ...unscopedWriteScope,
         spawn
       };
+      if (!args.full) return compact;
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
-      if (!args.full) {
-        const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
-        return Buffer.byteLength(JSON.stringify(withWarnings, null, 2)) <= 1200 ? withWarnings : compact;
-      }
       return {
         project: slug,
         projectPath: meta.path,

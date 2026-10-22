@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-'));
+const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-'));
+const home = path.join(homeRoot, 'windows-ci-home'.padEnd(Math.max(15, 90 - homeRoot.length - 1), 'x'));
+fs.mkdirSync(home);
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-board-'));
 const projectPath = path.join(projectRoot, 'windows-length-checkout'.padEnd(Math.max(22, 90 - projectRoot.length - 1), 'x'));
 fs.mkdirSync(projectPath);
@@ -59,6 +61,13 @@ function hookOutput(expression: string) {
     encoding: 'utf8', windowsHide: true,
     env: { ...process.env, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') },
   }));
+}
+
+function dispatchByteBreakdown(text: string): string {
+  const payload: { spawn: { prompt: string }; [field: string]: unknown } = JSON.parse(text);
+  const fields = Object.entries(payload).map(([field, value]) => `${field}=${Buffer.byteLength(JSON.stringify({ [field]: value }), 'utf8')}B`);
+  const sentences = payload.spawn.prompt.split(/\n|(?<=\.) /).map((sentence, index) => `prompt[${index}] ${JSON.stringify(sentence)}=${Buffer.byteLength(JSON.stringify(sentence), 'utf8')}B`);
+  return [...fields, ...sentences].join('; ');
 }
 
 test('end-to-end context budgets preserve real storage, retrieval, and model seams', async () => {
@@ -132,7 +141,8 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
   }
   assert.ok(!dispatch.isError, dispatch.content?.[0]?.text);
   process.stdout.write(`dispatch benchmark ${Buffer.byteLength(dispatch.content[0].text)}B projectPath=${projectPath.length}\n`);
-  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes; ${dispatchByteBreakdown(dispatch.content[0].text)}`);
+  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1260, `dispatch needs 60B margin below 1320B; ${dispatchByteBreakdown(dispatch.content[0].text)}`);
   const payload = JSON.parse(dispatch.content[0].text);
   const dispatchedTicket = store.getTicket(project, orientationTicket.ref);
   const baseCommit = dispatchedTicket.dispatch.baseCommit;

@@ -4977,8 +4977,8 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.equal(Object.hasOwn(instant, 'briefing'), false);
   assert.ok(Buffer.byteLength(instant.spawn.prompt) < 1200, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
-  assert.match(instant.spawn.prompt, /Title: instant dispatch/);
-  assert.ok(instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
+  assert.match(instant.spawn.prompt, /instant dispatch/);
+  assert.ok(!instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
   assert.ok(instant.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
   assert.match(instant.spawn.prompt, /FIRST action:/);
   assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high ticket=SQ-\d+\]/);

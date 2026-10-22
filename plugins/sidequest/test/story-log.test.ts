@@ -162,9 +162,10 @@ test('orchestrator appends without a member ticket ref through the CLI', () => {
   assert.doesNotMatch(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
   const spawn = agentsync.renderDispatchStub(briefingTicket, PROJECT_DIR);
   assert.doesNotMatch(spawn, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
-  assert.match(spawn, /Description:\nConsume the prior story finding\./);
-  assert.match(spawn, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts/);
-  assert.match(spawn, /Anchors:\nagentsync\.ts renderDispatchStub/);
+  assert.doesNotMatch(spawn, /Description:|Declared files:|Anchors:/);
+  assert.match(briefing, /Description:\nConsume the prior story finding\./);
+  assert.match(briefing, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts/);
+  assert.match(briefing, /agentsync\.ts renderDispatchStub/);
 });
 
 test('entries up to 16 KB are stored and long entries advise without blocking', () => {
