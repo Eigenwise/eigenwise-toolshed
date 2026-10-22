@@ -8,6 +8,51 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.610.0 (2026-10-22)
+
+### quality-gate 1.2.0 → 1.2.1
+
+#### Fixes
+
+- Enforce the measurement complexity floor and redirect receipts (SQ-3851)
+  Native V8 measurement fails new and complexity-raised bodies at complexity 6 or more even when coverage is unverified. Both scoring commands accept `--receipts-dir` and `QUALITY_GATE_RECEIPTS_DIR` to keep receipts outside the measured project.
+
+### sidequest 6.1.2 → 6.2.0
+
+#### Features
+
+- Integration records native quality receipts before delivery (SQ-3837)
+  Integration captures the pinned verifier with the configured Quality Gate, measures each candidate range, refuses measured failures, and records local receipts and candidate measurement debt.
+
+#### Fixes
+
+- Base isolated read-only dispatches at the integration branch (SQ-3834)
+  Isolated read-only dispatches follow the same integration-branch base policy as write dispatches. Dispatch results, spawn prompts, and briefings name the resolved base commit and branch.
+- Allow read-only Git inspection of the shared checkout (SQ-3835)
+  Read-only and isolated executors can inspect shared checkout status, worktree listings and other allowed Git reads. The shell and isolation guards share the same read-only predicate, including parsing global Git flags. Mutations still refuse.
+- Restore inherited repairs and provision scoped plugin dependencies (SQ-3836)
+  Related repairs restore candidate ancestry with a merge and automatically record unchanged inherited tests without extra control markers. Worktree provisioning installs scoped plugins' locked dependencies. Executor guidance follows the board's recorded verification concurrency policy.
+- Keep an oracle review's verdict reachable and route every verdict refusal to one shape (SQ-3840)
+  `groomClose` now refuses a bound review that is still awaiting its oracle verdict (`oracle_verdict_pending`), so closing it first can't drop the outcome. Verdict refusals no longer point at each other: naming the reviewed source as `ref` refuses `review_ref_required` with the review's next shape, a review closed with its oracle round unanswered refuses `oracle_round_closed` with the reopen-then-verdict recovery, and finalize shape errors print the exact `finalize` fields with the review's own source and candidate filled in.
+- Keep integration on the ticket's recorded branch (SQ-3843)
+  Singleton and wave delivery now keep the recorded integration branch when the registered checkout is on a release or topic branch. A separate worktree handles delivery without switching that checkout. Target overrides refuse, and apply worktrees retain their staged changes.
+- Preserve recorded delivery targets during integration closure (SQ-3848)
+  Integration closure keeps validated delivery targets when the board default changes. Frozen dispatch targets still take priority, and abandonment keeps its validated fallback when the frozen branch disappeared. Target checks avoid Git under the SQLite write lock. Detailed publishing and read-only guidance now lives in references so the main skill stays within its loading budget.
+- Align readonly dispatch regression fixtures with current contracts (SQ-3850)
+  Update the MCP descriptor golden from live descriptors and check that readonly isolated dispatches default to the integration branch while honoring configured bases.
+- Keep scoped dependency installs outside the worktree hook budget (SQ-3853)
+  Worktree provisioning links scoped plugin dependencies with matching lockfiles and records ownership for cleanup. Missing dependencies are deferred to the executor with the install command in its briefing. Setup retains its configured timeout.
+- Gate deliveries with importing plugin tests (SQ-3854)
+  Integration records the plugin test files that import changed modules and runs files outside the pinned verifier in serial, bounded batches. A failing importing test blocks delivery.
+- Include the shared read-only git predicate in isolated module tests (SQ-3856)
+  Copy the shared read-only git predicate into the guards module test fixture so CI can load the guards and exercise git and MCP permissions.
+- Keep dispatch base summaries within the Windows context budget (SQ-3857)
+  Dispatch results and spawn prompts use a 12-character base SHA with the branch name. Executor briefings retain the full SHA.
+- Preserve full-suite capture environment during integration quality checks (SQ-3858)
+  Integration quality capture keeps the full-suite slot environment and runs measurement after verification. Worktree isolation regressions now expect the shortened dispatch base while keeping the full commit in briefings.
+- Keep dispatch context in the briefing and diagnose payload growth (SQ-3859)
+  Move executor task details into the token-gated briefing. Normalize benchmark home and checkout paths for Windows CI, and name result fields and prompt sentences in byte-budget failures.
+
 ## v3.609.0 (2026-10-21)
 
 ### model-gateway 0.55.0 → 0.55.1

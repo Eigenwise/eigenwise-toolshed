@@ -1947,10 +1947,7 @@ function createDispatch(dependencies) {
     return opts.integrationBranch != null || opts.integrationMode != null;
   }
   function isolatedRepositoryDispatch(isolation) {
-    return !isolation.sharedTree && !isolation.readonly && !isolation.nonRepoOutput;
-  }
-  function automaticWorktreeBaseEligible(isolation, worktreeBase) {
-    return isolatedRepositoryDispatch(isolation) || !isolation.sharedTree && isolation.readonly && !isolation.nonRepoOutput && worktreeBase !== "auto";
+    return !isolation.sharedTree && !isolation.nonRepoOutput;
   }
   function remoteIntegrationTarget(slug, worktreeBase) {
     try {
@@ -1983,7 +1980,7 @@ function createDispatch(dependencies) {
     return autoSelectedIntegrationTarget(slug, worktreeBase);
   }
   function automaticWorktreeBase(slug, isolation, configured) {
-    return automaticWorktreeBaseEligible(isolation, configured.worktreeBase) && configured.integrationMode === "auto" ? configuredWorktreeBaseTarget(slug, configured.worktreeBase) : null;
+    return isolatedRepositoryDispatch(isolation) && configured.integrationMode === "auto" ? configuredWorktreeBaseTarget(slug, configured.worktreeBase) : null;
   }
   function explicitIntegrationTargetSelection(opts) {
     return {
@@ -2978,7 +2975,7 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
-  function recordDispatchWorktreeProvisioned(slug, sessionId, worktree, attempt) {
+  function recordDispatchWorktreeProvisioned(slug, sessionId, worktree, attempt, evidence = []) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -2995,6 +2992,7 @@ function createDispatch(dependencies) {
         if (!current || current.sessionId !== normalizedSessionId || current.terminalAt || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
           return { ok: false, reason: "dispatch_binding_unavailable" };
         }
+        current.worktreeProvisioningEvidence = evidence;
         current.worktreeProvisionedAt = (/* @__PURE__ */ new Date()).toISOString();
         stampDispatchEvent(ticket, "worktree-provisioned", current.worktreeProvisionedAt);
         putTicket(slug, ticket);

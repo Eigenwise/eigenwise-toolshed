@@ -93,6 +93,57 @@ function canonicalPath(value) {
   }
 }
 
+// src/hooks/shared/read-only-git.ts
+var READ_ONLY_SUBCOMMANDS = /* @__PURE__ */ new Set([
+  "status",
+  "log",
+  "show",
+  "diff",
+  "rev-parse",
+  "rev-list",
+  "ls-files",
+  "ls-tree",
+  "cat-file",
+  "describe",
+  "blame"
+]);
+var GLOBAL_VALUE_FLAGS = /* @__PURE__ */ new Set(["-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix"]);
+var GLOBAL_FLAGS = /* @__PURE__ */ new Set(["--no-pager", "--paginate", "-P", "-p", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"]);
+var BRANCH_READ_FLAGS = /^(?:--list|--show-current|-l|-a|--all|-r|--remotes|-v|-vv|--verbose|--no-color|--color(?:=.*)?|--format=.*|--sort=.*|--contains(?:=.*)?|--no-contains(?:=.*)?|--merged(?:=.*)?|--no-merged(?:=.*)?|--points-at(?:=.*)?)$/;
+function branchReads(arguments_) {
+  const flags = arguments_.filter((argument) => argument.startsWith("-"));
+  if (!flags.every((flag) => BRANCH_READ_FLAGS.test(flag))) return false;
+  return arguments_.every((argument) => argument.startsWith("-")) || arguments_.includes("--list");
+}
+var READ_ARGUMENTS = /* @__PURE__ */ new Map([
+  ["branch", branchReads],
+  ["worktree", (arguments_) => arguments_[0] === "list"],
+  ["remote", (arguments_) => arguments_.length === 1 && arguments_[0] === "-v"]
+]);
+function isReadOnlyGit(subcommand, arguments_) {
+  if (arguments_.some((argument) => /^--output(?:=|$)/.test(argument))) return false;
+  if (READ_ONLY_SUBCOMMANDS.has(subcommand)) return true;
+  return READ_ARGUMENTS.get(subcommand)?.(arguments_) ?? false;
+}
+function globalFlagWidth(word) {
+  if (GLOBAL_VALUE_FLAGS.has(word)) return 2;
+  if (GLOBAL_FLAGS.has(word)) return 1;
+  return /^(?:--(?:config-env|git-dir|work-tree|namespace|super-prefix)=|-C.|-c.)/.test(word) ? 1 : 0;
+}
+function gitSubcommandIndex(words) {
+  let index = 1;
+  while (words[index]?.startsWith("-")) {
+    const width = globalFlagWidth(words[index]);
+    if (!width) return -1;
+    index += width;
+  }
+  return index < words.length ? index : -1;
+}
+function gitWordsReadOnly(words) {
+  const index = gitSubcommandIndex(words);
+  return index > 0 && isReadOnlyGit(words[index], words.slice(index + 1));
+}
+
 // src/hooks/shared/shell-writes.ts
 var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)|(<<<|<<-?)[ \t]*("[^"\r\n]*"|'[^'\r\n]*'|[^\s|;&<>"']+)?/g;
 function unquote(word) {
@@ -111,34 +162,13 @@ function recordHeredoc(match, heredocs) {
 }
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
-var MUTATING_GIT = /* @__PURE__ */ new Set([
-  "add",
-  "am",
-  "apply",
-  "checkout",
-  "cherry-pick",
-  "clean",
-  "commit",
-  "merge",
-  "mv",
-  "pull",
-  "push",
-  "rebase",
-  "reset",
-  "restore",
-  "revert",
-  "rm",
-  "stash",
-  "switch"
-]);
 function operands(words) {
   return words.slice(1).filter((word) => !word.startsWith("-"));
 }
 function gitWriteTargets(words) {
   const flagIndex = words.indexOf("-C");
   const directory = flagIndex > 0 ? words[flagIndex + 1] : ".";
-  const subcommand = operands(words).find((word) => word !== directory);
-  return MUTATING_GIT.has(String(subcommand)) ? [directory || "."] : [];
+  return gitWordsReadOnly(words) ? [] : [directory || "."];
 }
 var SED_SCRIPT_FLAGS = /* @__PURE__ */ new Set(["-e", "--expression", "-f", "--file"]);
 function inPlaceEditTargets(words) {

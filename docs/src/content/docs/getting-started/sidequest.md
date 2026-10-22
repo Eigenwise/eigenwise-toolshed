@@ -40,9 +40,17 @@ Once this save-and-read check works, use the story workflow below when the task 
 
 When an executor hands back a clean committed checkpoint in a retained worktree, its replacement gets a Resume section first. It names the checkout, pinned commit, handback reason, and last recorded verification result and log. After claiming, the replacement confirms HEAD and runs the pinned verifier on that candidate before continuing (shared-environment checks still wait for delivery). It reads new instructions or missing evidence rather than starting over with the full thread. The complete description, contract, scope, and verifier remain in the briefing.
 
+A repair linked to a rejected candidate restores it with `git merge --no-ff`, preserving its commit ancestry. Byte-identical inherited tests are recorded as `inherited-unchanged` on submission and need no new negative-control markers; changed tests still need their controls. Provisioning links scoped plugins' dependencies from the registered checkout when their lockfiles match. If dependencies are missing or the lockfile differs, provisioning records an install deferral. The briefing tells the executor to run `npm ci --prefix plugins/<name> --ignore-scripts --no-audit --no-fund` before work. The WorktreeCreate hook never runs these plugin installs. Bounded verification needs no resource slot unless board configuration declares one, and any declared slot comes through the board.
+
+## Importing tests at delivery
+
+Integration runs the pinned verifier on the merged tree, then runs additional test files that statically import the delivery's changed plugin modules, including transitive imports through Sidequest's compiled `lib/`. The delivery records the selection in `verify.integrationTests`, even when no tests match. Files already in the pinned command aren't repeated. Extra files run serially, one file per batch, with a maximum of 600 seconds each. Sidequest uses `test:files`, never `test:full`, for these extra runs. A failure blocks delivery and its log appears in `verify.importingTestResults`.
+
 ## Read-only shell writes
 
 Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.
+
+Read-only and isolated executors can inspect the shared checkout with read-only Git commands, including `git -C <shared> worktree list` and `git -C <shared> status --porcelain -- <paths>`. This lets an executor check that it left the shared paths untouched. Git mutations against that checkout still refuse.
 
 ## Completed review decisions
 
@@ -66,11 +74,17 @@ Copy the original review's source and candidate from `reviewTarget`. Finalizatio
 
 For a bound review that was never dispatched, add `"authority": "main-attestation"` inside `finalize`. The main thread must supply `by`, `text` and evidence naming where the external review happened. Accepted permits integration, rejected blocks it. Sidequest records `reviewerRuntimeProvenance: false` and preserves the absent dispatch/completion. An active, released or partially completed reviewer cannot use this path.
 
-CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
+`ref` is always the review ticket (`SQ-12` above); the reviewed source only appears as `finalize.sourceRef`. Pass the source as `ref` and the refusal names the review and the shape it takes next.
+
+CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow: a review released with kind `oracle` takes plain `verdict {ref, outcome, by, text}`, never `finalize`. `groomClose` refuses such a bound review with `oracle_verdict_pending` until its verdict exists, so the outcome can't be dropped by closing it first. A review that was closed with its oracle round still unanswered (before that guard existed) refuses both verdict shapes with `oracle_round_closed`; reopen it with `update {ref, status: "awaiting-oracle"}`, then record the plain verdict. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
 
 ## Integration branches in linked worktrees
 
-If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. It merges and runs the delivery verifier there, leaving the registered checkout alone. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
+If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. Singleton and wave integration always deliver onto the ticket's recorded branch. If that branch has no checkout, `integrate` creates a separate worktree under the board worktree root, leaving the registered checkout's branch and files unchanged. Clean temporary worktrees are removed after delivery; apply mode retains staged changes in the integration record's `worktree` path. Passing a different `integrationBranch` refuses, so changing the delivery target requires redispatch. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
+
+## Integration quality receipts
+
+When Quality Gate is registered for the project, integration captures the pinned verifier on the exact delivery tree and measures changed source against each participant's dispatch baseline. Measured failures refuse delivery and name the failing bodies. Missing coverage stays UNVERIFIED and creates one measurement-debt ticket per candidate. Receipts stay in the board's verification directory and appear in the recorded verification, including publish queue JSON. Without a configured gate, verification records quality status `none`.
 
 ## Your first workflow
 
@@ -395,6 +409,8 @@ Use Sidequest for independent candidate reviews, repository audits, and shortcut
 
 An explicit per-ticket route can use a different provider when the ticket is effectively readonly. It leaves the category route alone; writable tickets stay with their category's provider.
 
+Dispatch keeps its spawn prompt short: task label, worktree base, and the briefing fetch command. The executor reads the full description, declared files, and anchors from that token-gated briefing before starting work.
+
 When a category's route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog), dispatch uses the category's own `fallback`, even when that's a Claude model. The dispatch result's `fallbackReason` and the executor briefing both say which fallback ran and why the primary couldn't, including the gateway's login or setup command. That choice happens once, when the dispatch is prepared: if the provider drops out after that, the prepared executor still claims on the route and effort its briefing named, and only the next dispatch falls back. The global fallback never crosses providers, so a Codex category with no fallback of its own is refused with that same reason. A discovered model whose provider isn't served by Model Gateway (anything but Codex or Grok) still runs as its own id, but Claude Code's Agent tool only takes `sonnet`, `opus`, `haiku`, or `fable` as a model. So Sidequest writes executor definitions named `sidequest-exec-model-<slug>-<effort>` (plus `-readonly-model-` twins) into your user agents folder, each pinning the full id, and spawns them with no model. Only the model and effort pairs some category route or fallback actually uses (on any board on this machine) get a file, and the `-readonly-model-` twin only exists for readonly categories. Session start writes those and removes the rest, so changing a route swaps the files. A dispatch that routes somewhere no category does, like a ticket route override, writes its own file right before the spawn. Your own agent files are never touched.
 
 - An explicitly assigned readonly advisor can discuss a bounded architectural/feasibility question directly
@@ -476,7 +492,7 @@ A worked example:
 
 **A ticket's project is a different repository from the current session.** An isolated dispatch now cuts its own worktree from the ticket's project and verifies there, not from the session's checkout, so this works across repositories. It only refuses when the same session already has isolated dispatches open on two different projects at once; that case names the conflict and the remedy.
 
-**Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. Sidequest keeps the intended integration branch that was frozen at dispatch, even if you later change branches or the board default. For two feature branches, name the intended target on each ticket instead of changing that board-wide default between dispatches. A read-only ticket in an isolated worktree also honors an explicit board base of `local-main` or `origin-main`; the automatic base deliberately stays on the checkout that prepared it. A bound review still starts from its candidate commit.
+**Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. Sidequest keeps the intended integration branch that was frozen at dispatch, even if you later change branches or the board default. For two feature branches, name the intended target on each ticket instead of changing that board-wide default between dispatches. Read-only and write isolated tickets use the recorded integration branch under the board's `worktreeBase` policy, including `local-main` and `origin-main` overrides. The dispatch result, spawn prompt, and briefing name the base commit and branch. A bound review still starts from its candidate commit.
 
 **A ticketed helper is refused while writing verification evidence.** Only the ticket's active owner and helpers admitted through that owner's recorded identity can write the ticket's exact board-owned evidence directory. Helpers cannot use another ticket's folder or a lookalike path. Ask Claude to inspect the ticket binding, not to request repository scope.
 

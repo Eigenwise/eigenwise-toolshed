@@ -46,6 +46,8 @@ accessibility, permissions and immutable candidate/review authority.
 
 Answer direct questions and operational requests inline. Small bounded fixes in a few known files may stay inline without tickets; read-only investigations use `route_recipe(category).research` as above.
 
+Isolated dispatches, read-only included, base at the recorded integration branch under the board's `worktreeBase` policy, and the dispatch result, spawn prompt and briefing name that base commit and branch. Read-only shared-checkout Git access and its write boundaries are in `references/readonly-guidance.md`.
+
 ### INLINE-SAFE direct work
 
 If inline-safe work was already ticketed, the orchestrator may claim `--direct` and edit inline after annotating the ticket, giving a 20+ character reason, and matching this allowlist:
@@ -74,7 +76,7 @@ schema-bumping release, reload plugins before MCP writes. Commands default to th
 stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
 unchanged. Set `Agent.description` to `spawn.description` byte-for-byte, never derived from the
 prompt, route marker, title, model, or effort. The executor fetches its
-token-gated durable packet as the first action: full description, category route and contract, scope,
+token-gated durable packet as the first action: full description, anchors, category route and contract, scope,
 state, comment metadata, and absolute attachment paths. It must inspect every readable
 attachment and report missing or unreadable ones, while the spawn keeps that content out of this
 transcript. Never trust a worker's self-report — the
@@ -136,23 +138,9 @@ optionally `--status todo`).
 - **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent. If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch.agentId` or its exact original Agent-returned identifier; never `claim.by` or a guessed/replacement address. Honor user Pause retries. Missing/mismatched identity stays continuation UNVERIFIED; preserve claim/work. A resume keeps claim, token-file path, and worktree binding. Queued/unknown/completed/absent/failed-send is not death. Never restart terminal executors; confirmed death requires salvage before replacement. Lost binding and died-before-claim recovery: `references/orchestration.md`.
 - Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence**: an executor ends its own run at submit, done, or release. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for a terminal ticket whose executor the host still lists running (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
 
-**Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
-`submit` (claim released, parked in `doing`); `submit.body` is the canonical report, so no separate pre-submit
-report comment; the terminal comment keeps only commit hash + verification. **Submit is terminal for the executor:** a
-submitted ticket cannot be amended by messaging the executor that produced it, however small the
-follow-up looks. File a follow-up ticket for changes. Redispatch the existing ticket only when it was
-released without a pending submission. The orchestrator is the integrator: choose
-`sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default, then run the
-publish transaction (lock → delivery → merged-tree gate → central version → review → push → reachability → `done`):
-`references/publishing.md`.
-**BOOKEND SUPERVISION.** Between dispatch and submission, avoid routine pulses, comment reads and
-peeks. Explicitly assigned builders and readonly advisors may exchange direct native messages and
-inspect authorized snapshots under `references/readonly-guidance.md`. Draft findings are advisory,
-never acceptance or claim release; this does not authorize orchestrator source peeking or self-review.
-At integration, read the submit report, deliver the range, and run the
-merged-tree gate once per wave. Judge by that oracle and the submit report, never by reading diffs. When sized risk or a weak oracle needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never re-review yourself. Never mark a submitted ticket done without
-integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
-the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
+**Publishing belongs to the orchestrator:** executors stop at terminal `submit`. Integration measures the exact delivery tree with the configured quality gate and refuses measured failures. UNVERIFIED rows record debt automatically. Executors need no capture import. See `references/publishing.md`.
+
+**BOOKEND SUPERVISION.** Avoid routine mid-flight reads and peeks; bounded live advice follows `references/readonly-guidance.md`, and integration uses the submit report and merged-tree gate, with independent review when needed.
 
 ## Route execution; keep the loop tight
 

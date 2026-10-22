@@ -6,6 +6,42 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { shellSegments, namesShellWrite } from '../src/hooks/shared/shell-writes.js';
+import { readOnlyShellRefusal } from '../src/hooks/shared/read-only-shell.js';
+import { gitInvocations, shellTokens } from '../hooks/guards/git-command.js';
+import { isReadOnlyGit } from '../src/hooks/shared/read-only-git.js';
+
+const SHARED_GIT_READS = [
+  'status --porcelain -- bin/docai_refactored app routes', 'log', 'show HEAD', 'diff',
+  'rev-parse --git-dir', 'rev-list HEAD', 'ls-files', 'ls-tree HEAD', 'cat-file -p HEAD',
+  'branch', 'branch --list feature*', 'branch --show-current', 'worktree list',
+  'remote -v', 'describe', 'blame README.md',
+];
+const SHARED_GIT_WRITES = [
+  'add .', 'checkout other', 'worktree add other', 'worktree remove other', 'worktree move a b',
+  'worktree prune', 'stash', 'branch other', 'branch --list --delete other', 'remote add other url',
+  'diff --output=result', 'unknown-command',
+];
+
+test('SQ-3835: shared-checkout git reads pass shell and executor admission predicates', () => {
+  for (const suffix of SHARED_GIT_READS) {
+    const command = `git -C "C:/shared checkout" -c color.ui=false ${suffix}`;
+    assert.equal(namesShellWrite(command), false, command);
+    assert.equal(readOnlyShellRefusal(command, process.cwd()), null, command);
+    const invocation = gitInvocations(command)[0]!;
+    assert.ok(invocation, command);
+    assert.equal(isReadOnlyGit(invocation.subcommand, shellTokens(invocation.args)), true, command);
+  }
+});
+
+test('SQ-3835: shared-checkout mutations retain the read-only refusal after global flags', () => {
+  for (const suffix of SHARED_GIT_WRITES) {
+    const command = `git -C "C:/shared checkout" -c color.ui=false ${suffix}`;
+    assert.equal(namesShellWrite(command), true, command);
+    assert.match(readOnlyShellRefusal(command, process.cwd())!, /read-only executor, refusing a git mutation/, command);
+    const invocation = gitInvocations(command)[0]!;
+    assert.equal(isReadOnlyGit(invocation.subcommand, shellTokens(invocation.args)), false, command);
+  }
+});
 
 test('SQ-3808: heredoc bodies never become shell write targets', () => {
   assert.deepEqual(shellSegments("cat > /scratch/probe.py <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF").flatMap((segment) => segment.redirects), ['/scratch/probe.py']);

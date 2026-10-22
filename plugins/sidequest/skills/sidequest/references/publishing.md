@@ -9,6 +9,27 @@ ready-for-integration with `sidequest submit` (claim released, status stays `doi
 verification, completing tickets in the control plane, then gating, assigning versions, and pushing
 main — is ONE serialized transaction owned by the orchestrator. This file is that transaction.
 
+`submit.body` is the canonical report, so no separate pre-submit report comment; the terminal
+comment keeps only commit hash + verification. Submit is terminal for the executor: a submitted
+ticket cannot be amended by messaging its producer. File a follow-up ticket for changes.
+Redispatch the existing ticket only when released without a pending submission.
+
+Singleton and wave delivery target the ticket-recorded integration branch, preserving a different
+registered checkout through a separate branch-owning worktree. `integrationBranch` cannot override
+that target. The frozen dispatch target has priority, then a validated persisted delivery target,
+then the board default; a deleted frozen target may use the abandonment path's validated resolution.
+The publish transaction is lock → delivery → merged-tree gate → central version → review → push →
+reachability → `done`.
+
+At integration, the merged-tree gate also follows static imports from each changed plugin's test directory to the delivery's changed paths, including Sidequest's compiled `lib/` to `src/lib/` identities. The delivery's `verify.integrationTests` records the selected files (including empty selections). Files already covered by the pinned command are excluded from extra runs. Each extra file runs serially with at most 600 seconds, using `test:files` where available, never `test:full`; a failing extra run blocks delivery. `verify.importingTestResults` records those runs.
+
+At integration, read the submit report, deliver the range, and run the merged-tree gate once per
+wave. Judge by that oracle and the report, never by reading diffs. When sized risk or a weak oracle
+needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never re-review
+yourself. Never mark a submitted ticket done without integrating it; never re-dispatch one (refused
+as `submitted`). A dead executor's `done` proves only the board transition, never that work shipped:
+salvage and close it using this transaction.
+
 `submit` derives the admitted range from the base recorded on the ticket's dispatch, for isolated and shared-tree
 dispatches alike; the merge base replaces it only when upstream work was synced into the candidate after dispatch.
 Paths whose bytes at the tip already equal the integration target's do not count against scope, and a tip still at
@@ -65,11 +86,13 @@ wave (including an environment-bound deferred wave) delivers its exact Git parti
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
-Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
-(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
-`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
-The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
-refuses `branch_not_checked_out`.
+Delivery lands only on the ticket's recorded integration branch, for singletons and assembled waves
+in every mode. A different registered checkout stays unchanged: delivery uses the branch's existing
+worktree or creates a separate worktree under the board worktree root. Clean temporary checkouts are
+removed; dirty apply checkouts are retained at the integration record's `worktree` path so staged
+content is preserved. `targetBranch` always names the recorded branch. `integrationBranch` (CLI
+`--integration-branch`) can confirm that branch, but a different value refuses; redispatch to change
+the recorded target.
 
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
