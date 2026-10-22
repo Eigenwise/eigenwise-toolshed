@@ -19,6 +19,7 @@ const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require
 const { stillSpawnsInsideItsWrite } = require('../db');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
+import { runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
@@ -936,7 +937,10 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const run = (environment: NodeJS.ProcessEnv) => isFullSuiteCommand(requirement.command)
     ? runFullSuiteVerification(requirement.command, project, () => verify(environment))
     : verify(environment);
-  return verifyCandidateQuality(slug, opts?.qualityTickets || [ticket], project, timeoutMilliseconds, run);
+  const participants = opts?.qualityTickets || [ticket];
+  const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
+  const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, run(environment), timeoutMilliseconds, environment);
+  return verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests);
 }
 
 function verificationFailureComment(verify: any) {

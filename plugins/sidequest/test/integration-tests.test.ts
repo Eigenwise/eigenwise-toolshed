@@ -3,7 +3,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { selectIntegrationTests } from '../src/lib/integration-tests.js';
+import { integrationTestBatches, selectIntegrationTests } from '../src/lib/integration-tests.js';
+
+test('integration test batches cap each file at the capture budget and exclude pinned files', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-batches-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  writeFixture(project, { 'plugins/sidequest/package.json': JSON.stringify({ scripts: { 'test:files': 'node --test' } }) });
+  const selections = [{ plugin: 'plugins/sidequest', files: ['test/first.test.ts', 'test/second.test.ts', 'test/third.test.ts'] }];
+  const batches = integrationTestBatches(project, selections, 'npm --prefix plugins/sidequest run test:files -- test/first.test.ts', 900_000);
+  assert.deepEqual(batches.map((batch) => batch.file), ['test/second.test.ts', 'test/third.test.ts']);
+  assert.deepEqual(batches.map((batch) => batch.timeoutMilliseconds), [600_000, 600_000]);
+  assert.ok(batches.every((batch) => batch.command.startsWith('npm run test:files -- --test-concurrency=1')));
+  assert.deepEqual(integrationTestBatches(project, selections, 'node --test "plugins/sidequest/test/*.test.ts"', 10_000), []);
+  assert.equal(integrationTestBatches(project, selections, 'node --version', 10_000)[0]!.timeoutMilliseconds, 10_000);
+});
 
 function writeFixture(root: string, files: Record<string, string>): void {
   for (const [relative, content] of Object.entries(files)) {
@@ -49,6 +62,7 @@ test('integration test selection handles JavaScript directory imports and plugin
   assert.deepEqual(selectIntegrationTests(project, ['plugins/example/lib/source.js', 'docs/guide.md']), [{
     plugin: 'plugins/example', files: ['test/source.test.js'],
   }]);
+  assert.deepEqual(selectIntegrationTests(project, ['plugins/example/lib/unreached.js']), [{ plugin: 'plugins/example', files: [] }]);
   assert.deepEqual(selectIntegrationTests(project, ['docs/guide.md']), []);
   assert.deepEqual(selectIntegrationTests(project, ['plugins/missing/lib/source.js']), [{ plugin: 'plugins/missing', files: [] }]);
 });

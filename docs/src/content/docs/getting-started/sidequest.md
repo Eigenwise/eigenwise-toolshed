@@ -42,6 +42,10 @@ When an executor hands back a clean committed checkpoint in a retained worktree,
 
 A repair linked to a rejected candidate restores it with `git merge --no-ff`, preserving its commit ancestry. Byte-identical inherited tests are recorded as `inherited-unchanged` on submission and need no new negative-control markers; changed tests still need their controls. Provisioning links scoped plugins' dependencies from the registered checkout when their lockfiles match. If dependencies are missing or the lockfile differs, provisioning records an install deferral. The briefing tells the executor to run `npm ci --prefix plugins/<name> --ignore-scripts --no-audit --no-fund` before work. The WorktreeCreate hook never runs these plugin installs. Bounded verification needs no resource slot unless board configuration declares one, and any declared slot comes through the board.
 
+## Importing tests at delivery
+
+Integration runs the pinned verifier on the merged tree, then runs additional test files that statically import the delivery's changed plugin modules, including transitive imports through Sidequest's compiled `lib/`. The delivery records the selection in `verify.integrationTests`, even when no tests match. Files already in the pinned command aren't repeated. Extra files run serially, one file per batch, with a maximum of 600 seconds each. Sidequest uses `test:files`, never `test:full`, for these extra runs. A failure blocks delivery and its log appears in `verify.importingTestResults`.
+
 ## Read-only shell writes
 
 Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.

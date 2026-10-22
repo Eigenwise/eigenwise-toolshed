@@ -616,6 +616,45 @@ test('integration keeps a recorded verifier instead of re-deriving a plugin gate
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
+test('integration records exactly importing tests and runs only files outside the pinned verifier', () => {
+  const pluginDirectory = path.join(PROJECT_DIR, 'plugins', 'importing-gate-fixture');
+  fs.mkdirSync(path.join(pluginDirectory, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(pluginDirectory, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(pluginDirectory, 'package.json'), '{}');
+  fs.writeFileSync(path.join(pluginDirectory, 'lib', 'changed.js'), 'module.exports = true;');
+  const testSource = "const assert = require('node:assert/strict'); const { test } = require('node:test'); const value = require('../lib/changed.js'); test('changed module is true', () => assert.equal(value, true));";
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'first.test.js'), testSource);
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'second.test.js'), testSource);
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'unrelated.test.js'), "throw new Error('unrelated test must not run');");
+  const ticket = addTicket('importing test delivery');
+  ticket.submission = {
+    commit: COMMIT, changedPaths: ['plugins/importing-gate-fixture/lib/changed.js'],
+    verify: 'cd plugins/importing-gate-fixture && node --test test/first.test.js', integration: { outcome: 'delivered' },
+  };
+  persist(ticket);
+  const result = store.verifyIntegration(slug, ticket.ref);
+  assert.equal(result.ok, true, result.verify.evidence);
+  const recorded = store.getTicket(slug, ticket.ref).submission.integration.verify;
+  assert.deepEqual(recorded.integrationTests, [{ plugin: 'plugins/importing-gate-fixture', files: ['test/first.test.js', 'test/second.test.js'] }]);
+  assert.equal(recorded.importingTestResults.length, 1);
+  assert.match(recorded.importingTestResults[0].command, /second\.test\.js/);
+  const stored = store.getTicket(slug, ticket.ref);
+  stored.submission.changedPaths = ['plugins/importing-gate-fixture/lib/unreached.js'];
+  stored.submission.integration = { outcome: 'delivered' };
+  persist(stored);
+  assert.equal(store.verifyIntegration(slug, ticket.ref).ok, true);
+  assert.deepEqual(store.getTicket(slug, ticket.ref).submission.integration.verify.integrationTests, [{ plugin: 'plugins/importing-gate-fixture', files: [] }]);
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'second.test.js'), testSource.replace('assert.equal(value, true)', 'assert.equal(value, false)'));
+  const failing = store.getTicket(slug, ticket.ref);
+  failing.submission.changedPaths = ['plugins/importing-gate-fixture/lib/changed.js'];
+  failing.submission.integration = { outcome: 'delivered' };
+  persist(failing);
+  const refused = store.verifyIntegration(slug, ticket.ref);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.verify.status, 'failed_suite');
+  assert.match(refused.verify.command, /second\.test\.js/);
+});
+
 function installFixtureQualityGate(complexity: number, covered: boolean) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-integration-quality-home-'));
   const gate = path.join(home, 'gate');

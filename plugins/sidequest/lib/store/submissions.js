@@ -1,4 +1,5 @@
 "use strict";
+var import_integration_tests = require("../integration-tests.js");
 var import_integration_quality = require("../integration-quality.js");
 const { emitExternalRefUpdates } = require("./external-ref-updates.js");
 const { currentBoardPath } = require("./move.js");
@@ -761,7 +762,10 @@ ${JSON.stringify(quality.unverified)}`,
       environment
     });
     const run = (environment) => isFullSuiteCommand(requirement.command) ? runFullSuiteVerification(requirement.command, project, () => verify(environment)) : verify(environment);
-    return verifyCandidateQuality(slug, opts?.qualityTickets || [ticket], project, timeoutMilliseconds, run);
+    const participants = opts?.qualityTickets || [ticket];
+    const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
+    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, run(environment), timeoutMilliseconds, environment);
+    return verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests);
   }
   function verificationFailureComment(verify) {
     return [

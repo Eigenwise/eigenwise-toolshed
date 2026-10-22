@@ -21,6 +21,8 @@ then the board default; a deleted frozen target may use the abandonment path's v
 The publish transaction is lock → delivery → merged-tree gate → central version → review → push →
 reachability → `done`.
 
+At integration, the merged-tree gate also follows static imports from each changed plugin's test directory to the delivery's changed paths, including Sidequest's compiled `lib/` to `src/lib/` identities. The delivery's `verify.integrationTests` records the selected files (including empty selections). Files already covered by the pinned command are excluded from extra runs. Each extra file runs serially with at most 600 seconds, using `test:files` where available, never `test:full`; a failing extra run blocks delivery. `verify.importingTestResults` records those runs.
+
 At integration, read the submit report, deliver the range, and run the merged-tree gate once per
 wave. Judge by that oracle and the report, never by reading diffs. When sized risk or a weak oracle
 needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never re-review
