@@ -710,11 +710,14 @@ ${JSON.stringify(quality.unverified)}`,
       });
     });
   }
-  function verifyCandidateQuality(slug, tickets, project, timeoutMilliseconds, verify) {
+  function verifyCandidateQuality(slug, tickets, project, timeoutMilliseconds, verify, environment) {
     const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
-    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify);
+    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify, environment);
     result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index], quality));
     return result;
+  }
+  function verifyWithFullSuiteCapture(command, project, verify) {
+    return isFullSuiteCommand(command) ? runFullSuiteVerification(command, project, verify) : verify(process.env);
   }
   function verifyDeliveredSubmission(slug, ticket, opts) {
     const requirement = opts?.requirement || pinnedVerificationRequirement(ticket);
@@ -761,11 +764,11 @@ ${JSON.stringify(quality.unverified)}`,
       outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
       environment
     });
-    const run = (environment) => isFullSuiteCommand(requirement.command) ? runFullSuiteVerification(requirement.command, project, () => verify(environment)) : verify(environment);
     const participants = opts?.qualityTickets || [ticket];
     const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
-    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, run(environment), timeoutMilliseconds, environment);
-    return verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests);
+    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
+    const runWithQuality = (environment) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+    return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
   }
   function verificationFailureComment(verify) {
     return [

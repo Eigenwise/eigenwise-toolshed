@@ -879,11 +879,17 @@ function recordQualityDebt(slug: string, ticket: QualityTicket, quality: Integra
   });
 }
 
-function verifyCandidateQuality(slug: string, tickets: QualityTicket[], project: string, timeoutMilliseconds: number, verify: (environment: NodeJS.ProcessEnv) => VerificationResult) {
+function verifyCandidateQuality(slug: string, tickets: QualityTicket[], project: string, timeoutMilliseconds: number, verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv) {
   const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
-  const result = runIntegrationQuality(inputs, verify);
+  const result = runIntegrationQuality(inputs, verify, environment);
   result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index]!, quality));
   return result;
+}
+
+function verifyWithFullSuiteCapture(command: string, project: string, verify: (environment: NodeJS.ProcessEnv) => VerificationResult): VerificationResult {
+  return isFullSuiteCommand(command)
+    ? runFullSuiteVerification(command, project, verify)
+    : verify(process.env);
 }
 
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
@@ -934,13 +940,11 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
     environment,
   });
-  const run = (environment: NodeJS.ProcessEnv) => isFullSuiteCommand(requirement.command)
-    ? runFullSuiteVerification(requirement.command, project, () => verify(environment))
-    : verify(environment);
   const participants = opts?.qualityTickets || [ticket];
   const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
-  const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, run(environment), timeoutMilliseconds, environment);
-  return verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests);
+  const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
+  const runWithQuality = (environment: NodeJS.ProcessEnv) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+  return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
 }
 
 function verificationFailureComment(verify: any) {

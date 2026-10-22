@@ -222,7 +222,8 @@ test(`SQ-3834: ${category} explicit isolation uses develop with ${worktreeBase} 
     assert.equal(fs.readFileSync(path.join(project, 'README.md'), 'utf8'), 'occupied checkout\n');
     const baseLabel = `${developTip} (${worktreeBase === 'local-main' ? 'develop' : 'origin/develop'})`;
     assert.equal(agentsync.ticketWorktreeBase(prepared.ticket), baseLabel);
-    assert.ok(agentsync.renderDispatchStub(prepared.ticket, project).includes(`worktreeBase: ${baseLabel}`), 'spawn names the develop base');
+    const spawnBaseLabel = `${developTip.slice(0, 12)} (${worktreeBase === 'local-main' ? 'develop' : 'origin/develop'})`;
+    assert.ok(agentsync.renderDispatchStub(prepared.ticket, project).includes(`worktreeBase: ${spawnBaseLabel}`), 'spawn names the develop base');
     assert.ok(agentsync.renderTicketBriefing(prepared.ticket, prepared.token, projectSlug, project).includes(`worktreeBase: ${baseLabel}`), 'briefing names the develop base');
   } finally {
     git(['worktree', 'remove', '--force', created.output]);

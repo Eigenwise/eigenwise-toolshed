@@ -67,6 +67,25 @@ test('native quality orchestration leaves unmapped rows unverified without faili
   assert.match(result.quality[0]!.unverified[0]!.unverified!, /authentic executed source map/);
 });
 
+test('native quality orchestration preserves capture-slot environment and verifies once before measurement', (context) => {
+  const input = withQualityFixture(context, 3, true);
+  const slotEnvironment = { ...process.env, SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: '0', NODE_OPTIONS: '--enable-source-maps' };
+  let verificationCount = 0;
+  const result = runIntegrationQuality([input], (environment) => {
+    verificationCount += 1;
+    assert.equal(environment.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT, '0');
+    assert.match(environment.NODE_OPTIONS!, /^--enable-source-maps --import=file:/);
+    assert.equal(environment.QUALITY_GATE_V8_CAPTURE, path.join(input.directory, 'coverage'));
+    assert.equal(fs.existsSync(path.join(input.directory, 'measure.json')), false);
+    return { kind: 'command', status: 'passed', evidence: 'fixture verifier' };
+  }, slotEnvironment);
+  assert.equal(verificationCount, 1);
+  assert.equal(slotEnvironment.NODE_OPTIONS, '--enable-source-maps');
+  assert.equal(result.status, 'passed');
+  assert.equal(result.quality[0]!.status, 'measured');
+  assert.ok(fs.existsSync(path.join(input.directory, 'measure.json')));
+});
+
 test('native quality orchestration records none when no gate is registered for the project', (context) => {
   const input = withQualityFixture(context, 3, true);
   input.registeredProject = path.join(input.project, 'unregistered');
