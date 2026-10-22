@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-guards-module-'));
 try {
-  for (const file of ['hooks/guards', 'src/lib/denied-tools.ts', 'src/lib/exec-names.ts', 'src/hooks/shared/shell-writes.ts', 'src/hooks/shared/main-thread-mutations.ts','types/index.d.ts']) {
+  for (const file of ['hooks/guards', 'src/lib/denied-tools.ts', 'src/lib/exec-names.ts', 'src/hooks/shared/shell-writes.ts', 'src/hooks/shared/read-only-git.ts', 'src/hooks/shared/main-thread-mutations.ts','types/index.d.ts']) {
     fs.cpSync(path.join(pluginRoot, file), path.join(copy, file), { recursive: true });
   }
   fs.mkdirSync(path.join(copy, '.claude-plugin'));
