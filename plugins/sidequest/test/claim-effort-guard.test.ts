@@ -629,8 +629,8 @@ test('serialized dispatch spawn and briefing preserve a huge packet', () => {
   const spawnBytes = Buffer.byteLength(serializedSpawn, 'utf8');
   const launchPayloadCeiling = 32 * 1024 * 1024;
   assert.ok(spawnBytes < launchPayloadCeiling, `serialized dispatched.spawn is ${spawnBytes} bytes`);
-  assert.match(serializedSpawn, /description-marker-/);
-  assert.match(serializedSpawn, /d{500000}/);
+  assert.doesNotMatch(serializedSpawn, /description-marker-/);
+  assert.doesNotMatch(serializedSpawn, /d{500000}/);
   assert.doesNotMatch(serializedSpawn, /Description excerpt capped/);
   assert.doesNotMatch(serializedSpawn, /First comment marker|asset-0-/);
 
@@ -654,8 +654,8 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.equal(Object.hasOwn(dispatched, 'briefing'), false);
   assert.ok(Buffer.byteLength(dispatched.spawn.prompt) < 1200);
-  assert.match(dispatched.spawn.prompt, /Title: guard fixture/);
-  assert.match(dispatched.spawn.prompt, /Where: claim guard fixture/);
+  assert.match(dispatched.spawn.prompt, /guard fixture/);
+  assert.doesNotMatch(dispatched.spawn.prompt, /Where: claim guard fixture/);
   assert.ok(dispatched.spawn.prompt.includes(`briefing ${ref} --token-file "${ticket(ref).dispatch.tokenFile}"`));
   assert.match(dispatched.spawn.prompt, /FIRST action:/);
   assert.doesNotMatch(dispatched.spawn.prompt, /## This ticket/);

@@ -76,7 +76,7 @@ schema-bumping release, reload plugins before MCP writes. Commands default to th
 stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
 unchanged. Set `Agent.description` to `spawn.description` byte-for-byte, never derived from the
 prompt, route marker, title, model, or effort. The executor fetches its
-token-gated durable packet as the first action: full description, category route and contract, scope,
+token-gated durable packet as the first action: full description, anchors, category route and contract, scope,
 state, comment metadata, and absolute attachment paths. It must inspect every readable
 attachment and report missing or unreadable ones, while the spawn keeps that content out of this
 transcript. Never trust a worker's self-report — the

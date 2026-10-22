@@ -1175,6 +1175,10 @@ function ticketReleaseFragmentScope(ticket?: any) {
   return fragment ? `\n\nImplicit release fragment (write only this ticket's):\n- ${fragment}` : '';
 }
 
+function ticketAnchorsPacket(ticket: { executorAnchors?: string }): string[] {
+  return ticket.executorAnchors ? [`Anchors:\n${ticket.executorAnchors}`] : [];
+}
+
 function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, uncertainty?: any, planDocument?: any, experimentLog?: any, findingCheckpoints?: any, continuation?: any) {
   return [
     '## This ticket',
@@ -1196,6 +1200,7 @@ ${category.contract || '(No category-specific executor instructions were recorde
     ...(oracleHandoffPacket(ticket) ? [oracleHandoffPacket(ticket)] : []),
     ...(experimentLog ? [`Experiment log:\n${experimentLog}`] : []),
     `Declared files:\n${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
+    ...ticketAnchorsPacket(ticket),
     ...(planDocument ? [planDocument] : []),
     'Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle. A user is not a board fallback: when no board path remains, comment the evidence and release with kind `technical_blocker`; never compose a command for a human to run.\n\nScope check: request scope when a needed path is outside the declared set. A granted ruling takes effect immediately for write enforcement and commit admission. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants, and globs match paths consistently at the hook and commit gate. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix.',
   ].join('\n\n');
@@ -1434,21 +1439,6 @@ function transportExecutorBriefing(briefing?: any, ticket?: any, slug?: any, pro
   ].join('\n');
 }
 
-function dispatchTicketContext(ticket?: any, projectPath?: any) {
-  const title = String(ticket?.title || '(Untitled ticket)');
-  const description = String(ticket?.description || '(No additional description was recorded.)');
-  const declaredFiles = Array.isArray(ticket?.files) && ticket.files.length
-    ? ticket.files.map((file: any) => `- ${file}`).join('\n')
-    : '(No files were declared.)';
-  const anchors = String(ticket?.executorAnchors || '(No anchors were recorded.)');
-  return [
-    `Title: ${title}`,
-    `Description:\n${description}`,
-    `Declared files:\n${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
-    `Anchors:\n${anchors}`,
-  ].join('\n\n');
-}
-
 function ticketWorktreeBase(ticket: { dispatch?: { sharedTree?: boolean; baseCommit?: string; reviewTarget?: unknown; integrationTarget?: { mode?: string; branch?: string } } }, commitLength = 40): string | null {
   const dispatch = ticket.dispatch;
   const target = dispatch?.integrationTarget;
@@ -1490,9 +1480,6 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   return [
     label,
     formatWorktreeBase(ticketWorktreeBase(ticket, 12)),
-    'Implementation context:',
-    dispatchTicketContext(ticket, project),
-    '',
     'Use the dispatched token file path exactly.',
     `FIRST action: run \`${command}\` and execute exactly what it prints.`,
     ...(marker ? ['', marker] : []),
