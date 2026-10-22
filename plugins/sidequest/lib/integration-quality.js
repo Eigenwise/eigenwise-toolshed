@@ -111,9 +111,9 @@ function persistQuality(input, quality) {
   import_node_fs.default.writeFileSync(receipt, JSON.stringify(recorded, null, 2) + "\n");
   return recorded;
 }
-function captureEnvironment(gate, directory) {
+function captureEnvironment(gate, directory, environment) {
   const preload = "--import=" + (0, import_node_url.pathToFileURL)(import_node_path.default.join(gate, "lib", "core.mjs")).href;
-  return { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, preload].filter(Boolean).join(" "), QUALITY_GATE_V8_CAPTURE: import_node_path.default.join(directory, "coverage") };
+  return { ...environment, NODE_OPTIONS: [environment.NODE_OPTIONS, preload].filter(Boolean).join(" "), QUALITY_GATE_V8_CAPTURE: import_node_path.default.join(directory, "coverage") };
 }
 function participantQuality(gate, input, captureDirectory) {
   import_node_fs.default.mkdirSync(input.directory, { recursive: true });
@@ -125,25 +125,25 @@ function participantQuality(gate, input, captureDirectory) {
   }
   return persistQuality(input, quality);
 }
-function unavailableQuality(inputs, verify, error) {
+function unavailableQuality(inputs, verify, error, environment) {
   const quality = inputs.map((input) => {
     import_node_fs.default.mkdirSync(input.directory, { recursive: true });
     return persistQuality(input, unverifiedQuality(error));
   });
-  return { ...verify(process.env), quality };
+  return { ...verify(environment), quality };
 }
-function runIntegrationQuality(inputs, verify) {
+function runIntegrationQuality(inputs, verify, environment = process.env) {
   const primary = inputs[0];
   let gate;
   try {
     gate = configuredIntegrationGate(primary.registeredProject);
   } catch (error) {
-    return unavailableQuality(inputs, verify, error);
+    return unavailableQuality(inputs, verify, error, environment);
   }
-  if (!gate) return { ...verify(process.env), quality: [emptyQuality("none")] };
+  if (!gate) return { ...verify(environment), quality: [emptyQuality("none")] };
   const captureDirectory = import_node_path.default.join(primary.directory, "coverage");
   import_node_fs.default.mkdirSync(captureDirectory, { recursive: true });
-  const verification = verify(captureEnvironment(gate, primary.directory));
+  const verification = verify(captureEnvironment(gate, primary.directory, environment));
   const quality = inputs.map((input) => participantQuality(gate, input, captureDirectory));
   const failures = quality.flatMap((result) => result.failures);
   if (!failures.length) return { ...verification, quality };

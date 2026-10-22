@@ -137,9 +137,9 @@ function persistQuality(input: QualityInput, quality: IntegrationQuality): Integ
   return recorded;
 }
 
-function captureEnvironment(gate: string, directory: string): NodeJS.ProcessEnv {
+function captureEnvironment(gate: string, directory: string, environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const preload = '--import=' + pathToFileURL(path.join(gate, 'lib', 'core.mjs')).href;
-  return { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, preload].filter(Boolean).join(' '), QUALITY_GATE_V8_CAPTURE: path.join(directory, 'coverage') };
+  return { ...environment, NODE_OPTIONS: [environment.NODE_OPTIONS, preload].filter(Boolean).join(' '), QUALITY_GATE_V8_CAPTURE: path.join(directory, 'coverage') };
 }
 
 function participantQuality(gate: string, input: QualityInput, captureDirectory: string): IntegrationQuality {
@@ -153,26 +153,26 @@ function participantQuality(gate: string, input: QualityInput, captureDirectory:
   return persistQuality(input, quality);
 }
 
-function unavailableQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, error: unknown) {
+function unavailableQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, error: unknown, environment: NodeJS.ProcessEnv) {
   const quality = inputs.map((input) => {
     fs.mkdirSync(input.directory, { recursive: true });
     return persistQuality(input, unverifiedQuality(error));
   });
-  return { ...verify(process.env), quality };
+  return { ...verify(environment), quality };
 }
 
-export function runIntegrationQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult): VerificationResult & { quality: IntegrationQuality[] } {
+export function runIntegrationQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv = process.env): VerificationResult & { quality: IntegrationQuality[] } {
   const primary = inputs[0]!;
   let gate: string | undefined;
   try {
     gate = configuredIntegrationGate(primary.registeredProject);
   } catch (error) {
-    return unavailableQuality(inputs, verify, error);
+    return unavailableQuality(inputs, verify, error, environment);
   }
-  if (!gate) return { ...verify(process.env), quality: [emptyQuality('none')] };
+  if (!gate) return { ...verify(environment), quality: [emptyQuality('none')] };
   const captureDirectory = path.join(primary.directory, 'coverage');
   fs.mkdirSync(captureDirectory, { recursive: true });
-  const verification = verify(captureEnvironment(gate, primary.directory));
+  const verification = verify(captureEnvironment(gate, primary.directory, environment));
   const quality = inputs.map((input) => participantQuality(gate, input, captureDirectory));
   const failures = quality.flatMap((result) => result.failures);
   if (!failures.length) return { ...verification, quality };
