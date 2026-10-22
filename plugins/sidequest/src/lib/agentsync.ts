@@ -1449,12 +1449,12 @@ function dispatchTicketContext(ticket?: any, projectPath?: any) {
   ].join('\n\n');
 }
 
-function ticketWorktreeBase(ticket: { dispatch?: { sharedTree?: boolean; baseCommit?: string; reviewTarget?: unknown; integrationTarget?: { mode?: string; branch?: string } } }): string | null {
+function ticketWorktreeBase(ticket: { dispatch?: { sharedTree?: boolean; baseCommit?: string; reviewTarget?: unknown; integrationTarget?: { mode?: string; branch?: string } } }, commitLength = 40): string | null {
   const dispatch = ticket.dispatch;
   const target = dispatch?.integrationTarget;
   if (dispatch?.sharedTree !== false || !target) return null;
   const branch = target.mode === 'remote' ? `origin/${target.branch}` : target.branch;
-  return `${dispatch.baseCommit} (${dispatch.reviewTarget ? 'review candidate' : branch})`;
+  return `${String(dispatch.baseCommit).slice(0, commitLength)} (${dispatch.reviewTarget ? 'review candidate' : branch})`;
 }
 
 function formatWorktreeBase(base: string | null): string {
@@ -1489,7 +1489,7 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   // placement routes identically.
   return [
     label,
-    formatWorktreeBase(ticketWorktreeBase(ticket)),
+    formatWorktreeBase(ticketWorktreeBase(ticket, 12)),
     'Implementation context:',
     dispatchTicketContext(ticket, project),
     '',

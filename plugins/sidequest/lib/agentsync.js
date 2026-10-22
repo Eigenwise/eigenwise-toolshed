@@ -1140,12 +1140,12 @@ ${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
 ${anchors}`
   ].join("\n\n");
 }
-function ticketWorktreeBase(ticket) {
+function ticketWorktreeBase(ticket, commitLength = 40) {
   const dispatch = ticket.dispatch;
   const target = dispatch?.integrationTarget;
   if (dispatch?.sharedTree !== false || !target) return null;
   const branch = target.mode === "remote" ? `origin/${target.branch}` : target.branch;
-  return `${dispatch.baseCommit} (${dispatch.reviewTarget ? "review candidate" : branch})`;
+  return `${String(dispatch.baseCommit).slice(0, commitLength)} (${dispatch.reviewTarget ? "review candidate" : branch})`;
 }
 function formatWorktreeBase(base) {
   return base ? `worktreeBase: ${base}` : "";
@@ -1169,7 +1169,7 @@ function renderDispatchStub(ticket, projectPath) {
   const label = String(ticket?.dispatch?.description || spawnDescription(ticket, store.resolveExec(ticket?.model, ticket?.effort))).replace(EMBEDDED_ROUTE_MARKER_RE, " ").replace(/\s+/g, " ").trim() || "Sidequest ticket executor.";
   return [
     label,
-    formatWorktreeBase(ticketWorktreeBase(ticket)),
+    formatWorktreeBase(ticketWorktreeBase(ticket, 12)),
     "Implementation context:",
     dispatchTicketContext(ticket, project),
     "",

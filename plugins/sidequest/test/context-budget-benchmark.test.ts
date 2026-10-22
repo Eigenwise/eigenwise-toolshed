@@ -6,8 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-home-'));
-const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-board-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-'));
+const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-board-'));
+const projectPath = path.join(projectRoot, 'windows-length-checkout'.padEnd(Math.max(22, 90 - projectRoot.length - 1), 'x'));
+fs.mkdirSync(projectPath);
 process.env.SIDEQUEST_HOME = home;
 process.env.CLAUDE_PROJECT_DIR = projectPath;
 process.env.CLAUDE_CODE_SESSION_ID = `context-budget-${process.pid}`;
@@ -61,6 +63,7 @@ function hookOutput(expression: string) {
 
 test('end-to-end context budgets preserve real storage, retrieval, and model seams', async () => {
   const project = store.ensureProject(projectPath).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main' });
   const story = store.createStory(project, { title: 'Context budget benchmark' });
   store.updateStory(project, story.ref, { executionContract: `Contract ${'測🧪'.repeat(5000)}` });
   store.setProjectCategory(project, 'benchmark', 'ADD', {
@@ -128,7 +131,15 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
     process.chdir(originalWorkingDirectory);
   }
   assert.ok(!dispatch.isError, dispatch.content?.[0]?.text);
+  process.stdout.write(`dispatch benchmark ${Buffer.byteLength(dispatch.content[0].text)}B projectPath=${projectPath.length}\n`);
   assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes`);
+  const payload = JSON.parse(dispatch.content[0].text);
+  const dispatchedTicket = store.getTicket(project, orientationTicket.ref);
+  const baseCommit = dispatchedTicket.dispatch.baseCommit;
+  assert.match(payload.worktreeBase, /^[a-f0-9]{12} \(main\)$/);
+  assert.ok(payload.spawn.prompt.includes(`worktreeBase: ${payload.worktreeBase}`));
+  assert.ok(!dispatch.content[0].text.includes(baseCommit));
+  assert.ok(agentsync.renderTicketBriefing(dispatchedTicket, 'benchmark-token', project, projectPath).includes(`worktreeBase: ${baseCommit} (main)`));
 
   const context = hookOutput("output.writeContext('SessionStart', 'Recover with the typed board call. ' + '🙂'.repeat(4000))");
   const contextText = context.hookSpecificOutput.additionalContext;
