@@ -16,6 +16,60 @@ execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:owner/repository
 
 const { githubRepository } = require('../lib/external-refs');
 
+test('verify accepts single-quoted jq bindings, named captures and grep patterns on add and update', (context) => {
+  const executableDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-tools-'));
+  fs.writeFileSync(path.join(executableDirectory, 'jq'), '');
+  fs.writeFileSync(path.join(executableDirectory, 'grep'), '');
+  const originalPath = process.env.PATH;
+  process.env.PATH = executableDirectory + path.delimiter + originalPath;
+  context.after(() => { process.env.PATH = originalPath; });
+  const commands = [
+    "jq -e '.items as $st | $st | length > 0' data.json",
+    'jq -r -e \'.name | capture("(?<s>[a-z]+)") | .s\' data.json',
+    "grep -c '<li>' index.html",
+    "echo '${SQ_VERIFY_UNSET_3864} %SQ_VERIFY_UNSET_3864% $SQ_VERIFY_UNSET_3864'",
+    "echo 'literal' '$SQ_VERIFY_UNSET_3864'",
+    'echo "it\'s literal"',
+  ];
+  for (const command of commands) {
+    assert.deepEqual(store.verifyCommandErrors(command), [], command);
+    const ticket = store.createTicket(slug, { title: 'Quoted verify', executorVerify: command });
+    assert.equal(store.updateTicket(slug, ticket.ref, { executorVerify: command }).executorVerify, command);
+  }
+});
+
+test('verify still refuses unquoted placeholders and variable expansions outside single quotes', () => {
+  assert.equal(process.env.SQ_VERIFY_UNSET_3864, undefined);
+  const commands = [
+    'echo "$SQ_VERIFY_UNSET_3864"',
+    'echo "\'$SQ_VERIFY_UNSET_3864\'"',
+    'echo ${SQ_VERIFY_UNSET_3864}',
+    'echo %SQ_VERIFY_UNSET_3864%',
+    "echo 'literal' $SQ_VERIFY_UNSET_3864",
+  ];
+  for (const command of commands) {
+    assert.match(store.verifyCommandErrors(command).join('\n'), /unset environment variable SQ_VERIFY_UNSET_3864/);
+    assert.throws(() => store.createTicket(slug, { executorVerify: command }), /unset environment variable SQ_VERIFY_UNSET_3864/);
+  }
+  assert.match(store.verifyCommandErrors('echo <placeholder>').join('\n'), /unresolved placeholder/);
+  assert.match(store.verifyCommandErrors('echo "<placeholder>"').join('\n'), /unresolved placeholder/);
+  assert.deepEqual(store.verifyCommandErrors('echo ${SQ_VERIFY_UNSET_3864:-/tmp}'), []);
+});
+
+test('verify reports each unset variable once across repeated dollar, brace and percent references', () => {
+  const errors = store.verifyCommandErrors('echo $SQ_VERIFY_UNSET_3864 ${SQ_VERIFY_UNSET_3864} %SQ_VERIFY_UNSET_3864% $SQ_VERIFY_UNSET_3864');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /unset environment variable SQ_VERIFY_UNSET_3864/);
+});
+
+test('verify shared quote scanner preserves quoted and escaped semicolons', () => {
+  assert.deepEqual(store.verifyCommandErrors("echo 'one;two'"), []);
+  assert.deepEqual(store.verifyCommandErrors('echo "one;two"'), []);
+  assert.deepEqual(store.verifyCommandErrors('echo one\\;two'), []);
+  assert.match(store.verifyCommandErrors("echo 'one'; echo two").join('\n'), /cannot use `;` command chaining/);
+  assert.match(store.verifyCommandErrors('echo "one"; echo two').join('\n'), /cannot use `;` command chaining/);
+});
+
 test('ticket refs normalize every accepted form, dedupe keys and reject unknown forms', () => {
   const cases = [
     ['GH-123', 'GH-123', 'https://github.com/owner/repository/issues/123'],
