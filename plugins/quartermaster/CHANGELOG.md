@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.1 (2026-10-20)
+
+Released in v3.605.0, up from 1.0.0.
+
+### Fixes
+
+- Quartermaster vetoes glob-argument commands instead of writing a dead allowlist rule (GH-323) [`d74eb6d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d74eb6db429f857a8fded3e27f7713fee586c579)
+- Score Lizard languages and reject unsupported source-only scopes (SQ-3770)
+  Rust and other Lizard languages accept CSV or local Lizard complexity. Unsupported source-only changes exit 2; LCOV inventory trust requirements stay unchanged.
+
+## 1.0.0 (2026-10-18)
+
+Released in v3.601.0, up from 0.12.2.
+
+### Breaking changes
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+
+### Fixes
+
+- update-toolshed removes a settings statusLine that still points at the retired Toolshed statusline shim (SQ-3738)
+  The Toolshed statusline left with observability 1.0, so the updater no longer repoints a stale `workbench-statusline.js` pin at a shim. It deletes that `statusLine` entry and says so; Claude Code then draws its own status line. A status line that is not the Toolshed shim is left alone.
+- delete the retired CRAP core and CI checker (SQ-3747)
+  Quartermaster's `crap-core.cjs` scoring module and `check-ci.js` are gone with their tests; quality scoring belongs to quality-gate, and CI watching is outside Quartermaster's role. The repository CRAP script now imports `crapScore` from quality-gate and the suite-resolution rule from the sidequest build instead of carrying copies.
+
 ## 0.12.2 (2026-10-17)
 
 Released in v3.599.0, up from 0.12.1.

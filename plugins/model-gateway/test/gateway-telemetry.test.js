@@ -7,7 +7,6 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { startGateway } = require('./support.js');
-const { otlpToObservations } = require('../../observability/lib/observability/otlp.js');
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -226,15 +225,9 @@ test('records failed Codex spans as canonical route observations', async (t) => 
   const received = await waitFor(() => collector.received[0], 'failed route telemetry was not received');
   const span = spanFrom(received);
   const attributes = attributeMap(span.attributes);
-  const observations = otlpToObservations('traces', JSON.parse(received.body), { projectId: 'a'.repeat(64) });
-  const route = observations.find((observation) => observation.event_name === 'codex_gateway.route');
   assert.equal(span.name, 'codex_gateway.route');
   assert.equal(attributes.status, 'server_error');
   assert.equal(attributes.status_code, 503);
-  assert.ok(route);
-  assert.equal(route.attributes.status, 'server_error');
-  assert.equal(route.attributes.status_code, 503);
-  assert.equal(observations.some((observation) => observation.event_name === 'coverage_gap'), false);
 });
 
 test('normalizes legacy context failures before final Codex readiness classification', async (t) => {

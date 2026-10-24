@@ -3,6 +3,8 @@ export type Effort = (typeof EFFORTS)[number];
 
 export const CLAUDE_PREFIX = 'sidequest-exec-';
 export const DISPATCH_PREFIX = 'sidequest-exec-dispatch-';
+export const EVIDENCE_CLAUDE_PREFIX = 'sidequest-exec-evidence-';
+export const EVIDENCE_DISPATCH_NAME = 'sidequest-exec-dispatch-evidence';
 export const READ_ONLY_CLAUDE_PREFIX = 'sidequest-exec-readonly-';
 export const READ_ONLY_DISPATCH_PREFIX = 'sidequest-exec-dispatch-readonly-';
 export const DISCOVERED_MODEL_PREFIX = 'sidequest-exec-model-';
@@ -115,6 +117,16 @@ export function stableDispatchName(_effort?: Effort): string {
   return DISPATCH_NAME;
 }
 
+export function stableEvidenceClaudeName(effort: Effort): string {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
+
+export function isEvidenceExecutor(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const name = canonicalExecutorName(value);
+  return name === EVIDENCE_DISPATCH_NAME || EFFORTS.some((effort) => name === stableEvidenceClaudeName(effort));
+}
+
 export function stableReadOnlyClaudeName(effort: Effort): string {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
@@ -141,7 +153,15 @@ function discoveredModelEffort(name: string, prefix: string): Effort | null {
   return name.startsWith(prefix) && isEffort(effort) ? effort : null;
 }
 
+function classifyEvidenceExecutor(name: string): ExecutorClassification | null {
+  if (name === EVIDENCE_DISPATCH_NAME) return { kind: 'read_only_codex_dispatch', effort: null };
+  const effort = name.slice(EVIDENCE_CLAUDE_PREFIX.length);
+  return name.startsWith(EVIDENCE_CLAUDE_PREFIX) && isEffort(effort) ? { kind: 'read_only_claude_builtin', effort } : null;
+}
+
 function classifyDiscoveredModel(name: string): ExecutorClassification | null {
+  const evidence = classifyEvidenceExecutor(name);
+  if (evidence) return evidence;
   const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
   if (readOnlyEffort) return { kind: 'read_only_discovered_model', effort: readOnlyEffort };
   const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
@@ -151,6 +171,8 @@ function classifyDiscoveredModel(name: string): ExecutorClassification | null {
 const BUNDLED_AGENT_NAMES = new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName),

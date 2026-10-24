@@ -88,6 +88,25 @@ For a discovered provider the shim does not serve (catalog provider other than `
 
 `route` is display and provenance data. `agent` is the caller wiring surface. Use exactly one gateway marker, unchanged. A prepared ticket dispatch adds ` ticket=<ref>` before the closing bracket, and the gateway records that ref with its usage. Never quote it in the prompt or append another marker. Codex effort rides only in that marker; Claude effort follows the session. A Codex gateway authentication failure remains a spawn-time error, so report the failed spawn instead of translating the recipe by hand.
 
+### Ticketless research
+
+`recipe.research` is a read-only spawn for an investigation that needs no ticket: one call, one spawn, routed by category. A Codex route names `sidequest:sidequest-exec-dispatch-readonly` (its definition pins the model, so omit `model`); a Claude route names `sidequest:sidequest-exec-readonly-<effort>` with `model` set to the route's Claude model. `promptPrefix` is the route marker plus the line that tells the executor there is no ticket:
+
+```js
+const { research } = await route_recipe({ category: 'codebase-exploration' });
+const findings = await Agent({
+  subagent_type: research.subagentType,
+  ...(research.model ? { model: research.model } : {}),
+  prompt: research.promptPrefix + question,
+});
+```
+
+```json
+{"research":{"subagentType":"sidequest:sidequest-exec-readonly-high","model":"opus","promptPrefix":"[sidequest-route model=opus effort=high]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n"}}
+```
+
+The Agent hook admits it without a dispatch only when the prompt opens with that prefix for a live route of an enabled category, and the spawned type matches. A stale or unknown marker is refused, so re-fetch the recipe after a route edit. Writable executors and generic agent types carrying a marker stay refused. Use the category recipe: a ticket-override recipe's prefix names a route the hook does not admit. `research` is null for a discovered-model route; dispatch a read-only ticket there.
+
 ## Sources
 
 - Choosing the right model — platform.claude.com/docs/en/about-claude/models/choosing-a-model

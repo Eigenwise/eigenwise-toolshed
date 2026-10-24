@@ -29,7 +29,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
+const { EVIDENCE_DISPATCH_NAME, stableEvidenceClaudeName, dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { execFileSync } = require('./git-process.js');
@@ -47,7 +47,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require('./worktrees.js');
+const { branchOwningWorktree, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require('./worktrees.js');
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
 const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
@@ -58,12 +58,13 @@ const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
 const { createAssets } = require('./store/assets.js');
+const { createDispatchSnapshot } = require('./store/dispatch-snapshot.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
-const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createReviewCorrections, pendingOracleVerdictRefusal } = require('./store/review-corrections.js');
 const { createReviewFinalization } = require('./store/review-finalization.js');
 const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
@@ -623,6 +624,7 @@ const {
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
+  ticketEvidenceDirectory,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -1149,8 +1151,60 @@ function attributeOwnChanges(slug: any, ticket: any, workspace: any, working: an
 // since its dispatch base, never what a merge carried in from the integration branch.
 function negativeControlChanges(slug: any, ticket: any, delta: any, changedPaths: string[]) {
   const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] as string[] };
-  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  if (!workspace?.base) return { paths: changedPaths, testNames: [] as string[], inheritedTests: [] as InheritedTestClassification[] };
+  const own = attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  const inheritedTests = inheritedTestClassifications(slug, ticket, workspace.root, changedPaths, own.testNames);
+  const inheritedNames = new Set(inheritedTests.flatMap((entry) => entry.tests));
+  return { ...own, testNames: own.testNames.filter((name) => !inheritedNames.has(name)), inheritedTests };
+}
+
+type InheritedTestClassification = { classification: 'inherited-unchanged'; sourceRef: string; candidate: string; tests: string[] };
+
+function inheritedTestBodies(source: string) {
+  const lines = source.split(/(?<=\n)/);
+  const definitions = testDefinitions(source, true);
+  return definitions.map((entry, index) => ({
+    name: entry.name,
+    bytes: lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1]!.line - 1 : lines.length).join(''),
+  }));
+}
+
+function uniqueInheritedTestBodies(root: string, revision: string | null, files: string[]) {
+  const bodies = files.flatMap((file) => inheritedTestBodies(sourceAt(root, revision, file)).map((entry) => ({ ...entry, file })));
+  const counts = new Map<string, number>();
+  for (const body of bodies) counts.set(body.name, (counts.get(body.name) || 0) + 1);
+  return new Map(bodies.filter((body) => counts.get(body.name) === 1).map((body) => [body.name, body]));
+}
+
+function inheritedCandidateTests(root: string, candidate: string, files: string[]): string[] {
+  const testFiles = files.filter(isTestSidePath);
+  const inherited = uniqueInheritedTestBodies(root, candidate, testFiles);
+  const current = uniqueInheritedTestBodies(root, null, testFiles);
+  return [...current].filter(([name, body]) => {
+    const previous = inherited.get(name);
+    return previous?.file === body.file && previous.bytes === body.bytes;
+  }).map(([name]) => name);
+}
+
+function rejectedAncestor(root: string, source: { submission?: { commit?: string; review?: { outcome?: string } } } | null): string | null {
+  const submission = source?.submission;
+  if (submission?.review?.outcome !== 'rejected' || !submission.commit) return null;
+  try {
+    gitOutput(root, ['merge-base', '--is-ancestor', submission.commit, 'HEAD']);
+    return submission.commit;
+  } catch {
+    return null;
+  }
+}
+
+function inheritedTestClassifications(slug: string, ticket: { links?: { type: string; ref: string }[] }, root: string, files: string[], expected: string[]): InheritedTestClassification[] {
+  return (ticket.links || []).filter((link) => link.type === 'related').flatMap((link) => {
+    const candidate = rejectedAncestor(root, getTicket(slug, link.ref));
+    if (!candidate) return [];
+    const unchanged = new Set(inheritedCandidateTests(root, candidate, files));
+    const tests = expected.filter((name) => unchanged.has(name));
+    return tests.length ? [{ classification: 'inherited-unchanged' as const, sourceRef: link.ref, candidate, tests }] : [];
+  });
 }
 
 // diff-tree prints nothing for a merge, so the committed paths miss a file that only a merge's
@@ -1396,11 +1450,13 @@ function mixedChange(paths: string[]) {
 // integration branch was written and tested there (GH-160).
 function ownedControlCheck(slug: string, ticket: ProvenanceCompletionTicket, delta: unknown, ownedPaths: string[]) {
   const kind = ticket.dispatch?.workProvenance?.kind;
-  if (['behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only'].includes(String(kind))) return { ok: true as const, negativeControl: 'not_required(' + kind + ')' };
+  if (['behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only'].includes(String(kind))) return { ok: true as const, inheritedTests: [] as InheritedTestClassification[], negativeControl: 'not_required(' + kind + ')' };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
-  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(no changed source under changed tests)' };
+  const inheritedTests = own.inheritedTests;
+  if ([inheritedTests.length, !own.testNames.length].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(inherited-unchanged)', inheritedTests };
+  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true as const, negativeControl: 'not_required(no changed source under changed tests)', inheritedTests };
   const control = negativeControlResult(ticket, own.testNames);
-  return ['failed', 'waived'].includes(control.kind) ? { ok: true as const, negativeControl: control.kind } : negativeControlRefusal(ticket, control);
+  return ['failed', 'waived'].includes(control.kind) ? { ok: true as const, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 
 function completionTreeCheck(slug: string, ticket: ProvenanceCompletionTicket, opts?: { explicitNoOp?: boolean }) {
@@ -1412,7 +1468,8 @@ function completionTreeCheck(slug: string, ticket: ProvenanceCompletionTicket, o
   const control = ownedControlCheck(slug, ticket, facts.delta, facts.ownedPaths);
   if (!control.ok) return control;
   return { ok: true, applicable: true, changedPaths: facts.changedPaths, ownedPaths: facts.ownedPaths,
-    noOp: !facts.changedPaths.length, workProvenance: facts.provenance, negativeControl: control.negativeControl };
+    noOp: !facts.changedPaths.length, workProvenance: facts.provenance, negativeControl: control.negativeControl,
+    inheritedTests: control.inheritedTests };
 }
 
 const {
@@ -1697,6 +1754,8 @@ const {
   recordSubmissionWaveDelivery,
   submissionsPayload,
 } = createSubmissions({
+  createTicket,
+  afterCommit,
   EXECUTOR_VERIFY_MAX,
   INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
   MANUAL_VERIFY_PREFIX,
@@ -1723,6 +1782,7 @@ const {
   integrationTarget,
   integrationTargetCommit,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   listTickets,
@@ -1962,8 +2022,35 @@ function ticketStorageRow(slug?: any, ticket?: any) {
   };
 }
 
+const { writeDispatchSnapshot } = createDispatchSnapshot({
+  listTickets: (slug: string) => listTickets(slug),
+  projectDir: (slug: string) => projectDir(slug),
+  boardConfig: (slug: string) => boardConfig(slug),
+  getCategory: (id: string, options: { project: string }) => getCategory(id, options),
+  routed: (slug: string) => projectDispatchAdmission(slug).status === 'routed',
+});
+
+// Every dispatch prepare, bind, claim, release, submit, done and remove writes its ticket here, so this is
+// the one seam that keeps the hooks module's dispatch snapshot current. A failed side write leaves the
+// guards reading an older snapshot; they fail open, so it must never fail the board write that caused it.
+function scheduleDispatchSnapshot(slug: string) {
+  afterCommit(() => {
+    try { writeDispatchSnapshot(slug); } catch {}
+  });
+}
+
+// Routing and denied-tools settings are snapshot fields too, so the writes that change them refresh it.
+function refreshingDispatchSnapshot(write: (slug: string, ...rest: any[]) => any) {
+  return (slug: string, ...rest: any[]) => {
+    const result = write(slug, ...rest);
+    scheduleDispatchSnapshot(slug);
+    return result;
+  };
+}
+
 function putTicket(slug?: any, ticket?: any) {
   putCachedRow(database(), 'tickets', ticketStorageRow(slug, ticket));
+  if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
   const project = readMeta(slug);
   telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
@@ -2202,16 +2289,26 @@ function priorityRank(p?: any) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? (PRIORITY_RANK[String(p)] ?? 9) : 9;
 }
 
+function evidenceExecutorName(ticket: { categoryId?: string; project?: string; effort: string }, resolved: { backend: string }): string | null {
+  if (getCategory(ticketCategory(ticket), { project: ticket.project })?.writes !== 'evidence') return null;
+  return resolved.backend === 'codex' ? EVIDENCE_DISPATCH_NAME : stableEvidenceClaudeName(ticket.effort);
+}
+
+function readonlyExecutorName(ticket: { effort: string }, resolved: { backend: string; readOnlyAgent?: string }): string {
+  return evidenceExecutorName(ticket, resolved) || resolved.readOnlyAgent || defaultReadonlyExecutorName(ticket, resolved);
+}
+
+function defaultReadonlyExecutorName(ticket: { effort: string }, resolved: { backend: string }): string {
+  return resolved.backend === 'codex' ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
+}
+
 // The plugin-bundled stable executor receives the briefing and token in its prompt.
 function stableExecutorName(ticket?: any, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
-  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
-  return resolved.backend === 'codex'
-    ? stableReadOnlyDispatchName(ticket.effort)
-    : stableReadOnlyClaudeName(ticket.effort);
+  return readonlyExecutorName(ticket, resolved);
 }
 
 // Prepare a ticket for dispatch: persist a fresh claim nonce and the stable
@@ -2750,6 +2847,8 @@ type Diagnostic = import('./kernel/index').Diagnostic;
 type ReleaseClaim = { by?: string; at?: string };
 type ReleaseSubmission = { by?: string; commit?: string };
 type ReleaseDispatch = {
+  evidenceMode?: boolean;
+  evidenceWriteRoots?: string[];
   terminalAt?: string | null;
   outcome?: string;
   declaredFiles?: string[];
@@ -2807,7 +2906,7 @@ type ReleaseOptions = {
   requireReleaseVerdict?: boolean;
   claimRelease?: { kind?: string };
   workedBy?: unknown;
-  completionComment?: { advisory?: unknown };
+  completionComment?: { advisory?: unknown; body?: string };
   recordedDelivery?: RecordedDelivery;
 };
 type PreparedComment = Readonly<Record<string, unknown>>;
@@ -2997,9 +3096,13 @@ function pendingSubmissionRefusal(t: ReleaseTicket, heldOwner: string, reopenSta
   };
 }
 
+function doneAuthorityRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
+  return evidenceDoneReportRefusal(request, facts) || executorDoneRefusal(request, facts);
+}
+
 function releaseRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
   const refusal = unclaimedActiveDispatchRefusal(request, facts)
-    || executorDoneRefusal(request, facts)
+    || doneAuthorityRefusal(request, facts)
     || changedClaimRefusal(request, facts)
     || ownershipRefusal(request, facts);
   if (refusal) return refusal;
@@ -3024,6 +3127,33 @@ function unclaimedDispatchRefusal(t: ReleaseTicket, dispatch: ReleaseDispatch | 
 }
 
 const NO_COMPLETION_DELTA: CompletionDeltaCheck = { completionDelta: null, sharedTreeCommittedScope: false };
+
+function savedEvidencePath(root: string, relative: string): boolean {
+  if (path.isAbsolute(relative)) return false;
+  const target = path.resolve(root, relative);
+  if (!boardVerificationEvidencePath(target, root)) return false;
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function evidenceReportNamesSavedFile(roots: readonly string[], body: string): boolean {
+  const paths = body.match(/`[^`]+`|[^\s,;]+/g) || [];
+  return roots.some((root) => paths.some((relative) => savedEvidencePath(root, relative.replace(/^`|`$/g, ''))));
+}
+
+function evidenceCompletionReported(dispatch: { evidenceWriteRoots?: string[] }, body: string): boolean {
+  return /\bnothing was saved\b/i.test(body) || evidenceReportNamesSavedFile(dispatch.evidenceWriteRoots || [], body);
+}
+
+function evidenceDoneReportRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
+  if (!facts.executorDone || facts.dispatch?.evidenceMode !== true) return null;
+  const body = String(request.opts.completionComment?.body || '');
+  if (evidenceCompletionReported(facts.dispatch, body)) return null;
+  return { ok: false, reason: 'evidence_report_required', message: 'Evidence dispatch done requires a written evidence file path relative to its admitted root, or the explicit statement "nothing was saved".', ticket: facts.t };
+}
 
 function executorDoneRefusal(request: ReleaseRequest, facts: ReleaseFacts): ReleaseResult | null {
   if (!facts.executorDone) return null;
@@ -3885,7 +4015,20 @@ function commitReachedRef(repo: string, commit: string, ref: string) {
 }
 
 function ticketIntegrationTarget(slug?: any, ticket?: any) {
-  return integrationTarget(slug, ticket?.dispatch?.integrationTarget || undefined);
+  return integrationTarget(slug, recordedTicketIntegrationTarget(ticket));
+}
+
+function recordedTicketIntegrationTarget(ticket: {
+  dispatch?: { integrationTarget?: { branch: string; mode?: string } };
+  submission?: { integration?: { deliveredAt?: string; targetBranch?: string; targetUpstream?: string } };
+} | null | undefined) {
+  return ticket?.dispatch?.integrationTarget || deliveredIntegrationTarget(ticket?.submission?.integration);
+}
+
+function deliveredIntegrationTarget(delivery: { deliveredAt?: string; targetBranch?: string; targetUpstream?: string } | undefined) {
+  if (!delivery?.deliveredAt) return undefined;
+  if (!delivery.targetBranch) return undefined;
+  return { branch: delivery.targetBranch, mode: delivery.targetUpstream === `origin/${delivery.targetBranch}` ? 'remote' : 'local' };
 }
 
 function abandonmentFallbackTarget(slug: string) {
@@ -3942,34 +4085,11 @@ function sameBranchWaveTarget(slug: any, targets: any[]) {
   return localAheadOfUpstreamWarning(readMeta(slug)?.path || '', local.branch) ? local : remote;
 }
 
-// The dispatch-time branch stays the default target, but an integrator that has since
-// fast-forwarded past it, or names integrationBranch, delivers onto the branch it has
-// checked out (SQ-3144). Any other checkout keeps the recorded target, so delivery
-// still refuses branch_not_checked_out. A local topic branch has no origin/<branch>
-// for remote mode to read, and delivery only ever moves the local branch, so that
-// target falls back to local mode rather than refusing.
 function deliveryIntegrationTarget(slug?: any, recorded?: any, integrationBranch?: any) {
-  const branch = integrationBranch == null
-    ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded))
-    : normalizeIntegrationBranch(integrationBranch);
-  if (!branch || branch === recorded.branch) return recorded;
-  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
-}
-
-function deliveryBranchMode(slug: any, recordedMode: string, branch: string) {
-  return recordedMode === 'remote' && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? 'remote' : 'local';
-}
-
-function checkedOutBranchDescendingFrom(repo: string, ref: string) {
-  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: 'pipe' }).trim();
-  const currentBranch = git(['branch', '--show-current']);
-  try {
-    git(['merge-base', '--is-ancestor', ref, 'HEAD']);
-    return currentBranch;
-  } catch (error: any) {
-    if (error?.status === 1) return '';
-    throw error;
+  if (integrationBranch != null && normalizeIntegrationBranch(integrationBranch) !== recorded.branch) {
+    throw new Error(`Delivery targets the recorded integration branch ${recorded.branch}; integrationBranch ${integrationBranch} cannot override it. Redispatch on the intended integration branch before submitting.`);
   }
+  return recorded;
 }
 
 function recordedDelivery(slug?: any, ticket?: any, commit?: any, evidence?: any) {
@@ -4111,17 +4231,23 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
 // completeTicketAsControlPlane, which refuses a bound unclaimed attempt as `active_dispatch` both inside and
 // past the deadline - while MCP counted down and then retired and closed in one call. So the CLI's advertised
 // recovery door could never open (SQ-2959 finding 3). Both surfaces now call this and print what it returns.
+function dispatchAlreadyTerminal(ticket?: any) {
+  return Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+}
+
 function groomCloseRecovery(slug?: any, idOrRef?: any, opts?: any) {
   const evidence = String(opts?.evidence || '').trim();
   const reason = String(opts?.reason || '');
-  if (!evidence) return { ok: true, reason };
   const ticket = getTicket(slug, idOrRef);
+  // Closing a bound review before its oracle verdict leaves the outcome unrecorded (SQ-3840).
+  const pendingVerdict = pendingOracleVerdictRefusal(ticket);
+  if (pendingVerdict) return { ok: false, recovered: pendingVerdict };
+  if (!evidence) return { ok: true, reason };
   const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
   if (recovered.ok) return { ok: true, reason };
   // A dispatch that is ALREADY terminal needs no retirement, so evidence arriving after the fact is recorded
   // in the closure reason rather than refused.
-  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
-  if (!terminalDispatch) return { ok: false, recovered };
+  if (!dispatchAlreadyTerminal(ticket)) return { ok: false, recovered };
   return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 
@@ -4657,7 +4783,7 @@ module.exports = {
   promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
-  setProjectRoutingProfile,
+  setProjectRoutingProfile: refreshingDispatchSnapshot(setProjectRoutingProfile),
   setNewProjectRoutingProfile,
   routingProfileEntries,
   routingProfileCategory,
@@ -4667,9 +4793,9 @@ module.exports = {
   getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
-  setProjectCategory,
+  setProjectCategory: refreshingDispatchSnapshot(setProjectCategory),
   detachCategory,
-  removeProjectCategory,
+  removeProjectCategory: refreshingDispatchSnapshot(removeProjectCategory),
   setCategory,
   removeCategory,
   homeRoot,
@@ -4685,9 +4811,10 @@ module.exports = {
   sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
-  setBoardConfig,
+  setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   normalizeDeliveryMode,
@@ -4722,7 +4849,7 @@ module.exports = {
   mergeProject,
   moveProject,
   setProjectNotify,
-  setProjectRouting,
+  setProjectRouting: refreshingDispatchSnapshot(setProjectRouting),
   projectRoutingEnabled,
   copyAsset,
   saveAssetData,
@@ -4777,6 +4904,7 @@ module.exports = {
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
+  ticketEvidenceDirectory,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,

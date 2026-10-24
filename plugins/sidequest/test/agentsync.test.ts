@@ -21,14 +21,16 @@ const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-gpt-5.6-p
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Codex dispatch executors are effort-collapsed: model AND effort ride the route
-// marker, so the stable set is 2 shared dispatch defs plus the per-effort Claude ladder.
+// marker, so each role has one dispatch definition and a per-effort Claude ladder.
 const STABLE_EXECUTORS = [
   'sidequest-diagnostic-probe.md',
   'sidequest-exec-dispatch.md',
   'sidequest-exec-dispatch-readonly.md',
+  'sidequest-exec-dispatch-evidence.md',
   ...EFFORTS.flatMap((effort) => [
     `sidequest-exec-${effort}.md`,
     `sidequest-exec-readonly-${effort}.md`,
+    `sidequest-exec-evidence-${effort}.md`,
   ]),
 ].sort();
 
@@ -732,7 +734,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   try {
     assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
     const result = agentsync.syncExecAgents(null, { dir });
-    assert.equal(result.written, 13);
+    assert.equal(result.written, STABLE_EXECUTORS.length);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
     // One collapsed dispatch definition keeps a safe frontmatter effort for internal non-marker calls.
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
@@ -811,6 +813,18 @@ test('a newly registered board tool needs no agentsync change to reach read-only
   const named = new Set(source.match(/mcp__plugin_sidequest_board__[a-zA-Z_]+/g) || []);
   assert.ok(named.size <= 4,
     `agentsync names ${named.size} board tools; read-only is a deny list, so it must not enumerate grants: ${[...named].join(', ')}`);
+});
+
+test('SQ-3739: read-only executors, and only they, recognise a ticketless research run', () => {
+  const researchParagraph = /\*\*Research runs:\*\* A prompt whose second line is `Read-only research run, no ticket: [^`]+` has no ticket\. Skip the briefing FIRST action, the claim, comments and every other ticket lifecycle step\./;
+  assert.match(agentsync.renderReadOnlyDispatchAgent(), researchParagraph);
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.match(agentsync.renderReadOnlyClaudeAgent(effort), researchParagraph, effort);
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'agents', `sidequest-exec-readonly-${effort}.md`), 'utf8'), researchParagraph, `generated ${effort} definition`);
+  }
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'agents', 'sidequest-exec-dispatch-readonly.md'), 'utf8'), researchParagraph);
+  assert.doesNotMatch(agentsync.renderDispatchAgent(), /Research runs/, 'a writable executor never skips its briefing');
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'agents', 'sidequest-exec-high.md'), 'utf8'), /Research runs/);
 });
 
 test('read-only executor denylists add configured MCP tools without dropping the writers', () => {
@@ -906,7 +920,7 @@ test('sync writes route-independent generated executors', () => {
   configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.equal(result.written, 13);
+  assert.equal(result.written, STABLE_EXECUTORS.length);
   assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
@@ -1086,11 +1100,10 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
   assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
   assert.equal(stub.match(/\[sidequest-route /g)!.length, 1);
-  assert.ok(stub.includes(stubDescription));
-  assert.doesNotMatch(stub, /excerpt capped|orientation capped/);
-  assert.match(stub, /Title: Instant dispatch/);
-  assert.match(stub, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
-  assert.match(stub, /Anchors:\nlib\/store\.js prepareDispatch/);
+  assert.ok(!stub.includes(stubDescription));
+  assert.doesNotMatch(stub, /excerpt capped|orientation capped|Title:|Declared files:|Anchors:/);
+  assert.match(briefing, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
+  assert.match(briefing, /lib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
   assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\\dispatch\\instant-token-334\.token" --project "C:\\dev\\fixture"`/);
 });
@@ -1586,6 +1599,10 @@ test('workflow recipes use the dispatch pin and normalized catalog marker for Co
       promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n',
     },
     effortCarrier: 'marker',
+    research: {
+      subagentType: 'sidequest:sidequest-exec-dispatch-readonly',
+      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n',
+    },
     warnings: [],
   });
 });
@@ -1619,6 +1636,11 @@ test('workflow recipes use the Claude runtime alias without a prompt prefix', ()
     runsLabel: 'Claude Opus',
     agent: { model: 'opus', promptPrefix: '' },
     effortCarrier: 'none',
+    research: {
+      subagentType: 'sidequest:sidequest-exec-readonly-high',
+      model: 'opus',
+      promptPrefix: '[sidequest-route model=opus effort=high]\nRead-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.\n\n',
+    },
     warnings: [],
   });
 });
@@ -1925,3 +1947,20 @@ for (const { label, artifact, legacyArtifact, expectedArtifact } of [
 }
 
 export {};
+
+
+test('evidence definitions admit Write and Edit while denying delegation and coding closeout', () => {
+  const sources = agentsync.bundledExecutorSources();
+  for (const name of ['sidequest-exec-dispatch-evidence', ...EFFORTS.map((effort) => 'sidequest-exec-evidence-' + effort)]) {
+    const source = sources.get(name + '.md');
+    assert.ok(source);
+    const denied = /^disallowedTools: (.+)$/m.exec(source)?.[1]?.split(', ') || [];
+    assert.ok(!denied.includes('Write'));
+    assert.ok(!denied.includes('Edit'));
+    assert.ok(denied.includes('Agent'));
+    assert.ok(denied.includes('NotebookEdit'));
+    assert.ok(denied.includes('mcp__plugin_sidequest_board__submit'));
+    assert.doesNotMatch(source, /^permissionMode:/m);
+    assert.equal(require('../lib/exec-names.js').isReadOnlyExecutor('sidequest:' + name), true);
+  }
+});

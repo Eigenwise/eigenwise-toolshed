@@ -18,6 +18,18 @@ is decided by the backend family segment (`claude-gpt-*`, `claude-grok-*`), neve
 
 All commands: `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart recreates this stable launcher from Claude Code's installed-plugin registry, so it follows upgrades and falls back to an installed downgrade; it reports a missing install directly.
 
+## Recovery before a model request
+
+The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors. A healthy current router costs one local health request (750 ms timeout) and PID-record reads, without loading the recovery CLI or taking its lifecycle lock.
+
+Wiring installs owned readiness hooks in that wiring's settings scope. Project wiring adds no global hooks; opt-in user fallback gets user-scope hooks. They use the stable launcher even when the project has no enabled plugin. `setup`, updater `setup --preserve-wiring`, and `ensure` migrate registered wiring without wiring new directories. Restart Claude Code after migration so it loads the hooks.
+
+SessionStart `startup|resume` attempts early recovery but cannot block a prompt. UserPromptSubmit synchronously checks readiness and attempts bounded recovery before model access. The recovery child has a 25-second deadline; the hook has a 35-second timeout and `onFailure: block`. A refusal asks the user to fix the local problem and resubmit. `recover` restores readiness without changing settings, pins or caches; `start` and `setup` explicitly resume an intentional stop. `stop` persists across reboot and upgrades, and automatic recovery honors it.
+
+Maintenance `setup --preserve-wiring` preserves intentional stop, including acquisition failures, and never starts a stopped gateway. Intentional stop is cleared once an explicit `start` or `setup` creates the supervisor process and records its PID; a launch that fails before that, including a spawn that yields no PID, leaves it stopped, and a PID-record failure after a successful spawn leaves both the marker and the process, so the next automatic path still refuses. A non-gateway effective endpoint is a cheap no-op before CLI resolution, even without an installed plugin. An absent `enabledPlugins` entry leaves recovery active; an explicit effective `false` for `model-gateway@eigenwise-toolshed` disables recovery without starting, stopping or touching gateway state. Project-local settings take precedence over project settings, then user settings; process endpoint env wins over settings endpoints. The disable notice names re-enabling the plugin or unwiring. `doctor` reports explicit plugin disable.
+
+A non-gateway effective endpoint bypasses recovery. Host-disabled hooks and supervisor death inside an active turn, including subagents or compaction, are outside prompt-gate coverage. Do not promise recovery for those paths. Use stable `start`, `recover`, `doctor`, or `env --remove` locally when model access is unavailable. `doctor` reports gate presence, stop state and diagnostic paths. Unwire every registered scope before removing the plugin; remove project wiring with `env --remove` and user fallback with `env --remove --write-user`.
+
 ## First-time setup
 
 Project-local wiring is the standard setup. `env --write-project` writes the current project's `.claude/settings.local.json`, so the gateway stays configured for this project's sessions and executor worktrees without putting a machine-local endpoint in a committed file. `setup` uses the same project-local target by default.
@@ -35,7 +47,7 @@ The first-run order matters:
 A plugin reload alone does not reload settings or the picker cache. Do not tell the user to select a new row until that full restart is complete.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
-state; act on it. The user sees that same line in the transcript, because a state only they can fix used to
+state; act on it. The nudge still appears for a Codex auth problem, and does not block prompts. The user sees that same line in the transcript, because a state only they can fix used to
 reach the model alone. Anything routine stays out of it, and the hook always exits 0 so the line survives:
 run `ensure` yourself when you need an exit code. SessionStart waits at most 12 seconds for a newly started
 gateway, then leaves its supervisor to finish in the background so it stays inside Claude Code's hook budget. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
@@ -267,6 +279,8 @@ has bounded process evidence that `doctor` summarizes. Ports: shim 18764, proxy 
 agree).
 
 ## Failure modes worth knowing
+
+- **Client disconnects during upload**: the public shim relay and `/internal/rc-compatibility` discard aborted or failed body reads without stopping the supervisor or interrupting sibling streams. Aborted uploads are not forwarded or counted as worker failures, and the application does not write to a disconnected response. Other read failures return a non-retryable HTTP 400 only while the response is writable. Both readers enforce a 64 MiB body cap (HTTP 413). This protects incoming uploads only; do not infer that disconnecting after a completed upload cancels provider work or prevents charges.
 
 - **Every request fails after wiring**: a SessionStart hook can time out while it starts the shim. Claude Code cancels that hook, and a directly spawned supervisor can die with its process tree before it records an exit. Model Gateway launches the supervisor outside that tree and stops waiting before the hook budget, but if this is an older install or it still repeats, run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.

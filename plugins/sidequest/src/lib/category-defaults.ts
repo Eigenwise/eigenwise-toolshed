@@ -1,6 +1,24 @@
-export const ROUTING_PROFILE_SEED_REVISION = 9;
+export function categoryEvidenceFields(category: { writes?: unknown }): { writes?: 'evidence' } {
+  return category.writes === 'evidence' ? { writes: 'evidence' } : {};
+}
+
+export const ROUTING_PROFILE_SEED_REVISION = 10;
+
+const EVIDENCE_CATEGORY = {
+  id: 'research.evidence',
+  name: 'Evidence collection',
+  description: 'Collect external evidence incrementally under dispatch evidence roots and declared investigation data roots. Sonnet/medium fits bounded collection and transcription with provenance rules carried by the contract; Opus/high is the fallback for sources that need judgment. Repository writes are forbidden; close through done with relative evidence paths or explicitly state that nothing was saved.',
+  route: { model: 'sonnet', effort: 'medium' },
+  fallback: { model: 'opus', effort: 'high' },
+  contract: "Inventory rows carry source id, channel or ticket, date, author role and why; files deduped by sha256 against the data root and story manifest; no private individuals' names in inventories or drafted cases (company names allowed); customer documents flagged and kept under the data root, never in the repository or the ticket thread; write evidence incrementally and checkpoint with a cursor before budget.",
+  artifactRoots: [],
+  readonly: true,
+  writes: 'evidence',
+  enabled: true,
+} as const;
 
 export const DEFAULT_CATEGORIES = [
+  EVIDENCE_CATEGORY,
   {
     id: 'codebase-exploration',
     name: 'Codebase exploration',
@@ -91,7 +109,7 @@ export const DEFAULT_CATEGORIES = [
     description: 'Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. Adversarially checking interactions and tracing concrete impact requires high code-review capability. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review when the ticket calls for it.',
     route: { model: 'sonnet', effort: 'medium' },
     fallback: { model: 'sonnet', effort: 'medium' },
-    contract: 'Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.',
+    contract: 'Report concrete findings with evidence, confidence, and impact; do not edit unless asked. Report in the quality-gate review format: a CRAP table for changed bodies when quality-gate is installed, then numbered four-part findings grouped Must/Should/Nice, ending with Verdict, Lean and Not checked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.',
     artifactRoots: [],
     readonly: true,
     enabled: true,
@@ -215,6 +233,7 @@ const CREATIVE_MUSIC_CATEGORIES = [
 ] as const;
 
 const RESEARCH_CATEGORIES = [
+  EVIDENCE_CATEGORY,
   {
     id: 'source-lookup',
     name: 'Source lookup',

@@ -8,6 +8,299 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.610.0 (2026-10-22)
+
+### quality-gate 1.2.0 → 1.2.1
+
+#### Fixes
+
+- Enforce the measurement complexity floor and redirect receipts (SQ-3851)
+  Native V8 measurement fails new and complexity-raised bodies at complexity 6 or more even when coverage is unverified. Both scoring commands accept `--receipts-dir` and `QUALITY_GATE_RECEIPTS_DIR` to keep receipts outside the measured project.
+
+### sidequest 6.1.2 → 6.2.0
+
+#### Features
+
+- Integration records native quality receipts before delivery (SQ-3837)
+  Integration captures the pinned verifier with the configured Quality Gate, measures each candidate range, refuses measured failures, and records local receipts and candidate measurement debt.
+
+#### Fixes
+
+- Base isolated read-only dispatches at the integration branch (SQ-3834)
+  Isolated read-only dispatches follow the same integration-branch base policy as write dispatches. Dispatch results, spawn prompts, and briefings name the resolved base commit and branch.
+- Allow read-only Git inspection of the shared checkout (SQ-3835)
+  Read-only and isolated executors can inspect shared checkout status, worktree listings and other allowed Git reads. The shell and isolation guards share the same read-only predicate, including parsing global Git flags. Mutations still refuse.
+- Restore inherited repairs and provision scoped plugin dependencies (SQ-3836)
+  Related repairs restore candidate ancestry with a merge and automatically record unchanged inherited tests without extra control markers. Worktree provisioning installs scoped plugins' locked dependencies. Executor guidance follows the board's recorded verification concurrency policy.
+- Keep an oracle review's verdict reachable and route every verdict refusal to one shape (SQ-3840)
+  `groomClose` now refuses a bound review that is still awaiting its oracle verdict (`oracle_verdict_pending`), so closing it first can't drop the outcome. Verdict refusals no longer point at each other: naming the reviewed source as `ref` refuses `review_ref_required` with the review's next shape, a review closed with its oracle round unanswered refuses `oracle_round_closed` with the reopen-then-verdict recovery, and finalize shape errors print the exact `finalize` fields with the review's own source and candidate filled in.
+- Keep integration on the ticket's recorded branch (SQ-3843)
+  Singleton and wave delivery now keep the recorded integration branch when the registered checkout is on a release or topic branch. A separate worktree handles delivery without switching that checkout. Target overrides refuse, and apply worktrees retain their staged changes.
+- Preserve recorded delivery targets during integration closure (SQ-3848)
+  Integration closure keeps validated delivery targets when the board default changes. Frozen dispatch targets still take priority, and abandonment keeps its validated fallback when the frozen branch disappeared. Target checks avoid Git under the SQLite write lock. Detailed publishing and read-only guidance now lives in references so the main skill stays within its loading budget.
+- Align readonly dispatch regression fixtures with current contracts (SQ-3850)
+  Update the MCP descriptor golden from live descriptors and check that readonly isolated dispatches default to the integration branch while honoring configured bases.
+- Keep scoped dependency installs outside the worktree hook budget (SQ-3853)
+  Worktree provisioning links scoped plugin dependencies with matching lockfiles and records ownership for cleanup. Missing dependencies are deferred to the executor with the install command in its briefing. Setup retains its configured timeout.
+- Gate deliveries with importing plugin tests (SQ-3854)
+  Integration records the plugin test files that import changed modules and runs files outside the pinned verifier in serial, bounded batches. A failing importing test blocks delivery.
+- Include the shared read-only git predicate in isolated module tests (SQ-3856)
+  Copy the shared read-only git predicate into the guards module test fixture so CI can load the guards and exercise git and MCP permissions.
+- Keep dispatch base summaries within the Windows context budget (SQ-3857)
+  Dispatch results and spawn prompts use a 12-character base SHA with the branch name. Executor briefings retain the full SHA.
+- Preserve full-suite capture environment during integration quality checks (SQ-3858)
+  Integration quality capture keeps the full-suite slot environment and runs measurement after verification. Worktree isolation regressions now expect the shortened dispatch base while keeping the full commit in briefings.
+- Keep dispatch context in the briefing and diagnose payload growth (SQ-3859)
+  Move executor task details into the token-gated briefing. Normalize benchmark home and checkout paths for Windows CI, and name result fields and prompt sentences in byte-budget failures.
+
+## v3.609.0 (2026-10-21)
+
+### model-gateway 0.55.0 → 0.55.1
+
+#### Fixes
+
+- Trust observed child closure in gateway test cleanup (SQ-3821)
+  Keep gateway test teardown from treating an observed closed child as alive. Ignore Windows EPERM responses for remaining fixture PID probes while preserving live-process rejection.
+- Skip recovery CLI loading for healthy prompt gates (SQ-3845)
+  Healthy readiness gates check the recorded router and its serving version directly, avoiding CLI loading and the lifecycle lock. Recovery and blocking behavior stay unchanged when the check fails.
+- Keep oversized upload rejection readable before closing the connection (SQ-3846)
+  Flush the shim's HTTP 413 response before closing an oversized upload, with a 250 ms drain grace. Keep the 64 MiB limit and never forward rejected bodies to a worker.
+
+### quality-gate 1.1.0 → 1.2.0
+
+#### Features
+
+- Report unexecuted changed-hunk branches in native V8 measurement (SQ-3841)
+  Quality Gate's `measure` command reports untaken changed-hunk branches and fails new or complexity-raised bodies for them. Legacy rows stay informational. Child capture gaps and ambiguous loop outcomes stay named UNVERIFIED.
+
+### sidequest 6.1.1 → 6.1.2
+
+#### Fixes
+
+- Stop board writers failing as "locked" while the queue is still moving (SQ-3844)
+  Registering an already-current board no longer takes the SQLite write lock, so every CLI and hook call stops queueing behind other writers just to find nothing changed. A write transaction now keeps waiting while other writers keep committing (up to 15s) and only reports "stayed locked" after three busy waits in a row with no other writer committing, which is what a stuck holder looks like. A burst of 12 concurrent `add` calls on Windows CI had failed after 7s because SQLite's busy handler lets newer writers jump ahead of an old one.
+
+## v3.608.0 (2026-10-21)
+
+### model-gateway 0.54.5 → 0.55.0
+
+#### Features
+
+- Recover wired gateway sessions after reboot without model access (SQ-3839)
+  Add process-identity lifecycle coordination and persistent intentional-stop state for gateway recovery. Wired projects install SessionStart and UserPromptSubmit recovery hooks with the gateway wiring, and a settings-free `recover` command restarts a dead router before the first model request. Preserve intentional stop until explicit resume creates the supervisor and records a real PID; a spawn without one is a failed launch. Gate prompts on router health only, so Codex authentication and upstream failures stay per-request and never block a healthy router's prompts. Quiet SessionStart keeps the one-line Codex sign-in nudge when readiness is not ready and stays silent for a healthy session.
+
+## v3.607.0 (2026-10-21)
+
+### sidequest 6.1.0 → 6.1.1
+
+#### Fixes
+
+- Honor explicit isolated dispatches on shared-tree boards (SQ-3806)
+  Explicit `sharedTree:false` overrides the board default and refuses when isolation is unavailable. Redispatches retain that request until `sharedTree:true` clears it.
+- Treat heredoc and here-string input as shell data (SQ-3808)
+  Read-only and evidence shell guards no longer mistake heredoc body text for output redirects. Real repository write targets stay protected.
+- Test fixtures stop requesting isolation on non-Git projects; skill text trimmed under its budget (SQ-3815)
+  Fixtures that only ever ran in the shared tree no longer pass `sharedTree:false`, which now refuses when isolation is unavailable. The dispatch-isolation detail lives in `references/routing-details.md`; SKILL.md points there and stays under its session-load budget.
+
+## v3.606.0 (2026-10-20)
+
+### sidequest 6.0.2 → 6.1.0
+
+#### Features
+
+- Add evidence collection categories with external write roots (SQ-3777)
+  Evidence collection keeps repository writes forbidden and closes through done without a commit. A distinct evidence executor family admits Write and Edit under evidence roots, leaving existing read-only definitions unchanged.
+
+#### Fixes
+
+- Worktree sweep stops deferring pruning on parks it can't repair, and SessionEnd stops sweeping (SQ-3438)
+  GH-429, GH-539: a retained park whose Git registration is already gone, or that belongs to another repository (quarantine is shared across projects), no longer counts as an unreconciled park. The sweep records why on that quarantine entry and runs `git worktree prune` as usual, so prunable registrations stop piling up. When pruning really is deferred, the sweep now reports it once with the count of unreconciled parks and prunable registrations, instead of one notice per park on every run.
+
+  GH-400: SessionEnd no longer starts a sweep. It unregisters the ended session and records that the project is owed a sweep, all inside the host's ~1.5 s exit budget, and the next SessionStart maintenance runs the sweep under its worker deadline and clears the record. A sweep cancelled at exit can no longer leave its session registered as live.
+- Deliver integration branches in their owning linked worktree (SQ-3502)
+  Resolve the branch-owning checkout for integrate and manual delivery recording, including merged-tree verification. Leave the registered checkout untouched when the integration branch lives in a linked worktree. Keep qualified dispatch refs and frozen submission ranges unchanged. Fixes GH-499.
+- Preserve investigation cursors and evidence across checkpoint handoffs (SQ-3778)
+  Checkpoint accepts a resume cursor and relative evidence paths, and continuation briefings replay them.
+
+  The MCP tools/list ceiling rises from 29100 to 29400 bytes for the two new checkpoint properties; the 2500-byte headroom floor is unchanged.
+- Deny read-only executor MCP write calls by default (SQ-3779)
+- Carry story and parent evidence into dependent briefings (SQ-3780)
+  Briefings list completed dependency evidence directories and done summaries, pending parents, and existing story evidence roots with the sha256 manifest dedupe convention. Ready output is unchanged.
+
+  Concurrent children can race when appending to manifest.sha256.json. TODO SQ-3787: serialize manifest updates without losing another child's entry.
+
+  A briefing rendered without a project slug (as the briefing unit tests do) skips the story evidence root instead of querying the store with an unbound parameter.
+- Document fan-out investigations (SQ-3781)
+  Orchestration, user-story and the Sidequest guide now explain the research.evidence category, evidence roots, investigationDataRoots, checkpoint cursors and the read-only MCP write guard.
+- Refresh evidence executor and category shape expectations (SQ-3789)
+  Refresh executor counts, generated category fixtures, dispatch snapshot fields, and category-edit expectations for evidence collection. Explain the evidence category route and clean up lifecycle fixture state.
+
+## v3.605.0 (2026-10-20)
+
+### model-gateway 0.54.4 → 0.54.5
+
+#### Fixes
+
+- Model Gateway tests run against a throwaway home and refuse settings writes outside the temp directory (GH-319)
+- Model Gateway contains aborted request-body reads instead of crashing the shim (GH-578)
+
+### quality-gate 1.0.0 → 1.1.0
+
+#### Features
+
+- Score Lizard languages and reject unsupported source-only scopes (SQ-3770)
+  Rust and other Lizard languages accept CSV or local Lizard complexity. Unsupported source-only changes exit 2; LCOV inventory trust requirements stay unchanged.
+
+#### Fixes
+
+- quality-gate fails a cc 6+ body even when its coverage is unverified (GH-574)
+  CRAP is never below complexity, so a new or complexity-raised body at cc 6 or more now reports FAIL and exit 1 whatever its coverage capture says, instead of UNVERIFIED and exit 2. The row keeps the coverage reason after the complexity advice. Informational and legacy rows are unchanged. Found while re-gating the GH-574 Rust fixture: cc 7 with an adapter that cannot inventory executable lines came back as a measurement question.
+- Score nested callbacks from complete LCOV with explicit line-hit limits (SQ-3771)
+  JS/TS callbacks and Python lambdas now share LCOV DA hits with proven ancestors when their owned-line inventories are contained, including equal inventories in the GH-573 repro. Each body uses its own executable lines. Rows explain that shared line execution is an upper bound for callback execution, since LCOV cannot prove independent callback hits. Sibling overlaps remain UNVERIFIED. Python has the same parent/lambda shape, so both adapters use the shared-root fix.
+
+### quartermaster 1.0.0 → 1.0.1
+
+#### Fixes
+
+- Quartermaster vetoes glob-argument commands instead of writing a dead allowlist rule (GH-323) [`d74eb6d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d74eb6db429f857a8fded3e27f7713fee586c579)
+- Score Lizard languages and reject unsupported source-only scopes (SQ-3770)
+  Rust and other Lizard languages accept CSV or local Lizard complexity. Unsupported source-only changes exit 2; LCOV inventory trust requirements stay unchanged.
+
+## v3.604.0 (2026-10-20)
+
+### sidequest 6.0.1 → 6.0.2
+
+#### Fixes
+
+- Shard Sidequest Windows CI across three runners (SQ-3767)
+  Run the Sidequest Windows CI suite in three parallel file shards, keeping local and Linux runs unchanged.
+- publish lock and unlock accept --by, matching the identity the integrate refusal names (SQ-3769) [`5b9b98b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5b9b98ba17106935efb977ef1b81a01c0f4070e3)
+
+## v3.603.0 (2026-10-19)
+
+### observability 1.0.0 → 1.1.0
+
+#### Features
+
+- Show session tests and CC from Quality Gate (SQ-3763) [`f8966ee`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f8966eee2d8532b9e8c53d14d512699c94c7915f)
+
+#### Fixes
+
+- Observability module test expects the hashed ledger filename (SQ-3762) [`f9e4e47`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f9e4e475761d547507cd678e163dabffa9026d64)
+
+### sidequest 6.0.0 → 6.0.1
+
+#### Fixes
+
+- Run hooks-module tests in the CI plugin matrix (SQ-3765)
+  Resolve module-test commands alongside normal plugin suites and run them in the Test workflow on both platforms, using the isolated guards runner for Sidequest.
+
+## v3.602.0 (2026-10-18)
+
+### sidequest 5.13.0 → 6.0.0
+
+#### Breaking changes
+
+- sidequest's executor admission guard runs from the hooks module; force-exec-bypass is no longer a command hook (SQ-3751)
+  The executor admission guard (force-exec-bypass) left `hooks/hooks.json`. The hooks module `hooks/guards/executor-admission.ts` hooks `tool.call` for Agent, SendMessage, Bash, PowerShell, the edit tools and the board's dispatch, update, scopeRequest, remove and verdict tools. It reads the dispatch snapshot (cached for 2 s) and lets through every call the snapshot shows the guard would pass, so an executor's ordinary shell, edit and board calls start no process. It runs `hooks/force-exec-bypass.js` once, through `$.process.run`, only for an Agent spawn or a call the guard could refuse: a subagent's main-thread-only board mutation, `sidequest dispatch` from a subagent, a shell write by a read-only executor, a helper's write, a finished executor's call, or a message to a closed executor. Refusal and correction text is unchanged because that same code still produces it.
+
+  An Agent spawn fails closed: when the decision cannot run, the spawn is refused with "sidequest: executor admission guard could not run; spawn refused". Every other guarded call fails open with the status line "sidequest: executor guard skipped".
+
+  Two PreToolUse command hooks stay on purpose. bind-runtime-identity needs the subagent's own cwd and permission mode, which `tool.call` does not carry, and it writes the store. guard-worktree-isolation writes the store through the lease kernel. quota-fallback stays a PostToolUseFailure command hook. No Bash or PowerShell command hook is left.
+
+  On the 50-call mix (15 Bash, 5 PowerShell, 15 reads, 10 edits, 3 board calls, 1 Agent, 1 Skill) run as an executor, the executor guard went from 31 node processes to 1 (the Agent spawn's decision). PreToolUse command hooks together went from 44 node processes to 13 (bind-runtime-identity 3, guard-worktree-isolation 10). The 30 git children all come from guard-worktree-isolation and didn't change.
+
+#### Features
+
+- sidequest runs its git guards in the hooks module, and the destructive-git guard fails closed (SQ-3750)
+  Three Bash/PowerShell command hooks are gone from `hooks/hooks.json`: `guard-destructive-git`, `guard-shared-checkout-git` and `guard-shared-tree-commit`. They now run in `hooks/guards/register.ts` on `tool.call`, sharing one shell-command reader (`hooks/guards/git-command.ts`), so every git guard resolves Git Bash `/c/...` paths and quoted `-C` directories the same way. The shared-checkout and shared-tree-commit guards are one guard now; both deny texts are unchanged.
+
+  git only starts once the command text names a destructive, tagging, pushing or mutating git invocation. Each directory's repository is asked once per session (`git rev-parse --show-toplevel --git-common-dir`, cached in `$.state` `sidequest.repoRoot`). A 50-call executor turn with ordinary reads, edits, `git add` and `git commit` now starts one git process, where it used to start three node processes per Bash call plus a `rev-parse` each. The publish lock is read straight from the git common dir.
+
+  The destructive-git guard is the one module guard that fails closed: if its check throws, it refuses with `sidequest: destructive git guard could not run; refusing <command>`. The shared-checkout guard still fails open.
+
+  `guard-worktree-isolation` stays a command hook on executor edits: it runs the worktree lease kernel and can bind a runtime identity in the store, which the dispatch snapshot does not carry.
+
+#### Fixes
+
+- sidequest's module admission guard no longer treats a missing snapshot row as a pass (SQ-3760)
+  The hooks-module executor admission guard from SQ-3751 trusts the dispatch snapshot (cached for 2 s) only while its own `at` is under 60 s old, and a missing, stale or rowless snapshot proves nothing, because the decision reads every project's live store. So `hooks/force-exec-bypass.js` now runs for every helper write, every SendMessage, and any executor call the snapshot does not bind to a live dispatch, as well as the calls SQ-3751 listed. An executor bound to a live dispatch in a fresh snapshot still starts no process for its ordinary shell and edit calls; after a minute with no dispatch change on the board, each of its guarded calls runs the decision again until the next store write.
+
+  The main-thread-only board fields (`remove` force, `dispatch` workProvenance, `update` closeout fields, `scopeRequest` grant, `verdict` finalize or correct) are refused from the call itself when it comes from a subagent or a claimed teammate, before any engine call, so an `$.agent.list()` or process failure can't admit them. The guard finds its caller the way the other module guards do: a subagent by its agent id, a teammate by the session that claimed its ticket, so a read-only teammate's shell write reaches the read-only check as its executor.
+
+## v3.601.0 (2026-10-18)
+
+### observability 0.8.2 → 1.0.0
+
+#### Breaking changes
+
+- observability records each turn through a Claude Code hooks module into a per-project JSONL ledger (SQ-3733)
+  The recorder is now a hooks module (`hooks/register.ts`). Once `/observability:track on` was run in a project, every main-thread turn appends one row to `~/.claude/observability/ledger/<project>.jsonl` with the engine's own cost, tokens per model, tool calls, subagent spawns, context fill and rate limits. `/observability:board` builds `~/.claude/observability/board.html` from the last 90 days of every ledger and opens it. The command hooks are gone from `hooks/hooks.json`.
+- Observability becomes a local turn ledger and usage board (SQ-3735)
+  Removed the OpenTelemetry Collector, SQLite observer, Docker/Grafana dashboards, remote sinks, price estimates, and statusline. The replacement records exact engine usage in per-project JSONL ledgers and opens a self-contained local board with `/observability:board`. Recording stays off until `/observability:track on` in each project.
+
+  Old SQLite data is not migrated or deleted. It remains at `%LOCALAPPDATA%\Eigenwise\Workbench\observability.db`, or `~/.local/share/Eigenwise/Workbench/observability.db` when `LOCALAPPDATA` was not set.
+
+#### Fixes
+
+- Self-contained observability board page (SQ-3734)
+  The board page generator renders cost, agent time, tokens and sessions with deltas, plan-usage gauges, a per-project stream, model mix, tools, tickets, a searchable sessions table and a 12-week activity honeycomb from the ledger rows. One local HTML file, no network.
+
+### quality-gate 0.4.1 → 1.0.0
+
+#### Breaking changes
+
+- quality-gate starts without config and installs its parser on first use (SQ-3746)
+  Quality Gate installs TypeScript 7 on first use, with a shared lock and a bounded install. `crap` defaults to tracked JS/TS/Python and complexity-only checks when coverage is absent. Config stays optional. `turn --json` reports edited bodies and reuse signals; `inventory --bytes` supplies a bounded definition list. `provision` installs only the parser for session startup.
+
+#### Features
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+- measure edited functions once at turn end per working directory (SQ-3742)
+  Record edits and test results by working directory, then publish turn-end complexity and reuse signals. Coverage setup notices appear once per session; measurement failures leave the previous report intact.
+- measured review skill and shared Sidequest findings format (SQ-3748)
+  Add `/quality-gate:review [diff|repo|debt]` with existing-coverage-only measurement, caller inspection, concrete four-part findings and honest measurement limits. Sidequest read-only reviews use the same CRAP table and Must/Should/Nice format.
+- show session cost and turn quality above the prompt (SQ-3749)
+  Stack a one-line quality band above existing drawings with session cost, changed-function complexity and test freshness. Yield to surveys and the persona off switch; show the coverage reminder on the first unverified report.
+
+### quartermaster 0.12.2 → 1.0.0
+
+#### Breaking changes
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+
+#### Fixes
+
+- update-toolshed removes a settings statusLine that still points at the retired Toolshed statusline shim (SQ-3738)
+  The Toolshed statusline left with observability 1.0, so the updater no longer repoints a stale `workbench-statusline.js` pin at a shim. It deletes that `statusLine` entry and says so; Claude Code then draws its own status line. A status line that is not the Toolshed shim is left alone.
+- delete the retired CRAP core and CI checker (SQ-3747)
+  Quartermaster's `crap-core.cjs` scoring module and `check-ci.js` are gone with their tests; quality scoring belongs to quality-gate, and CI watching is outside Quartermaster's role. The repository CRAP script now imports `crapScore` from quality-gate and the suite-resolution rule from the sidequest build instead of carrying copies.
+
+### sidequest 5.12.1 → 5.13.0
+
+#### Features
+
+- Read-only research runs on its category route without a ticket (SQ-3739)
+  `route_recipe` now returns a `research` spawn next to `agent`: `subagentType`, `model` on a Claude route, and a `promptPrefix` that carries the route marker plus a "no ticket" line. Spawn it and the Agent hook admits the read-only executor without a dispatch, as long as the prefix matches a live route of an enabled category. So codebase research can run on one model and UX research on another, with no ticket ceremony. Stale or unknown markers, writable executors, and generic agents carrying a marker are still refused. The read-only executor definitions skip the briefing and ticket lifecycle for these runs and answer with findings. `research` is null for discovered-model routes.
+- sidequest runs its pure-text PreToolUse guards in one hooks module, reading a per-project dispatch snapshot (SQ-3743)
+  Nine PreToolUse command hooks are gone from `hooks/hooks.json`: home-delete, Bash Windows paths, heredoc in an isolated worktree, PowerShell cmd shims, the repeated-command warning, the inline-work nudge, denied tools, TaskOutput and peer-message. They now run inside the hooks module `hooks/guards/register.ts` on `tool.call`, so a tool call no longer starts a node process per guard. Deny and warning text is unchanged. A guard that throws skips itself and lets the call through.
+
+  The board writes `<sidequest home>/projects/<slug>/dispatch-snapshot.json` after every dispatch write (prepare, bind, claim, release, submit, done, remove) and after routing, category and board-config changes. The module reads that file to tell who is calling, instead of loading the store. Each row carries the executor's resolved `deniedTools`.
+
+  The quota fallback stays a command hook: it only runs on a failed Agent call and its work is board writes. The git guards and the executor admission guard move in later releases.
+- Track external issue references and import GitHub tickets (SQ-3744)
+  Normalize external issue links across ticket authoring, compact reads and executor briefings, and carry fragment refs into changelog bullets.
+- Add opt-in GitHub delivery and published-release updates (SQ-3752)
+
+#### Fixes
+
+- quality-gate owns the quality persona and its switches (SQ-3741)
+  Quality Gate injects its single persona into session and teammate prompts, with persistent on/off and shortcut-marker switches and a best-effort reuse inventory. Quartermaster stops seeding duplicate quality guidance. Sidequest executor templates defer to the persona and use the shortcut marker.
+- measured review skill and shared Sidequest findings format (SQ-3748)
+  Add `/quality-gate:review [diff|repo|debt]` with existing-coverage-only measurement, caller inspection, concrete four-part findings and honest measurement limits. Sidequest read-only reviews use the same CRAP table and Must/Should/Nice format.
+
 ## v3.600.0 (2026-10-17)
 
 ### quality-gate 0.4.0 → 0.4.1

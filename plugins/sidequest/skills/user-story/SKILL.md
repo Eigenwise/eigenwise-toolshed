@@ -3,7 +3,8 @@ name: user-story
 description: >-
   Plan and dispatch work with 3+ independently checkable pieces and a stated reason for a story or
   wave. Bounded fixes default to one owner; small fixes in a few known files may run inline without
-  tickets. Read-only investigations may use native Explore or general-purpose agents without tickets.
+  tickets. Read-only investigations need no ticket: prefer the route_recipe research spawn over native
+  Explore.
 ---
 
 # user-story
@@ -37,7 +38,7 @@ Sizing is a call you make and state in a line, not a question you ask the user. 
 - **Blast radius**: does existing behavior change for people already using this?
 - **Stakes**: data loss, auth, money, the release path itself.
 
-A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations may use native Explore or general-purpose agents without tickets. A story or wave needs 3+ independently checkable pieces and a stated reason. A review panel needs a named risk for each lens.
+A bounded fix defaults to one owner and a focused check. Small fixes in a few files at known locations may run inline without tickets. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore or general-purpose agents stay for tiny lookups or unrouted projects. A story or wave needs 3+ independently checkable pieces and a stated reason. A review panel needs a named risk for each lens.
 
 Three sizes, and what each dial does at each:
 
@@ -55,6 +56,12 @@ Escalate mid-flight when evidence says so. A spike that comes back reporting the
 expected raises the size; write that in the story log so the jump is on the record and not a vibe.
 De-escalating is equally fine: if the panel converges on one obvious answer, stop paying for the
 panel.
+
+### Fan-out investigations
+
+When the work is "gather evidence from several sources, then conclude", split by source: one `research.evidence` ticket per source, each saving what it finds under the story evidence root, plus one dependent synthesis ticket that reads the parents' evidence (the briefing's `Parent evidence:` section, where present, and the story evidence root) and writes the conclusion. The evidence tickets run in parallel, close with `done` (no commit), and checkpoint with a cursor if they hit budget, so a redispatch resumes instead of restarting. Children dedupe by sha256 against a `manifest.sha256.json` kept in the story evidence root (a convention the tickets follow, not a store table); the synthesis ticket treats the manifest as the authority on what was saved.
+
+Prefer this over plain Agent spawns for any run that must leave files behind or may hit budget. A plain research spawn from `route_recipe` stays right for a lookup whose whole answer fits in the reply. External data that belongs outside the repository needs a path in `board_config investigationDataRoots` first. Details: `references/orchestration.md`, Investigations.
 
 ## Planning checkpoint
 

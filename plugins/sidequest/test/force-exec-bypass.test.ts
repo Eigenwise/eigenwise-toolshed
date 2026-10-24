@@ -2,7 +2,83 @@ import './hooks.test.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { shellSegments, namesShellWrite } from '../src/hooks/shared/shell-writes.js';
+import { readOnlyShellRefusal } from '../src/hooks/shared/read-only-shell.js';
+import { gitInvocations, shellTokens } from '../hooks/guards/git-command.js';
+import { isReadOnlyGit } from '../src/hooks/shared/read-only-git.js';
+
+const SHARED_GIT_READS = [
+  'status --porcelain -- bin/docai_refactored app routes', 'log', 'show HEAD', 'diff',
+  'rev-parse --git-dir', 'rev-list HEAD', 'ls-files', 'ls-tree HEAD', 'cat-file -p HEAD',
+  'branch', 'branch --list feature*', 'branch --show-current', 'worktree list',
+  'remote -v', 'describe', 'blame README.md',
+];
+const SHARED_GIT_WRITES = [
+  'add .', 'checkout other', 'worktree add other', 'worktree remove other', 'worktree move a b',
+  'worktree prune', 'stash', 'branch other', 'branch --list --delete other', 'remote add other url',
+  'diff --output=result', 'unknown-command',
+];
+
+test('SQ-3835: shared-checkout git reads pass shell and executor admission predicates', () => {
+  for (const suffix of SHARED_GIT_READS) {
+    const command = `git -C "C:/shared checkout" -c color.ui=false ${suffix}`;
+    assert.equal(namesShellWrite(command), false, command);
+    assert.equal(readOnlyShellRefusal(command, process.cwd()), null, command);
+    const invocation = gitInvocations(command)[0]!;
+    assert.ok(invocation, command);
+    assert.equal(isReadOnlyGit(invocation.subcommand, shellTokens(invocation.args)), true, command);
+  }
+});
+
+test('SQ-3835: shared-checkout mutations retain the read-only refusal after global flags', () => {
+  for (const suffix of SHARED_GIT_WRITES) {
+    const command = `git -C "C:/shared checkout" -c color.ui=false ${suffix}`;
+    assert.equal(namesShellWrite(command), true, command);
+    assert.match(readOnlyShellRefusal(command, process.cwd())!, /read-only executor, refusing a git mutation/, command);
+    const invocation = gitInvocations(command)[0]!;
+    assert.equal(isReadOnlyGit(invocation.subcommand, shellTokens(invocation.args)), false, command);
+  }
+});
+
+test('SQ-3808: heredoc bodies never become shell write targets', () => {
+  assert.deepEqual(shellSegments("cat > /scratch/probe.py <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF").flatMap((segment) => segment.redirects), ['/scratch/probe.py']);
+  assert.deepEqual(shellSegments('cat > repo/probe.py <<"EOF"\ndef f() -> int:\nEOF').flatMap((segment) => segment.redirects), ['repo/probe.py']);
+  for (const command of [
+    'cat <<-EOF\n\tdef f() -> int:\n\tEOF',
+    'cat <<FIRST <<"SECOND"\nx > fake\nFIRST\ny > other\nSECOND',
+    'cat <<EOF\ndef f() -> int:',
+    'cat <<< "x > fake"',
+    'cat <<<bare',
+    'cat <<',
+    "cat <<'E.O[F]'\r\nx > fake\r\nE.O[F]\r\n",
+    "cat <<''\nx > fake\n\n",
+  ]) assert.equal(namesShellWrite(command), false, command);
+  assert.equal(namesShellWrite('cat <<EOF\nx > fake\nEOF\necho x > real'), true);
+  assert.equal(namesShellWrite('cat <<EOF\nx > fake\nEOF\ngit reset --hard'), true);
+  assert.deepEqual(shellSegments('cat <<-EOF\nx > fake\n EOF\n\tEOF\necho x > real').flatMap((segment) => segment.redirects), ['real']);
+  assert.deepEqual(shellSegments('cat <<FIRST <<SECOND\nx > fake\nFIRST\ny > other\nSECOND\necho x > real').flatMap((segment) => segment.redirects), ['real']);
+  assert.deepEqual(shellSegments('cat <<<"data > fake" > real 2>&1').flatMap((segment) => segment.redirects), ['real']);
+});
+
+test('SQ-3808: force-exec-bypass allows scratch heredocs and refuses the real repository redirect', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-heredoc-repo-'));
+  fs.mkdirSync(path.join(root, '.git'));
+  const scratch = path.join(os.tmpdir(), 'sq-heredoc-probe.py').replaceAll('\\', '/');
+  const command = `cat > "${scratch}" <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF`;
+  const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
+  for (const [input, denied] of [[command, false], [command.replace(scratch, 'probe.py'), true]] as const) {
+    const result = spawnSync(process.execPath, [hook], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', agent_id: 'heredoc-reader', agent_type: 'sidequest-exec-readonly-high', cwd: root, tool_name: 'Bash', tool_input: { command: input } }),
+      encoding: 'utf8', windowsHide: true, timeout: 30_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.includes('"permissionDecision":"deny"'), denied, result.stdout);
+    if (denied) assert.ok(result.stdout.includes('probe.py'));
+  }
+});
 
 test('correction host hook denies subagents including malformed correct and permits trusted main', () => {
   const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
@@ -115,4 +191,74 @@ test('native write intent and undispatched Sidequest executor remain refused', (
   }
   assert.match(nativeAgentDecision({ subagent_type: 'custom-reader', description: 'Edit source', prompt: 'Read files.' }), /permissionDecision.*deny/);
   assert.match(nativeAgentDecision({ subagent_type: 'sidequest:sidequest-exec-dispatch', prompt: 'Read files.' }), /exact prepared FIRST action briefing command/);
+});
+
+const RESEARCH_LINE = 'Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.';
+
+function researchDecision(project: string, toolInput: Record<string, unknown>): { denied: boolean; reason: string; updatedInput: Record<string, unknown> | undefined } {
+  const result = spawnSync(process.execPath, [path.join(__dirname, '../hooks/force-exec-bypass.js')], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', cwd: project, tool_input: toolInput }),
+    encoding: 'utf8', windowsHide: true, timeout: 30_000,
+    env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_PROJECT_DIR: project },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput : {};
+  return { denied: output.permissionDecision === 'deny', reason: String(output.permissionDecisionReason || ''), updatedInput: output.updatedInput };
+}
+
+test('SQ-3739: a read-only executor with a live category research prefix runs without a ticket', () => {
+  const store = require('../lib/store.js');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3739-research-'));
+  const { slug } = store.ensureProject(project);
+  store.setCategory({ id: 'sq3739-codex-research', name: 'sq3739-codex-research', route: { model: 'codex-gpt-6-1-sol', effort: 'medium' }, fallback: null, readonly: true, enabled: true });
+  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'haiku', effort: 'max' }, fallback: null, readonly: true, enabled: true });
+  // Other suites share this profile, so their categories are switched off for this project; a stale marker must not stay live through one of them.
+  for (const category of store.getCategories({ project: slug })) {
+    if (category.enabled && category.id !== 'general' && !category.id.startsWith('sq3739-')) store.setProjectCategory(slug, category.id, 'DISABLE', {});
+  }
+  assert.notDeepEqual(store.getCategory('general', { project: slug }).route, { model: 'haiku', effort: 'max' }, 'general, which cannot be disabled, must not share the stale route');
+  const codexPrompt = `[sidequest-route model=gpt-6.1-sol effort=medium]\n${RESEARCH_LINE}\n\nHow does the UX of the board page read? Edit nothing.`;
+  const claudePrompt = `[sidequest-route model=haiku effort=max]\n${RESEARCH_LINE}\n\nFind every caller of routeMarker.`;
+
+  const codex = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', model: 'opus', isolation: 'worktree', mode: 'bypassPermissions', description: 'UX research', prompt: codexPrompt });
+  assert.equal(codex.denied, false, codex.reason);
+  assert.equal(codex.updatedInput?.prompt, codexPrompt);
+  assert.equal(Object.hasOwn(codex.updatedInput || {}, 'model'), false, 'the Codex definition pin selects the model');
+  assert.equal(Object.hasOwn(codex.updatedInput || {}, 'isolation'), false, 'research runs in the parent tree');
+  assert.equal(Object.hasOwn(codex.updatedInput || {}, 'mode'), false, 'a read-only executor never gets bypassPermissions');
+
+  const claude = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-max', model: 'opus', description: 'Code research', prompt: claudePrompt });
+  assert.equal(claude.denied, false, claude.reason);
+  assert.equal(claude.updatedInput?.model, 'haiku', 'the Claude route model replaces the caller model');
+
+  store.setCategory({ id: 'sq3739-claude-research', name: 'sq3739-claude-research', route: { model: 'haiku', effort: 'low' }, fallback: null, readonly: true, enabled: true });
+  const stale = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-max', prompt: claudePrompt });
+  assert.equal(stale.denied, true, 'a marker for a route the category no longer has is refused');
+  assert.match(stale.reason, /live research prefix of an enabled category route/);
+  const unknown = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', prompt: `[sidequest-route model=gpt-9-ghost effort=medium]\n${RESEARCH_LINE}\n\nLook around.` });
+  assert.equal(unknown.denied, true, 'an unknown marker is refused');
+  assert.match(unknown.reason, /live research prefix/);
+  const wrongExecutor = researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-high', prompt: codexPrompt });
+  assert.equal(wrongExecutor.denied, true, 'the marker must belong to the spawned executor type');
+
+  assert.equal(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch', prompt: codexPrompt }).denied, true, 'a writable Codex executor still needs a dispatch');
+  assert.equal(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-low', model: 'sonnet', prompt: `[sidequest-route model=sonnet effort=low]\n${RESEARCH_LINE}\n\nRead.` }).denied, true, 'a writable Claude executor still needs a dispatch');
+  assert.match(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-dispatch-readonly', prompt: 'Read files.' }).reason, /exact prepared FIRST action briefing command/);
+  assert.match(researchDecision(project, { subagent_type: 'sidequest:sidequest-exec-readonly-low', model: 'sonnet', prompt: 'Read files.' }).reason, /missing its dispatched ticket/);
+});
+
+
+test('evidence category keeps its ticketless readonly research recipe admissible', () => {
+  const store = require('../lib/store.js');
+  const agentsync = require('../lib/agentsync.js');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-recipe-'));
+  const { slug } = store.ensureProject(project);
+  const category = store.getCategory('research.evidence', { project: slug });
+  const resolved = store.resolveCategoryRoute(category);
+  const recipe = agentsync.workflowRecipe({ ...category, project: slug }, resolved);
+  assert.equal(recipe.category, 'research.evidence');
+  assert.ok(recipe.agent);
+  assert.equal(recipe.research.subagentType, 'sidequest:sidequest-exec-readonly-medium');
+  const decision = researchDecision(project, { subagent_type: recipe.research.subagentType, model: recipe.research.model, description: 'Evidence research', prompt: recipe.research.promptPrefix + 'Inspect only. Save nothing.' });
+  assert.equal(decision.denied, false, decision.reason);
 });

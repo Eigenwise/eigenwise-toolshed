@@ -85,6 +85,8 @@ async function cmdCheckpoint(opts: any, positional: any) {
       worktree: opts.worktree,
       verify: opts.verify,
       ttlMinutes: opts['ttl-minutes'],
+      cursor: opts.cursor,
+      evidence: opts.evidence,
       source: opts.source || 'cli',
     });
   } catch (e: any) {

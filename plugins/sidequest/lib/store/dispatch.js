@@ -1813,18 +1813,20 @@ function createDispatch(dependencies) {
   function requestedReducedAgentSchema(opts, current) {
     return opts.reducedAgentSchema === true || !Object.hasOwn(opts, "reducedAgentSchema") && current?.reducedAgentSchema === true;
   }
-  function initialSharedTree(reviewTargetState, worktreeIsolation, requested) {
-    if (reviewTargetState) return false;
+  function requestedIsolation(opts, current) {
+    return opts.sharedTree === false || !Object.hasOwn(opts, "sharedTree") && current?.explicitIsolation === true;
+  }
+  function initialSharedTree(reviewTargetState, worktreeIsolation, requested, explicitIsolation) {
+    if (reviewTargetState || explicitIsolation) return false;
     return worktreeIsolation ? requested : true;
   }
   function isolatedCheckoutWarning(slug, sharedTree, readonly, effectiveFiles) {
     return !sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null;
   }
-  function isolationWarning(slug, worktreeIsolation, explicitIsolation, sharedTree, readonly, effectiveFiles) {
-    if (!worktreeIsolation && explicitIsolation) {
-      return `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}`;
+  function assertRequestedIsolation(t, explicitIsolation, worktreeWarning) {
+    if (explicitIsolation && worktreeWarning) {
+      throw new Error(`prepare dispatch: ${t.ref} requires sharedTree:false isolation. ${worktreeWarning}`);
     }
-    return isolatedCheckoutWarning(slug, sharedTree, readonly, effectiveFiles);
   }
   function assertReviewCheckoutIsolation(t, reviewTargetState, opts, worktreeWarning) {
     if (!reviewTargetState) return;
@@ -1837,9 +1839,10 @@ function createDispatch(dependencies) {
     const readonly = dispatchReadOnly(t) || investigationWithoutRepositoryWrites(t);
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
     const reviewTargetState = reviewDispatchTarget(slug, t);
-    const sharedTree = initialSharedTree(reviewTargetState, worktreeIsolation, requestedSharedTree(opts, current));
-    const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
-    const worktreeWarning = isolationWarning(slug, worktreeIsolation, explicitIsolation, sharedTree, readonly, effectiveFiles);
+    const explicitIsolation = requestedIsolation(opts, current);
+    const sharedTree = initialSharedTree(reviewTargetState, worktreeIsolation, requestedSharedTree(opts, current), explicitIsolation);
+    const worktreeWarning = explicitIsolation ? worktreeIsolationWarning(slug, readonly) : isolatedCheckoutWarning(slug, sharedTree, readonly, effectiveFiles);
+    assertRequestedIsolation(t, explicitIsolation, worktreeWarning);
     assertReviewCheckoutIsolation(t, reviewTargetState, opts, worktreeWarning);
     return {
       readonly,
@@ -1847,6 +1850,7 @@ function createDispatch(dependencies) {
       reducedAgentSchema: requestedReducedAgentSchema(opts, current),
       reviewTargetState,
       sharedTree: sharedTree || Boolean(worktreeWarning),
+      explicitIsolation,
       nonRepoOutput: nonRepoExternalOutput(t, effectiveFiles),
       worktreeWarning
     };
@@ -1884,6 +1888,19 @@ function createDispatch(dependencies) {
       throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
     }
     return { workingTreeDelivery, verificationRequirement: verificationRequirement2 };
+  }
+  function dispatchEvidenceScope(slug, ticket, projectPath, evidenceDirectory) {
+    const evidenceMode = getCategory(ticketCategory(ticket), { project: slug })?.writes === "evidence";
+    if (!evidenceMode) return { evidenceMode: false, evidenceWriteRoots: [] };
+    const roots = [evidenceDirectory];
+    if (ticket.storyId) {
+      const story = getStory(slug, ticket.storyId);
+      const directory = ticketEvidenceDirectory(slug, story.ref, projectPath);
+      fs.mkdirSync(directory, { recursive: true, mode: 448 });
+      roots.push(directory);
+    }
+    roots.push(...boardConfig(slug).investigationDataRoots);
+    return { evidenceMode: true, evidenceRepositoryRoot: canonicalPath(projectPath), evidenceWriteRoots: [...new Set(roots.map((root) => canonicalPath(root)))] };
   }
   function dispatchArtifactRoot(slug, t, sharedTree, effectiveFiles) {
     return sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), effectiveFiles[0]) : null;
@@ -1930,10 +1947,7 @@ function createDispatch(dependencies) {
     return opts.integrationBranch != null || opts.integrationMode != null;
   }
   function isolatedRepositoryDispatch(isolation) {
-    return !isolation.sharedTree && !isolation.readonly && !isolation.nonRepoOutput;
-  }
-  function automaticWorktreeBaseEligible(isolation, worktreeBase) {
-    return isolatedRepositoryDispatch(isolation) || !isolation.sharedTree && isolation.readonly && !isolation.nonRepoOutput && worktreeBase !== "auto";
+    return !isolation.sharedTree && !isolation.nonRepoOutput;
   }
   function remoteIntegrationTarget(slug, worktreeBase) {
     try {
@@ -1966,7 +1980,7 @@ function createDispatch(dependencies) {
     return autoSelectedIntegrationTarget(slug, worktreeBase);
   }
   function automaticWorktreeBase(slug, isolation, configured) {
-    return automaticWorktreeBaseEligible(isolation, configured.worktreeBase) && configured.integrationMode === "auto" ? configuredWorktreeBaseTarget(slug, configured.worktreeBase) : null;
+    return isolatedRepositoryDispatch(isolation) && configured.integrationMode === "auto" ? configuredWorktreeBaseTarget(slug, configured.worktreeBase) : null;
   }
   function explicitIntegrationTargetSelection(opts) {
     return {
@@ -2032,6 +2046,7 @@ function createDispatch(dependencies) {
     assertPublishedReleaseBaseline(slug, t, preflight.projectPath, baseCommit, integrationTargetState);
     const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, isolation.nonRepoOutput, preflight.snapshotPreflight);
     return {
+      evidenceScope: dispatchEvidenceScope(slug, t, preflight.projectPath, evidenceDirectory),
       now,
       preparedExec,
       fallbackReason,
@@ -2065,6 +2080,7 @@ function createDispatch(dependencies) {
       ),
       verificationRequirement: plan.delivery.verificationRequirement,
       evidenceDirectory: plan.evidenceDirectory,
+      ...plan.evidenceScope,
       sessionId: preparingSessionId(opts),
       preparedBy: dispatchPreparationAttribution(opts),
       ...preparedCompatibility ? { preparedCompatibility } : {}
@@ -2079,6 +2095,7 @@ function createDispatch(dependencies) {
   function checkoutPlacementFields(plan, preflight, opts) {
     return {
       sharedTree: plan.isolation.sharedTree,
+      explicitIsolation: plan.isolation.explicitIsolation,
       ...plan.isolation.reducedAgentSchema ? { reducedAgentSchema: true } : {},
       ...plan.isolation.worktreeWarning ? { worktreeWarning: plan.isolation.worktreeWarning } : {},
       ...plan.guarded.crossBoundWorktree ? { crossBoundWorktree: plan.guarded.crossBoundWorktree } : {},
@@ -2958,7 +2975,7 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
-  function recordDispatchWorktreeProvisioned(slug, sessionId, worktree, attempt) {
+  function recordDispatchWorktreeProvisioned(slug, sessionId, worktree, attempt, evidence = []) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -2975,6 +2992,7 @@ function createDispatch(dependencies) {
         if (!current || current.sessionId !== normalizedSessionId || current.terminalAt || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
           return { ok: false, reason: "dispatch_binding_unavailable" };
         }
+        current.worktreeProvisioningEvidence = evidence;
         current.worktreeProvisionedAt = (/* @__PURE__ */ new Date()).toISOString();
         stampDispatchEvent(ticket, "worktree-provisioned", current.worktreeProvisionedAt);
         putTicket(slug, ticket);
@@ -4295,6 +4313,7 @@ function createDispatch(dependencies) {
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,
+    ticketEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

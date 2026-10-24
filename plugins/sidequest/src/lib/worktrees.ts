@@ -541,23 +541,58 @@ function runWorktreeSetup(setup: string, worktree: string, timeoutMs?: number): 
   });
 }
 
+function scopedPluginDirectories(files: string[]): string[] {
+  return [...new Set(files.flatMap((file) => {
+    const plugin = /^plugins\/([A-Za-z0-9_-]+)(?:\/|$)/.exec(file.replace(/\\/g, '/'));
+    return plugin ? [`plugins/${plugin[1]}`] : [];
+  }))];
+}
+
+function linkedPluginDependencies(repository: string, directory: string, plugin: string): boolean {
+  const modules = path.join(directory, 'node_modules');
+  if (!nativeFs.existsSync(modules) || !nativeFs.lstatSync(modules).isSymbolicLink()) return false;
+  const source = path.join(repository, plugin);
+  const sameLock = nativeFs.readFileSync(path.join(source, 'package-lock.json')).equals(nativeFs.readFileSync(path.join(directory, 'package-lock.json')));
+  if (!sameLock || canonicalPath(modules) !== canonicalPath(path.join(source, 'node_modules'))) throw new Error(`unverified locked dependency link: ${plugin}`);
+  return true;
+}
+
+function linkScopedPluginDependencies(repository: string, worktree: string, plugin: string): ProvisionedDependencyLink | null {
+  const source = path.join(repository, plugin, 'node_modules');
+  if (!nativeFs.existsSync(source)) return null;
+  const sourceLock = path.join(repository, plugin, 'package-lock.json');
+  if (!nativeFs.existsSync(sourceLock)) return null;
+  if (!nativeFs.readFileSync(sourceLock).equals(nativeFs.readFileSync(path.join(worktree, plugin, 'package-lock.json')))) return null;
+  return provisionDependencyPath(repository, worktree, { path: `${plugin}/node_modules`, mode: 'link' });
+}
+
+function scopedPluginProvisioning(repository: string, worktree: string, plugin: string, onDependencyLink?: (link: ProvisionedDependencyLink) => void): string[] {
+  const directory = path.join(worktree, plugin);
+  if (!nativeFs.existsSync(path.join(directory, 'package-lock.json'))) return [];
+  if (linkedPluginDependencies(repository, directory, plugin)) return [`${plugin}: retained dependency link with matching lockfile`];
+  const link = linkScopedPluginDependencies(repository, worktree, plugin);
+  if (!link) return [`${plugin}: install deferred (npm ci --prefix ${plugin} --ignore-scripts --no-audit --no-fund)`];
+  onDependencyLink?.(link);
+  return [`${plugin}: linked locked dependencies with matching lockfile`];
+}
+
 async function provisionWorktree(
   repository: string,
   worktree: string,
   config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null },
-  options: { setupTimeoutMs?: number; onDependencyLink?: (link: ProvisionedDependencyLink) => void } = {},
+  options: { setupTimeoutMs?: number; declaredFiles?: string[]; evidence?: string[]; onDependencyLink?: (link: ProvisionedDependencyLink) => void } = {},
 ): Promise<WorktreeProvisioningFailure | null> {
   for (const dependency of config.worktreeDependencyPaths || []) {
     const createdLink = provisionDependencyPath(repository, worktree, dependency);
     if (createdLink) options.onDependencyLink?.(createdLink);
   }
+  const { declaredFiles = [], evidence = [], setupTimeoutMs = 120_000 } = options;
+  for (const plugin of scopedPluginDirectories(declaredFiles)) {
+    evidence.push(...scopedPluginProvisioning(repository, worktree, plugin, options.onDependencyLink));
+  }
   const setup = String(config.worktreeSetup || '').trim();
   if (!setup) return null;
-  const configuredTimeoutMs = Number(options.setupTimeoutMs);
-  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
-    ? Math.floor(configuredTimeoutMs)
-    : undefined;
-  return runWorktreeSetup(setup, worktree, timeoutMs);
+  return runWorktreeSetup(setup, worktree, setupTimeoutMs);
 }
 
 function gitBashPath(value: string): string {
@@ -750,6 +785,16 @@ function parseWorktreeList(output: string): any[] {
     }
     return entry;
   }).filter((entry) => entry.worktree);
+}
+
+function branchOwningWorktree(repository: string, branch: string): string {
+  const output: string = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+    cwd: repository, encoding: 'utf8', windowsHide: true, stdio: 'pipe',
+  });
+  const fields = output.split('\0\0')
+    .map((entry) => entry.split('\0'))
+    .find((entry) => entry.includes(`branch refs/heads/${branch}`));
+  return fields?.find((field) => field.startsWith('worktree '))?.slice('worktree '.length) ?? repository;
 }
 
 function isAgentWorktree(repo: string, worktree: string): boolean {
@@ -2434,8 +2479,11 @@ type RecoveryStoreEntry = {
   action: 'keep' | 'remove';
   reason: 'within_retention' | 'retention_age' | 'live_claim';
   registrationRepaired?: boolean;
+  registrationSkipped?: ParkedRegistrationSkip;
   sizeBytes?: number;
 };
+
+type ParkedRegistrationSkip = { reason: 'registration_gone' | 'other_repository'; gitDirectory: string };
 
 type RecoveryStoreReport = {
   path: string;
@@ -2546,16 +2594,67 @@ function clearQuarantineFailureForDestination(destination: string): void {
   if (changed) writeFailureState(state);
 }
 
+async function parkedGitDirectory(destination: string): Promise<string | null> {
+  try {
+    const gitDirectory = /^gitdir:\s*(.+?)\s*$/m.exec(await fs.readFile(path.join(destination, '.git'), 'utf8'))?.[1] || '';
+    return path.isAbsolute(gitDirectory) && path.basename(path.dirname(gitDirectory)) === 'worktrees' ? gitDirectory : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function repositoryCommonDirectory(repo: string): Promise<string> {
+  const common = await git(repo, ['rev-parse', '--git-common-dir']);
+  return common.ok ? canonicalPath(path.resolve(repo, common.stdout)) : '';
+}
+
+// Quarantine is shared by every project, so a park can belong to another repository, whose own sweep
+// reconciles it; repairing it from here could even hand this repository's same-named registration to
+// it. A park whose registration directory is already gone has nothing left for repair to move or for
+// the prune to take. Neither is a reason to defer this repository's metadata pruning, and both did,
+// on every sweep, until prunable registrations piled up by the hundred (GH-429, GH-539).
+async function parkedRegistrationSkip(commonDirectory: string, destination: string): Promise<ParkedRegistrationSkip | null> {
+  const gitDirectory = await parkedGitDirectory(destination);
+  if (!gitDirectory || !commonDirectory) return null;
+  if (canonicalPath(path.dirname(path.dirname(gitDirectory))) !== commonDirectory) return { reason: 'other_repository', gitDirectory };
+  return nativeFs.existsSync(gitDirectory) ? null : { reason: 'registration_gone', gitDirectory };
+}
+
+async function prunableRegistrationCount(repo: string): Promise<number | null> {
+  const listed = await git(repo, ['worktree', 'list', '--porcelain']);
+  return listed.ok ? listed.stdout.split(/\r?\n/).filter((line) => line.startsWith('prunable')).length : null;
+}
+
+async function deferredPruneFailure(repo: string, unreconciled: string[]): Promise<{ path: string; message: string }> {
+  const prunable = await prunableRegistrationCount(repo);
+  const parks = unreconciled.length === 1 ? '1 retained parked worktree' : `${unreconciled.length} retained parked worktrees`;
+  const listed = prunable === null ? 'its prunable registrations stay listed' : `${prunable} prunable registration${prunable === 1 ? '' : 's'} stay listed`;
+  return {
+    path: unreconciled[0]!,
+    message: `${parks} could not reconcile their Git registration (first: ${unreconciled[0]}), so repository metadata pruning is deferred and ${listed}. Run git worktree repair on that path from ${repo}, then sweep again.`,
+  };
+}
+
+async function parkedRegistrationReconciled(repo: string, commonDirectory: string, entry: RecoveryStoreEntry): Promise<boolean> {
+  const skipped = await parkedRegistrationSkip(commonDirectory, entry.path);
+  if (skipped) {
+    entry.registrationSkipped = skipped;
+    return true;
+  }
+  entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
+  return entry.registrationRepaired;
+}
+
 async function reconcileRetainedParkedRegistrations(repo: string, entries: RecoveryStoreEntry[]): Promise<{ unrepaired: boolean; failures: Array<{ path: string; message: string }> }> {
-  const failures: Array<{ path: string; message: string }> = [];
+  const unreconciled: string[] = [];
+  let commonDirectory: string | null = null;
   for (const entry of entries.filter((candidate) => candidate.action === 'keep')) {
     if (!await linkedPark(entry.path)) continue;
-    entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
-    if (!entry.registrationRepaired) {
-      failures.push({ path: entry.path, message: `retained parked worktree at ${entry.path} could not reconcile its Git registration, so repository metadata pruning is deferred` });
-    }
+    commonDirectory ??= await repositoryCommonDirectory(repo);
+    if (!await parkedRegistrationReconciled(repo, commonDirectory, entry)) unreconciled.push(entry.path);
   }
-  return { unrepaired: failures.length > 0, failures };
+  if (!unreconciled.length) return { unrepaired: false, failures: [] };
+  return { unrepaired: true, failures: [await deferredPruneFailure(repo, unreconciled)] };
 }
 
 async function recoveryStoreReport(store: RecoveryStoreName, root: string, entries: RecoveryStoreEntry[], options: any): Promise<RecoveryStoreReport> {
@@ -3096,4 +3195,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };
+module.exports = { branchOwningWorktree, WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };

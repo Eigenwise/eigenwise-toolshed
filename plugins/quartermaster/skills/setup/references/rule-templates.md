@@ -2,11 +2,11 @@
 
 These are lift-ready **individual rule files** for a new workspace. Use this catalog as reference while writing rules for **THIS project**. Derive each rule from the project's visible structure, stated purpose, existing conventions, and own guideline files. Do not pick blocks because they look close. A rule that lands byte-identical to a catalog block is evidence that it was copied rather than derived, so rewrite it in the project's terms before installing it.
 
-Write each selected rule to its own `.claude/live-rules/rules/<stable-name>.md` file, with no shared header and exactly one frontmatter-plus-body rule per file. Ship the craft baseline on every workspace; add stack-specific rules only when the detected stack needs them. Keep bodies tight: all rules matching one event share a ~10k-character injection budget. Higher `priority` injects first.
+Write each selected rule to its own `.claude/live-rules/rules/<stable-name>.md` file, with no shared header and exactly one frontmatter-plus-body rule per file. Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade. Add stack-specific rules only when the detected stack needs them. Keep bodies tight: all rules matching one event share a ~10k-character injection budget. Higher `priority` injects first.
 
 **Installer requirement: generated rule text must conform to the target project's own voice and style rules. If the project's rules ban a construction, the generated rules cannot use that construction. Check the final text against the project's guidelines before writing any rule file.**
 
-**Priority convention (standardized):** 90–100 = global craft baselines · 50–70 = stack/design rules ·
+**Priority convention (standardized):** 90–100 = project-wide workflow rules · 50–70 = stack/design rules ·
 40–45 = prompt-keyword and self-improvement rules · 10 = narrow domain-file rules.
 
 ## Atomic directory and manifest
@@ -42,7 +42,7 @@ rename it into `.claude/live-rules/`. The manifest's `path` values are relative 
 
 ---
 
-## Craft baseline (global : ship on every workspace)
+## Workflow rules (derive from project needs)
 
 ### Atomic commits & two hats
 
@@ -70,23 +70,6 @@ priority: 87
 - Every technical claim in a commit message must be something you actually observed or reproduced,
   not a plausible guess. An honest "cause not yet confirmed" beats an invented root cause.
 - Describe what changed and why; don't narrate a fix you didn't verify.
-```
-
-### Reuse-first implementation
-
-```markdown
----
-description: Reuse-first implementation
-priority: 90
----
-Before changing code, trace the real flow and decide whether the requested behavior needs new code.
-Reuse an existing code path first, then the standard library, a native platform capability, or an
-already-installed dependency. When code must change, fix the smallest shared root cause; delete code
-when behavior stays intact. Skip speculative guards, abstractions, configuration, and cleanup.
-Keep validation and error handling where trust, data loss, security, or accessibility requires them.
-During implementation, run the smallest focused regression check that exercises the changed behavior.
-One integration owner runs the full gate after merged changes. Do not bypass required gates or claim
-results you have not evaluated.
 ```
 
 ### Surgical, simple, honest (Karpathy directive)
@@ -129,19 +112,6 @@ Use the gate's threshold and report per-function rows honestly; unmeasured bodie
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```
 
-### House code conventions (naming over comments)
-
-```markdown
----
-description: House code conventions
-priority: 80
----
-- No inline comments unless they capture a real hidden constraint (a *why* the code can't express).
-  Lean on naming and structure, not narration. Delete commented-out code.
-- Replace magic numbers with named constants. Match the surrounding code's idiom, naming, and
-  comment density.
-```
-
 ### Refactoring discipline (prompt-scoped)
 
 ```markdown
@@ -154,21 +124,6 @@ Refactor only for an observed reason and preserve behavior. Choose the smallest 
 or removes observed duplication, including deletion or a rename; extract only when it does so. Keep
 behavior changes separate from deliberate refactors. Run the focused regression check for the changed
 behavior; do not fold in tidy-up work without evidence.
-```
-
-### Optional: guidelines pointer (with the bundled digest)
-
-Only if the user wants the deeper digest available. Copy `references/clean-code-principles.md` into
-`.claude/` and add:
-
-```markdown
----
-description: Clean-code principles : read the guidelines file
-priority: 5
----
-- Before writing or refactoring non-trivial code, read `.claude/clean-code-principles.md` : a distilled
-  clean-code digest (Martin, Fowler, Beck, Metz, Feathers).
-- If you haven't read it this session, read it before your next code change, then apply it.
 ```
 
 ---

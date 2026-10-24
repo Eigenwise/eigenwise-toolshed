@@ -10,6 +10,7 @@ import {
   repoSectionHeading,
   upsertSection,
 } from '../lib/changelog.mjs';
+import { buildPlan } from '../lib/plan.mjs';
 import { fragmentFingerprint } from '../lib/fragments.mjs';
 
 const PLAN = {
@@ -132,4 +133,28 @@ test('a hotfix window says so', () => {
   const section = renderRepoSection({ ...PLAN, mode: 'hotfix', tag: 'v3.207.1' });
   assert.match(section, /^## v3\.207\.1 \(2026-07-25\)$/m);
   assert.match(section, /Hotfix release cut from `main`\./);
+});
+
+
+test('changelog refs stay linked to the local entry and fingerprint read-back', () => {
+  const entry = { ref: 'SQ-123', title: 'Linked fix (SQ-999)', level: 'patch', commit: null, body: 'Detail', refs: [
+    { key: 'GH-123', url: 'https://github.com/owner/repo/pull/123' },
+    { key: 'ABC-2', url: null },
+  ] };
+  const fragment = { ...entry, plugins: [{ name: 'sidequest', level: 'patch' }] };
+  const plan = buildPlan({
+    fragments: [fragment, { ...entry, ref: 'SQ-124', scope: 'repo', plugins: [] }],
+    manifest: { version: '1.0.0', repository: PLAN.repository, plugins: new Map([['sidequest', { version: '1.0.0', dir: 'plugins/sidequest' }]]) },
+    date: PLAN.date,
+  });
+  assert.deepEqual(plan.plugins[0].entries[0].refs, entry.refs);
+  assert.deepEqual(plan.repositoryEntries[0].refs, entry.refs);
+  const section = renderRepoSection({ ...PLAN, plugins: [], repositoryEntries: [entry] });
+  assert.match(section, /\(SQ-123\) \[GH-123\]\(https:\/\/github.com\/owner\/repo\/pull\/123\) \[ABC-2\]/);
+  assert.deepEqual([...releasedRefs(section)], ['SQ-123']);
+  assert.ok(releasedFragmentFingerprints(section).has(fragmentFingerprint(entry)));
+  assert.notEqual(fragmentFingerprint(entry), fragmentFingerprint({ ...entry, refs: [] }));
+  const committed = { ...entry, commit: 'c7b2702' };
+  const committedSection = renderRepoSection({ ...PLAN, plugins: [], repositoryEntries: [committed] });
+  assert.ok(releasedFragmentFingerprints(committedSection).has(fragmentFingerprint(committed)));
 });

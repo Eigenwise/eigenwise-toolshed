@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
+import { isEvidenceExecutor } from '../lib/exec-names.js';
+import { evidenceToolDenial } from '../lib/evidence-writes.js';
 import { execFileSync } from 'node:child_process';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
@@ -9,6 +11,7 @@ import {
   boardVerificationEvidencePath,
   canonicalPath,
   dispatchEvidenceDirectory,
+  dispatchEvidenceScope,
   enclosingCheckout,
   executorAgent,
   identityDiagnosis,
@@ -223,6 +226,14 @@ function linkedWorktreeLeaseRefusal(found: IsolationExpectation, target: string,
   );
 }
 
+function protectedTargetPath(input: Record<string, unknown>, executor: string): string {
+  if (!isEvidenceExecutor(executor)) return targetPath(input);
+  const argumentsInput = isRecord(input.tool_input) ? input.tool_input : {};
+  const denial = evidenceToolDenial(stringField(input, 'tool_name'), argumentsInput, stringField(input, 'cwd'), dispatchEvidenceScope(input) || {});
+  if (denial) writeDeny('PreToolUse', denial);
+  return '';
+}
+
 function main(): void {
   const input = readStdin();
   if (!input || !WRITE_TOOLS.has(stringField(input, 'tool_name'))) return;
@@ -230,7 +241,7 @@ function main(): void {
   const executor = stringField(input, 'agent_type', 'agentType', 'subagent_type');
   if (!agentId || !executorAgent(executor)) return;
 
-  const target = targetPath(input);
+  const target = protectedTargetPath(input, executor);
   if (!target) return;
   // No enclosing checkout at all already means the guard allows the write, so that case is resolved
   // first: it is the common shape of an evidence or scratch write, and it must not pay for loading

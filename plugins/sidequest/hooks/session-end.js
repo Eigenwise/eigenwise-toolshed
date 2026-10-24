@@ -29,6 +29,8 @@ var import_node_fs = __toESM(require("node:fs"));
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 var DISPATCH_NAME = "sidequest-exec-dispatch";
@@ -36,12 +38,17 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -103,6 +110,36 @@ var import_node_path3 = __toESM(require("node:path"));
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
 var import_node_crypto = __toESM(require("node:crypto"));
+function platformPath(value) {
+  return process.platform === "win32" ? value.toLowerCase() : value;
+}
+function canonicalPath(value) {
+  const gitBashDrive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
+  const resolved = import_node_path2.default.resolve(gitBashDrive ? `${gitBashDrive[1]}:${value.slice(2)}` : value);
+  const missing = [];
+  let existing = resolved;
+  while (!import_node_fs2.default.existsSync(existing)) {
+    const parent = import_node_path2.default.dirname(existing);
+    if (parent === existing) return platformPath(resolved);
+    missing.unshift(import_node_path2.default.basename(existing));
+    existing = parent;
+  }
+  try {
+    return platformPath(import_node_path2.default.join(import_node_fs2.default.realpathSync.native(existing), ...missing));
+  } catch {
+    return platformPath(resolved);
+  }
+}
+
+// src/lib/sweep-state-path.ts
+function stateDirectory() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
+  return import_node_path3.default.join(home, "sweep-reports");
+}
+function reportFile(cwd) {
+  const key = import_node_crypto2.default.createHash("sha1").update(canonicalPath(cwd || ".")).digest("hex").slice(0, 16);
+  return import_node_path3.default.join(stateDirectory(), `${key}.json`);
+}
 
 // src/hooks/shared/sweep-flight.ts
 var import_node_crypto3 = __toESM(require("node:crypto"));
@@ -110,27 +147,29 @@ var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path4 = __toESM(require("node:path"));
 
 // src/hooks/shared/sweep-handoff.ts
-var HANDOFF_FAILED_NOTICE = "sidequest: worktree sweep could not run, so stale agent worktrees were not collected this session.";
 function sweepCwd(data) {
   return stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
-function detachSessionEndSweep(data) {
+var MAX_RECORDED_ENDED_SESSIONS = 20;
+function sessionEndHandoffFile(cwd) {
+  return reportFile(cwd).replace(/\.json$/, ".session-end.json");
+}
+function readSessionEndHandoff(cwd) {
   try {
-    const child = (0, import_node_child_process.spawn)(process.execPath, [
-      import_node_path5.default.join(pluginRoot(), "hooks", "sweep-worktrees.js"),
-      "--cwd",
-      sweepCwd(data),
-      "--session",
-      stringField(data, "session_id", "sessionId"),
-      "--mode",
-      "session-end"
-    ], { detached: true, stdio: "ignore", windowsHide: true });
-    child.once("error", () => {
-    });
-    child.unref();
-    return true;
+    const parsed = JSON.parse(import_node_fs4.default.readFileSync(sessionEndHandoffFile(cwd), "utf8"));
+    return { cwd: String(parsed.cwd || cwd), sessions: Array.isArray(parsed.sessions) ? parsed.sessions.map(String) : [], recordedAt: String(parsed.recordedAt || "") };
   } catch (_) {
-    return false;
+    return null;
+  }
+}
+function recordSessionEndHandoff(data) {
+  const cwd = sweepCwd(data);
+  const ended = stringField(data, "session_id", "sessionId");
+  const sessions = [...(readSessionEndHandoff(cwd)?.sessions || []).filter((session) => session !== ended), ended];
+  try {
+    import_node_fs4.default.mkdirSync(stateDirectory(), { recursive: true });
+    import_node_fs4.default.writeFileSync(sessionEndHandoffFile(cwd), JSON.stringify({ cwd, sessions: sessions.slice(-MAX_RECORDED_ENDED_SESSIONS), recordedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+  } catch (_) {
   }
 }
 
@@ -197,17 +236,17 @@ function reconcileEndedSession(sessionId2, reason) {
     return [`sidequest: session-end reconciliation failed: ${error && error.message || error}`];
   }
 }
-async function main() {
+function main() {
   const data = readStdin();
   const sessionId2 = endedSessionId(data);
   if (!data || !sessionId2) return;
+  unregisterSweepSession(data);
+  recordSessionEndHandoff(data);
   const notices = reconcileEndedSession(sessionId2, endReason(data));
-  if (!detachSessionEndSweep(data)) {
-    unregisterSweepSession(data);
-    notices.push(HANDOFF_FAILED_NOTICE);
-  }
   if (notices.length) console.error(notices.join("\n"));
 }
-main().catch((error) => {
+try {
+  main();
+} catch (error) {
   console.error(`sidequest: session-end failed: ${error && error.message || error}`);
-});
+}

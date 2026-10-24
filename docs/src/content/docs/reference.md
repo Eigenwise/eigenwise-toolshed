@@ -7,7 +7,7 @@ The plugin pages in this section are generated from plugin metadata, skill front
 
 The generated pages describe what is present in each plugin. A `bin/` entry is an implementation file inventory, not automatically a supported user command. For supported CLI usage and daily workflows, use the owning plugin's README or guide.
 
-- [Observability guide](../observability/setup/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/observability) for setup and supported usage.
+- [Observability guide](../observability/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/observability) for setup and supported usage.
 - [Model Gateway guide](../getting-started/model-gateway/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/model-gateway) for supported usage.
 - [Codebase Mapper guide](../getting-started/codebase-mapper/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codebase-mapper) for supported usage.
 - [Live Rules guide](../getting-started/live-rules/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/live-rules) for supported usage.

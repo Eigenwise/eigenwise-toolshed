@@ -407,7 +407,7 @@ function isolatedDispatchWorktree(dispatch: any): boolean {
 }
 
 function closedTicketCleanupApplies(slug: string, ticket: any): boolean {
-  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+  return isolatedDispatchWorktree(ticket?.dispatch);
 }
 
 // remove deletes the ticket before its cleanup runs, so it passes the deleted ticket in as
@@ -1015,6 +1015,7 @@ function compactPulse(pulse?: any) {
   const wave = compactWave(pulse.submission?.wave);
   return {
     ref: pulse.ref,
+    refs: pulse.refs,
     status: pulse.status,
     claim: pulse.claim,
     working: pulse.working,

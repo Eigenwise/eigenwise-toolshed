@@ -34,7 +34,7 @@ function execFileSync(file, args, options = {}) {
 // src/hooks/force-exec-bypass.ts
 var import_node_fs8 = __toESM(require("node:fs"));
 var import_node_os5 = __toESM(require("node:os"));
-var import_node_path8 = __toESM(require("node:path"));
+var import_node_path9 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -43,6 +43,8 @@ var import_node_fs = __toESM(require("node:fs"));
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
 var DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
@@ -137,6 +139,14 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
+function isEvidenceExecutor(value) {
+  if (typeof value !== "string") return false;
+  const name = canonicalExecutorName(value);
+  return name === EVIDENCE_DISPATCH_NAME || EFFORTS.some((effort) => name === stableEvidenceClaudeName(effort));
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
@@ -145,7 +155,14 @@ function discoveredModelEffort(name, prefix) {
   const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
   return name.startsWith(prefix) && isEffort(effort) ? effort : null;
 }
+function classifyEvidenceExecutor(name) {
+  if (name === EVIDENCE_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  const effort = name.slice(EVIDENCE_CLAUDE_PREFIX.length);
+  return name.startsWith(EVIDENCE_CLAUDE_PREFIX) && isEffort(effort) ? { kind: "read_only_claude_builtin", effort } : null;
+}
 function classifyDiscoveredModel(name) {
+  const evidence = classifyEvidenceExecutor(name);
+  if (evidence) return evidence;
   const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
   if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
   const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
@@ -154,6 +171,8 @@ function classifyDiscoveredModel(name) {
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -325,67 +344,110 @@ function writeSessionState(file, state) {
   import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
 }
 
-// src/hooks/shared/read-only-shell.ts
-var import_node_fs4 = __toESM(require("node:fs"));
-var import_node_os2 = __toESM(require("node:os"));
+// src/lib/evidence-writes.ts
 var import_node_path4 = __toESM(require("node:path"));
 
-// src/hooks/shared/runtime-identity.ts
+// src/lib/kernel/worktree.ts
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path3 = __toESM(require("node:path"));
-function canonicalPath(value) {
-  const kernel = require(runtimeModule("kernel/worktree"));
-  return kernel.canonicalPath(value);
+var import_node_crypto2 = __toESM(require("node:crypto"));
+function platformPath(value) {
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }
-function enclosingCheckout(start) {
-  let directory = canonicalPath(start);
-  for (; ; ) {
-    const gitEntry = import_node_path3.default.join(directory, ".git");
-    let stats = null;
-    try {
-      stats = import_node_fs3.default.statSync(gitEntry);
-    } catch (_) {
-      stats = null;
-    }
-    if (stats) return { root: directory, linked: stats.isFile() };
-    const parent = import_node_path3.default.dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
+function canonicalPath(value) {
+  const gitBashDrive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
+  const resolved = import_node_path3.default.resolve(gitBashDrive ? `${gitBashDrive[1]}:${value.slice(2)}` : value);
+  const missing = [];
+  let existing = resolved;
+  while (!import_node_fs3.default.existsSync(existing)) {
+    const parent = import_node_path3.default.dirname(existing);
+    if (parent === existing) return platformPath(resolved);
+    missing.unshift(import_node_path3.default.basename(existing));
+    existing = parent;
+  }
+  try {
+    return platformPath(import_node_path3.default.join(import_node_fs3.default.realpathSync.native(existing), ...missing));
+  } catch {
+    return platformPath(resolved);
   }
 }
 
-// src/hooks/shared/read-only-shell.ts
-var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)/g;
+// src/hooks/shared/read-only-git.ts
+var READ_ONLY_SUBCOMMANDS = /* @__PURE__ */ new Set([
+  "status",
+  "log",
+  "show",
+  "diff",
+  "rev-parse",
+  "rev-list",
+  "ls-files",
+  "ls-tree",
+  "cat-file",
+  "describe",
+  "blame"
+]);
+var GLOBAL_VALUE_FLAGS = /* @__PURE__ */ new Set(["-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix"]);
+var GLOBAL_FLAGS = /* @__PURE__ */ new Set(["--no-pager", "--paginate", "-P", "-p", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"]);
+var BRANCH_READ_FLAGS = /^(?:--list|--show-current|-l|-a|--all|-r|--remotes|-v|-vv|--verbose|--no-color|--color(?:=.*)?|--format=.*|--sort=.*|--contains(?:=.*)?|--no-contains(?:=.*)?|--merged(?:=.*)?|--no-merged(?:=.*)?|--points-at(?:=.*)?)$/;
+function branchReads(arguments_) {
+  const flags = arguments_.filter((argument) => argument.startsWith("-"));
+  if (!flags.every((flag) => BRANCH_READ_FLAGS.test(flag))) return false;
+  return arguments_.every((argument) => argument.startsWith("-")) || arguments_.includes("--list");
+}
+var READ_ARGUMENTS = /* @__PURE__ */ new Map([
+  ["branch", branchReads],
+  ["worktree", (arguments_) => arguments_[0] === "list"],
+  ["remote", (arguments_) => arguments_.length === 1 && arguments_[0] === "-v"]
+]);
+function isReadOnlyGit(subcommand, arguments_) {
+  if (arguments_.some((argument) => /^--output(?:=|$)/.test(argument))) return false;
+  if (READ_ONLY_SUBCOMMANDS.has(subcommand)) return true;
+  return READ_ARGUMENTS.get(subcommand)?.(arguments_) ?? false;
+}
+function globalFlagWidth(word) {
+  if (GLOBAL_VALUE_FLAGS.has(word)) return 2;
+  if (GLOBAL_FLAGS.has(word)) return 1;
+  return /^(?:--(?:config-env|git-dir|work-tree|namespace|super-prefix)=|-C.|-c.)/.test(word) ? 1 : 0;
+}
+function gitSubcommandIndex(words) {
+  let index = 1;
+  while (words[index]?.startsWith("-")) {
+    const width = globalFlagWidth(words[index]);
+    if (!width) return -1;
+    index += width;
+  }
+  return index < words.length ? index : -1;
+}
+function gitWordsReadOnly(words) {
+  const index = gitSubcommandIndex(words);
+  return index > 0 && isReadOnlyGit(words[index], words.slice(index + 1));
+}
+
+// src/hooks/shared/shell-writes.ts
+var SHELL_TOKEN_RE = /(@"\r?\n[\s\S]*?\r?\n"@|@'\r?\n[\s\S]*?\r?\n'@|"(?:[^"\\`]|[\\`][\s\S]|"")*"|'(?:[^']|'')*')|((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|([^\s|;&<>"']+)|(<<<|<<-?)[ \t]*("[^"\r\n]*"|'[^'\r\n]*'|[^\s|;&<>"']+)?/g;
+function unquote(word) {
+  return word.replace(/^(["'])([\s\S]*)\1$/, "$2");
+}
+function heredocEnd(command, start, heredoc) {
+  const terminator = heredoc.terminator.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const indentation = heredoc.stripTabs ? "\\t*" : "";
+  const ending = new RegExp(`^${indentation}${terminator}\\r?(?:\\n|$)`, "m");
+  const match = ending.exec(command.slice(start));
+  return match ? start + match.index + match[0].length : command.length;
+}
+function recordHeredoc(match, heredocs) {
+  if (match[4] === "<<<" || match[5] === void 0) return;
+  heredocs.push({ terminator: unquote(match[5]), stripTabs: match[4] === "<<-" });
+}
 var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
 var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
-var MUTATING_GIT = /* @__PURE__ */ new Set([
-  "add",
-  "am",
-  "apply",
-  "checkout",
-  "cherry-pick",
-  "clean",
-  "commit",
-  "merge",
-  "mv",
-  "pull",
-  "push",
-  "rebase",
-  "reset",
-  "restore",
-  "revert",
-  "rm",
-  "stash",
-  "switch"
-]);
 function operands(words) {
   return words.slice(1).filter((word) => !word.startsWith("-"));
 }
 function gitWriteTargets(words) {
   const flagIndex = words.indexOf("-C");
   const directory = flagIndex > 0 ? words[flagIndex + 1] : ".";
-  const subcommand = operands(words).find((word) => word !== directory);
-  return MUTATING_GIT.has(String(subcommand)) ? [directory || "."] : [];
+  return gitWordsReadOnly(words) ? [] : [directory || "."];
 }
 var SED_SCRIPT_FLAGS = /* @__PURE__ */ new Set(["-e", "--expression", "-f", "--file"]);
 function inPlaceEditTargets(words) {
@@ -429,18 +491,35 @@ var WRITE_TARGET_READERS = new Map([
   ["git", gitWriteTargets]
 ]);
 function commandName(words) {
-  return import_node_path4.default.basename(words[0] || "").toLowerCase().replace(/\.exe$/, "");
+  return (words[0] || "").split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
 }
 function isGitMutation(words) {
   return commandName(words) === "git" && gitWriteTargets(words).length > 0;
 }
 function commandWriteTargets(words) {
-  const name = commandName(words);
-  const reader = WRITE_TARGET_READERS.get(name);
+  const reader = WRITE_TARGET_READERS.get(commandName(words));
   return reader ? reader(words) : [];
 }
+function shellToken(match) {
+  return match[2] ? { operator: match[2] } : { word: unquote(match[1] || match[3]) };
+}
 function shellTokens(command) {
-  return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => match[2] ? { operator: match[2] } : { word: (match[1] || match[3]).replace(/^(["'])([\s\S]*)\1$/, "$2") });
+  const lexer = new RegExp(SHELL_TOKEN_RE);
+  const tokens = [];
+  const heredocs = [];
+  let match;
+  while ((match = lexer.exec(command)) !== null) {
+    if (match[4]) {
+      recordHeredoc(match, heredocs);
+      continue;
+    }
+    tokens.push(shellToken(match));
+    if (match[2] === "\n") {
+      lexer.lastIndex = heredocs.reduce((start, heredoc) => heredocEnd(command, start, heredoc), lexer.lastIndex);
+      heredocs.length = 0;
+    }
+  }
+  return tokens;
 }
 function shellSegments(command) {
   const segments = [{ words: [], redirects: [] }];
@@ -461,16 +540,123 @@ function shellSegments(command) {
 function ignoredTarget(word) {
   return !word || word.startsWith("$") || NULL_SINKS.has(word.toLowerCase());
 }
+
+// src/lib/evidence-writes.ts
+function within(root, target) {
+  const relative = import_node_path4.default.relative(canonicalPath(root), canonicalPath(target));
+  return relative !== ".." && !relative.startsWith(`..${import_node_path4.default.sep}`) && !import_node_path4.default.isAbsolute(relative);
+}
+function protectedRoots(scope) {
+  return [scope.evidenceRepositoryRoot, scope.worktree].filter((root) => Boolean(root));
+}
+function evidencePathAllowed(target, scope) {
+  if (!scope.evidenceMode || !import_node_path4.default.isAbsolute(target)) return false;
+  if (protectedRoots(scope).some((root) => within(root, target))) return false;
+  return (scope.evidenceWriteRoots ?? []).some((root) => within(root, target));
+}
+function refusal(scope) {
+  return `sidequest: evidence executor may write only under admitted roots: ${(scope.evidenceWriteRoots ?? []).join(", ") || "(no live evidence scope)"}. Repository paths remain forbidden. Close through done, without commit or submit.`;
+}
+function nativeTarget(base, target) {
+  const native = process.platform === "win32" ? target.replace(/^\/([a-z])(\/|$)/i, "$1:/") : target;
+  return import_node_path4.default.resolve(base, native);
+}
+function segmentTargets(segment, base) {
+  return [...segment.redirects, ...commandWriteTargets(segment.words)].filter((target) => !ignoredTarget(target)).map((target) => nativeTarget(base, target));
+}
+function changedDirectory(segment, base) {
+  return segment.words[0] === "cd" && segment.words[1] ? nativeTarget(base, segment.words[1]) : base;
+}
+function segmentForbidden(segment, base, scope) {
+  return isGitMutation(segment.words) || segmentTargets(segment, base).some((target) => !evidencePathAllowed(target, scope));
+}
+function shellDenial(command, cwd, scope) {
+  let base = cwd;
+  for (const segment of shellSegments(command)) {
+    base = changedDirectory(segment, base);
+    if (segmentForbidden(segment, base, scope)) return refusal(scope);
+  }
+  return null;
+}
+function fileDenial(input, _cwd, scope) {
+  return evidencePathAllowed(String(input.file_path ?? input.path ?? ""), scope) ? null : refusal(scope);
+}
+var TOOL_GUARDS = {
+  Bash: (input, cwd, scope) => shellDenial(String(input.command ?? ""), cwd, scope),
+  PowerShell: (input, cwd, scope) => shellDenial(String(input.command ?? ""), cwd, scope),
+  Write: fileDenial,
+  Edit: fileDenial,
+  MultiEdit: fileDenial,
+  NotebookEdit: (_input, _cwd, scope) => refusal(scope),
+  Agent: (_input, _cwd, scope) => refusal(scope),
+  mcp__plugin_sidequest_board__commit: (_input, _cwd, scope) => refusal(scope),
+  mcp__plugin_sidequest_board__submit: (_input, _cwd, scope) => refusal(scope),
+  mcp__plugin_sidequest_board__integrate: (_input, _cwd, scope) => refusal(scope)
+};
+function evidenceToolDenial(tool, input, cwd, scope) {
+  return TOOL_GUARDS[tool]?.(input, cwd, scope) ?? null;
+}
+
+// src/hooks/shared/runtime-identity.ts
+var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_path5 = __toESM(require("node:path"));
+function canonicalPath2(value) {
+  const kernel = require(runtimeModule("kernel/worktree"));
+  return kernel.canonicalPath(value);
+}
+function dispatchEvidenceScope(input) {
+  const found = isolationExpectation(input, stringField(input, "agent_id", "agentId"), stringField(input, "agent_type", "agentType"), true, stringField(input, "cwd"));
+  if (!found?.claimHeld || found.terminal) return null;
+  const store = require(runtimeModule("store"));
+  try {
+    return store.getTicket(found.project, found.ref)?.dispatch ?? null;
+  } catch {
+    return null;
+  }
+}
+function hookSessionId(input) {
+  return stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+}
+function enclosingCheckout(start) {
+  let directory = canonicalPath2(start);
+  for (; ; ) {
+    const gitEntry = import_node_path5.default.join(directory, ".git");
+    let stats = null;
+    try {
+      stats = import_node_fs4.default.statSync(gitEntry);
+    } catch (_) {
+      stats = null;
+    }
+    if (stats) return { root: directory, linked: stats.isFile() };
+    const parent = import_node_path5.default.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true, observedWorktree = "") {
+  try {
+    const store = require(runtimeModule("store"));
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
+    return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
+  } catch (_) {
+    return null;
+  }
+}
+
+// src/hooks/shared/read-only-shell.ts
+var import_node_fs5 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path6 = __toESM(require("node:path"));
 function nativePath(word) {
-  if (word === "~" || word.startsWith("~/")) return import_node_path4.default.join(import_node_os2.default.homedir(), word.slice(1));
+  if (word === "~" || word.startsWith("~/")) return import_node_path6.default.join(import_node_os2.default.homedir(), word.slice(1));
   return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
 }
 function resolvedTarget(base, word) {
-  return ignoredTarget(word) ? null : canonicalPath(import_node_path4.default.resolve(base, nativePath(word)));
+  return ignoredTarget(word) ? null : canonicalPath2(import_node_path6.default.resolve(base, nativePath(word)));
 }
 function mainCheckoutOf(linkedRoot) {
-  const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs4.default.readFileSync(import_node_path4.default.join(linkedRoot, ".git"), "utf8"));
-  return pointer ? canonicalPath(import_node_path4.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..")) : null;
+  const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs5.default.readFileSync(import_node_path6.default.join(linkedRoot, ".git"), "utf8"));
+  return pointer ? canonicalPath2(import_node_path6.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..")) : null;
 }
 function checkoutRoots(cwd) {
   const checkout = enclosingCheckout(cwd);
@@ -482,8 +668,8 @@ function comparable(value) {
   return process.platform === "win32" ? value.toLowerCase() : value;
 }
 function isWithin(root, target) {
-  const relative = import_node_path4.default.relative(comparable(root), comparable(target));
-  return !relative.startsWith("..") && !import_node_path4.default.isAbsolute(relative);
+  const relative = import_node_path6.default.relative(comparable(root), comparable(target));
+  return !relative.startsWith("..") && !import_node_path6.default.isAbsolute(relative);
 }
 function insideAny(roots, target) {
   return roots.some((root) => isWithin(root, target));
@@ -496,7 +682,7 @@ function segmentWriteTargets(segment, base) {
 }
 function firstCheckoutWrite(command, cwd) {
   const roots = checkoutRoots(cwd);
-  let base = canonicalPath(cwd);
+  let base = canonicalPath2(cwd);
   for (const segment of shellSegments(command)) {
     base = nextBase(segment.words, base);
     const blocked = segmentWriteTargets(segment, base).find((target) => insideAny(roots, target));
@@ -512,42 +698,71 @@ function readOnlyShellRefusal(command, cwd) {
   return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Use scratch files outside the checkout, under ${import_node_os2.default.tmpdir()}, or the ticket's verification directory. For repository edits, comment the needed change and release the ticket.` : null;
 }
 
+// src/hooks/shared/main-thread-mutations.ts
+var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
+  "files",
+  "addFiles",
+  "removeFiles",
+  "status",
+  "readonly",
+  "readonlyOverride",
+  "workingTreeDelivery",
+  "externalDeliverable",
+  "verify",
+  "verifyKind",
+  "attestationArtifact",
+  "verifyCwd",
+  "admitComposition",
+  "executorVerify",
+  "executorVerifyKind",
+  "executorAttestationArtifact",
+  "executorVerifyCwd"
+]);
+var MAIN_THREAD_MUTATIONS = {
+  mcp__plugin_sidequest_board__dispatch: {
+    matches: (input) => Object.hasOwn(input, "workProvenance"),
+    denial: "sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing."
+  },
+  mcp__plugin_sidequest_board__update: {
+    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
+    denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
+  },
+  mcp__plugin_sidequest_board__scopeRequest: {
+    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
+    // already recorded, which is a live-claim mutation just like the update fields
+    // above. Without this, a subagent could pass by:'orchestrator' to mint the
+    // grant itself; the store's by-mismatch check only catches the claim holder's
+    // own by, not an impersonated one.
+    matches: (input) => input.grant === true,
+    denial: "sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread."
+  },
+  mcp__plugin_sidequest_board__remove: {
+    // force:true is the only path that deletes a live-claimed ticket, so it is the
+    // executor's escape hatch (delete the ticket to shed the claim). The store
+    // refuses ungranted live-claim deletion, but deny it here too so a subagent
+    // can never mint the main-thread grant by riding the MCP remove handler.
+    matches: (input) => input.force === true,
+    denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
+  },
+  mcp__plugin_sidequest_board__verdict: {
+    matches: (input) => ["correct", "finalize"].some((field) => Object.hasOwn(input, field)),
+    denial: "sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread."
+  }
+};
+function mainThreadMutationDenial(toolName, toolInput) {
+  const rule = MAIN_THREAD_MUTATIONS[toolName];
+  return rule?.matches(toolInput) ? rule.denial : null;
+}
+
 // src/lib/board-mcp-liveness.ts
 var import_node_fs6 = __toESM(require("node:fs"));
 var import_node_os3 = __toESM(require("node:os"));
-var import_node_path6 = __toESM(require("node:path"));
-
-// src/lib/kernel/worktree.ts
-var import_node_fs5 = __toESM(require("node:fs"));
-var import_node_path5 = __toESM(require("node:path"));
-var import_node_crypto2 = __toESM(require("node:crypto"));
-function platformPath(value) {
-  return process.platform === "win32" ? value.toLowerCase() : value;
-}
-function canonicalPath2(value) {
-  const gitBashDrive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
-  const resolved = import_node_path5.default.resolve(gitBashDrive ? `${gitBashDrive[1]}:${value.slice(2)}` : value);
-  const missing = [];
-  let existing = resolved;
-  while (!import_node_fs5.default.existsSync(existing)) {
-    const parent = import_node_path5.default.dirname(existing);
-    if (parent === existing) return platformPath(resolved);
-    missing.unshift(import_node_path5.default.basename(existing));
-    existing = parent;
-  }
-  try {
-    return platformPath(import_node_path5.default.join(import_node_fs5.default.realpathSync.native(existing), ...missing));
-  } catch {
-    return platformPath(resolved);
-  }
-}
-
-// src/lib/board-mcp-liveness.ts
+var import_node_path7 = __toESM(require("node:path"));
 var MARKER_PREFIX = "board-mcp-";
 var MARKER_SUFFIX = ".json";
 function boardMcpMarkerDirectory() {
-  const home = process.env.SIDEQUEST_HOME || import_node_path6.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
-  return import_node_path6.default.join(home, "tmp", "state");
+  const home = process.env.SIDEQUEST_HOME || import_node_path7.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
+  return import_node_path7.default.join(home, "tmp", "state");
 }
 function markerField(value, key) {
   return value !== null && typeof value === "object" ? Reflect.get(value, key) : void 0;
@@ -564,7 +779,7 @@ function legacySessionId(name) {
   return decodeURIComponent(name.slice(MARKER_PREFIX.length, -MARKER_SUFFIX.length));
 }
 function readMarker(directory, name) {
-  const file = import_node_path6.default.join(directory, name);
+  const file = import_node_path7.default.join(directory, name);
   try {
     const value = JSON.parse(import_node_fs6.default.readFileSync(file, "utf8"));
     const pid = markerPid(value);
@@ -608,7 +823,7 @@ function observeBoardMcp(sessionId, project) {
     return unlistableMarkers(error, directory);
   }
   const markers = names.flatMap((name) => readMarker(directory, name));
-  return observeMarkers(markers, sessionId, project ? canonicalPath2(project) : "", directory);
+  return observeMarkers(markers, sessionId, project ? canonicalPath(project) : "", directory);
 }
 
 // src/lib/dispatch-preflight.ts
@@ -616,7 +831,7 @@ var import_node_child_process2 = require("node:child_process");
 var import_node_crypto3 = require("node:crypto");
 var import_node_fs7 = __toESM(require("node:fs"));
 var import_node_os4 = __toESM(require("node:os"));
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_path8 = __toESM(require("node:path"));
 var PLUGIN_ID = "sidequest@eigenwise-toolshed";
 var REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
 var FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300];
@@ -639,11 +854,11 @@ function readFileSyncWithRetry(filePath, encoding) {
   }
 }
 function claudeHomeDir(opts = {}) {
-  return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path7.default.join(import_node_os4.default.homedir(), ".claude");
+  return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path8.default.join(import_node_os4.default.homedir(), ".claude");
 }
 function normalizeDir(value) {
   if (typeof value !== "string" || !value.trim()) return null;
-  return import_node_path7.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return import_node_path8.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 function jsonRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -673,8 +888,8 @@ function installRuntimeSnapshot(installPath, version) {
   if (typeof installPath !== "string" || !installPath.trim()) return { detail: "the registry entry has no installPath" };
   if (typeof version !== "string" || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
   try {
-    const mcpManifest = canonicalJsonFile(import_node_path7.default.join(installPath, ".mcp.json"));
-    const hooks = canonicalJsonFile(import_node_path7.default.join(installPath, "hooks", "hooks.json"));
+    const mcpManifest = canonicalJsonFile(import_node_path8.default.join(installPath, ".mcp.json"));
+    const hooks = canonicalJsonFile(import_node_path8.default.join(installPath, "hooks", "hooks.json"));
     const manifest = jsonRecord(mcpManifest);
     const mcpServers = jsonRecord(manifest?.mcpServers);
     const identity = (0, import_node_crypto3.createHash)("sha256").update(JSON.stringify({
@@ -690,7 +905,7 @@ function installRuntimeSnapshot(installPath, version) {
 }
 function checkSidequestInstall(projectPath, opts = {}) {
   const claudeHome = claudeHomeDir(opts);
-  const registryPath = import_node_path7.default.join(claudeHome, "plugins", "installed_plugins.json");
+  const registryPath = import_node_path8.default.join(claudeHome, "plugins", "installed_plugins.json");
   let registry;
   try {
     registry = JSON.parse(readFileSyncWithRetry(registryPath, "utf8"));
@@ -742,8 +957,8 @@ function installRefusalMessage(check, projectPath) {
 }
 
 // src/hooks/force-exec-bypass.ts
-var { canonicalPath: canonicalPath3 } = require(import_node_path8.default.join(__dirname, "..", "lib", "worktrees.js"));
-var { isInScope: scopeMatch } = require(import_node_path8.default.join(__dirname, "..", "lib", "scope-match.js"));
+var { canonicalPath: canonicalPath3 } = require(import_node_path9.default.join(__dirname, "..", "lib", "worktrees.js"));
+var { isInScope: scopeMatch } = require(import_node_path9.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "Plan", "statusline-setup"]);
 var READ_ONLY_NATIVE_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "Plan", "claude-code-guide"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
@@ -807,7 +1022,7 @@ function helperModelDenyReason(type) {
 }
 function helperEvidenceRule(input) {
   const transcriptPath = stringField(input, "transcript_path", "transcriptPath").trim();
-  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path8.default.join(import_node_path8.default.dirname(transcriptPath), "subagents")] : [];
+  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path9.default.join(import_node_path9.default.dirname(transcriptPath), "subagents")] : [];
   const knownLocations = sessionPaths.length ? ` Current session self-reference locations: ${sessionPaths.join(", ")}.` : "";
   return "\n\nEvidence rule: quoted ticket strings appear in this session’s context and generated transcripts. A match in the parent or helper session transcript, subagent transcript, or task-output files is self-reference, not evidence: report it as such. Do not search session, transcript, or task-output directories for evidence. Cite only the directly reachable artifact under investigation; if it is outside the parent worktree or otherwise unavailable, report a visibility block rather than a finding." + knownLocations;
 }
@@ -1010,64 +1225,12 @@ function dispatchLaunches(prompt) {
 function toolInputOf(input) {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
-var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
-  "files",
-  "addFiles",
-  "removeFiles",
-  "status",
-  "readonly",
-  "readonlyOverride",
-  "workingTreeDelivery",
-  "externalDeliverable",
-  "verify",
-  "verifyKind",
-  "attestationArtifact",
-  "verifyCwd",
-  "admitComposition",
-  "executorVerify",
-  "executorVerifyKind",
-  "executorAttestationArtifact",
-  "executorVerifyCwd"
-]);
-var MAIN_THREAD_MUTATIONS = {
-  mcp__plugin_sidequest_board__dispatch: {
-    matches: (input) => Object.hasOwn(input, "workProvenance"),
-    denial: "sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing."
-  },
-  mcp__plugin_sidequest_board__update: {
-    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
-    denial: "sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread."
-  },
-  mcp__plugin_sidequest_board__scopeRequest: {
-    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
-    // already recorded, which is a live-claim mutation just like the update fields
-    // above. Without this, a subagent could pass by:'orchestrator' to mint the
-    // grant itself; the store's by-mismatch check only catches the claim holder's
-    // own by, not an impersonated one.
-    matches: (input) => input.grant === true,
-    denial: "sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread."
-  },
-  mcp__plugin_sidequest_board__remove: {
-    // force:true is the only path that deletes a live-claimed ticket, so it is the
-    // executor's escape hatch (delete the ticket to shed the claim). The store
-    // refuses ungranted live-claim deletion, but deny it here too so a subagent
-    // can never mint the main-thread grant by riding the MCP remove handler.
-    matches: (input) => input.force === true,
-    denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
-  },
-  mcp__plugin_sidequest_board__verdict: {
-    matches: (input) => ["correct", "finalize"].some((field) => Object.hasOwn(input, field)),
-    denial: "sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread."
-  }
-};
 function executorLiveClaimMutationRefusal(input) {
   if (!isSubagentCaller(input)) return false;
   const toolInput = toolInputOf(input);
-  if (!toolInput) return false;
-  const rule = MAIN_THREAD_MUTATIONS[stringField(input, "tool_name")];
-  if (!rule) return false;
-  if (!rule.matches(toolInput)) return false;
-  writeDeny("PreToolUse", rule.denial);
+  const denial = toolInput && mainThreadMutationDenial(stringField(input, "tool_name"), toolInput);
+  if (!denial) return false;
+  writeDeny("PreToolUse", denial);
   return true;
 }
 function dispatchAgentName(input) {
@@ -1391,7 +1554,7 @@ function writeTarget(input) {
   const raw = writeTargetValue(input);
   if (!raw) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
-  return import_node_path8.default.resolve(cwd, raw);
+  return import_node_path9.default.resolve(cwd, raw);
 }
 function restoresCommittedContent(input, target) {
   try {
@@ -1409,12 +1572,12 @@ function restoresCommittedContent(input, target) {
       return false;
     }
     const repository = canonicalPath3(execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd: import_node_path8.default.dirname(target),
+      cwd: import_node_path9.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
     }).trim());
-    const relative = import_node_path8.default.relative(repository, canonicalPath3(target)).replace(/\\/g, "/");
-    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path8.default.isAbsolute(relative)) return false;
+    const relative = import_node_path9.default.relative(repository, canonicalPath3(target)).replace(/\\/g, "/");
+    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path9.default.isAbsolute(relative)) return false;
     const committed = execFileSync("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
       windowsHide: true
@@ -1425,13 +1588,13 @@ function restoresCommittedContent(input, target) {
   }
 }
 function relativeInside(root, target) {
-  const relative = import_node_path8.default.relative(root, target).replace(/\\/g, "/");
-  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path8.default.isAbsolute(relative) ? relative : null;
+  const relative = import_node_path9.default.relative(root, target).replace(/\\/g, "/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path9.default.isAbsolute(relative) ? relative : null;
 }
 function linkedWorktreeRelative(target, projectPath) {
-  let existing = import_node_path8.default.dirname(target);
+  let existing = import_node_path9.default.dirname(target);
   while (!import_node_fs8.default.existsSync(existing)) {
-    const parent = import_node_path8.default.dirname(existing);
+    const parent = import_node_path9.default.dirname(existing);
     if (parent === existing) return null;
     existing = parent;
   }
@@ -1446,8 +1609,8 @@ function linkedWorktreeRelative(target, projectPath) {
       encoding: "utf8",
       windowsHide: true
     }).trim();
-    const common = canonicalPath3(import_node_path8.default.isAbsolute(commonOutput) ? commonOutput : import_node_path8.default.resolve(checkout, commonOutput));
-    if (common !== canonicalPath3(import_node_path8.default.join(projectPath, ".git"))) return null;
+    const common = canonicalPath3(import_node_path9.default.isAbsolute(commonOutput) ? commonOutput : import_node_path9.default.resolve(checkout, commonOutput));
+    if (common !== canonicalPath3(import_node_path9.default.join(projectPath, ".git"))) return null;
     return relativeInside(checkout, target);
   } catch (_) {
     return null;
@@ -1465,7 +1628,7 @@ function inScope(target, scope) {
   const canonicalTarget = canonicalPath3(target);
   const relative = projectRelative(canonicalTarget, canonicalPath3(scope.projectPath));
   if (relative != null) return scopeMatch(relative, scope.files);
-  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path8.default.isAbsolute(file)).map(canonicalPath3));
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path9.default.isAbsolute(file)).map(canonicalPath3));
 }
 function evidencePathRelation(target, scope) {
   const evidenceDirectory = canonicalPath3(scope.evidenceDirectory);
@@ -1478,8 +1641,8 @@ function evidenceTraversalAttempt(input, scope) {
   const rawTarget = writeTargetValue(input);
   if (!rawTarget) return false;
   const cwd = stringField(input, "cwd") || process.cwd();
-  const candidate = (import_node_path8.default.isAbsolute(rawTarget) ? rawTarget : import_node_path8.default.join(cwd, rawTarget)).replace(/\\/g, "/");
-  const evidenceDirectory = import_node_path8.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
+  const candidate = (import_node_path9.default.isAbsolute(rawTarget) ? rawTarget : import_node_path9.default.join(cwd, rawTarget)).replace(/\\/g, "/");
+  const evidenceDirectory = import_node_path9.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
   const comparableCandidate = process.platform === "win32" ? candidate.toLowerCase() : candidate;
   const comparableDirectory = process.platform === "win32" ? evidenceDirectory.toLowerCase() : evidenceDirectory;
   if (!comparableCandidate.startsWith(`${comparableDirectory}/`)) return false;
@@ -1493,10 +1656,10 @@ function denyEvidenceWrite(target) {
 }
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
-  const roots = [configuredRoot, import_node_path8.default.join(import_node_os5.default.tmpdir(), "claude")].filter((root) => Boolean(root));
+  const roots = [configuredRoot, import_node_path9.default.join(import_node_os5.default.tmpdir(), "claude")].filter((root) => Boolean(root));
   return roots.some((root) => {
-    const relative = import_node_path8.default.relative(import_node_path8.default.resolve(root), target);
-    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path8.default.sep}`) && !import_node_path8.default.isAbsolute(relative);
+    const relative = import_node_path9.default.relative(import_node_path9.default.resolve(root), target);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path9.default.sep}`) && !import_node_path9.default.isAbsolute(relative);
   });
 }
 function guardHelperWrite(input) {
@@ -1533,8 +1696,8 @@ function guardHelperWrite(input) {
 }
 function guardReadOnlyShell(input) {
   if (!isReadOnlyExecutor(stringField(input, "agent_type", "agentType"))) return;
-  const refusal = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ""), stringField(input, "cwd") || process.cwd());
-  if (refusal) writeDeny("PreToolUse", refusal);
+  const refusal2 = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ""), stringField(input, "cwd") || process.cwd());
+  if (refusal2) writeDeny("PreToolUse", refusal2);
 }
 function spawnPermissionFields(reducedAgentSchema, type) {
   return reducedAgentSchema || isReadOnlyExecutor(type) ? {} : { mode: "bypassPermissions" };
@@ -1569,7 +1732,13 @@ ${message.trim()}`
   } catch (_) {
   }
 }
-function nonAgentToolGuard(toolName) {
+function guardEvidenceTool(input) {
+  const scope = dispatchEvidenceScope(input);
+  const denial = evidenceToolDenial(stringField(input, "tool_name"), toolInputOf(input) || {}, stringField(input, "cwd") || process.cwd(), scope || {});
+  if (denial) writeDeny("PreToolUse", denial);
+}
+function nonAgentToolGuard(toolName, input) {
+  if (isEvidenceExecutor(stringField(input, "agent_type", "agentType"))) return guardEvidenceTool;
   if (toolName === "SendMessage") return guardLateSteer;
   if (WRITE_TOOLS.has(toolName)) return guardHelperWrite;
   if (SHELL_TOOLS.has(toolName)) return guardReadOnlyShell;
@@ -1578,7 +1747,7 @@ function nonAgentToolGuard(toolName) {
 function decidedBeforeAgentAdmission(input) {
   const toolName = stringField(input, "tool_name");
   if (guardTerminalExecutor(input) || guardOwnTicketDispatch(input) || executorLiveClaimMutationRefusal(input)) return true;
-  const toolGuard = nonAgentToolGuard(toolName);
+  const toolGuard = nonAgentToolGuard(toolName, input);
   if (toolGuard) toolGuard(input);
   return toolName !== "Agent";
 }
@@ -1636,11 +1805,56 @@ function refusedGenericAgent({ input, type, classification }) {
   writeDeny("PreToolUse", agentDenyReason(input, type, classification));
   return true;
 }
+var RESEARCH_KINDS = /* @__PURE__ */ new Set(["read_only_codex_dispatch", "read_only_claude_builtin"]);
+function categoryResearchSpawn(store, researchSpawnFor, category) {
+  const route = store.resolveCategoryRoute(category);
+  return route?.exec ? researchSpawnFor(route.exec, route.effort) : null;
+}
+function liveResearchSpawns(input) {
+  try {
+    const store = require(runtimeModule("store"));
+    const { researchSpawn } = require(runtimeModule("agentsync"));
+    const found = store.findProject(requestedProject(input));
+    if (!found.ok || !found.slug) return [];
+    return store.getCategories({ project: found.slug }).filter((category) => category.enabled).map((category) => categoryResearchSpawn(store, researchSpawn, category)).filter((spawn) => spawn !== null);
+  } catch (_) {
+    return [];
+  }
+}
+function matchingResearchSpawn({ input, toolInput, type }) {
+  const prompt = String(toolInput.prompt ?? "");
+  if (dispatchRouteMarkers(input).length !== 1) return void 0;
+  return liveResearchSpawns(input).find((spawn) => canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
+}
+function researchSpawnInput(toolInput, research) {
+  const updatedInput = { ...toolInput };
+  delete updatedInput.mode;
+  delete updatedInput.isolation;
+  delete updatedInput.model;
+  if (research.model) updatedInput.model = research.model;
+  return updatedInput;
+}
+function isResearchAttempt({ toolInput, classification }, dispatchValidation) {
+  return dispatchValidation.status === "none" && RESEARCH_KINDS.has(classification.kind) && String(toolInput.prompt ?? "").startsWith("[sidequest-route ");
+}
+function decidedResearchSpawn(request, dispatchValidation) {
+  if (!isResearchAttempt(request, dispatchValidation)) return false;
+  const research = matchingResearchSpawn(request);
+  if (!research) {
+    writeDeny("PreToolUse", `sidequest: ${request.type} research prompt does not open with the live research prefix of an enabled category route. Re-fetch route_recipe(category).research and spawn its subagentType, model and promptPrefix unchanged.`);
+    return true;
+  }
+  if (!refusedSubagentModelOverride()) writeToolUpdate(researchSpawnInput(request.toolInput, research));
+  return true;
+}
+function decidedBeforeExecutorLaunch(request, dispatchValidation) {
+  return decidedResearchSpawn(request, dispatchValidation) || refusedPreparedDispatch(request, dispatchValidation) || refusedGenericAgent(request) || refusedSubagentModelOverride();
+}
 function routedExecutorSpawn(request) {
   const admission = dispatchAdmission(request.input);
   if (refusedForMissingExecutorRoute(request.type, request.classification, admission)) return null;
   const dispatchValidation = preparedDispatchValidation(request.input);
-  if (refusedPreparedDispatch(request, dispatchValidation) || refusedGenericAgent(request) || refusedSubagentModelOverride()) return null;
+  if (decidedBeforeExecutorLaunch(request, dispatchValidation)) return null;
   return { ...request, admission, preparedSpawn: dispatchValidation.spawn };
 }
 function admittedExecutorSpawn(input) {
@@ -1760,6 +1974,7 @@ function main() {
 }
 try {
   main();
-} catch (_) {
-  process.exit(0);
+} catch (error) {
+  process.stderr.write(String(error));
+  process.exit(1);
 }

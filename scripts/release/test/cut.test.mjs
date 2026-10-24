@@ -356,6 +356,7 @@ test('a failed Test workflow refuses before suites or release mutations', async 
           plugin: 'sidequest',
           cwd: 'plugins/sidequest',
           setup: null,
+          shards: { windows: 3 },
           command: 'node --test --test-timeout=120000 "test/*.test.js"',
         }]);
         return assertParentCiPassed(repoRoot, commit, failedTestRun, suites);
@@ -551,4 +552,58 @@ test('a failing default suite writes its output and names the log', async (t) =>
   const match = failure.message.match(/log: (\.release.*\.log)/);
   assert.ok(match, `the failure names the suite log: ${failure.message}`);
   assert.equal(context.read(match[1]), 'suite stdoutsuite stderr');
+});
+
+
+test('published GitHub Releases emit fragment refs after confirmation; deferred releases emit nothing', async (t) => {
+  for (const status of ['published', 'deferred']) {
+    const context = setup(t);
+    context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch', extra: 'refs: https://github.com/owner/repo/issues/12' });
+    context.commit('integrate');
+    const events = [];
+    const result = await cut({
+      repoRoot: context.root,
+      git: { ...createGit({ cwd: context.root }), remoteUrl: () => 'git@github.com:owner/repo.git' },
+      push: true, directPublish: true, skipTests: true, log: () => {},
+      publishLock: { acquire: async () => ({ ok: true }), release: async () => ({ ok: true }) },
+      assertParentCiPassed: () => ({ conclusion: 'success' }),
+      assertGitHubReleasePublished: async () => { events.push('confirmed'); return { status, message: 'deferred' }; },
+      emitPublishedExternalRefUpdates: (root, tag, loadFragments) => {
+        assert.equal(root, context.root);
+        assert.equal(tag, 'v3.208.0');
+        assert.deepEqual(loadFragments()[0].refs, [{ key: 'GH-12', url: 'https://github.com/owner/repo/issues/12' }]);
+        events.push('emitted');
+      },
+    });
+    assert.equal(result.pushed, true);
+    assert.deepEqual(events, status === 'published' ? ['confirmed', 'emitted'] : ['confirmed']);
+  }
+});
+
+test('finalize recovers only consumed fragment refs from the immutable release history', async (t) => {
+  const { publicationFragments } = await import('../lib/external-refs.mjs');
+  const { finalize } = await import('../finalize.mjs');
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor', extra: 'refs: https://github.com/owner/repo/issues/12' });
+  context.commit('integrate');
+  const before = context.git('rev-parse', 'HEAD');
+  const result = await cut({ repoRoot: context.root, runSuite: context.runSuite, log: () => {} });
+  const fragments = publicationFragments(createGit({ cwd: context.root }), before, result.commit);
+  assert.deepEqual(fragments.map((fragment) => [fragment.ref, fragment.refs]), [['SQ-1', [{ key: 'GH-12', url: 'https://github.com/owner/repo/issues/12' }]]]);
+  const events = [];
+  await finalize({
+    repoRoot: context.root,
+    git: { ...createGit({ cwd: context.root }), remoteUrl: () => 'git@github.com:owner/repo.git', remoteBranchHead: () => result.commit },
+    push: true, log: () => {},
+    publishLock: { acquire: async () => ({ ok: true }), release: async () => ({ ok: true }) },
+    assertParentCiPassed: () => ({ conclusion: 'success' }),
+    assertGitHubReleasePublished: async () => { events.push('confirmed'); return { status: 'published' }; },
+    emitPublishedExternalRefUpdates: (root, tag, loadFragments) => {
+      assert.equal(root, context.root);
+      assert.equal(tag, result.plan.tag);
+      assert.deepEqual(loadFragments(), fragments);
+      events.push('emitted');
+    },
+  });
+  assert.deepEqual(events, ['confirmed', 'emitted']);
 });

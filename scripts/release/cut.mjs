@@ -5,6 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { applyChangelogs, readRepoChangelog, releasedFragmentFingerprints, REPO_CHANGELOG } from './lib/changelog.mjs';
+import { emitConfirmedReleaseExternalRefs } from './lib/external-refs.mjs';
 import { createGit } from './lib/git.mjs';
 import { fragmentFile, fragmentFingerprint, HOLD_FILE, isHeld, readFragments } from './lib/fragments.mjs';
 import { assertGitHubReleasePublished, assertParentCiPassed, isGitHubRemote } from './lib/github.mjs';
@@ -513,6 +514,7 @@ export async function cut(options = {}) {
             ?? ((repoRoot, tag, releaseCommit) => assertGitHubReleasePublished(repoRoot, tag, releaseCommit));
           githubRelease = await assertReleasePublished(repoRoot, plan.tag, commit);
           if (githubRelease.status === 'deferred') log(githubRelease.message);
+          emitConfirmedReleaseExternalRefs(githubRelease, repoRoot, plan.tag, () => plan.selected, log, options.emitPublishedExternalRefUpdates);
         }
         pushed = true;
         log(`published ${plan.tag} (${commit})`);

@@ -34,6 +34,8 @@ var import_node_fs = __toESM(require("node:fs"));
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
 var DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
@@ -49,6 +51,9 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
@@ -57,7 +62,14 @@ function discoveredModelEffort(name, prefix) {
   const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
   return name.startsWith(prefix) && isEffort(effort) ? effort : null;
 }
+function classifyEvidenceExecutor(name) {
+  if (name === EVIDENCE_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  const effort = name.slice(EVIDENCE_CLAUDE_PREFIX.length);
+  return name.startsWith(EVIDENCE_CLAUDE_PREFIX) && isEffort(effort) ? { kind: "read_only_claude_builtin", effort } : null;
+}
 function classifyDiscoveredModel(name) {
+  const evidence = classifyEvidenceExecutor(name);
+  if (evidence) return evidence;
   const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
   if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
   const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
@@ -66,6 +78,8 @@ function classifyDiscoveredModel(name) {
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -1027,7 +1041,7 @@ async function restartNoticeFor(data, primarySession) {
 }
 var ROUTED_GUIDANCE = {
   standingAuthorization: "A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation.\n",
-  boardAuthorization: "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it.",
+  boardAuthorization: "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Read-only investigations need no ticket: spawn route_recipe(category).research, not native Explore, so they are routed. Ask before work beyond the approved scope unless explicit standing permission covers it.",
   inlineBoundary: "",
   fanoutGuidance: ""
 };
@@ -1059,7 +1073,7 @@ ROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary
   emit(
     `=== sidequest (active) ===
 ${standingAuthorization}${recovery}
-ROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only for one still alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
+ROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only for one still alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
     restartNotice,
     initialUserMessage
   );

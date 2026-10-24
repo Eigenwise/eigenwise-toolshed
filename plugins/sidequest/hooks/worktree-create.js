@@ -34,6 +34,8 @@ var import_node_fs = __toESM(require("node:fs"));
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var EVIDENCE_CLAUDE_PREFIX = "sidequest-exec-evidence-";
+var EVIDENCE_DISPATCH_NAME = "sidequest-exec-dispatch-evidence";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 var DISPATCH_NAME = "sidequest-exec-dispatch";
@@ -41,12 +43,17 @@ var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
+function stableEvidenceClaudeName(effort) {
+  return `${EVIDENCE_CLAUDE_PREFIX}${effort}`;
+}
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
+  EVIDENCE_DISPATCH_NAME,
+  ...EFFORTS.map(stableEvidenceClaudeName),
   DIAGNOSTIC_PROBE_NAME,
   ...EFFORTS.map(stableClaudeName),
   ...EFFORTS.map(stableReadOnlyClaudeName)
@@ -341,11 +348,11 @@ function completeCreation(repository, sessionId, worktree, attempt) {
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree, attempt);
 }
-function recordProvisioned(repository, sessionId, worktree, attempt) {
+function recordProvisioned(repository, sessionId, worktree, attempt, evidence) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
-  return store.recordDispatchWorktreeProvisioned(project.slug, sessionId, worktree, attempt);
+  return store.recordDispatchWorktreeProvisioned(project.slug, sessionId, worktree, attempt, evidence);
 }
 function recordProvisioningFailure(repository, sessionId, worktree, failure, attempt) {
   const store = require(runtimeModule("store"));
@@ -383,6 +390,12 @@ function preparedWorktreeLease(binding, name) {
     liveness: { status: "live", evidence: `dispatch ${binding.ref} reserved this creation` },
     provisioning: "host"
   });
+}
+function declaredProvisioningFiles(repository, ref) {
+  const store = require(runtimeModule("store"));
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) throw new Error("dependency provisioning requires a registered project");
+  return store.getTicket(project.slug, ref)?.files || [];
 }
 function provisioningConfig(repository) {
   const store = require(runtimeModule("store"));
@@ -457,11 +470,14 @@ async function createWorktreeMain() {
       leaseKernel.createCheckoutInstanceMarker(identity2.gitDirectory);
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
       if (!completed.ok) throw new Error(recordingRefusal("completed creation", completed.reason, "completion binding is incomplete"));
+      const evidence = [];
       const provisioningFailure = await worktrees.provisionWorktree(
         boundCreation.repository,
         boundCreation.worktree,
         provisioningConfig(boundCreation.repository),
         {
+          declaredFiles: declaredProvisioningFiles(boundCreation.repository, boundCreation.ref),
+          evidence,
           setupTimeoutMs: worktreeSetupDeadlineMs(),
           onDependencyLink: (link) => {
             const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link, attempt);
@@ -469,7 +485,7 @@ async function createWorktreeMain() {
           }
         }
       );
-      const provisioned = recordProvisioned(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
+      const provisioned = recordProvisioned(boundCreation.repository, sessionId, boundCreation.worktree, attempt, evidence);
       if (!provisioned.ok) throw new Error(recordingRefusal("finished provisioning", provisioned.reason));
       if (provisioningFailure) {
         const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure, attempt);

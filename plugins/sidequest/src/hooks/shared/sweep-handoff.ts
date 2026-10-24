@@ -150,33 +150,48 @@ export function drainReport(cwd: string): string[] | null {
   }
 }
 
-// A SessionEnd sweep has no session left to tell, so it adds to whatever report the next start drains.
-export function appendReport(cwd: string, notices: string[]): void {
-  if (!notices.length) return;
-  writeReport(cwd, [...(drainReport(cwd) || []), ...notices]);
-}
-
 function sweepCwd(data: HookInput): string {
   return stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 
-// SessionEnd gets about 1.5 s whatever its declared timeout says, and an inline sweep was cancelled
-// on every exit that ran past it (SQ-51, GH-400). The worker owns the sweep and the session's
-// unregistration; the hook only starts it. False means nothing was started.
-export function detachSessionEndSweep(data: HookInput): boolean {
+const MAX_RECORDED_ENDED_SESSIONS = 20;
+
+export type SessionEndHandoff = Readonly<{ cwd: string; sessions: readonly string[]; recordedAt: string }>;
+
+function sessionEndHandoffFile(cwd: string): string {
+  return reportFile(cwd).replace(/\.json$/, '.session-end.json');
+}
+
+export function readSessionEndHandoff(cwd: string): SessionEndHandoff | null {
   try {
-    const child = spawn(process.execPath, [
-      path.join(pluginRoot(), 'hooks', 'sweep-worktrees.js'),
-      '--cwd', sweepCwd(data),
-      '--session', stringField(data, 'session_id', 'sessionId'),
-      '--mode', 'session-end',
-    ], { detached: true, stdio: 'ignore', windowsHide: true });
-    child.once('error', () => {});
-    child.unref();
-    return true;
+    const parsed = JSON.parse(fs.readFileSync(sessionEndHandoffFile(cwd), 'utf8')) as Partial<SessionEndHandoff>;
+    return { cwd: String(parsed.cwd || cwd), sessions: Array.isArray(parsed.sessions) ? parsed.sessions.map(String) : [], recordedAt: String(parsed.recordedAt || '') };
   } catch (_) {
-    return false;
+    return null;
   }
+}
+
+// SessionEnd gets about 1.5 s whatever its declared timeout says. Every sweep it started, inline or
+// detached, could be cancelled mid-write when the host exited, and a cancelled worker never
+// unregistered its session, so that tree stayed protected as live (SQ-51, GH-400, GH-439). SessionEnd
+// now only records that this project is owed a sweep; SessionStart maintenance runs it under its own
+// worker deadline and clears the record.
+export function recordSessionEndHandoff(data: HookInput): void {
+  const cwd = sweepCwd(data);
+  const ended = stringField(data, 'session_id', 'sessionId');
+  const sessions = [...(readSessionEndHandoff(cwd)?.sessions || []).filter((session) => session !== ended), ended];
+  try {
+    fs.mkdirSync(stateDirectory(), { recursive: true });
+    fs.writeFileSync(sessionEndHandoffFile(cwd), JSON.stringify({ cwd, sessions: sessions.slice(-MAX_RECORDED_ENDED_SESSIONS), recordedAt: new Date().toISOString() }));
+  } catch (_) {
+    // A lost record costs nothing: every SessionStart sweeps this project anyway.
+  }
+}
+
+export function clearSessionEndHandoff(cwd: string): void {
+  try {
+    fs.rmSync(sessionEndHandoffFile(cwd), { force: true });
+  } catch (_) {}
 }
 
 // Always runs the sweep in a detached child and waits only up to the deadline. The

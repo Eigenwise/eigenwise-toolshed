@@ -29,8 +29,6 @@ const worktreeLease = require('../lib/kernel/worktree.js');
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const GUARD_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
 const BIND_RUNTIME_IDENTITY = path.join(HOOKS, 'bind-runtime-identity.js');
-const GUARD_SHARED_CHECKOUT_GIT = path.join(HOOKS, 'guard-shared-checkout-git.js');
-const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 const FORCE_EXEC_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 
@@ -183,6 +181,84 @@ function writePayload(agentId: string, executor: string, sessionId: string, file
     tool_input: { file_path: filePath, old_string: 'a', new_string: 'b' },
   };
 }
+
+for (const [category, worktreeBase] of [
+  ['coding.normal', 'auto'],
+  ['codebase-exploration', 'auto'],
+  ['codebase-exploration', 'origin-main'],
+  ['codebase-exploration', 'local-main'],
+]) {
+test(`SQ-3834: ${category} explicit isolation uses develop with ${worktreeBase} and names its base`, () => {
+  const project = initRepo('sq-explicit-isolation-');
+  const git = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: project, encoding: 'utf8', windowsHide: true }).trim();
+  git(['checkout', '-b', 'develop']);
+  fs.writeFileSync(path.join(project, 'develop.txt'), 'integration tip\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'integration tip']);
+  const developTip = git(['rev-parse', 'HEAD']);
+  git(['checkout', '-b', 'feature', 'develop']);
+  fs.writeFileSync(path.join(project, 'feature.txt'), 'unrelated feature tip\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'unrelated feature tip']);
+  const registeredTip = git(['rev-parse', 'HEAD']);
+  git(['remote', 'add', 'origin', project]);
+  git(['update-ref', 'refs/remotes/origin/develop', developTip]);
+  git(['update-ref', 'refs/remotes/origin/main', registeredTip]);
+  fs.writeFileSync(path.join(project, 'README.md'), 'occupied checkout\n');
+  const projectSlug = store.ensureProject(project).slug;
+  store.setBoardConfig(projectSlug, { worktreeIsolation: false, worktreeBase, integrationBranch: 'develop', worktreeDependencyPaths: [] });
+  const ticket = store.createTicket(projectSlug, { title: 'explicit isolated checkout', category, files: ['README.md'] });
+  const sessionId = `explicit-isolation-${Date.now()}`;
+  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId, sharedTree: false });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false, 'explicit false overrides the shared board');
+  assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: 'explicit-isolation' }).ok, true);
+  const created = createWorktree(sessionId, 'explicit-isolation', project);
+  assert.equal(created.ok, true, created.output);
+  try {
+    assert.equal(store.getTicket(projectSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(created.output));
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.output, encoding: 'utf8', windowsHide: true }).trim(), developTip);
+    assert.equal(git(['rev-parse', 'HEAD']), registeredTip);
+    assert.equal(git(['branch', '--show-current']), 'feature');
+    assert.equal(fs.readFileSync(path.join(project, 'README.md'), 'utf8'), 'occupied checkout\n');
+    const baseLabel = `${developTip} (${worktreeBase === 'local-main' ? 'develop' : 'origin/develop'})`;
+    assert.equal(agentsync.ticketWorktreeBase(prepared.ticket), baseLabel);
+    const spawnBaseLabel = `${developTip.slice(0, 12)} (${worktreeBase === 'local-main' ? 'develop' : 'origin/develop'})`;
+    assert.ok(agentsync.renderDispatchStub(prepared.ticket, project).includes(`worktreeBase: ${spawnBaseLabel}`), 'spawn names the develop base');
+    assert.ok(agentsync.renderTicketBriefing(prepared.ticket, prepared.token, projectSlug, project).includes(`worktreeBase: ${baseLabel}`), 'briefing names the develop base');
+  } finally {
+    git(['worktree', 'remove', '--force', created.output]);
+  }
+});
+}
+
+test('SQ-3794: unavailable explicit isolation refuses before creating a token on either board default', () => {
+  for (const worktreeIsolation of [false, true]) {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-explicit-non-git-'));
+    const projectSlug = store.ensureProject(project).slug;
+    store.setBoardConfig(projectSlug, { worktreeIsolation });
+    const ticket = store.createTicket(projectSlug, { title: 'non-Git isolation refusal', category: 'codebase-exploration', files: ['README.md'] });
+    assert.throws(() => store.prepareDispatch(projectSlug, ticket.ref, { sharedTree: false }), /requires sharedTree:false isolation/);
+    const refused = store.getTicket(projectSlug, ticket.ref);
+    assert.equal(refused.dispatch, undefined, 'refusal leaves no dispatch or live token');
+    assert.equal(refused.claim, undefined, 'refusal leaves no claim');
+  }
+});
+
+test('SQ-3794: redispatch inherits explicit isolation until explicit shared clears it', () => {
+  const project = initRepo('sq-explicit-retry-');
+  const projectSlug = store.ensureProject(project).slug;
+  store.setBoardConfig(projectSlug, { worktreeIsolation: false });
+  const ticket = store.createTicket(projectSlug, { title: 'isolation retry', category: 'codebase-exploration', files: ['README.md'] });
+  const first = store.prepareDispatch(projectSlug, ticket.ref, { sharedTree: false });
+  assert.equal(first.ticket.dispatch.explicitIsolation, true);
+  const retried = store.prepareDispatch(projectSlug, ticket.ref, {});
+  assert.equal(retried.ticket.dispatch.sharedTree, false);
+  assert.equal(retried.ticket.dispatch.explicitIsolation, true);
+  const shared = store.prepareDispatch(projectSlug, ticket.ref, { sharedTree: true });
+  assert.equal(shared.ticket.dispatch.sharedTree, true);
+  assert.equal(shared.ticket.dispatch.explicitIsolation, false);
+  assert.equal(store.prepareDispatch(projectSlug, ticket.ref, {}).ticket.dispatch.sharedTree, true);
+});
 
 test('a write into the shared checkout is refused when the dispatch promised a worktree', () => {
   const agentId = 'a1isolated';
@@ -2435,32 +2511,11 @@ test('the dispatch briefing states the isolation contract and the resume trap', 
 
 
 
-test('an isolated executor can inspect but not mutate the shared checkout with git', () => {
-  const agentId = 'shared-git';
-  const { sessionId, executor } = dispatched(agentId);
-  const command = (value: string) => runHook(GUARD_SHARED_CHECKOUT_GIT, {
-    session_id: sessionId,
-    agent_id: agentId,
-    agent_type: executor,
-    cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`),
-    tool_name: 'Bash',
-    tool_input: { command: value },
-  });
-
-  assert.equal(command(`git -C "${PROJECT}" log --oneline`), null, 'read-only Git against the shared checkout stays available');
-  const denied = command(`git -C "${PROJECT}" reset --hard HEAD`);
-  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /mutating git command against the shared checkout/);
-  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Read-only git commands/);
-});
-
 // GH-422. Executors appended `; echo anc=$?` to the briefing's raw `git merge-base` check and the compound
 // command was refused. The briefing now prints a single `sync-check` command, and every Bash guard in this
 // plugin has to let each form of it through for an isolated executor, including one that names the shared
 // checkout as its --worktree.
 test('the sync-check commands the briefing prints pass every Bash guard for an isolated executor', () => {
-  const agentId = 'sync-check-guards';
-  const { sessionId, executor } = dispatched(agentId);
   const base = 'a'.repeat(40);
   const retained = 'c'.repeat(40);
   const briefingFor = (continuation: Record<string, unknown> | undefined) => agentsync.renderTicketBriefing({
@@ -2474,153 +2529,16 @@ test('the sync-check commands the briefing prints pass every Bash guard for an i
   ].flatMap((briefing: string) => [...briefing.matchAll(/`(node "[^"]*sidequest-launcher\.js" sync-check [^`]*)`/g)].map((match) => match[1]));
   assert.equal(commands.length, 3, 'one sync-check command per briefing variant');
 
-  const guards = ['guard-shared-checkout-git.js', 'guard-destructive-git.js', 'guard-shared-tree-commit.js', 'guard-home-delete.js', 'guard-heredoc-isolated.js', 'guard-bash-windows-paths.js', 'repeated-command-warn.js'];
+  const { bashWindowsPathVerdict, homeDeleteDenial } = require('../hooks/guards/text-guards.ts');
+  const { hasHereDoc } = require('../hooks/guards/context-guards.ts');
+  // The git guards act only on a git invocation or a destructive pattern, so a command with neither passes them.
+  const { destructiveMatch, gitInvocations } = require('../hooks/guards/git-command.ts');
   for (const command of commands) {
-    for (const guard of guards) {
-      const out = runHook(path.join(HOOKS, guard), {
-        session_id: sessionId,
-        agent_id: agentId,
-        agent_type: executor,
-        cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`),
-        tool_name: 'Bash',
-        tool_input: { command },
-      });
-      assert.equal(out?.hookSpecificOutput?.permissionDecision, undefined, `${guard} must not refuse: ${command}`);
-    }
-  }
-});
-
-test('an unrelated executor subagent does not inherit a session fallback claim', () => {
-  const activeAgentId = 'active-shared-git';
-  const { sessionId, executor } = dispatched(activeAgentId);
-  const integratorAgentId = 'integrator-subagent';
-
-  const command = (agentId: string) => runHook(GUARD_SHARED_CHECKOUT_GIT, {
-    session_id: sessionId,
-    agent_id: agentId,
-    agent_type: executor,
-    cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${activeAgentId}`),
-    tool_name: 'Bash',
-    tool_input: { command: `git -C "${PROJECT}" reset --hard HEAD` },
-  });
-
-  assert.equal(command(integratorAgentId), null, 'the integrator subagent retains shared-checkout access');
-  const denied = command(activeAgentId);
-  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny', 'a live isolated executor remains blocked');
-});
-
-test('a destructive git command is refused while the shared checkout carries uncommitted work', () => {
-  // Match CI's nested temp paths on every platform; the sq- prefix lets _temp-cleanup collect the parent.
-  const temporaryParent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sidequest-full-suite-')));
-  const repositoryPrefix = 'sq-destructive-repo-'.padEnd(94 - temporaryParent.length, '-');
-  const repo = initRepo(repositoryPrefix, temporaryParent);
-  assert.ok(repo.length >= 94, 'exercises at least the Windows CI shared-checkout path length');
-  store.ensureProject(repo);
-  const clean = runHook(GUARD_DESTRUCTIVE, {
-    cwd: repo,
-    tool_name: 'Bash',
-    tool_input: { command: 'git reset --hard origin/main' },
-  });
-  assert.equal(clean, null, 'a clean tree is not guarded');
-
-  fs.writeFileSync(path.join(repo, 'executor-work.txt'), 'nine files of finished work\n');
-  const out = runHook(GUARD_DESTRUCTIVE, {
-    cwd: repo,
-    tool_name: 'Bash',
-    tool_input: { command: 'git reset --hard origin/main' },
-  });
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  const reason = out.hookSpecificOutput.permissionDecisionReason;
-  assert.ok(reason.includes('executor-work.txt'), 'lists what would be destroyed');
-  assert.ok(reason.includes('git stash push -u -m "sidequest recovery"'), 'preserves the complete named-stash command');
-  assert.ok(reason.includes(`sidequest recover-shared --project "${worktrees.canonicalPath(repo)}" --stash <stash@{n}> --yes`), 'preserves the complete recovery command and project path');
-  assert.ok(reason.endsWith('That exact recovery action verifies the stash before it runs `git reset --hard && git clean -fd`.'), 'preserves the final stash-verification warning');
-  assert.ok(!reason.includes('content omitted'), `fits the PreToolUse budget untruncated at a ${repo.length}-character repo path`);
-  assert.ok(Buffer.byteLength(reason, 'utf8') <= 768, 'stays within the PreToolUse byte budget');
-
-  const narrow = runHook(GUARD_DESTRUCTIVE, {
-    cwd: repo,
-    tool_name: 'Bash',
-    tool_input: { command: 'git checkout -- README.md' },
-  });
-  assert.equal(narrow, null, 'discarding one named path stays allowed');
-
-  const elsewhere = runHook(GUARD_DESTRUCTIVE, {
-    cwd: os.tmpdir(),
-    tool_name: 'Bash',
-    tool_input: { command: `git -C "${repo.replace(/\\/g, '/')}" clean -fd` },
-  });
-  assert.equal(elsewhere.hookSpecificOutput.permissionDecision, 'deny', 'git -C targets the named repo');
-});
-
-test('destructive Git guard ignores heredoc prose but refuses executable publication commands', () => {
-  const repo = initRepo('sq-destructive-heredoc-');
-  const project = store.ensureProject(repo);
-  store.setBoardConfig(project.slug, { integrationBranch: 'dev' });
-  const payload = (command: string) => ({
-    cwd: repo,
-    session_id: 'other-session',
-    tool_name: 'Bash',
-    tool_input: { command },
-  });
-  const proseOnly = `git commit -F - <<'MESSAGE'\ngit push --force origin main\ngit reset --hard and rm -rf remain guarded in this security note\nMESSAGE`;
-  assert.equal(runHook(GUARD_DESTRUCTIVE, payload(proseOnly)), null, 'commit message prose is not shell code');
-
-  const executablePush = `git commit -F - <<'MESSAGE'\nsecurity note: git push --force remains guarded\nMESSAGE\ngit push --force origin HEAD:main`;
-  const out = runHook(GUARD_DESTRUCTIVE, payload(executablePush));
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /publish lock/);
-});
-
-test('published-branch pushes and manual tags need the current session publish lock', () => {
-  const repo = initRepo('sq-published-branch-');
-  const project = store.ensureProject(repo);
-  store.setBoardConfig(project.slug, { integrationBranch: 'dev' });
-  const sessionId = `release-owner-${Date.now()}`;
-  const payload = (command: string, tool_name: string = 'Bash', owner: string = 'other-session', cwd: string = repo) => ({
-    cwd,
-    session_id: owner,
-    tool_name,
-    tool_input: { command },
-  });
-  const denied = [
-    'git tag v3.208.0',
-    'git tag -a v3.208.0 -m release',
-    'git push origin main',
-    'git push origin HEAD:main',
-    'git push --force origin HEAD:main',
-    'git push origin +main',
-    'git push origin main:',
-    'git push upstream HEAD:main',
-    'git push origin --tags',
-    'git push origin dev --follow-tags',
-  ];
-  for (const command of denied) {
-    const out = runHook(GUARD_DESTRUCTIVE, payload(command, command.includes('HEAD:main') ? 'PowerShell' : 'Bash'));
-    assert.ok(out, command);
-    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', command);
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /local early warning/);
-  }
-  for (const command of ['git status', 'git fetch origin', 'git tag --list', 'git push origin dev', 'git push upstream HEAD:dev', 'echo "; git tag v3.208.0"']) {
-    assert.equal(runHook(GUARD_DESTRUCTIVE, payload(command)), null, command);
-  }
-
-  fs.writeFileSync(path.join(repo, '.git', 'sidequest-publish.lock'), JSON.stringify({
-    transient: true,
-    sessionId,
-    repo,
-    at: new Date().toISOString(),
-  }));
-  const other = initRepo('sq-published-branch-other-');
-  const crossRepo = runHook(GUARD_DESTRUCTIVE, payload(`git -C "${repo}" status; git -C "${other}" tag v3.208.0`, 'Bash', sessionId));
-  assert.equal(crossRepo.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(crossRepo.hookSpecificOutput.permissionDecisionReason, /entire shell invocation/);
-  for (const command of denied) {
-    assert.equal(runHook(GUARD_DESTRUCTIVE, payload(command, 'PowerShell', sessionId)), null, command);
-  }
-  if (process.platform === 'win32') {
-    const gitBashCwd = repo.replace(/^([a-zA-Z]):/, '/$1').replace(/\\/g, '/');
-    assert.equal(runHook(GUARD_DESTRUCTIVE, payload('git tag -d v3.208.0', 'Bash', sessionId, gitBashCwd)), null);
+    assert.equal(bashWindowsPathVerdict(command), null, `the Windows-path guard must not refuse: ${command}`);
+    assert.equal(homeDeleteDenial(command, { home: os.homedir(), windows: true }), null, `the home-delete guard must not refuse: ${command}`);
+    assert.equal(hasHereDoc(command), false, `the heredoc guard must not refuse: ${command}`);
+    assert.deepEqual(gitInvocations(command), [], `the git guards must not see a git invocation: ${command}`);
+    assert.equal(destructiveMatch(command), null, `the destructive git guard must not refuse: ${command}`);
   }
 });
 

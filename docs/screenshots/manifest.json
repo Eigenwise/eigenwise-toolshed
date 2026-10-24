@@ -1,5 +1,5 @@
 {
-  "viewport": "1400px wide; Sidequest light mode; Grafana dark mode",
+  "viewport": "1400px wide; Sidequest light mode; Observability board dark mode",
   "generatedBy": "npm run screenshots",
   "files": {
     "sidequest-kanban.png": "Synthetic three-project Sidequest board with 25 active tickets.",
@@ -12,9 +12,6 @@
     "sidequest-ticket-context.png": "Synthetic ticket context with labels, affected files, attachments, and comments.",
     "sidequest-stories.png": "Synthetic Sidequest story filter with primary stories.",
     "sidequest-second-project.png": "Synthetic Acme Fulfillment board with nine active tickets selected from the project rail.",
-    "observability-at-a-glance.png": "Synthetic Grafana At a glance row with spend, Codex routing, and tool failure panels.",
-    "observability-where-the-spend-goes.png": "Synthetic Grafana Where the spend goes row with model, project, and agent-role cost panels.",
-    "observability-failures-and-source-activity.png": "Synthetic Grafana Failures and source activity row with failure and source activity panels.",
-    "observability-context-recharge.png": "Synthetic Grafana Context recharge row with assistant-turn and tool-result byte panels."
+    "observability-board.png": "Synthetic Observability board in dark mode, rendered from fixture rows with made-up project and session names."
   }
 }

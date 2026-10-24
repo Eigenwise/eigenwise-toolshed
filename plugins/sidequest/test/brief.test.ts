@@ -40,7 +40,7 @@ const { callTool } = makeMcpCaller(mcp);
 // MCP/skill docs enumerate this list.
 const BRIEF_KEYS = [
   'ref', 'title', 'status', 'priority', 'complexity', 'categoryId', 'categoryName', 'route', 'effort',
-  'readonlyOverride', 'direct', 'claim', 'blockedBy', 'comments', 'checkpoint',
+  'readonlyOverride', 'direct', 'claim', 'blockedBy', 'comments', 'checkpoint', 'refs',
   'submission', // pending ready-for-integration submission (SQ-398): null until an executor submits
 ].sort();
 

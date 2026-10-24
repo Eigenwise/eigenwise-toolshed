@@ -14,6 +14,8 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
+const { referenceKeys } = require("../lib/external-refs");
+const { importGitHubIssue } = require("../lib/github-import");
 const { bodyFromOpts, fail, resolveProject } = require("./sidequest-cmd-shared");
 const PRIORITY_MARK = { urgent: "!!", high: "!", normal: "", low: "·" };
 function modelMark(t) {
@@ -110,6 +112,9 @@ function reviewTargetFromOpts(opts) {
   if (hasRevision && (!source || !value)) fail("--review-source and --review-revision must be provided together.");
   return { ref, ...hasCommit ? { commit } : { sourceRevision: { source, value } } };
 }
+function externalRefsFromOpts(opts) {
+  return opts.refs === void 0 ? {} : { refs: opts.refs };
+}
 function highStakesFromOpts(opts) {
   if (opts["high-stakes"] === void 0) return void 0;
   return String(opts["high-stakes"]).toLowerCase() !== "false";
@@ -138,6 +143,7 @@ async function addPreview(opts, category, complexity) {
     priority,
     highStakes: highStakesFromOpts(opts) || false,
     labels: opts.label || [],
+    refs: opts.refs,
     images: opts.image || [],
     files: opts.file ?? opts.files ?? [],
     contracts: contractsFromOpts(opts),
@@ -160,6 +166,7 @@ async function addPreview(opts, category, complexity) {
   };
 }
 async function cmdAdd(opts) {
+  Object.assign(opts, importGitHubIssue(opts.github));
   if (opts.priority === "medium") opts.priority = "normal";
   const input = validatedAddInput(opts);
   if (opts["dry-run"]) {
@@ -184,6 +191,7 @@ async function cmdAdd(opts) {
     status: opts.status,
     highStakes: highStakesFromOpts(opts),
     labels: opts.label,
+    refs: opts.refs,
     images: opts.image || [],
     files: opts.file ?? opts.files,
     contracts: contractsFromOpts(opts),
@@ -267,7 +275,7 @@ async function cmdList(opts) {
       const readonly = t.readonlyOverride === false ? "  readonly:false" : "";
       const oracle = store.oracleProjection(t);
       const awaitingOracle = oracle ? `  ${oracle.summary}` : "";
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${awaitingOracle}`);
+      console.log(`    ${t.ref}${pr}  ${t.title}  ${referenceKeys(t.externalRefs).join(", ")}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${awaitingOracle}`);
     }
   }
 }
@@ -315,6 +323,7 @@ async function cmdUpdate(opts, positional) {
   if (opts.status != null) patch.status = opts.status;
   if (opts.priority != null) patch.priority = opts.priority === "medium" ? "normal" : opts.priority;
   if (opts["high-stakes"] !== void 0) patch.highStakes = highStakesFromOpts(opts);
+  Object.assign(patch, externalRefsFromOpts(opts));
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
   Object.assign(patch, fileScopeFlagsPatch(opts));

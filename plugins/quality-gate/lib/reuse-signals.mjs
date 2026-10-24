@@ -40,8 +40,12 @@ function callerSignal(root, metric) {
   return sites.length ? [{ kind: 'callers-open', name: metric.name, file: metric.relativePath, line: metric.line, sites: sites.slice(0, 2).map(({ file, line }) => ({ file, line })) }] : [];
 }
 
+export function definitionInventory(root) {
+  return (tryGit(root, ['grep', '-nE', GREP_DEFINITIONS, 'HEAD', '--']) ?? '').split('\n').flatMap(sourceHit).flatMap(definition);
+}
+
 export function reuseSignals(root, changedMetrics, removedMetrics) {
-  const definitions = (tryGit(root, ['grep', '-nE', GREP_DEFINITIONS, 'HEAD', '--']) ?? '').split('\n').flatMap(sourceHit).flatMap(definition);
+  const definitions = definitionInventory(root);
   const duplicates = changedMetrics.filter((metric) => metric.classification === 'new').flatMap((metric) => duplicateSignal(metric, definitions));
   return duplicates.concat(removedMetrics.flatMap((metric) => callerSignal(root, metric)));
 }

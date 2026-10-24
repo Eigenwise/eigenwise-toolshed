@@ -1,57 +1,31 @@
 ---
 title: Observability
-description: See local Claude Code usage for the repositories you choose.
+description: Exact local Claude Code usage, with per-project opt-in.
 ---
 
-Observability records local Claude Code usage metadata such as token totals, tool activity, models, sessions, and estimated costs. The intended policy is per-repository opt-in. Shared service setup consent and project opt-in are separate decisions. The shared observer and Collector are machine-wide, while project settings decide which repository should participate.
+Observability is a local Claude Code hooks module. It records one metadata row per completed main-thread turn, including aborted, refused, and failed turns. Recording is off until you enable it in each project.
 
-The telemetry schema is designed to exclude prompt or response text, code or file contents, tool inputs or results, credentials, and environment values. Sink configuration and supplied exporter credentials are stored in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set. Repository opt-in is enforced on the local capture path and on the single export path. Hook capture is gated before the spool write, ingest is gated before persistence, and the observer's outbox is the only route by which a log record reaches a configured sink. Disabling a repository stops future capture and withholds still-queued rows from export while local history is preserved. Traces and metrics still reach a configured sink through the Collector without this gate.
+## Commands
 
-## Start here
+- `/observability:track on` enables recording for the current project.
+- `/observability:track off` stops future recording. Existing history stays on disk.
+- `/observability:track status` reports whether the current project records turns.
+- `/observability:board` rebuilds and opens the local board.
 
-1. Install the [Observability plugin](./setup/).
-2. From the repository you want to watch, run `/observability:enable-project-telemetry`.
-3. Give separate consent for the machine-shared observer and Collector, then opt this repository into the service.
-4. Choose local SQLite only, or explicitly request the Docker dashboard with `--dashboard`.
-5. Restart every Claude Code session already running in the affected repository directories. A plugin reload alone does not apply the new environment.
-6. Create fresh activity, then open the [dashboard](./dashboard/) and verify the result.
+Installing the plugin does not opt any project in.
 
-The skill handles the observer, dashboard setup, project wiring, and verification. Its project command writes the repository SHA-256 identity as `OTEL_RESOURCE_ATTRIBUTES` `project.id` and its sanitized basename as `project.name`, matching the local opt-in registry. Re-running it rewrites only that repository's env. It reports whether the local observer, Collector, downstream sink, and dashboard are healthy as separate planes. A linked worktree's hook events can resolve to the main repository identity, while native Claude Code metrics still require the exact session-start directory to be wired.
+## What the board shows
 
-## Daily use
+![Observability board in dark mode with cost, agent time, token and session tiles, quota gauges, and a per-project cost chart, rendered from synthetic fixture rows](../../assets/screenshots/observability-board.png)
 
-Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare usage across opted-in repositories or focus on one project. Use it to spot model and token use, API list-price-equivalent costs, tool activity, MCP activity, and failures. Estimated API-equivalent costs are not subscription charges. A model without a published API price appears in **Unpriced model token usage** with its resolved model name and token volume, while cost totals exclude it. See the [dashboard guide](./dashboard/) for the main views.
+The board shows cost, agent time, tokens, sessions, quota usage, project activity, model mix, tool calls and failures, ticket totals, session outcomes, and activity streaks. Filter by project, period, or session name. Cost uses the engine's own /cost figure, with per-turn differences from its session total. There are no price tables or estimates. Agent time sums turn durations; it can exceed elapsed wall time when sessions overlap.
 
-### Pricing and cost panels
+When Quality Gate is installed, sessions also show the latest test status (marked stale after edits) and maximum CC, with SPLIT in red for new or complexity-raised bodies at CC 6 or higher.
 
-The dashboard shows API list-price-equivalent estimates for models with a maintained public price map. Those figures are never actual subscription spend. The cache-read, cache-write, input, and output buckets follow the resolved model and provider's pricing semantics, so do not apply one provider's cache rules to another provider.
+## Local data and privacy
 
-GPT-6 Astra uses the maintained OpenAI model and pricing authorities, including the [OpenAI API pricing](https://openai.com/api/pricing/) page and the [GPT-6 Astra model page](https://developers.openai.com/api/docs/models/gpt-6-astra). Anthropic model rates come from the [Anthropic pricing documentation](https://platform.claude.com/docs/en/pricing). The dashboard selects a public-price tier per request where the authority defines one. Unknown, virtual, or otherwise unpriced models remain visible in **Unpriced model token usage** with token volumes and no invented USD total.
+The Claude config directory is `CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude` (`%USERPROFILE%\.claude` on Windows). Ledgers live at `<claude config dir>/observability/ledger/<project-slug>.jsonl`. The slug is the project root's basename (characters outside letters, digits, underscore, dot, and hyphen replaced by underscores) followed by a six-character hash of the full path, so two projects with the same folder name keep separate ledgers. The generated board is `<claude config dir>/observability/board.html`.
 
-**Work routed to Codex** is the API-equivalent cost for resolved Codex gateway requests divided by total priced API-equivalent cost in the selected time range. It is not a token percentage, and it excludes unpriced usage from both the priced numerator and denominator. The dashboard's displayed cost uses the same maintained price map and selected time range. Neither measure reports what a subscription provider will charge.
+Metadata includes project names, session identifiers and titles (or the first prompt line, up to 60 characters), model names, token counts, exact engine cost, timing, tool names and counts, agent types, context usage, quota usage, compaction, outcomes, and a ticket identifier when present. Full prompts, responses, code, tool inputs and results, credentials, and environment values are not recorded. Session names can contain sensitive text, so treat the ledger and board as private files.
 
-To check setup or disable telemetry, run the same skill and describe what you want. Claude reports whether a project is sending data and tells you when a restart or more activity is needed.
-
-## Health and statusline signals
-
-The observer's `GET /health` endpoint returns `200` when it is healthy and `503` when it has a health failure. For an enabled outbox, `outbox_stalled` means records are pending but the sender's last attempt is older than its retry interval. `outbox_not_draining` means the oldest pending record has been waiting more than 120 seconds. The codes distinguish a sender that stopped attempting from a backlog that is aging while still pending.
-
-When the observer reports an unhealthy response, the status line appends a compact `obs: <error>` badge, such as `obs: outbox_not_draining`. A healthy observer, or an observer that cannot be reached, adds no badge.
-
-## Storage pressure
-
-The local observer keeps a 128 MiB writable reserve below its 4 GiB database limit. Its normal retention window is 30 days. It removes data past that window first, then removes the oldest whole days inside the window when pressure remains, so pressure can prune data earlier than 30 days. Health reports the pressure state, action, remaining headroom, and exact removed windows and row counts.
-
-Freed SQLite pages stay available to new telemetry. The managed observer does not need a full `VACUUM`; the standalone retention command checks filesystem space before any blocking file-space reclaim. Retention pruning and user-requested deletion of local history are separate actions. If no removable data restores the reserve, health reports `storage_headroom_unrecoverable` while committed ingestion keeps its normal acknowledgement.
-
-## If the dashboard is empty
-
-Tell Claude:
-
-> My Observability dashboard is empty. Check the project setup and tell me what to fix.
-
-Existing sessions need a restart after opt-in, and that restart must happen before creating activity or running verification. A project also needs fresh Claude Code activity before its panels appear. A dashboard outage does not stop local observer ingestion. The outbox retries a failed delivery up to eight times. If rows become exhausted, ask Claude to show the pre-action `pending_count` and `exhausted_count` plus health, get approval for the explicit requeue action, then report the post-action counts and health. `POST /v1/outbox/requeue` resets every exhausted row in the shared local outbox, not just one project's rows, so do not describe it as project-scoped recovery.
-
-If a generated dashboard is stale, reset it with `--reset-dashboards`, create fresh activity, and run setup or let SessionStart reprovision the current definitions. Fully reload the Grafana browser tab after reprovisioning. Grafana Refresh reruns queries already loaded in the page and does not replace stale dashboard definitions. Verify the project after fresh activity and report `found` or `not-found` as returned. Do not claim telemetry is flowing before the verifier says `found`. If the local service is unavailable, ask Claude to diagnose the observer, Collector, downstream sink, and dashboard separately. The observer health response includes hook-spool failures, the last error, and any quarantined poison file.
-
-See the generated [Observability reference](../reference/observability/) for the agent-facing setup and command contract.
+Nothing leaves the machine. The board is a self-contained local HTML file with no server, network requests, or remote sinks. Turning tracking off keeps existing files; deleting history is a separate manual file deletion.

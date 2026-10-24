@@ -70,8 +70,9 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are unattended workers;
   omitting bypass sends their ordinary Bash approvals into the lead session. Never spawn a
   Claude-route executor without `model:` — an omitted model inherits the session model (usually the
-  priciest route), silently defeating routing. The bundled PreToolUse hook injects or blocks as a
-  backstop, but the spawn call must carry it.
+  priciest route), silently defeating routing. The guards hooks module injects or blocks as a
+  backstop, running one admission decision process per Agent spawn and refusing the spawn when that
+  decision cannot run, but the spawn call must carry it.
 - **Codex routes (`exec.model` null):** spawn the EXACT shared dispatch executor the dispatch returned as
   `spawn.subagent_type` (`sidequest-exec-dispatch`, or `sidequest-exec-dispatch-readonly` for a readonly
   category; both are effort-collapsed) with `mode: "bypassPermissions"`, a unique
@@ -97,8 +98,12 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
 - **Haiku routes:** spawn the stable executor returned in `exec.agent` with
   `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`, like every other Claude
   route. A plain generic Agent is denied by the Sidequest gate.
-- Worktree isolation: tickets with declared files carry `isolation: "worktree"` in `spawn`; pass it
-  unchanged. `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
+- Worktree isolation defaults on; pass `spawn.isolation` unchanged. A board with
+  `worktreeIsolation:false` defaults to shared execution. `--no-shared-tree` / `{sharedTree:false}`
+  overrides that default and refuses before issuing a token if isolation is unavailable. Redispatch
+  inherits the explicit isolation request until `--shared-tree` / `{sharedTree:true}` clears it.
+  An isolated dispatch record also controls close-time cleanup, regardless of the board default.
+  `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
   on uncommitted local state, and its reason belongs in a ticket comment before spawning. A bounded
   documentation artifact may close with `done` only when its category has a structured `artifactRoots`
   capability, its one declared scope is under an approved root, it was dispatched with shared-tree enabled,

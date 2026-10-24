@@ -1,9 +1,11 @@
 "use strict";
+const { referenceHeader } = require("./external-refs");
+"use strict";
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
+const { EVIDENCE_DISPATCH_NAME, stableEvidenceClaudeName, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -66,6 +68,20 @@ function recipeAgentWiring(exec, effort) {
   }
   return { agent: { model: exec.model, promptPrefix: "" }, effortCarrier: "none" };
 }
+const RESEARCH_RUN_LINE = "Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.";
+function researchSpawn(exec, effort) {
+  if (exec.backend === "codex") {
+    return { subagentType: bundledAgentType(stableReadOnlyDispatchName()), promptPrefix: `${routeMarker(exec.dispatchModel, effort)}
+${RESEARCH_RUN_LINE}
+
+` };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) return null;
+  return { subagentType: bundledAgentType(stableReadOnlyClaudeName(effort)), model: exec.model, promptPrefix: `${routeMarker(exec.model, effort)}
+${RESEARCH_RUN_LINE}
+
+` };
+}
 function workflowRecipe(category, resolved) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error("A resolved category route is required.");
@@ -77,6 +93,7 @@ function workflowRecipe(category, resolved) {
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
     ...recipeAgentWiring(exec, resolved.effort),
+    research: researchSpawn(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : []
   };
 }
@@ -97,11 +114,11 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
   const extra = Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [];
   return {
     tools: null,
-    disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra])]
+    disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra.filter((tool) => !tool.startsWith("mcp__plugin_sidequest_board"))])]
   };
 }
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** MCP read tools are allowed; MCP write tools are refused by name. board_config readOnlyDeniedTools replaces the whole default deny list, rather than extending it. Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 function scratchWorktreeNote() {
   return "\n\n**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.";
@@ -154,6 +171,11 @@ function renderDispatchAgent(_effort) {
 function withoutPermissionMode(source) {
   return source.replace(/^permissionMode: bypassPermissions\n/m, "");
 }
+function researchRunNote() {
+  return `
+
+**Research runs:** A prompt whose second line is \`${RESEARCH_RUN_LINE}\` has no ticket. Skip the briefing FIRST action, the claim, comments and every other ticket lifecycle step. Investigate read-only and answer with your findings as your final message.`;
+}
 function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return withoutPermissionMode(collapseEffortProse(renderExecAgent({
@@ -161,7 +183,7 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
     effort: "high",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: `${dispatchNote()}${readOnlyNote()}`,
+    extraNote: `${dispatchNote()}${readOnlyNote()}${researchRunNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
   })));
@@ -172,9 +194,21 @@ function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
-    extraNote: readOnlyNote(),
+    extraNote: `${readOnlyNote()}${researchRunNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
+  }));
+}
+function renderEvidenceAgent(effort, dispatch = false) {
+  const denied = [...READ_ONLY_DENIED_TOOLS.filter((tool) => tool !== "Edit" && tool !== "Write"), "mcp__plugin_sidequest_board__commit", "mcp__plugin_sidequest_board__submit", "mcp__plugin_sidequest_board__integrate"];
+  return withoutPermissionMode(renderExecAgent({
+    name: dispatch ? EVIDENCE_DISPATCH_NAME : stableEvidenceClaudeName(effort),
+    effort,
+    modelId: dispatch ? DISPATCH_MODEL_ID : void 0,
+    marker: MARKER,
+    extraNote: "\n\n**Evidence role:** Write and Edit are available only under the dispatch evidenceWriteRoots. Repository writes, coding submissions, commits, NotebookEdit and delegation are forbidden. Save evidence incrementally and checkpoint with a cursor before budget. Close with done naming root-relative saved paths, or explicitly say nothing was saved. Report once through the board." + researchRunNote(),
+    tools: null,
+    disallowedTools: denied
   }));
 }
 function implementationExecutorSources() {
@@ -191,6 +225,8 @@ function implementationExecutorSources() {
 }
 function bundledExecutorSources(readOnlyDeniedTools) {
   const sources = implementationExecutorSources();
+  sources.set(`${EVIDENCE_DISPATCH_NAME}.md`, collapseEffortProse(renderEvidenceAgent("high", true)));
+  for (const effort of EXEC_EFFORTS) sources.set(`${stableEvidenceClaudeName(effort)}.md`, renderEvidenceAgent(effort));
   sources.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
   sources.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
@@ -316,6 +352,10 @@ function ticketRouteMarker(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   return resolved && resolved.backend === "codex" && resolved.dispatchModel ? routeMarker(resolved.dispatchModel, ticket.effort, ticket.ref) : null;
 }
+function readOnlyCloseout(ticket, model, effort) {
+  if (ticket.dispatch.evidenceMode) return `Closeout: this evidence dispatch closes with done --model ${model} --effort ${effort}. Name each saved evidence file relative to its admitted root, or explicitly say "nothing was saved". Do not commit, submit or integrate. Report once through the done comment, then stop.`;
+  return `Closeout: this prepared dispatch is read-only. MCP read tools are allowed; MCP write tools are refused by name (board_config readOnlyDeniedTools replaces the default list). Close with done --model ${model} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
+}
 function ticketCloseout(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
@@ -332,7 +372,7 @@ function ticketCloseout(ticket) {
     return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Closeout attributes only your declared paths and your own release fragment. Outside-scope dirty paths are recorded on completion and returned as ignoredDirtyPaths, never a scope refusal. Eligible completed sibling candidate drift is recorded and returned as a warning naming the sibling, without refusing your closeout. Preserve other work and report drift to the existing parent for verification or grooming; never revert, absorb, or commit it. Your own committed paths, empty deliverable, or failed candidate verification still refuse. Do not commit or submit. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
   }
   if (ticket?.dispatch?.readonly === true) {
-    return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
+    return readOnlyCloseout(ticket, resolved.runsModel, effort);
   }
   const externalDeliverableRequirement = ticket.dispatch?.verificationRequirement || {};
   const externalDeliverableVerify = externalDeliverableRequirement.command ? "the pinned verify-capture wrapper records the current dispatch attempt and revision" : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || "custom"} requirement is supplied`;
@@ -365,6 +405,14 @@ function resumedCheckpointEvidence(continuation) {
     "Verification log: " + (logPath || "not recorded"),
     "Handback reason: " + (continuation.releaseReason || "not recorded")
   ];
+}
+function checkpointContinuationPacket(ticket) {
+  const checkpoint = ticket.checkpoint;
+  if (!checkpoint) return ticketContinuationPacket(ticket);
+  const lines = [];
+  if (checkpoint.cursor !== void 0) lines.push(`Cursor: ${checkpoint.cursor}`);
+  if (checkpoint.evidence !== void 0) lines.push(`Evidence: ${checkpoint.evidence.join(", ")}`);
+  return [...lines, ticketContinuationPacket(ticket)].filter(Boolean).join("\n") || null;
 }
 function ticketContinuationPacket(ticket) {
   const continuation = ticket?.dispatch?.continuation;
@@ -406,10 +454,28 @@ function ticketContinuationPacket(ticket) {
   if (continuation && !resume.allowed) return `Continuation fallback: the retained worktree lease refused resume (${resume.reason}). This dispatch uses a fresh worktree.`;
   const fallback = ticket?.dispatch?.continuationFallback;
   if (!fallback?.reason) return null;
-  const replay = Array.isArray(fallback.commits) && fallback.commits.length ? ` After claiming and before any other work, run \`git cherry-pick ${fallback.commits.join(" ")}\`. If the cherry-pick fails, stop and report the failure. Do not rediscover or rewrite the checkpointed work.` : "";
+  const replay = fallback.commit ? ` After claiming and synchronizing the dispatch baseline, run \`git merge --no-ff ${fallback.commit}\`. If the merge fails, stop and report the failure. Preserve inherited commit identities; do not rewrite the checkpointed work.` : "";
   const cause = String(fallback.cause || "").trim();
   const evidence = cause ? ` Validation evidence: ${cause}.` : "";
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, " ")}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ""}${evidence}${replay}`.trim();
+}
+function ownPinnedCandidate(project, ref) {
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", `refs/sidequest/${ref}^{commit}`], { cwd: project, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch {
+    return null;
+  }
+}
+function candidateRestorePacket(ticket, slug, project) {
+  if (ticket.dispatch?.continuation) return "";
+  const related = (ticket.links || []).filter((link) => link.type === "related").map((link) => store.getTicket(slug, link.ref)?.submission?.commit).filter(Boolean);
+  const candidates = [...new Set([...related, ownPinnedCandidate(project, ticket.ref)].filter(Boolean))];
+  if (!candidates.length) return "";
+  return [
+    "Inherited candidate restore (first step after claiming and synchronizing the dispatch baseline):",
+    ...candidates.map((candidate) => `Run \`git merge --no-ff ${candidate}\`. If it fails, stop and report the failure. Preserve the inherited commits as ancestors.`),
+    `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`
+  ].join("\n");
 }
 const syncCheckRun = (commit, flags = "") => syncCheckCommand(quotedShellArgument(dispatchLauncherPath()), commit, flags);
 const retainedCandidateStep = (commit, retainedCommit) => retainedSyncCheckStep(quotedShellArgument(dispatchLauncherPath()), commit, retainedCommit);
@@ -578,10 +644,16 @@ function capturedVerifyCommand(verify, ticketRef, project, boundWorktree) {
   const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : "";
   return `node "${captureScript}"${commandSource}${worktree}`;
 }
+function evidenceGuidanceText(dispatch, directory) {
+  if (dispatch.evidenceMode === true) return `Evidence write roots (repository paths remain forbidden):
+${dispatch.evidenceWriteRoots.map((root) => "- " + root).join("\n")}
+Save incrementally. Customer documents stay under the investigation data root. Close with done naming root-relative evidence paths, or say "nothing was saved".`;
+  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery; the active owner and its admitted helpers can write it without a scope request. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
+}
 function ticketEvidenceGuidance(ticket) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || "").trim();
   if (!directory) return null;
-  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery; the active owner and its admitted helpers can write it without a scope request. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
+  return evidenceGuidanceText(ticket.dispatch, directory);
 }
 function dispatchUncertaintyPacket(ticket, slug) {
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
@@ -686,6 +758,14 @@ function highStakesVerificationGuidance(highStakes) {
 function executorVerificationDirectoryGuidance(directory) {
   return directory ? `verifyCwd: the wrapper runs it from ${directory}, relative to the checkout root; the integrate gate does the same.` : "";
 }
+function deferredDependencySetup(ticket) {
+  const commands = (ticket.dispatch?.worktreeProvisioningEvidence || []).flatMap((evidence) => {
+    const deferred = /^plugins\/[A-Za-z0-9_-]+: install deferred \((npm ci --prefix plugins\/[A-Za-z0-9_-]+ --ignore-scripts --no-audit --no-fund)\)$/.exec(evidence);
+    return deferred ? [deferred[1]] : [];
+  });
+  return commands.length ? `First step after claiming and confirming the worktree: run these deferred dependency installs in the worktree before any tests or source work:
+${commands.map((command) => `\`${command}\``).join("\n")}` : "";
+}
 function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
@@ -708,9 +788,14 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     "Claim first with this exact call. Do not pass direct or replace the prepared executor:",
     ["```javascript", claimCall, "```"].join("\n"),
     worktreeIdentity,
+    deferredDependencySetup(ticket),
+    formatWorktreeBase(ticketWorktreeBase(ticket)),
     readOnlyScratchSpace,
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join("\n\n"),
+    `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`,
+    "Verification concurrency: bounded runs need no resource slot unless board configuration declares one; the board grants any declared slot, never a chat handoff.",
+    "When isolated worktrees cannot import the coverage gate, the orchestrator captures coverage in the main checkout. Report that standing measurement boundary without retrying the import.",
     verify,
     executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
     requirement.environment === "shared" ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log." : verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
@@ -804,11 +889,16 @@ function ticketReleaseFragmentScope(ticket) {
 Implicit release fragment (write only this ticket's):
 - ${fragment}` : "";
 }
+function ticketAnchorsPacket(ticket) {
+  return ticket.executorAnchors ? [`Anchors:
+${ticket.executorAnchors}`] : [];
+}
 function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation) {
   return [
     "## This ticket",
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || "(Untitled ticket)"}`,
+    ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || "(No additional description was recorded.)"}`,
     "Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.",
@@ -827,6 +917,7 @@ ${findingCheckpoints}`] : [],
 ${experimentLog}`] : [],
     `Declared files:
 ${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
+    ...ticketAnchorsPacket(ticket),
     ...planDocument ? [planDocument] : [],
     "Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle. A user is not a board fallback: when no board path remains, comment the evidence and release with kind `technical_blocker`; never compose a command for a human to run.\n\nScope check: request scope when a needed path is outside the declared set. A granted ruling takes effect immediately for write enforcement and commit admission. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants, and globs match paths consistently at the hook and commit gate. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix."
   ].join("\n\n");
@@ -853,6 +944,26 @@ function taskAndScopeBody(ticket, slug) {
   const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket));
 }
+function parentEvidenceLine(parent) {
+  if (parent.status !== "done") return "- " + parent.ref + ": pending (" + parent.status + ")";
+  const directory = parent.dispatch?.evidenceDirectory;
+  if (!directory) return "- " + parent.ref + ": done (no evidence directory recorded)";
+  const completion = parent.comments.find((comment) => comment.id === parent.completion?.commentId);
+  const firstLine = completion ? completion.body.split(/\r?\n/, 1)[0] : "(No done comment recorded.)";
+  return "- " + parent.ref + ": " + path.resolve(directory) + "\n  " + firstLine;
+}
+function parentEvidencePacket(links = [], slug) {
+  const parents = links.filter((link) => link.type === "blocked-by").map((link) => store.getTicket(slug, link.ref)).filter(Boolean);
+  return parents.length ? "Parent evidence:\n" + parents.map(parentEvidenceLine).join("\n") : "";
+}
+function storyEvidencePacket(storyId, slug) {
+  if (!storyId || !slug) return "";
+  const story = store.getStory(slug, storyId);
+  if (!story) return "";
+  const directory = store.ticketEvidenceDirectory(slug, story.ref, store.readMeta(slug).path);
+  if (!fs.existsSync(directory)) return "";
+  return "Story evidence root: " + directory + "\nRead " + path.join(directory, "manifest.sha256.json") + " before saving a file, then append {sha256, path, source, savedBy}; synthesis uses this manifest as the dedupe authority.";
+}
 function executorHandlesBody(ticket, slug) {
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
   return [
@@ -863,6 +974,8 @@ ${ticketContractsPacket(ticket)}`,
 ${ticketReadinessContractPacket(ticket, slug)}`,
     `Dependencies:
 ${links}`,
+    parentEvidencePacket(ticket.links, slug),
+    storyEvidencePacket(ticket.storyId, slug),
     `Attachments (inspect every readable attachment before implementation):
 ${ticketAssetsPacket(ticket, slug)}`
   ].join("\n\n");
@@ -889,7 +1002,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const planDocument = planDocumentPacket(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
-  const continuation = ticketContinuationPacket(ticket);
+  const continuation = [checkpointContinuationPacket(ticket), candidateRestorePacket(ticket, slug, project)].filter(Boolean).join("\n\n");
   const taskAndScope = taskAndScopeBody(ticket, slug);
   const rejectionHistory = rejectedSubmissionHistoryBody(ticket);
   const snapshot = storySnapshot(ticket, slug);
@@ -1017,20 +1130,15 @@ function transportExecutorBriefing(briefing, ticket, slug, projectPath) {
     `Before acting, Read "${briefingPath}" in full. It contains the exact claim call, worktree contract, complete task and scope, comments, and verification instructions.`
   ].join("\n");
 }
-function dispatchTicketContext(ticket, projectPath) {
-  const title = String(ticket?.title || "(Untitled ticket)");
-  const description = String(ticket?.description || "(No additional description was recorded.)");
-  const declaredFiles = Array.isArray(ticket?.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
-  const anchors = String(ticket?.executorAnchors || "(No anchors were recorded.)");
-  return [
-    `Title: ${title}`,
-    `Description:
-${description}`,
-    `Declared files:
-${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
-    `Anchors:
-${anchors}`
-  ].join("\n\n");
+function ticketWorktreeBase(ticket, commitLength = 40) {
+  const dispatch = ticket.dispatch;
+  const target = dispatch?.integrationTarget;
+  if (dispatch?.sharedTree !== false || !target) return null;
+  const branch = target.mode === "remote" ? `origin/${target.branch}` : target.branch;
+  return `${String(dispatch.baseCommit).slice(0, commitLength)} (${dispatch.reviewTarget ? "review candidate" : branch})`;
+}
+function formatWorktreeBase(base) {
+  return base ? `worktreeBase: ${base}` : "";
 }
 function renderDispatchStub(ticket, projectPath) {
   const project = String(projectPath || "").trim();
@@ -1051,9 +1159,7 @@ function renderDispatchStub(ticket, projectPath) {
   const label = String(ticket?.dispatch?.description || spawnDescription(ticket, store.resolveExec(ticket?.model, ticket?.effort))).replace(EMBEDDED_ROUTE_MARKER_RE, " ").replace(/\s+/g, " ").trim() || "Sidequest ticket executor.";
   return [
     label,
-    "Implementation context:",
-    dispatchTicketContext(ticket, project),
-    "",
+    formatWorktreeBase(ticketWorktreeBase(ticket, 12)),
     "Use the dispatched token file path exactly.",
     `FIRST action: run \`${command}\` and execute exactly what it prints.`,
     ...marker ? ["", marker] : []
@@ -1393,6 +1499,7 @@ module.exports = {
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
+  researchSpawn,
   workflowRecipe,
   renderDispatchAgent,
   renderReadOnlyDispatchAgent,
@@ -1410,6 +1517,7 @@ module.exports = {
   nativeAgentSource,
   withProjectIdentity,
   renderDispatchStub,
+  ticketWorktreeBase,
   ensureDispatchLauncher,
   agentSpawn,
   spawnDescription,

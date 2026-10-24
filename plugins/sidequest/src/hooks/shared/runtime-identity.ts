@@ -61,6 +61,17 @@ export function dispatchEvidenceDirectory(found: IsolationExpectation | null): s
   }
 }
 
+export function dispatchEvidenceScope(input: HookInput) {
+  const found = isolationExpectation(input, stringField(input, 'agent_id', 'agentId'), stringField(input, 'agent_type', 'agentType'), true, stringField(input, 'cwd'));
+  if (!found?.claimHeld || found.terminal) return null;
+  const store = require(runtimeModule('store')) as { getTicket: (project: string, ref: string) => { dispatch?: { evidenceMode?: boolean; evidenceWriteRoots?: string[]; evidenceRepositoryRoot?: string } } | null };
+  try {
+    return store.getTicket(found.project, found.ref)?.dispatch ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function executorAgent(type: string): boolean {
   if (!type) return false;
   try {

@@ -219,22 +219,12 @@ test('fresh-process hook latency reports benchmark measurements', (context: any)
     agent_id: 'perf-stop-id',
     agent_name: 'perf-stop-agent',
   }));
-  const inlineWork = measure(() => runHook('inline-work-nudge.js', {
-    tool_name: 'Read',
-    session_id: 'perf-guard',
-    agent_id: 'executor',
-  }));
-  const guardsSerial = measure(() => {
-    runHook('inline-work-nudge.js', { tool_name: 'Read', session_id: 'perf-guard', agent_id: 'executor' });
-  });
 
   for (const [name, measured] of [
     ['SessionStart', sessionStart],
     ['board-first', boardFirst],
     ['SubagentStart', subagentStart],
     ['SubagentStop', subagentStop],
-    ['inline-work-nudge', inlineWork],
-    ['common guards serial', guardsSerial],
   ] as const) {
     context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95; control ${measured.control.median.toFixed(1)}ms median, ${measured.control.p95.toFixed(1)}ms p95`);
   }

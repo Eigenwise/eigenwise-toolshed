@@ -1,3 +1,4 @@
+const { referenceHeader } = require('./external-refs');
 'use strict';
 /**
  * Routed Sidequest work runs only through Claude Code's in-session Agent tool.
@@ -24,6 +25,7 @@ function executorPrompt(ticket?: any, taskPrompt?: any) {
   const contract = [
     'Authoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):',
     `Title: ${ticket.title}`,
+    ...referenceHeader(ticket.externalRefs),
     ticket.description || '(No additional description was recorded.)',
   ].join('\n');
   const parts = [base, EXECUTOR_RUN_GUIDANCE, EXECUTOR_VERIFY_GUIDANCE, contract];

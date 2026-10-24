@@ -40,9 +40,10 @@ template: splash
     </article>
     <article class="shed-card card">
       <h2>Usage is hard to see</h2>
-      <p><a href="../observability/">Observability</a> records selected metadata locally, with per-project opt-in and optional sinks.</p>
+      <p><a href="../observability/">Observability</a> records selected metadata locally, with per-project opt-in and a local usage board.</p>
     </article>
   </div>
+  <p>Quality Gate measures the code Claude writes: it scores each new or changed function by complexity and test coverage (CRAP), not by pattern matching on text, and works the moment you install it. It is an optional extra install: <a href="./getting-started/quality-gate/">Quality Gate</a>.</p>
   <p>These plugins are independent. Quartermaster is the guided entry point, not a prerequisite. Install one plugin directly when you already know the job.</p>
 </section>
 

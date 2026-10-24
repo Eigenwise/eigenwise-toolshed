@@ -4,9 +4,9 @@
 const { PUBLIC_SHIM_PORT, SHIM_PORT } = require('./runtime.js');
 const { fetchUrl, readPidRecord, recordedGatewayPid, resolvePortOwner } = require('./process-supervision.js');
 
-async function fetchShimHealth() {
+async function fetchShimHealth({ timeout = 2000 } = {}) {
   try {
-    const response = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 2000 });
+    const response = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout });
     return JSON.parse(response.body.toString());
   } catch { return null; }
 }
@@ -52,4 +52,27 @@ function describeShimState(shim) {
   return `shim (model router) on :${SHIM_PORT}: ${shim.state}${SHIM_STATE_DETAILS[shim.state](shim)}`;
 }
 
-module.exports = { describeShimState, fetchShimHealth, probeShimState, servingShimVersion };
+function parseSemver(text) {
+  const match = String(text || '').match(/(\d+)\.(\d+)\.(\d+)/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function semverLt(first, second) {
+  for (let index = 0; index < 3; index++) {
+    if (first[index] !== second[index]) return first[index] < second[index];
+  }
+  return false;
+}
+
+function shimNeedsRestart(installedVersion, health) {
+  if (health?.proxyRecovery !== true) return true;
+  const running = parseSemver(servingShimVersion(health));
+  const installed = parseSemver(installedVersion);
+  return !running || !installed || semverLt(running, installed);
+}
+
+function servingCurrentVersion(shim, installedVersion = require('./runtime.js').PLUGIN_VERSION) {
+  return shim.state === 'running-ours' && !shimNeedsRestart(installedVersion, shim.health);
+}
+
+module.exports = { describeShimState, fetchShimHealth, parseSemver, probeShimState, semverLt, servingCurrentVersion, servingShimVersion, shimNeedsRestart };

@@ -155,7 +155,7 @@ async function cmdNativeAgent(opts: any, positional: any) {
   const executorClaimRefusal = store.executorClaimDispatchRefusal(slug, sessionId);
   if (executorClaimRefusal) fail(executorClaimRefusal);
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
-  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || opts['shared-tree'] === true;
+  const sharedTree = opts['shared-tree'] ?? (store.boardConfig(slug)?.worktreeIsolation === false);
   const runtimeRefusal = sharedTree ? store.sharedTreeRuntimeRefusal(ticket, meta.path, process.cwd()) : null;
   if (runtimeRefusal) fail(runtimeRefusal);
   const created = agentsync.createNativeAgent({
@@ -259,6 +259,8 @@ const BOARD_CONFIG_OPTION_PATCH_KEYS: Record<string, string> = {
   'worktree-base': 'worktreeBase',
   'not-integrated-salvage-age-hours': 'notIntegratedSalvageAgeHours',
   'worktree-recovery-retention-age-hours': 'worktreeRecoveryRetentionAgeHours',
+  'jira-base-url': 'jiraBaseUrl',
+  'github-sync': 'githubSync',
   'auto-approve-test-scope': 'autoApproveTestScope',
   'auto-approve-scope': 'autoApproveScope',
   'worktree-setup': 'worktreeSetup',
@@ -305,6 +307,7 @@ function dependencyPathLabel(dependency: any) {
 
 function printBoardConfig(payload: any) {
   console.log(`board name: ${payload.name}`);
+  console.log(`Jira base URL: ${payload.jiraBaseUrl}`);
   console.log(`always in scope: ${listOrNone(payload.alwaysInScope)}`);
   console.log(`generated pairs: ${listOrNone(payload.generatedPairs.map(generatedPairLabel))}`);
   console.log(`integration mode: ${payload.integrationMode}`);

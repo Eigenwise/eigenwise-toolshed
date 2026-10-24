@@ -31,11 +31,11 @@ function git(project, argumentsList) {
   return result.stdout.trim();
 }
 
-test('resolves the scored project compiler before the plugin dependency', async () => {
+test('resolves the provisioned plugin compiler before a project dependency', async () => {
   const { root, project } = await isolatedPlugin();
   try {
     await fs.cp(path.join(pluginRoot, 'node_modules'), path.join(project, 'node_modules'), { recursive: true });
-    assert.ok(resolveCompiler(project).resolve('typescript/unstable/ast').startsWith(project));
+    assert.ok(resolveCompiler(project).resolve('typescript/unstable/ast').startsWith(pluginRoot));
     const analyzer = await createAnalyzer(project);
     const descriptors = await analyzer.collectFunctions('const double = (value) => value * 2;', 'subject.js');
     await analyzer.close();
@@ -45,14 +45,14 @@ test('resolves the scored project compiler before the plugin dependency', async 
   }
 });
 
-test('an isolated plugin uses its own compiler and refuses plainly when neither location has one', async () => {
+test('an isolated plugin reports the manual remedy without npm and uses its own installed compiler', async () => {
   const { root, plugin, project } = await isolatedPlugin();
   try {
     const entry = pathToFileURL(path.join(plugin, 'lib/core.mjs')).href;
     const script = `const { createAnalyzer } = await import(${JSON.stringify(entry)}); const analyzer = await createAnalyzer(${JSON.stringify(project)}); console.log(JSON.stringify(await analyzer.collectFunctions('function subject() { return 1; }', 'subject.js')));`;
-    const missing = runNode(['--input-type=module', '-e', script], { cwd: project });
+    const missing = runNode(['--input-type=module', '-e', script], { cwd: project, env: { ...process.env, PATH: '' } });
     assert.equal(missing.status, 1);
-    assert.match(missing.stderr, /No supported typescript dependency was found in the scored project .* or in the quality-gate plugin/);
+    assert.match(missing.stderr, /TypeScript parser unavailable:.*npm install --prefix/);
     await fs.cp(path.join(pluginRoot, 'node_modules'), path.join(plugin, 'node_modules'), { recursive: true });
     const fallback = runNode(['--input-type=module', '-e', script], { cwd: project });
     assert.equal(fallback.status, 0, fallback.stderr);
@@ -82,7 +82,9 @@ test('measure consumes real V8 coverage, preserves report JSON and fails at six'
     assert.equal(report.changedMetrics[0].coverage, 1);
     const cli = runNode([path.join(pluginRoot, 'bin/quality-gate.js'), 'measure', '--project', project, '--base', base, '--coverage', coverage, 'subject.mjs']);
     assert.equal(cli.status, 1, cli.stderr);
-    assert.deepEqual(JSON.parse(cli.stdout), report);
+    const { receipt, ...cliReport } = JSON.parse(cli.stdout);
+    assert.equal(receipt, path.join(project, '.claude/quality-gate/receipts', base + '.json'));
+    assert.deepEqual(cliReport, report);
     assert.deepEqual(await measureFiles([subject], { projectRoot: project, base, coverageDirectory: coverage }), report);
     assert.equal(report.failures.length, 1);
     const emptyCoverage = path.join(root, 'empty-coverage');
@@ -141,7 +143,7 @@ test('an equal-complexity legacy edit is informational even without coverage', a
 test('a legacy function that gains a branch is modified-raised and fails at or above six', async () => {
   const { byName, verdict } = await classifiedAgainstLegacyBase(legacyAtBase.replace('  }\n  return', '    if (item.f) total += 6;\n  }\n  return'));
   assert.deepEqual(byName, { legacy: 'modified-raised' });
-  assert.deepEqual(verdict.failures, ['legacy.mjs:1 legacy cc=8 coverage=100.00% CRAP=8.0000']);
+  assert.deepEqual(verdict.failures, ['legacy.mjs:1 legacy cc=8 coverage=100.00% CRAP=8.0000; failure: complexity floor']);
 });
 
 test('a new helper is enforced while its equal-complexity legacy caller is informational', async () => {

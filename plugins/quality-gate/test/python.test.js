@@ -77,13 +77,13 @@ test('Python fixture/setup markers and source-qualified test classes have explic
   assert.equal(pythonDescriptors('def test_production():\n    assert True\n', 'production.py', pluginRoot)[0].oracleClassification, 'production');
 });
 
-test('Python per-body coverage excludes nested declarations and refuses shared-line callbacks', () => {
+test('Python per-body coverage excludes nested declarations and requires complete callback DA lines', () => {
   const outer = byName.get('test_nested.Session.call_tool');
   const inner = byName.get('test_nested.Session.call_tool.completed');
   const lines = new Map([...outer.executableLines.map((line) => [line, 1]), ...inner.executableLines.map((line) => [line, 0])]);
   assert.equal(functionLineCoverage(outer, rows, lines).coverage, 1);
   assert.equal(functionLineCoverage(inner, rows, lines).coverage, 0);
-  assert.match(functionLineCoverage(byName.get('callback_consumer.<lambda>'), rows, lines).unverified, /share executable source lines/);
+  assert.match(functionLineCoverage(byName.get('callback_consumer.<lambda>'), rows, lines).unverified, /Missing executable LCOV lines/);
 });
 
 test('Python same-byte coverage hash mismatch is unverified and report names adapter version', async (context) => {
@@ -270,6 +270,8 @@ test('repeatable CLI source selectors narrow configured scope and keep exclusion
   const defaults = await crapReport({ project: root, ccOnly: true, source: ['src'] });
   assert.deepEqual(Object.keys(defaults.files).sort(), ['src/first.py', 'src/second.py']);
   await fs.rm(configPath);
+  git(root, ['init', '-q']);
+  git(root, ['add', '.']);
   const selected = await crapReport({ project: root, ccOnly: true, source: ['src/second.py', 'subject.py'] });
   assert.deepEqual(Object.keys(selected.files).sort(), ['src/second.py', 'subject.py']);
 });

@@ -3,7 +3,7 @@ var import_work_provenance = require("./store/work-provenance");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
+const { EVIDENCE_DISPATCH_NAME, stableEvidenceClaudeName, dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 const { execFileSync } = require("./git-process.js");
@@ -21,7 +21,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
+const { branchOwningWorktree, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
@@ -32,12 +32,13 @@ const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
 const { createAssets } = require("./store/assets.js");
+const { createDispatchSnapshot } = require("./store/dispatch-snapshot.js");
 const { createNotifications } = require("./store/notifications.js");
 const { createWorkers } = require("./store/workers.js");
 const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
-const { createReviewCorrections } = require("./store/review-corrections.js");
+const { createReviewCorrections, pendingOracleVerdictRefusal } = require("./store/review-corrections.js");
 const { createReviewFinalization } = require("./store/review-finalization.js");
 const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
@@ -711,6 +712,7 @@ const {
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
+  ticketEvidenceDirectory,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -1105,8 +1107,53 @@ function attributeOwnChanges(slug, ticket, workspace, working, changedPaths) {
 }
 function negativeControlChanges(slug, ticket, delta, changedPaths) {
   const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
-  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  if (!workspace?.base) return { paths: changedPaths, testNames: [], inheritedTests: [] };
+  const own = attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  const inheritedTests = inheritedTestClassifications(slug, ticket, workspace.root, changedPaths, own.testNames);
+  const inheritedNames = new Set(inheritedTests.flatMap((entry) => entry.tests));
+  return { ...own, testNames: own.testNames.filter((name) => !inheritedNames.has(name)), inheritedTests };
+}
+function inheritedTestBodies(source) {
+  const lines = source.split(/(?<=\n)/);
+  const definitions = testDefinitions(source, true);
+  return definitions.map((entry, index) => ({
+    name: entry.name,
+    bytes: lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1].line - 1 : lines.length).join("")
+  }));
+}
+function uniqueInheritedTestBodies(root, revision, files) {
+  const bodies = files.flatMap((file) => inheritedTestBodies(sourceAt(root, revision, file)).map((entry) => ({ ...entry, file })));
+  const counts = /* @__PURE__ */ new Map();
+  for (const body of bodies) counts.set(body.name, (counts.get(body.name) || 0) + 1);
+  return new Map(bodies.filter((body) => counts.get(body.name) === 1).map((body) => [body.name, body]));
+}
+function inheritedCandidateTests(root, candidate, files) {
+  const testFiles = files.filter(isTestSidePath);
+  const inherited = uniqueInheritedTestBodies(root, candidate, testFiles);
+  const current = uniqueInheritedTestBodies(root, null, testFiles);
+  return [...current].filter(([name, body]) => {
+    const previous = inherited.get(name);
+    return previous?.file === body.file && previous.bytes === body.bytes;
+  }).map(([name]) => name);
+}
+function rejectedAncestor(root, source) {
+  const submission = source?.submission;
+  if (submission?.review?.outcome !== "rejected" || !submission.commit) return null;
+  try {
+    gitOutput(root, ["merge-base", "--is-ancestor", submission.commit, "HEAD"]);
+    return submission.commit;
+  } catch {
+    return null;
+  }
+}
+function inheritedTestClassifications(slug, ticket, root, files, expected) {
+  return (ticket.links || []).filter((link) => link.type === "related").flatMap((link) => {
+    const candidate = rejectedAncestor(root, getTicket(slug, link.ref));
+    if (!candidate) return [];
+    const unchanged = new Set(inheritedCandidateTests(root, candidate, files));
+    const tests = expected.filter((name) => unchanged.has(name));
+    return tests.length ? [{ classification: "inherited-unchanged", sourceRef: link.ref, candidate, tests }] : [];
+  });
 }
 function mergeResolvedPaths(workspace) {
   if (!workspace?.base) return [];
@@ -1278,11 +1325,13 @@ function mixedChange(paths) {
 }
 function ownedControlCheck(slug, ticket, delta, ownedPaths) {
   const kind = ticket.dispatch?.workProvenance?.kind;
-  if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, negativeControl: "not_required(" + kind + ")" };
+  if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, inheritedTests: [], negativeControl: "not_required(" + kind + ")" };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
-  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)" };
+  const inheritedTests = own.inheritedTests;
+  if ([inheritedTests.length, !own.testNames.length].every(Boolean)) return { ok: true, negativeControl: "not_required(inherited-unchanged)", inheritedTests };
+  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)", inheritedTests };
   const control = negativeControlResult(ticket, own.testNames);
-  return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind } : negativeControlRefusal(ticket, control);
+  return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 function completionTreeCheck(slug, ticket, opts) {
   const facts = completionWorkFacts(slug, ticket);
@@ -1299,7 +1348,8 @@ function completionTreeCheck(slug, ticket, opts) {
     ownedPaths: facts.ownedPaths,
     noOp: !facts.changedPaths.length,
     workProvenance: facts.provenance,
-    negativeControl: control.negativeControl
+    negativeControl: control.negativeControl,
+    inheritedTests: control.inheritedTests
   };
 }
 const {
@@ -1592,6 +1642,8 @@ const {
   recordSubmissionWaveDelivery,
   submissionsPayload
 } = createSubmissions({
+  createTicket,
+  afterCommit,
   EXECUTOR_VERIFY_MAX,
   INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
   MANUAL_VERIFY_PREFIX,
@@ -1618,6 +1670,7 @@ const {
   integrationTarget,
   integrationTargetCommit,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   listTickets,
@@ -1823,8 +1876,31 @@ function ticketStorageRow(slug, ticket) {
     data: stored
   };
 }
+const { writeDispatchSnapshot } = createDispatchSnapshot({
+  listTickets: (slug) => listTickets(slug),
+  projectDir: (slug) => projectDir(slug),
+  boardConfig: (slug) => boardConfig(slug),
+  getCategory: (id, options) => getCategory(id, options),
+  routed: (slug) => projectDispatchAdmission(slug).status === "routed"
+});
+function scheduleDispatchSnapshot(slug) {
+  afterCommit(() => {
+    try {
+      writeDispatchSnapshot(slug);
+    } catch {
+    }
+  });
+}
+function refreshingDispatchSnapshot(write) {
+  return (slug, ...rest) => {
+    const result = write(slug, ...rest);
+    scheduleDispatchSnapshot(slug);
+    return result;
+  };
+}
 function putTicket(slug, ticket) {
   putCachedRow(database(), "tickets", ticketStorageRow(slug, ticket));
+  if (ticket?.dispatch) scheduleDispatchSnapshot(slug);
   const project = readMeta(slug);
   telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
@@ -2009,13 +2085,22 @@ const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 function priorityRank(p) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[String(p)] ?? 9 : 9;
 }
+function evidenceExecutorName(ticket, resolved) {
+  if (getCategory(ticketCategory(ticket), { project: ticket.project })?.writes !== "evidence") return null;
+  return resolved.backend === "codex" ? EVIDENCE_DISPATCH_NAME : stableEvidenceClaudeName(ticket.effort);
+}
+function readonlyExecutorName(ticket, resolved) {
+  return evidenceExecutorName(ticket, resolved) || resolved.readOnlyAgent || defaultReadonlyExecutorName(ticket, resolved);
+}
+function defaultReadonlyExecutorName(ticket, resolved) {
+  return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
+}
 function stableExecutorName(ticket, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
-  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
-  return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
+  return readonlyExecutorName(ticket, resolved);
 }
 const DIRECT_REASON_MIN_LENGTH = 20;
 function isRoutedTicket(ticket) {
@@ -2571,8 +2656,11 @@ function pendingSubmissionRefusal(t, heldOwner, reopenStatus) {
     message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission?.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
   };
 }
+function doneAuthorityRefusal(request, facts) {
+  return evidenceDoneReportRefusal(request, facts) || executorDoneRefusal(request, facts);
+}
 function releaseRefusal(request, facts) {
-  const refusal = unclaimedActiveDispatchRefusal(request, facts) || executorDoneRefusal(request, facts) || changedClaimRefusal(request, facts) || ownershipRefusal(request, facts);
+  const refusal = unclaimedActiveDispatchRefusal(request, facts) || doneAuthorityRefusal(request, facts) || changedClaimRefusal(request, facts) || ownershipRefusal(request, facts);
   if (refusal) return refusal;
   assertOracleRelease(request, facts);
   return sweepReleaseRefusal(request, facts);
@@ -2592,6 +2680,29 @@ function unclaimedDispatchRefusal(t, dispatch2, by) {
   };
 }
 const NO_COMPLETION_DELTA = { completionDelta: null, sharedTreeCommittedScope: false };
+function savedEvidencePath(root, relative) {
+  if (path.isAbsolute(relative)) return false;
+  const target = path.resolve(root, relative);
+  if (!boardVerificationEvidencePath(target, root)) return false;
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+function evidenceReportNamesSavedFile(roots, body) {
+  const paths = body.match(/`[^`]+`|[^\s,;]+/g) || [];
+  return roots.some((root) => paths.some((relative) => savedEvidencePath(root, relative.replace(/^`|`$/g, ""))));
+}
+function evidenceCompletionReported(dispatch2, body) {
+  return /\bnothing was saved\b/i.test(body) || evidenceReportNamesSavedFile(dispatch2.evidenceWriteRoots || [], body);
+}
+function evidenceDoneReportRefusal(request, facts) {
+  if (!facts.executorDone || facts.dispatch?.evidenceMode !== true) return null;
+  const body = String(request.opts.completionComment?.body || "");
+  if (evidenceCompletionReported(facts.dispatch, body)) return null;
+  return { ok: false, reason: "evidence_report_required", message: 'Evidence dispatch done requires a written evidence file path relative to its admitted root, or the explicit statement "nothing was saved".', ticket: facts.t };
+}
 function executorDoneRefusal(request, facts) {
   if (!facts.executorDone) return null;
   const delta = facts.active ? reviewedCompletionDelta(request.slug, facts) : NO_COMPLETION_DELTA;
@@ -3294,7 +3405,15 @@ function commitReachedRef(repo, commit, ref) {
   }
 }
 function ticketIntegrationTarget(slug, ticket) {
-  return integrationTarget(slug, ticket?.dispatch?.integrationTarget || void 0);
+  return integrationTarget(slug, recordedTicketIntegrationTarget(ticket));
+}
+function recordedTicketIntegrationTarget(ticket) {
+  return ticket?.dispatch?.integrationTarget || deliveredIntegrationTarget(ticket?.submission?.integration);
+}
+function deliveredIntegrationTarget(delivery) {
+  if (!delivery?.deliveredAt) return void 0;
+  if (!delivery.targetBranch) return void 0;
+  return { branch: delivery.targetBranch, mode: delivery.targetUpstream === `origin/${delivery.targetBranch}` ? "remote" : "local" };
 }
 function abandonmentFallbackTarget(slug) {
   try {
@@ -3346,23 +3465,10 @@ function sameBranchWaveTarget(slug, targets) {
   return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
-  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
-  if (!branch || branch === recorded.branch) return recorded;
-  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
-}
-function deliveryBranchMode(slug, recordedMode, branch) {
-  return recordedMode === "remote" && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? "remote" : "local";
-}
-function checkedOutBranchDescendingFrom(repo, ref) {
-  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: "pipe" }).trim();
-  const currentBranch = git(["branch", "--show-current"]);
-  try {
-    git(["merge-base", "--is-ancestor", ref, "HEAD"]);
-    return currentBranch;
-  } catch (error) {
-    if (error?.status === 1) return "";
-    throw error;
+  if (integrationBranch != null && normalizeIntegrationBranch(integrationBranch) !== recorded.branch) {
+    throw new Error(`Delivery targets the recorded integration branch ${recorded.branch}; integrationBranch ${integrationBranch} cannot override it. Redispatch on the intended integration branch before submitting.`);
   }
+  return recorded;
 }
 function recordedDelivery(slug, ticket, commit, evidence) {
   const requestedCommit = String(commit || "").trim();
@@ -3483,15 +3589,19 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
     return { ok: true, ticket };
   });
 }
+function dispatchAlreadyTerminal(ticket) {
+  return Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+}
 function groomCloseRecovery(slug, idOrRef, opts) {
   const evidence = String(opts?.evidence || "").trim();
   const reason = String(opts?.reason || "");
-  if (!evidence) return { ok: true, reason };
   const ticket = getTicket(slug, idOrRef);
+  const pendingVerdict = pendingOracleVerdictRefusal(ticket);
+  if (pendingVerdict) return { ok: false, recovered: pendingVerdict };
+  if (!evidence) return { ok: true, reason };
   const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
   if (recovered.ok) return { ok: true, reason };
-  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
-  if (!terminalDispatch) return { ok: false, recovered };
+  if (!dispatchAlreadyTerminal(ticket)) return { ok: false, recovered };
   return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 function unconsumedPreparedDispatch(ticket, state) {
@@ -3934,7 +4044,7 @@ module.exports = {
   promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
-  setProjectRoutingProfile,
+  setProjectRoutingProfile: refreshingDispatchSnapshot(setProjectRoutingProfile),
   setNewProjectRoutingProfile,
   routingProfileEntries,
   routingProfileCategory,
@@ -3944,9 +4054,9 @@ module.exports = {
   getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
-  setProjectCategory,
+  setProjectCategory: refreshingDispatchSnapshot(setProjectCategory),
   detachCategory,
-  removeProjectCategory,
+  removeProjectCategory: refreshingDispatchSnapshot(removeProjectCategory),
   setCategory,
   removeCategory,
   homeRoot,
@@ -3962,9 +4072,10 @@ module.exports = {
   sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
-  setBoardConfig,
+  setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   normalizeDeliveryMode,
@@ -3999,7 +4110,7 @@ module.exports = {
   mergeProject,
   moveProject,
   setProjectNotify,
-  setProjectRouting,
+  setProjectRouting: refreshingDispatchSnapshot(setProjectRouting),
   projectRoutingEnabled,
   copyAsset,
   saveAssetData,
@@ -4054,6 +4165,7 @@ module.exports = {
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
   dispatchEvidenceDirectory,
+  ticketEvidenceDirectory,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,

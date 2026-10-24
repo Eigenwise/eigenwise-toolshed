@@ -280,13 +280,13 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.',
+    description: 'Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Isolated read-only and write dispatches base at the recorded integration branch under the board worktreeBase policy; the result and briefing name the resolved commit and branch. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        sharedTree: { type: 'boolean', description: 'Use the declared shared checkout only when the spawning runtime is already rooted there. Read-only tickets and unscoped investigations declaring no repository writes need no write-scope ruling; whole-tree write scope is never granted here. Executors with a live claim cannot use this to dispatch child work.' },
+        sharedTree: { type: 'boolean', description: 'false requires isolation regardless of the board default, refuses if unavailable, and persists on retry until true. Omitted uses the board default. true requires the runtime rooted in the shared checkout. Read-only work needs no write-scope ruling; whole-tree write scope is never granted. Live executors cannot dispatch child work.' },
         reducedAgentSchema: { type: 'boolean', description: 'Omit name/mode; hook needs agent_id and permission_mode "auto" or "bypassPermissions".' },
         allowRepeatFailure: { type: 'boolean' },
         allowUnscoped: { type: 'boolean', description: 'Give a write ticket with no declared files the whole tree as its write scope (isolated worktree only).' },
@@ -364,18 +364,15 @@ const tools: ToolDefinition[] = [
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
+        worktreeBase: agentsync.ticketWorktreeBase(prepared.ticket, 12),
         ...(prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {}),
         ...(prepared.recovery?.worktreeCorrection ? { worktreeCorrection: prepared.recovery.worktreeCorrection } : {}),
         ...boardAddedScope,
         ...unscopedWriteScope,
         spawn,
       };
+      if (!args.full) return compact;
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
-      if (!args.full) {
-        const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
-        // Compact dispatches must keep a bounded spawn payload. Warnings ride only when they fit the MCP ceiling.
-        return Buffer.byteLength(JSON.stringify(withWarnings, null, 2)) <= 1200 ? withWarnings : compact;
-      }
       return {
         project: slug,
         projectPath: meta.path,
@@ -441,7 +438,7 @@ const tools: ToolDefinition[] = [
       if (!route || !route.exec) throw new Error(`native_agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
       const resolved = route.exec;
       const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, args.prompt), meta.path);
-      const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || args.sharedTree === true;
+      const sharedTree = args.sharedTree ?? (store.boardConfig(slug)?.worktreeIsolation === false);
       const runtimeRefusal = sharedTree ? store.sharedTreeRuntimeRefusal(ticket, meta.path, process.cwd()) : null;
       if (runtimeRefusal) throw new Error(runtimeRefusal);
       const created = agentsync.createNativeAgent({

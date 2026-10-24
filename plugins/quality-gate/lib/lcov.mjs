@@ -106,12 +106,34 @@ export function functionLineCoverage(descriptor, descriptors, lines) {
   return { unverified: 'LCOV executable-line completeness is unverified for this adapter. Source hashes and DA records alone cannot establish the denominator. Only the JS/TS and Python adapters inventory executable lines from exact source.' };
 }
 
+function isAncestorBody(ancestor, descendant, descriptors) {
+  let parent = descendant.parent;
+  while (parent !== '<root>') {
+    if (parent === ancestor.identity) return true;
+    parent = descriptors.find((candidate) => candidate.identity === parent)?.parent;
+    if (!parent) return false;
+  }
+  return false;
+}
+
+function nestedLineSubset(left, right, descriptors) {
+  if (isAncestorBody(left, right, descriptors)) return right.ownedLines.every((line) => left.ownedLines.includes(line));
+  return isAncestorBody(right, left, descriptors) && left.ownedLines.every((line) => right.ownedLines.includes(line));
+}
+
+function sharedLineCoverage(descriptor, descriptors) {
+  const shared = descriptors.filter((candidate) => candidate.identity !== descriptor.identity && candidate.ownedLines?.some((line) => descriptor.ownedLines.includes(line)));
+  if (!shared.length) return {};
+  if (shared.some((candidate) => !nestedLineSubset(descriptor, candidate, descriptors))) return { unverified: 'Sibling bodies share executable source lines without nested owned-line containment. Put those bodies on separate lines to measure per-function LCOV coverage.' };
+  return { coverageNote: 'Shared nested-body DA lines measure line execution, an upper bound for callback execution; coverage uses those line hits for both bodies.' };
+}
+
 function inventoriedLineCoverage(descriptor, descriptors, lines) {
-  const shared = descriptors.some((candidate) => candidate.identity !== descriptor.identity && candidate.ownedLines?.some((line) => descriptor.ownedLines.includes(line)));
-  if (shared) return { unverified: 'Independently owned bodies share executable source lines. Put their bodies on separate lines to measure per-function LCOV coverage.' };
+  const shared = sharedLineCoverage(descriptor, descriptors);
+  if (shared.unverified) return shared;
   const executable = descriptor.executableLines;
   if (!executable) return { unverified: 'Executable-line inventory is missing. Rerun the exact-source adapter and coverage capture.' };
   if (!executable.length) return { unverified: 'No executable LCOV lines in this function. Run coverage that includes this body, then rerun the gate.' };
   if (executable.some((line) => !lines.has(line))) return { unverified: 'Missing executable LCOV lines from the exact-source executable-line inventory. Regenerate complete coverage; exclusions, skipped statements or ambiguous multiline mapping cannot prove per-body coverage.' };
-  return { coverage: executable.filter((line) => lines.get(line) > 0).length / executable.length };
+  return { ...shared, coverage: executable.filter((line) => lines.get(line) > 0).length / executable.length };
 }

@@ -286,7 +286,7 @@ function isolatedDispatchWorktree(dispatch) {
   return Boolean(dispatch?.worktree && dispatch.sharedTree === false && !dispatch.continuation);
 }
 function closedTicketCleanupApplies(slug, ticket) {
-  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+  return isolatedDispatchWorktree(ticket?.dispatch);
 }
 function closeCleanupTickets(ticket, claimWasLive, extraTicket) {
   return [...store.worktreeGcTickets(), ...extraTicket ? [extraTicket] : []].map((candidate) => candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate);
@@ -857,6 +857,7 @@ function compactPulse(pulse) {
   const wave = compactWave(pulse.submission?.wave);
   return {
     ref: pulse.ref,
+    refs: pulse.refs,
     status: pulse.status,
     claim: pulse.claim,
     working: pulse.working,

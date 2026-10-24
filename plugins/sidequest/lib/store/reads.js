@@ -1,4 +1,6 @@
 "use strict";
+const { referenceKeys } = require("../external-refs");
+"use strict";
 function createReads(dependencies) {
   const {
     checkpointProjection,
@@ -30,6 +32,7 @@ function createReads(dependencies) {
     return {
       ref: t.ref,
       title: t.title,
+      refs: referenceKeys(t.externalRefs),
       status: t.status,
       priority: t.priority,
       complexity: t.complexity || null,

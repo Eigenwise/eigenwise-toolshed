@@ -1,4 +1,7 @@
 "use strict";
+var import_integration_tests = require("../integration-tests.js");
+var import_integration_quality = require("../integration-quality.js");
+const { emitExternalRefUpdates } = require("./external-ref-updates.js");
 const { currentBoardPath } = require("./move.js");
 "use strict";
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require("../kernel/verification.js");
@@ -16,7 +19,7 @@ const worktrees = require("../worktrees.js");
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require("./composition-admission.js");
 const { stillSpawnsInsideItsWrite } = require("../db");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, afterCommit, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, recordedTicketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   let heldCompositionDelivery = null;
   function withTicketLock(slug, id, callback) {
@@ -322,6 +325,7 @@ function createSubmissions(dependencies) {
       failure: checkpoint.failure || null,
       worktree: checkpoint.worktree || null,
       verify: verify.text,
+      ...checkpointRecoveryFields(checkpoint),
       verifyLength: verify.length,
       verifyTruncated: verify.truncated
     };
@@ -343,12 +347,43 @@ function createSubmissions(dependencies) {
     ].filter(Boolean).join(", ");
     return { round, at, candidate, deliverable, ask, summary };
   }
+  function checkpointCursor(cursor) {
+    if (cursor === void 0) return void 0;
+    if (typeof cursor !== "string") throw new Error("checkpoint cursor must be a string");
+    const bytes = Buffer.byteLength(cursor, "utf8");
+    if (bytes > 2048) throw new Error(`checkpoint cursor is ${bytes} bytes; maximum is 2048 bytes (2 KiB)`);
+    return cursor;
+  }
+  function checkpointEvidencePath(value) {
+    if (typeof value !== "string") throw new Error("checkpoint evidence paths must be strings");
+    if (!value || /^(?:[a-z]:|[\\/])/i.test(value)) throw new Error("checkpoint evidence paths must be relative to the dispatch evidence directory");
+    if (value.split(/[\\/]/).includes("..")) throw new Error("checkpoint evidence paths must not contain ..");
+    return value;
+  }
+  function checkpointEvidence(evidence) {
+    if (evidence === void 0) return void 0;
+    if (!Array.isArray(evidence)) throw new Error("checkpoint evidence must be an array of relative paths");
+    return evidence.map(checkpointEvidencePath);
+  }
+  function checkpointRecoveryFields(checkpoint) {
+    return {
+      ...checkpoint.cursor === void 0 ? {} : { cursor: checkpoint.cursor },
+      ...checkpoint.evidence === void 0 ? {} : { evidence: checkpoint.evidence }
+    };
+  }
+  function checkpointRecoveryComment(checkpoint) {
+    const recovery = [];
+    if (checkpoint.cursor !== void 0) recovery.push(`Cursor: ${checkpoint.cursor}`);
+    if (checkpoint.evidence !== void 0) recovery.push(`Evidence: ${checkpoint.evidence.join(", ")}`);
+    const title = recovery.length ? "Continuation checkpoint" : "Live review checkpoint";
+    return [`${title} ${checkpoint.id}`, ...recovery].join("\n");
+  }
   function checkpointCommentBody(checkpoint) {
     const candidate = [
       checkpoint.commit ? `commit ${checkpoint.commit}` : null,
       checkpoint.worktree ? `worktree ${checkpoint.worktree}` : null
     ].filter(Boolean).join(", ");
-    return `Live review checkpoint ${checkpoint.id}
+    return `${checkpointRecoveryComment(checkpoint)}
 Candidate: ${candidate}
 Verification: ${checkpoint.verify}
 Expires: ${checkpoint.expiresAt}`;
@@ -368,6 +403,8 @@ Expires: ${checkpoint.expiresAt}`;
     const verify = String(opts.verify || "").trim();
     if (!verify) throw new Error("checkpoint verification evidence is required");
     if (verify.length > CHECKPOINT_VERIFY_MAX) throw new Error(`checkpoint verification evidence exceeds ${CHECKPOINT_VERIFY_MAX} characters`);
+    const cursor = checkpointCursor(opts.cursor);
+    const evidence = checkpointEvidence(opts.evidence);
     const ttlMs = checkpointTtlMs(opts.ttlMinutes);
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
@@ -395,7 +432,8 @@ Expires: ${checkpoint.expiresAt}`;
           message: String(opts.failure.message || "").trim()
         } : null,
         worktree,
-        verify
+        verify,
+        ...checkpointRecoveryFields({ cursor, evidence })
       };
       const body = opts.commentBody == null ? checkpointCommentBody(checkpoint) : String(opts.commentBody);
       const prepared = prepareComment({ by, body, source: opts.source || "cli" });
@@ -642,6 +680,45 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       diagnostics: [verificationWaiverDiagnostic(validated)]
     };
   }
+  function qualityInput(slug, ticket, project, timeoutMilliseconds) {
+    const baseline = sourceRevisionBaseline(ticket);
+    return {
+      project,
+      registeredProject: readMeta(slug).path,
+      directory: path.join(path.dirname(integrationVerifyLogPath(slug, ticket)), "quality-" + crypto.randomUUID()),
+      base: baseline?.revision.value || ticket.submission.base || "",
+      changedPaths: ticket.submission.changedPaths || [],
+      timeoutMilliseconds
+    };
+  }
+  function recordQualityDebt(slug, ticket, quality) {
+    if (!quality.unverified.length) return;
+    const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
+    transaction(() => {
+      if (listTickets(slug).some((existing) => existing.title === title)) return;
+      dependencies.createTicket(slug, {
+        title,
+        description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}
+${JSON.stringify(quality.unverified)}`,
+        category: "coding.normal",
+        complexity: 2,
+        complexityWhy: "Capture missing native quality evidence for an existing candidate",
+        files: ticket.submission.changedPaths || [],
+        executorVerifyKind: "manual",
+        executorVerify: "Native quality-gate receipt resolves every recorded UNVERIFIED row",
+        source: "integration-quality"
+      });
+    });
+  }
+  function verifyCandidateQuality(slug, tickets, project, timeoutMilliseconds, verify, environment) {
+    const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
+    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify, environment);
+    result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index], quality));
+    return result;
+  }
+  function verifyWithFullSuiteCapture(command, project, verify) {
+    return isFullSuiteCommand(command) ? runFullSuiteVerification(command, project, verify) : verify(process.env);
+  }
   function verifyDeliveredSubmission(slug, ticket, opts) {
     const requirement = opts?.requirement || pinnedVerificationRequirement(ticket);
     const submitted = ticket.submission?.verificationResult;
@@ -687,7 +764,11 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
       environment
     });
-    return isFullSuiteCommand(requirement.command) ? runFullSuiteVerification(requirement.command, project, verify) : verify(process.env);
+    const participants = opts?.qualityTickets || [ticket];
+    const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
+    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
+    const runWithQuality = (environment) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+    return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
   }
   function verificationFailureComment(verify) {
     return [
@@ -887,16 +968,48 @@ ${verify.outputTail}` : null
       delivery: { state: "delivered", revision, verification }
     };
   }
-  function updateSubmissionIntegration(slug, id, patch, submissionPatch) {
+  function updateSubmissionIntegration(slug, id, patch, submissionPatch, resolvedRecordingBranch) {
     return withTicketLock(slug, id, () => {
       const ticket = getTicket(slug, id);
       if (!ticket || !ticket.submission) return { ok: false, reason: "submission_required", ticket };
       ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
       if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "integration");
+      persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch);
       return { ok: true, ticket };
+    });
+  }
+  function assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch) {
+    const branch = ticket.submission.integration.targetBranch;
+    if (!branch) return;
+    const previous = getTicket(slug, ticket.id);
+    const expectedBranch = resolvedRecordingBranch ?? recordedTicketIntegrationTarget(previous)?.branch ?? boardConfig(slug).integrationBranch;
+    if (branch !== expectedBranch) {
+      throw new Error(`Integration record targetBranch ${branch} differs from the recorded integration branch ${expectedBranch}.`);
+    }
+  }
+  function persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch) {
+    assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch);
+    const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+    putTicket(slug, ticket);
+    if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
+    queueEventNotification(slug, ticket, "status", "integration");
+  }
+  function emitDeliveryExternalRefs(slug, ticket) {
+    const integration = ticket.submission.integration;
+    const revision = integration.sourceRevision;
+    const sha = integration.resultingHead || (revision?.source === "git" ? revision.value : null);
+    if (!sha) return;
+    emitExternalRefUpdates(ticket, {
+      kind: "delivered",
+      mode: boardConfig(slug).githubSync,
+      cwd: readMeta(slug).path,
+      branch: integration.targetBranch || boardConfig(slug).integrationBranch,
+      sha,
+      onFailure: (body) => {
+        ticket.comments.push(createComment({ by: "github-sync", kind: "comment", source: "integration", body }));
+        putTicket(slug, ticket);
+      }
     });
   }
   function integrationFailure(slug, ticket, patch) {
@@ -915,7 +1028,32 @@ ${verify.outputTail}` : null
   }
   function branchNotCheckedOutMessage(targetBranch, currentBranch, action) {
     const checkedOut = currentBranch || "detached HEAD";
-    return `${targetBranch} must be checked out before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
+    return `${action} requires the recorded integration branch ${targetBranch}; currently on ${checkedOut}. Run git switch ${JSON.stringify(targetBranch)} in the delivery worktree before retrying.`;
+  }
+  function withIntegrationCheckout(slug, repository, branch, deliver) {
+    const checkout = worktrees.branchOwningWorktree(repository, branch);
+    if (integrationGit(checkout, ["branch", "--show-current"]) === branch) return deliver(checkout);
+    const root = worktrees.worktreeRoot(repository);
+    ensureDir(root);
+    const temporary = fs.mkdtempSync(path.join(root, "integration-"));
+    integrationGit(repository, ["worktree", "add", temporary, branch]);
+    try {
+      const provisioning = provisionWaveGateWorktree(slug, temporary);
+      if (!provisioning.ok) throw new Error(provisioning.message);
+      return deliver(temporary);
+    } finally {
+      removeCleanIntegrationCheckout(repository, temporary);
+    }
+  }
+  function removeCleanIntegrationCheckout(repository, checkout) {
+    try {
+      if (integrationGit(checkout, ["status", "--porcelain", "--untracked-files=all"])) return;
+      if (integrationOperationResidue(checkout).length) return;
+      integrationGit(repository, ["worktree", "remove", checkout]);
+    } catch (error) {
+      process.stderr.write(`Integration checkout retained at ${checkout}: ${integrationGitError(error)}
+`);
+    }
   }
   function integrationTargetCheckoutState(repo) {
     return integrationGit(repo, ["status", "--porcelain=v2", "--untracked-files=all"]).split(/\r?\n/).filter(Boolean);
@@ -1510,6 +1648,10 @@ ${verify.outputTail}` : null
       return false;
     }
   }
+  function manualDeliveryIntegrationBranch(slug, idOrRef, target) {
+    if (!getTicket(slug, idOrRef)?.dispatch?.integrationTarget) return void 0;
+    return target?.branch;
+  }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
@@ -1527,7 +1669,7 @@ ${verify.outputTail}` : null
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       completingApplyDelivery: opts.completingApplyDelivery === true,
       deliveryMethod: opts.deliveryMethod,
-      integrationBranch: opts.target?.branch
+      integrationBranch: manualDeliveryIntegrationBranch(slug, idOrRef, opts.target)
     });
     if (!preflight.ok) return preflight;
     const preflightTicket = preflight.ticket;
@@ -1551,7 +1693,7 @@ ${verify.outputTail}` : null
     const target = opts.target;
     if (!registeredRepo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
     const requestedWorktree = String(opts.worktree || "").trim();
-    let repo = registeredRepo;
+    let repo = worktrees.branchOwningWorktree(registeredRepo, target.branch);
     if (requestedWorktree) {
       const resolvedWorktree = resolveDeliveryWorktree(registeredRepo, requestedWorktree);
       if (!resolvedWorktree.ok) {
@@ -1729,7 +1871,7 @@ ${verify.outputTail}` : null
         recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
         deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
         verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { wave: reconciledDeliveryWave(slug, ticket, observedIntegrationRevision, verify) });
+      }, { wave: reconciledDeliveryWave(slug, ticket, observedIntegrationRevision, verify) }, target.branch);
       return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
     } catch (error) {
       return { ok: false, reason: "delivery_evidence_unavailable", ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
@@ -1778,8 +1920,7 @@ ${verify.outputTail}` : null
       });
       ticket.submission.integratedAt = now;
       ticket.updatedAt = now;
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "integration");
+      persistSubmissionIntegration(slug, ticket);
       return { ok: true, ticket, integration: ticket.submission.integration };
     });
   }
@@ -1847,8 +1988,7 @@ ${verify.outputTail}` : null
       });
       ticket.submission.integratedAt = now;
       ticket.updatedAt = now;
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "integration");
+      persistSubmissionIntegration(slug, ticket, target.branch);
       return { ok: true, ticket, integration: ticket.submission.integration };
     });
   }
@@ -1896,7 +2036,7 @@ ${verify.outputTail}` : null
     const lockLease = acquireLock(lock, { wait: false, holder });
     if (!lockLease) return deliveryInProgress(ticket, lock);
     try {
-      return deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath })));
+      return withIntegrationCheckout(slug, readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () => deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }))));
     } finally {
       lockLease.refresh();
       releaseLock(lock, lockLease);
@@ -2006,8 +2146,9 @@ ${verify.outputTail}` : null
   function deliverGitWave(slug, assembled, opts) {
     const resolved = waveIntegrationTarget(slug, assembled.tickets, opts.integrationBranch);
     if (!resolved.ok) return resolved;
-    const repo = readMeta(slug)?.path;
-    if (!repo || !resolved.target?.branch) return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets };
+    const registeredRepo = readMeta(slug)?.path;
+    if (!registeredRepo || !resolved.target?.branch) return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets };
+    const repo = worktrees.branchOwningWorktree(registeredRepo, resolved.target.branch);
     return deliverGitWaveUnderLease(slug, assembled, opts, repo, resolved.target);
   }
   function waveIntegrationTarget(slug, tickets, integrationBranch) {
@@ -2030,7 +2171,7 @@ ${verify.outputTail}` : null
     const lockLease = acquireLock(lock, { wait: false, holder });
     if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
     try {
-      return deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, repo, target);
+      return withIntegrationCheckout(slug, repo, target.branch, (checkout) => deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, checkout, target));
     } catch (error) {
       return { ok: false, reason: "wave_delivery_error", tickets: assembled.tickets, message: integrationGitError(error) };
     } finally {
@@ -2045,7 +2186,7 @@ ${verify.outputTail}` : null
     const mergeFailure = mergeWaveCandidates(repo, prepared, before, assembled.tickets);
     if (mergeFailure) return mergeFailure;
     const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
-    const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
+    const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], { ...opts, cwd: repo, qualityTickets: assembled.tickets });
     if (!verificationAccepted(verification)) return rollBackUnverifiedWave(slug, assembled, repo, { before, resultingHead }, prepared.dirt, verification);
     return recordGitWaveDelivery(slug, assembled, target, prepared, resultingHead, verification);
   }
@@ -2082,7 +2223,7 @@ ${verify.outputTail}` : null
         message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths)
       };
     }
-    return { ok: true, mode, candidates, dirt };
+    return { ok: true, worktree: repo, mode, candidates, dirt };
   }
   function mergeWaveCandidates(repo, prepared, before, tickets) {
     try {
@@ -2129,6 +2270,7 @@ ${verify.outputTail}` : null
       mode,
       targetBranch: target.branch,
       targetUpstream: target.upstream,
+      worktree: prepared.worktree,
       pinnedRef: candidate.gitRef,
       pinnedCommit: candidate.pinnedCommit,
       changedPaths: candidate.changedPaths,
@@ -2165,7 +2307,7 @@ ${verify.outputTail}` : null
     if (!preflight.ok) return preflight;
     let ticket = preflight.ticket;
     const project = readMeta(slug);
-    const repo = project?.path;
+    let repo = project?.path;
     const mode = normalizeDeliveryMode(opts.mode);
     let target;
     try {
@@ -2174,6 +2316,8 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
     if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+    repo = worktrees.branchOwningWorktree(repo, target.branch);
+    opts = { ...opts, cwd: repo };
     let dirt;
     try {
       dirt = integrationTargetDirt(repo, [ticket.submission]);
@@ -2213,6 +2357,7 @@ ${verify.outputTail}` : null
       mode,
       targetBranch: target.branch,
       targetUpstream: target.upstream,
+      worktree: repo,
       pinnedRef: gitRef,
       pinnedCommit,
       changedPaths,
@@ -2422,6 +2567,9 @@ ${verify.outputTail}` : null
     if (requirement.command) return commandSubmissionVerification(ticket, requirement, evidence, candidateCommit, directCaptureInvocation);
     return evidenceSubmissionVerification(requirement, evidence);
   }
+  function inheritedTestEvidence(completion) {
+    return "inheritedTests" in completion ? completion.inheritedTests : [];
+  }
   function submissionAdmissionDecision(slug, ticket, by, opts, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
@@ -2489,7 +2637,7 @@ ${verify.outputTail}` : null
         ...readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]
       ]
     });
-    return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+    return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths, inheritedTests: inheritedTestEvidence(completion) };
   }
   function submitTicket(slug, idOrRef, by, opts) {
     opts = opts || {};
@@ -2585,6 +2733,7 @@ ${verify.outputTail}` : null
         by,
         at: submittedAt,
         ...sourceRevision ? { sourceRevision, changedPaths: changedSurfaces, projectCapabilities } : { commit, gitRef: gitRef || submissionGitRef(t) },
+        inheritedTests: admission.inheritedTests,
         commentId: comment ? comment.id : null,
         verify,
         verificationResult: submissionVerification.result,

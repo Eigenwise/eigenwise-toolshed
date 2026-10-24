@@ -266,6 +266,13 @@
             "type": "string"
           }
         },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "External issue refs."
+        },
         "files": {
           "type": "array",
           "items": {
@@ -444,6 +451,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "External issue refs."
         },
         "files": {
           "type": "array",
@@ -905,6 +919,15 @@
           "minLength": 1,
           "maxLength": 4000
         },
+        "cursor": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "ttlMinutes": {
           "type": "integer",
           "minimum": 1,
@@ -1297,7 +1320,7 @@
               ]
             }
           ],
-          "description": "Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate."
+          "description": "ref=review. {sourceRef: reviewed source, commit|sourceRevision: reviewTarget candidate, evidence}. Done bound review, no oracle round (oracle: plain verdict); or undispatched + authority=main-attestation."
         },
         "correct": {
           "type": "object",
@@ -2193,6 +2216,12 @@
         "contract": {
           "type": "string"
         },
+        "writes": {
+          "type": "string",
+          "enum": [
+            "evidence"
+          ]
+        },
         "artifactRoots": {
           "type": "array",
           "items": {
@@ -2262,6 +2291,12 @@
         },
         "contract": {
           "type": "string"
+        },
+        "writes": {
+          "type": "string",
+          "enum": [
+            "evidence"
+          ]
         },
         "artifactRoots": {
           "type": "array",
@@ -2415,6 +2450,12 @@
             "type": "string"
           }
         },
+        "investigationDataRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "readOnlyDeniedTools": {
           "type": "array",
           "items": {
@@ -2467,6 +2508,17 @@
         "worktreeRecoveryRetentionAgeHours": {
           "type": "integer",
           "minimum": 1
+        },
+        "jiraBaseUrl": {
+          "type": "string"
+        },
+        "githubSync": {
+          "type": "string",
+          "enum": [
+            "off",
+            "comment",
+            "close"
+          ]
         },
         "autoApproveTestScope": {
           "type": "boolean"

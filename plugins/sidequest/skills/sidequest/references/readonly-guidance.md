@@ -1,8 +1,20 @@
 # Read-only review and audit guidance
 
-Sidequest routes formal candidate reviews, repository audits, and shortcut-debt reports through the existing readonly `review-audit` category. They report findings only. They never edit the repository, create a ledger, run a migration, or start a sweep.
+Sidequest routes formal candidate reviews, repository audits, and shortcut-debt reports through the existing readonly `review-audit` category. Report in the quality-gate review format: a CRAP table for changed bodies when quality-gate is installed, then numbered four-part findings grouped Must/Should/Nice, ending with Verdict, Lean and Not checked. Each finding explains what this is, the problem with a concrete case, the smallest safe fix, and what happens if we skip it. They report findings only. They never edit the repository, create a ledger, run a migration, or start a sweep.
 
 These reports need Sidequest installed in the host. When it is unavailable, say the routed report capability is unavailable rather than pretending to have board integration.
+
+## Shared-checkout reads
+
+Read-only guards allow read-only Git against the shared checkout from isolated and read-only
+executors. Verify untouched paths with `git -C <shared> status --porcelain -- <paths>`;
+`git -C <shared> worktree list` is also allowed. Mutations still require the assigned worktree
+and write authority.
+
+Between dispatch and submission, avoid routine pulses, comment reads and source peeks. Explicitly
+assigned builders and readonly advisors may exchange direct native messages and inspect authorized
+snapshots as described below. Draft findings are advisory, never acceptance or claim release;
+this does not authorize orchestrator source peeking or self-review.
 
 ## Bounded live advice
 
@@ -45,7 +57,7 @@ Create a readonly `review-audit` ticket with a named scope such as `plugins/side
 
 ## Shortcut debt
 
-Create a readonly `review-audit` ticket with the source directories to inspect. Scan actual source comments for `whittle:` markers. Report each deliberate shortcut with its file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger is itself a finding. Do not invent either one, require a marker for every simplification, or move results into a ledger.
+Create a readonly `review-audit` ticket with the source directories to inspect. Scan actual source comments for `shortcut:` markers. Report each deliberate shortcut with its file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger is itself a finding. Do not invent either one, require a marker for every simplification, or move results into a ledger.
 
 ## Measurement
 

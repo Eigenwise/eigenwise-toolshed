@@ -78,7 +78,7 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 27900 for the GH-424 shared add/update field schema merged with develop: measured 25425 payload bytes, +31 net over develop (add now also accepts externalDeliverable). Keeps the 2.5KB reserve.
 // Raised from 27900 for update.addFiles/removeFiles and scopeRequest.grant (GitHub #173): +535 bytes compacted, measured 25929 payload bytes on the merged tree. Keeps the 2.5KB reserve.
 // Merged 13 Oct: both raises apply (shared field schema plus addFiles/removeFiles/scopeRequest.grant); measured 26255 payload bytes on the merged tree. Keeps the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 28800;
+const MCP_TOOLS_LIST_MAX_BYTES = 29400;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -118,7 +118,7 @@ const mutationTails = new Map<string, Promise<void>>();
 
 const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
   verdict: ['correct', 'finalize'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
-  board_config: ['name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
+  board_config: ['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
     'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
     'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
 };
@@ -324,9 +324,10 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   context_page: {
     limit: 'UTF-8 bytes.',
   },
-  add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
+  add: { refs: 'External issue refs.', complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
   update: {
+    refs: 'External issue refs.',
     verify: ATTESTATION_VERIFY_CONTRACT,
     addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
     removeFiles: 'Drop declared paths; conflicts with files. Isolated: now; shared: redispatch.',
@@ -364,7 +365,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   verdict: {
     outcome: 'Explicit candidate outcome, not reviewer prose.',
-    finalize: 'Done bound review, or undispatched with authority=main-attestation; by/text/evidence; accepted may integrate.',
+    finalize: 'ref=review. {sourceRef: reviewed source, commit|sourceRevision: reviewTarget candidate, evidence}. Done bound review, no oracle round (oracle: plain verdict); or undispatched + authority=main-attestation.',
     correct: 'Main-only accepted->rejected; by/text/evidence; expectedVerdictAt from list({ref}) reviewDecision|oracle verdict.at.',
   },
   scopeRequest: {

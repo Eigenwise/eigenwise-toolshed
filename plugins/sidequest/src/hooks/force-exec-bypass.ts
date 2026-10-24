@@ -8,8 +8,11 @@ import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
-import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor } from '../lib/exec-names.js';
+import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor, isEvidenceExecutor } from '../lib/exec-names.js';
+import { evidenceToolDenial } from '../lib/evidence-writes.js';
+import { dispatchEvidenceScope } from './shared/runtime-identity.js';
 import { readOnlyShellRefusal } from './shared/read-only-shell.js';
+import { mainThreadMutationDenial } from './shared/main-thread-mutations.js';
 import { observeBoardMcp, type BoardMcpObservation } from '../lib/board-mcp-liveness.js';
 import { checkSidequestInstall, installRefusalMessage } from '../lib/dispatch-preflight.js';
 
@@ -106,6 +109,8 @@ interface Store {
   readMeta: (slug: string) => { path?: string } | null;
   executionScope: (slug: string, ticket: Ticket) => string[];
   resolveExec: (model: string, effort: string) => unknown;
+  getCategories: (options: { project: string }) => Array<{ enabled?: boolean }>;
+  resolveCategoryRoute: (category: unknown) => { effort?: string | null; exec?: unknown } | null;
   terminalDispatchTarget: (agentName: string) => { slug: string; ref: string; outcome: string } | null;
   addComment: (slug: string, ref: string, fields: { by: string; body: string }) => { ok: boolean } | null;
 }
@@ -462,52 +467,12 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
 
-const CLOSEOUT_UPDATE_FIELDS = new Set([
-  'files', 'addFiles', 'removeFiles', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
-  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd', 'admitComposition',
-  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
-]);
-
-const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, unknown>) => boolean; denial: string }> = {
-  mcp__plugin_sidequest_board__dispatch: {
-    matches: (input) => Object.hasOwn(input, 'workProvenance'),
-    denial: 'sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing.',
-  },
-  mcp__plugin_sidequest_board__update: {
-    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
-    denial: 'sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread.',
-  },
-  mcp__plugin_sidequest_board__scopeRequest: {
-    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
-    // already recorded, which is a live-claim mutation just like the update fields
-    // above. Without this, a subagent could pass by:'orchestrator' to mint the
-    // grant itself; the store's by-mismatch check only catches the claim holder's
-    // own by, not an impersonated one.
-    matches: (input) => input.grant === true,
-    denial: 'sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.',
-  },
-  mcp__plugin_sidequest_board__remove: {
-    // force:true is the only path that deletes a live-claimed ticket, so it is the
-    // executor's escape hatch (delete the ticket to shed the claim). The store
-    // refuses ungranted live-claim deletion, but deny it here too so a subagent
-    // can never mint the main-thread grant by riding the MCP remove handler.
-    matches: (input) => input.force === true,
-    denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
-  },
-  mcp__plugin_sidequest_board__verdict: {
-    matches: (input) => ['correct', 'finalize'].some(field => Object.hasOwn(input, field)),
-    denial: 'sidequest: subagents cannot finalize or correct completed review verdicts. Ask the orchestrator to use verdict with finalize or correct from the main thread.',
-  },
-};
-
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
   const toolInput = toolInputOf(input);
-  if (!toolInput) return false;
-  const rule = MAIN_THREAD_MUTATIONS[stringField(input, 'tool_name')];
-  if (!rule) return false;
-  if (!rule.matches(toolInput)) return false;
-  writeDeny('PreToolUse', rule.denial);
+  const denial = toolInput && mainThreadMutationDenial(stringField(input, 'tool_name'), toolInput);
+  if (!denial) return false;
+  writeDeny('PreToolUse', denial);
   return true;
 }
 
@@ -1110,7 +1075,14 @@ interface CorrectedSpawnInput {
   preparedCorrection: string | null;
 }
 
-function nonAgentToolGuard(toolName: string): ((input: HookInput) => void) | null {
+function guardEvidenceTool(input: HookInput): void {
+  const scope = dispatchEvidenceScope(input);
+  const denial = evidenceToolDenial(stringField(input, 'tool_name'), toolInputOf(input) || {}, stringField(input, 'cwd') || process.cwd(), scope || {});
+  if (denial) writeDeny('PreToolUse', denial);
+}
+
+function nonAgentToolGuard(toolName: string, input: HookInput): ((input: HookInput) => void) | null {
+  if (isEvidenceExecutor(stringField(input, 'agent_type', 'agentType'))) return guardEvidenceTool;
   if (toolName === 'SendMessage') return guardLateSteer;
   if (WRITE_TOOLS.has(toolName)) return guardHelperWrite;
   if (SHELL_TOOLS.has(toolName)) return guardReadOnlyShell;
@@ -1120,7 +1092,7 @@ function nonAgentToolGuard(toolName: string): ((input: HookInput) => void) | nul
 function decidedBeforeAgentAdmission(input: HookInput): boolean {
   const toolName = stringField(input, 'tool_name');
   if (guardTerminalExecutor(input) || guardOwnTicketDispatch(input) || executorLiveClaimMutationRefusal(input)) return true;
-  const toolGuard = nonAgentToolGuard(toolName);
+  const toolGuard = nonAgentToolGuard(toolName, input);
   if (toolGuard) toolGuard(input);
   return toolName !== 'Agent';
 }
@@ -1190,11 +1162,83 @@ function refusedGenericAgent({ input, type, classification }: AgentSpawnRequest)
   return true;
 }
 
+interface ResearchSpawn {
+  subagentType: string;
+  model?: string;
+  promptPrefix: string;
+}
+
+type ResearchSpawnFor = (exec: unknown, effort: unknown) => ResearchSpawn | null;
+
+const RESEARCH_KINDS: ReadonlySet<ExecutorKind> = new Set<ExecutorKind>(['read_only_codex_dispatch', 'read_only_claude_builtin']);
+
+function categoryResearchSpawn(store: Store, researchSpawnFor: ResearchSpawnFor, category: unknown): ResearchSpawn | null {
+  const route = store.resolveCategoryRoute(category);
+  return route?.exec ? researchSpawnFor(route.exec, route.effort) : null;
+}
+
+// Built from route_recipe's own research field, so the hook and the recipe cannot disagree on a live route.
+function liveResearchSpawns(input: HookInput): ResearchSpawn[] {
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const { researchSpawn } = require(runtimeModule('agentsync')) as { researchSpawn: ResearchSpawnFor };
+    const found = store.findProject(requestedProject(input));
+    if (!found.ok || !found.slug) return [];
+    return store.getCategories({ project: found.slug })
+      .filter((category) => category.enabled)
+      .map((category) => categoryResearchSpawn(store, researchSpawn, category))
+      .filter((spawn): spawn is ResearchSpawn => spawn !== null);
+  } catch (_) {
+    return [];
+  }
+}
+
+function matchingResearchSpawn({ input, toolInput, type }: AgentSpawnRequest): ResearchSpawn | undefined {
+  const prompt = String(toolInput.prompt ?? '');
+  if (dispatchRouteMarkers(input).length !== 1) return undefined;
+  return liveResearchSpawns(input).find((spawn) =>
+    canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
+}
+
+function researchSpawnInput(toolInput: Record<string, unknown>, research: ResearchSpawn): Record<string, unknown> {
+  const updatedInput: Record<string, unknown> = { ...toolInput };
+  delete updatedInput.mode;
+  delete updatedInput.isolation;
+  delete updatedInput.model;
+  if (research.model) updatedInput.model = research.model;
+  return updatedInput;
+}
+
+// A ticketless read-only research spawn: its definition forbids writes, so the live route marker is the only admission it needs.
+function isResearchAttempt({ toolInput, classification }: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
+  return dispatchValidation.status === 'none'
+    && RESEARCH_KINDS.has(classification.kind)
+    && String(toolInput.prompt ?? '').startsWith('[sidequest-route ');
+}
+
+function decidedResearchSpawn(request: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
+  if (!isResearchAttempt(request, dispatchValidation)) return false;
+  const research = matchingResearchSpawn(request);
+  if (!research) {
+    writeDeny('PreToolUse', `sidequest: ${request.type} research prompt does not open with the live research prefix of an enabled category route. Re-fetch route_recipe(category).research and spawn its subagentType, model and promptPrefix unchanged.`);
+    return true;
+  }
+  if (!refusedSubagentModelOverride()) writeToolUpdate(researchSpawnInput(request.toolInput, research));
+  return true;
+}
+
+function decidedBeforeExecutorLaunch(request: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
+  return decidedResearchSpawn(request, dispatchValidation)
+    || refusedPreparedDispatch(request, dispatchValidation)
+    || refusedGenericAgent(request)
+    || refusedSubagentModelOverride();
+}
+
 function routedExecutorSpawn(request: AgentSpawnRequest): AdmittedExecutorSpawn | null {
   const admission = dispatchAdmission(request.input);
   if (refusedForMissingExecutorRoute(request.type, request.classification, admission)) return null;
   const dispatchValidation = preparedDispatchValidation(request.input);
-  if (refusedPreparedDispatch(request, dispatchValidation) || refusedGenericAgent(request) || refusedSubagentModelOverride()) return null;
+  if (decidedBeforeExecutorLaunch(request, dispatchValidation)) return null;
   return { ...request, admission, preparedSpawn: dispatchValidation.spawn };
 }
 
@@ -1331,8 +1375,10 @@ function main(): void {
   stampSpawnModel(spawn, correctedSpawnInput(spawn));
 }
 
+// The guards module runs this per decision and fails an Agent spawn closed on a non-zero exit.
 try {
   main();
-} catch (_) {
-  process.exit(0);
+} catch (error) {
+  process.stderr.write(String(error));
+  process.exit(1);
 }

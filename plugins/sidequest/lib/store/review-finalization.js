@@ -121,12 +121,16 @@ function createReviewFinalization(dependencies) {
     dependencies.putTicket(slug, review);
     return { ok: true, decision, reviewOutcome: { sourceRef: source.ref, outcome: input.outcome } };
   }
+  function unboundReviewRefusal(slug, ticket) {
+    const reviewId = ticket.submission?.review?.ticketId;
+    return (0, import_review_corrections.reviewedSourceRefusal)(ticket, reviewId ? dependencies.getTicket(slug, reviewId) : null) ?? refuse("review_unbound", "Finalization requires the original source binding.");
+  }
   function finalizeCompletedReview(slug, idOrRef, input, grant = {}) {
     const invalid = requestRefusal(input, grant.allowCompletedReviewFinalization === true);
     if (invalid) return invalid;
     const review = dependencies.getTicket(slug, idOrRef);
     if (!review) return refuse("not_found", "Review ticket not found.");
-    if (!review.reviewTarget?.ticketId) return refuse("review_unbound", "Finalization requires the original source binding.");
+    if (!review.reviewTarget?.ticketId) return unboundReviewRefusal(slug, review);
     try {
       return dependencies.withSourceTicketLock(
         slug,

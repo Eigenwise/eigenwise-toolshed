@@ -126,7 +126,7 @@ test('operating guidance uses live taxonomy and consistent recon boundaries', ()
     assert.doesNotMatch(source, /`docs-writing`|`security-audit`/);
   }
   for (const source of [skill, userStory, orchestration]) {
-    assert.match(source, /Read-only investigations may use native Explore or general-purpose agents without tickets/);
+    assert.match(source, /Read-only investigations need no ticket: on a routed project spawn `route_recipe\(category\)\.research`/);
   }
   for (const source of [userStory, orchestration]) {
     assert.match(source, /bounded recon.*named anchors/i);
@@ -341,9 +341,9 @@ test('candidate review admission names an untested risk and precedes delivery', 
 
 test('all shipped executor profiles budget final verification before the continuation boundary', () => {
   const sources = agentsync.bundledExecutorSources() as Map<string, string>;
-  assert.equal(sources.size, 13);
+  assert.equal(sources.size, 19);
   assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
-  assert.equal(sources.size, 12);
+  assert.equal(sources.size, 18);
   assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 75);
   for (const [filename, source] of sources) {
     assert.match(source, /Size implementation plus final verification to fit comfortably before 75 tool rounds/, filename);
@@ -354,22 +354,17 @@ test('all shipped executor profiles budget final verification before the continu
   assert.doesNotMatch(orchestration, /100-tool-round|around 100 tool rounds/);
 });
 
-test('heavy resource handoffs preserve independent work and require the actual owner return', () => {
+test('executor verification concurrency follows recorded board configuration', () => {
   const sources = agentsync.bundledExecutorSources() as Map<string, string>;
   assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
-  assert.equal(sources.size, 12);
+  assert.equal(sources.size, 18);
   for (const [filename, source] of sources) {
-    assert.match(source, /Serialize heavy commands on the parent-named shared resource, not entire tickets/, filename);
-    assert.match(source, /continue independent reading, editing, and scoped commits/, filename);
-    assert.match(source, /readiness and end the turn retaining your claim/, filename);
-    assert.match(source, /actual owner must acknowledge that its owned heavy command and\s+descendants ended before the parent hands off/, filename);
-    assert.match(source, /authenticated explicit mid-claim return is valid too/, filename);
-    assert.match(source, /at most two\s+workers, finite owned deadlines, and descendant cleanup/, filename);
-    assert.match(source, /Never infer availability\s+from elapsed time, process counts, failed sends, model labels, or absence/, filename);
+    assert.match(source, /Bounded verification proceeds without a resource slot unless the board\s+configuration declares one/, filename);
+    assert.match(source, /declared slot is granted through the board, never by a chat handoff/, filename);
+    assert.match(source, /Do not request a slot the board cannot record/, filename);
+    assert.match(source, /at most two workers, finite owned\s+deadlines, and descendant cleanup/, filename);
+    assert.doesNotMatch(source, /SendMessage.*actual transfer|parent-named shared resource/, filename);
   }
-  assert.doesNotMatch(orchestration, /Serialize tickets that\s+share one/);
-  assert.match(orchestration, /parent `SendMessage` naming the resource and next holder/);
-  assert.match(userStory, /serialize commands using it,\s+not entire tickets/);
 });
 
 test('exclusive comment watermarks never stand in for processed instructions', () => {
@@ -441,9 +436,9 @@ test('continuous execution freezes trustworthy measurement and pauses only the b
   assert.match(verifyDiscipline, /without a duplicate suite merely for reviewer identity/);
 });
 
-test('all twelve executors discover optional gates without a shipped quality mandate', () => {
+test('all shipped executors discover optional gates without a shipped quality mandate', () => {
   const executors = [...agentsync.bundledExecutorSources()].filter(([filename]) => filename !== 'sidequest-diagnostic-probe.md');
-  assert.equal(executors.length, 12);
+  assert.equal(executors.length, 18);
   for (const [filename, source] of executors) {
     assert.equal(fs.readFileSync(path.join(ROOT, 'agents', filename), 'utf8'), source, filename);
     assert.match(source, /configured quality gate when the briefing names one/);
