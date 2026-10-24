@@ -482,6 +482,112 @@ test('dashboard ticket feed uses the pulse claim verdict', async (t?: any) => {
   assert.equal(typeof claim.idleMs, 'number');
 });
 
+const sqliteDb = require('../lib/db.js');
+
+function heavyTicket(id: string, ref: string, order: number, status: string = 'todo') {
+  const at = new Date().toISOString();
+  return {
+    id, ref, title: `heavy ${ref}`, status, priority: 'normal', order, createdAt: at, updatedAt: at, category: 'general',
+    description: 'd'.repeat(3000),
+    dispatch: { nonce: id, prompt: 'p'.repeat(4000) },
+    submission: { body: 's'.repeat(4000) },
+    comments: [{ id: `${id}-c1`, by: 'executor', body: 'c'.repeat(2000), at }, { id: `${id}-c2`, by: 'you', body: 'ok', at }],
+  };
+}
+
+function seedHeavyTickets(database: any, slug: string, count: number, status: string = 'todo') {
+  database.exec('BEGIN');
+  for (let index = 0; index < count; index++) {
+    const ticket = heavyTicket(`${slug}-heavy-${index}`, `HV-${index}`, index, status);
+    sqliteDb.putRow(database, 'tickets', { id: ticket.id, project: slug, ref: ticket.ref, status, archived: 0, ord: index, claim_by: null, data: ticket });
+  }
+  database.exec('COMMIT');
+}
+
+test('dashboard ticket list serves card rows and the detail read carries the history (GH-629)', async (t?: any) => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-list-rows-')), 'Dashboard list rows').slug;
+  const database = sqliteDb.openDb(store.homeRoot());
+  seedHeavyTickets(database, project, 3);
+  const done = heavyTicket(`${project}-done`, 'HV-DONE', 10, 'done');
+  sqliteDb.putRow(database, 'tickets', { id: done.id, project, ref: done.ref, status: 'done', archived: 0, ord: 10, claim_by: null, data: done });
+  const started = await start(await availablePort());
+  t.after(() => started.server.close());
+
+  const listed = await requestRaw(started.port, `/api/tickets?project=${encodeURIComponent(project)}`);
+  const rows = JSON.parse(listed.body).tickets;
+  assert.equal(rows.length, 4);
+  for (const row of rows) {
+    for (const field of ['dispatch', 'submission', 'comments', 'description']) assert.equal(row[field], undefined, `${row.ref} list row carries ${field}`);
+    assert.equal(row.project, project);
+    assert.equal(row.summary.length, 280);
+    assert.equal(row.commentCount, 2);
+    assert.deepEqual(Object.keys(row.category).sort(), ['id', 'name']);
+  }
+  assert.ok(listed.body.length < 4 * 2000, `four list rows took ${listed.body.length} bytes`);
+
+  const todo = await fetchJson(started.port, `/api/tickets?project=${encodeURIComponent(project)}&status=todo`);
+  assert.deepEqual(todo.tickets.map((row?: any) => row.ref).sort(), ['HV-0', 'HV-1', 'HV-2']);
+  const all = await fetchJson(started.port, '/api/tickets?project=all&status=done');
+  assert.deepEqual(all.tickets.filter((row?: any) => row.project === project).map((row?: any) => row.ref), ['HV-DONE']);
+  assert.equal(all.tickets.some((row?: any) => 'dispatch' in row || 'comments' in row), false);
+
+  const detail = await fetchJson(started.port, `/api/tickets/HV-1?project=${encodeURIComponent(project)}`);
+  assert.equal(detail.ticket.ref, 'HV-1');
+  assert.equal(detail.ticket.project, project);
+  assert.equal(detail.ticket.description.length, 3000);
+  assert.equal(detail.ticket.dispatch.prompt.length, 4000);
+  assert.equal(detail.ticket.submission.body.length, 4000);
+  assert.equal(detail.ticket.comments.length, 2);
+  assert.equal(detail.ticket.reminder, null);
+  const missing = await requestRaw(started.port, `/api/tickets/HV-404?project=${encodeURIComponent(project)}`);
+  assert.equal(missing.status, 404);
+});
+
+test('serve with a gone --handoff-pid answers health while a heavy all-project list builds (GH-629)', { timeout: 120000 }, async (t?: any) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-heavy-'));
+  const home = path.join(root, 'home');
+  const boardPath = path.join(root, 'board');
+  fs.mkdirSync(boardPath, { recursive: true });
+  const slug = store.slugify(boardPath);
+  const database = sqliteDb.openDb(home);
+  sqliteDb.putRow(database, 'projects', { slug, data: { path: boardPath, name: 'Heavy board', createdAt: new Date().toISOString() } });
+  seedHeavyTickets(database, slug, 1000);
+  database.close();
+
+  const gone = spawn(process.execPath, ['-e', ''], { stdio: 'ignore', windowsHide: true });
+  await new Promise((resolve) => gone.once('exit', resolve));
+  const port = await availablePort();
+  const server = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'serve', '--port', String(port), '--handoff-pid', String(gone.pid)], {
+    env: Object.assign({}, process.env, { SIDEQUEST_HOME: home, SIDEQUEST_NO_HOT_RECYCLE: '1' }),
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  t.after(() => {
+    if (server.pid && isAlive(server.pid)) {
+      try { process.kill(server.pid); } catch (_: any) {}
+    }
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch (_: any) {}
+  });
+  await waitFor(async () => (await fetchJson(port, '/api/health')).ok === true, 60000, 'the handed-off dashboard');
+
+  const timeline = { listHeaders: Number.POSITIVE_INFINITY, health: 0 };
+  const list = new Promise<number>((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: '/api/tickets?project=all' }, (res?: any) => {
+      timeline.listHeaders = Date.now();
+      let bytes = 0;
+      res.on('data', (chunk?: any) => { bytes += chunk.length; });
+      res.on('end', () => resolve(bytes));
+    }).on('error', reject);
+  });
+  const health = await fetchJson(port, '/api/health');
+  timeline.health = Date.now();
+  const bytes = await list;
+
+  assert.equal(health.ok, true);
+  assert.ok(timeline.health < timeline.listHeaders, `health answered ${timeline.health - timeline.listHeaders} ms after the list headers; it waited for the whole build`);
+  assert.ok(bytes < 1000 * 2000, `1000 list rows took ${bytes} bytes`);
+});
+
 test('dashboard PATCH cannot flip live-claim closeout fields (unauthenticated localhost endpoint)', async (t?: any) => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-closeout-update-'));
   const project = store.ensureProject(projectPath, 'Dashboard closeout update').slug;

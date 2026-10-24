@@ -72,10 +72,11 @@ for (const [issue, file, expected, unverifiedNames] of [
     const root = await fixture(context, { [file]: text });
     await lcov(root, file, text);
     const report = await crapReport({ project: root });
-    assert.equal(report.exitCode, unverifiedNames.length ? 2 : 0);
+    assert.equal(report.exitCode, 0);
     assert.deepEqual(report.changedMetrics.map((row) => [row.name, row.complexity]), expected);
     assert.equal(report.failures.length, 0);
-    assert.deepEqual(report.unverified.map((row) => row.name), unverifiedNames);
+    assert.deepEqual(report.changedMetrics.filter((row) => row.unverified).map((row) => row.name), unverifiedNames);
+    assert.deepEqual(report.unverified, []);
     assert.ok(report.changedMetrics.every((row) => row.unverified || row.coverage === 1));
   });
 }
@@ -163,7 +164,7 @@ test('unrounded scores below six pass even when display rounds to six', () => {
 });
 
 test('missing coverage, absent manifest and differing hashes stay unverified', async (context) => {
-  const text = 'function subject() { return 1; }\n';
+  const text = 'function subject(value) { if (value) return 1; return 0; }\n';
   const root = await fixture(context, { 'source.js': text });
   const missing = await crapReport({ project: root });
   assert.equal(missing.exitCode, 0);
@@ -197,6 +198,23 @@ test('a TS function added on a branch is measured from complete LCOV (GH-563)', 
   const missingLine = cli(root);
   assert.equal(missingLine.status, 2);
   assert.match(missingLine.stdout, /UNVERIFIED src\/a\.ts:5 g: Missing executable LCOV lines/);
+});
+
+test('GH-627: Vitest LCOV measures parenthesized arrows, split initializers and uninitialized declarations', async (context) => {
+  const file = 'lcov-expression-starts.ts';
+  const text = await fs.readFile(path.join(pluginRoot, 'test/fixtures', file), 'utf8');
+  const root = await fixture(context, { [file]: text });
+  await lcov(root, file, text);
+  const recordedLines = [1, 2, 3, 7, 9, 10, 13, 15, 16];
+  await fs.writeFile(path.join(root, 'coverage/lcov.info'), `SF:${file}\n${recordedLines.map((line) => `DA:${line},1`).join('\n')}\nend_of_record\n`);
+  const report = await crapReport({ project: root });
+  assert.deepEqual(report.changedMetrics.map((row) => [row.name, row.executableLines]), [
+    ['paren', [2]], ['<anonymous>', [3]], ['declared', [9, 10]], ['uninit', [15, 16]],
+  ]);
+  assert.ok(report.changedMetrics.every((row) => row.coverage === 1 && !row.unverified));
+  assert.equal(report.exitCode, 0);
+  await fs.writeFile(path.join(root, 'coverage/lcov.info'), `SF:${file}\n${recordedLines.filter((line) => line !== 9).map((line) => `DA:${line},1`).join('\n')}\nend_of_record\n`);
+  assert.match((await crapReport({ project: root })).changedMetrics.find((row) => row.name === 'declared').unverified, /Missing executable LCOV lines/);
 });
 
 test('the TS executable-line inventory skips decorators, blocks, empty, type-only and ambient statements', async () => {
@@ -292,7 +310,7 @@ test('coverageCommand rejects stale output, source edits and command failures', 
 });
 
 test('CLI writes unverified receipts and preserves actionable help and exit codes', async (context) => {
-  const root = await fixture(context, { 'source.js': 'function subject() { return 1; }\n' });
+  const root = await fixture(context, { 'source.js': 'function subject(value) { if (value) return 1; return 0; }\n' });
   const head = commitBaseline(root);
   const unverified = cli(root, ['--base', 'HEAD', '--lcov', 'missing.info', '--json']);
   assert.equal(unverified.status, 2, unverified.stderr);
@@ -493,9 +511,10 @@ test('sibling arrows sharing one executable line stay UNVERIFIED', async (contex
   const root = await fixture(context, { 'source.js': text });
   await lcov(root, 'source.js', text);
   const report = await crapReport({ project: root });
-  assert.equal(report.exitCode, 2);
-  assert.equal(report.unverified.length, 2);
-  assert.ok(report.unverified.every((row) => /Sibling bodies share executable source lines/.test(row.unverified)));
+  assert.equal(report.exitCode, 0);
+  assert.deepEqual(report.unverified, []);
+  assert.ok(report.changedMetrics.every((row) => row.boundVerdict === 'pass' && /Sibling bodies share executable source lines/.test(row.unverified)));
+  assert.equal(formatCrapReport(report).match(/coverage=unverified \(bound cc²\+cc=2 < 6\)/g).length, 2);
 });
 
 test('nested LCOV containment follows multiple parent identities and preserves zero and missing DA evidence', () => {
@@ -507,3 +526,33 @@ test('nested LCOV containment follows multiple parent identities and preserves z
   assert.equal(functionLineCoverage(inner, descriptors, new Map([[1, 1], [2, 0]])).coverage, 0);
   assert.match(functionLineCoverage(inner, descriptors, new Map([[1, 1]])).unverified, /Missing executable LCOV lines/);
 });
+
+for (const [complexity, exitCode, boundVerdict, verdict, unresolved, failures, outputPattern] of [
+  [1, 0, 'pass', 'passed', 0, 0, /PASS .*coverage=unverified \(bound cc²\+cc=2 < 6\); No LCOV/],
+  [2, 2, undefined, 'unverified', 1, 0, /UNVERIFIED .*No LCOV/],
+  [3, 2, undefined, 'unverified', 1, 0, /UNVERIFIED .*No LCOV/],
+  [6, 1, undefined, 'failed', 0, 1, /FAIL .*fails at any coverage/],
+]) {
+  test(`GH-628 crap cc-${complexity} resolves only coverage-independent verdicts`, async (context) => {
+    const text = `export function subject(value) {\n${'if (value) value--;\n'.repeat(complexity - 1)}return value;\n}\n`;
+    const root = await fixture(context, { 'source.js': text });
+    const head = commitBaseline(root);
+    const result = cli(root, ['--base', 'HEAD', '--lcov', 'missing.info', '--json']);
+    assert.equal(result.status, exitCode, result.stderr);
+    const report = JSON.parse(result.stdout);
+    const metric = report.changedMetrics[0];
+    assert.equal(metric.complexity, complexity);
+    assert.equal(metric.classification, 'new');
+    assert.match(metric.unverified, /No LCOV/);
+    assert.equal(metric.coverage, undefined);
+    assert.equal(metric.crap, undefined);
+    assert.equal(metric.boundVerdict, boundVerdict);
+    assert.equal(report.unverified.length, unresolved);
+    assert.equal(report.failures.length, failures);
+    const receipt = JSON.parse(await fs.readFile(report.receipt, 'utf8'));
+    assert.equal(receipt.head, head);
+    assert.equal(receipt.verdict, verdict);
+    const output = formatCrapReport(report);
+    assert.match(output, outputPattern);
+  });
+}

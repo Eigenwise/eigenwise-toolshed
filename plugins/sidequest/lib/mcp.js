@@ -13,7 +13,7 @@ function boardMcpSessionId() {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 29400;
+const MCP_TOOLS_LIST_MAX_BYTES = 29600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -84,6 +84,7 @@ const CONDITIONAL_MUTATION_FIELDS = {
     "readOnlyDeniedTools",
     "generatedPairs",
     "integrationMode",
+    "integrationQuality",
     "integrationBranch",
     "worktreeIsolation",
     "worktreeBase",
@@ -95,7 +96,7 @@ const CONDITIONAL_MUTATION_FIELDS = {
     "worktreeDependencyPaths"
   ]
 };
-const NULL_NONMUTATING_BOARD_FIELDS = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationBranch"]);
+const NULL_NONMUTATING_BOARD_FIELDS = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationQuality", "integrationBranch"]);
 function toolMutates(name, args = {}) {
   if (MUTATING_TOOLS.has(name)) return true;
   const fields = CONDITIONAL_MUTATION_FIELDS[name];
@@ -284,7 +285,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
-  board_config: { verifyEnvironment: "shared: verify at integration only. Frozen per dispatch; default isolated." },
+  board_config: { integrationQuality: "enforce (default): measured failures refuse. report: record only. off: skip quality, verify normally.", verifyEnvironment: "shared: verify at integration only. Frozen per dispatch; default isolated." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."

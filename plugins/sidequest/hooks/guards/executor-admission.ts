@@ -3,6 +3,7 @@ import type { EngineInterface, On, ToolCallResult } from 'claude-code'
 import { classify, isReadOnlyExecutor } from '../../src/lib/exec-names.js'
 import { mainThreadMutationDenial } from '../../src/hooks/shared/main-thread-mutations.js'
 import { namesShellWrite } from '../../src/hooks/shared/shell-writes.js'
+import { guardFailure } from './guard-errors.js'
 import { callerRow } from './context-guards.js'
 import type { Snapshot, SnapshotRow } from './context-guards.js'
 import { projectDirectory, readSnapshot } from './snapshot.js'
@@ -11,8 +12,6 @@ import { projectDirectory, readSnapshot } from './snapshot.js'
 // module cannot load. So the module answers every call the snapshot proves that code would pass, and runs it
 // as one process only for an Agent spawn or a call it could refuse. The snapshot holds one project's rows
 // while the decision reads every project's live store, so a missing row proves nothing.
-
-export const ADMISSION_FAILED = 'sidequest: executor admission guard could not run; spawn refused'
 
 export const GUARDED_TOOLS = /^(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|SendMessage|mcp__plugin_sidequest_board__(dispatch|update|scopeRequest|remove|verdict))$/
 const SHELL_TOOLS = /^(Bash|PowerShell)$/
@@ -162,9 +161,8 @@ async function guardedDecision($: EngineInterface, e: { tool: string; agentId?: 
   if (denial) return { deny: denial }
   try {
     return await callerDecision($, e, await callerOf($, e.agentId ?? ''))
-  } catch {
-    $.ui.status('sidequest: executor guard skipped')
-    return {}
+  } catch (error) {
+    return { deny: guardFailure($, 'guard-executor-admission', e.tool, 'closed', error)! }
   }
 }
 
@@ -172,8 +170,8 @@ async function guardedDecision($: EngineInterface, e: { tool: string; agentId?: 
 async function admissionDecision($: EngineInterface, e: { tool: string; agentId?: string }): Promise<Decision> {
   try {
     return await runDecision($, e.tool, e, await callerOf($, e.agentId ?? ''))
-  } catch {
-    return { deny: ADMISSION_FAILED }
+  } catch (error) {
+    return { deny: guardFailure($, 'guard-executor-admission', e.tool, 'closed', error)! }
   }
 }
 

@@ -41,7 +41,7 @@ for (const output of JSON.parse(fs.readFileSync('captures.json', 'utf8'))) {
 `);
   const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(script.replaceAll('\\', '/'))}`;
   await captures(root, [{ path: 'configured.info', run: false }]);
-  const existing = acquireCoverage(root, { lcov: 'configured.info', coverageCommand: command }, ['subject.py']);
+  const existing = await acquireCoverage(root, { lcov: 'configured.info', coverageCommand: command }, ['subject.py']);
   await fs.writeFile(path.join(root, 'configured.info.sources.json'), JSON.stringify(existing.hashes));
   await captures(root, [{ path: 'isolated', run: true }]);
   await fs.mkdir(path.join(root, '.claude/quality-gate'), { recursive: true });
@@ -87,8 +87,11 @@ test('configured LCOV remains the no-command fallback with authentic hashes', co
   assert.equal(report.changedMetrics[0].coverage, 0);
   await fs.writeFile(path.join(root, 'configured.info.sources.json'), '{}');
   const untrusted = await crapReport({ project: root, coverageCommand: '' });
-  assert.equal(untrusted.exitCode, 2);
-  assert.match(untrusted.unverified[0].unverified, /source hash is missing or differs/);
+  assert.equal(untrusted.exitCode, 0);
+  assert.deepEqual(untrusted.unverified, []);
+  assert.equal(untrusted.changedMetrics[0].boundVerdict, 'pass');
+  assert.equal(untrusted.changedMetrics[0].coverage, undefined);
+  assert.match(untrusted.changedMetrics[0].unverified, /source hash is missing or differs/);
 });
 
 test('fresh rewritten configured output remains a compatible command fallback', coverageRequired, async (context) => {

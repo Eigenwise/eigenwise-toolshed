@@ -109,33 +109,38 @@ function containsUnquotedSemicolon(command?: any) {
   return splitVerifyCommands(command).hasSemicolon;
 }
 
+function quoteAfterCharacter(quote: string, character: string): string {
+  if (quote) return character === quote ? '' : quote;
+  return /^["']$/.test(character) ? character : '';
+}
+
+function* verifyCommandCharacters(text: string) {
+  let quote = '';
+  for (const match of text.matchAll(/\\[\s\S]|[\s\S]/g)) {
+    const character = match[0];
+    yield { index: match.index, character, quote };
+    quote = quoteAfterCharacter(quote, character);
+  }
+}
+
+function outsideSingleQuotes(command: string): string {
+  return [...verifyCommandCharacters(command)]
+    .map(({ character, quote }) => quote === "'" ? '\n' : character).join('');
+}
+
 function splitVerifyCommands(command?: any) {
   const segments: string[] = [];
   const text = String(command || '');
-  let quote = '';
   let start = 0;
   let hasSemicolon = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === '\\') {
-      index += 1;
-      continue;
-    }
-    if (quote) {
-      if (character === quote) quote = '';
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
+  for (const { index, character, quote } of verifyCommandCharacters(text)) {
+    if (quote || index < start) continue;
     const next = text[index + 1];
     if (character !== ';' && !((character === '&' || character === '|') && next === character)) continue;
     const segment = text.slice(start, index).trim();
     if (segment) segments.push(segment);
     if (character === ';') hasSemicolon = true;
     start = index + (character === ';' ? 1 : 2);
-    if (character !== ';') index += 1;
   }
   const segment = text.slice(start).trim();
   if (segment) segments.push(segment);
@@ -163,10 +168,12 @@ function verifyCommandErrors(value?: any) {
     || resolvableOnPath(first);
   const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
   const errors: string[] = [];
+  const expansionText = outsideSingleQuotes(command);
+  const environmentErrors = new Map<string, string>();
   if (/\r|\n/.test(command)) {
     errors.push('Verify must be one runnable command line. Use `npm run test` or `cd <repo-relative-dir> && <command>`.');
   }
-  if (/<[^<>\r\n]+>/.test(command)) {
+  if (/<[^<>\r\n]+>/.test(expansionText)) {
     errors.push('Verify contains an unresolved placeholder. Replace it with a runnable command such as `npm run test`.');
   }
   if (containsUnquotedSemicolon(command)) {
@@ -178,18 +185,19 @@ function verifyCommandErrors(value?: any) {
   if (proseStarter || !likelyExecutable) {
     errors.push('Verify must start with a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.');
   }
-  for (const match of command.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
+  for (const match of expansionText.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
     const name = match[1] || match[2];
     if (name && process.env[name] == null && !match[0].includes(':-')) {
-      errors.push(`Verify references unset environment variable ${name}. Set a portable default such as \`${'${'}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`);
+      environmentErrors.set(name, `Verify references unset environment variable ${name}. Set a portable default such as \`${'${'}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`);
     }
   }
-  for (const match of command.matchAll(/%([A-Za-z_][A-Za-z0-9_]*)%/g)) {
+  for (const match of expansionText.matchAll(/%([A-Za-z_][A-Za-z0-9_]*)%/g)) {
     const name = match[1];
     if (name != null && process.env[name] == null) {
-      errors.push(`Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`);
+      environmentErrors.set(name, `Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`);
     }
   }
+  errors.push(...environmentErrors.values());
   return errors;
 }
 

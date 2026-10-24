@@ -27,7 +27,9 @@
 	let pendingImages = $state<PendingImage[]>([]);
 	let detailsEditing = $state(false);
 	let saving = $state(false);
-	let editingTicket = $derived(board.openDialog && board.openDialog !== 'create' ? board.raw?.tickets.find((ticket) => ticket.id === board.openDialog) ?? null : null);
+	let listRow = $derived(board.openDialog && board.openDialog !== 'create' ? board.raw?.tickets.find((ticket) => ticket.id === board.openDialog) ?? null : null);
+	let detailLoaded = $derived(Boolean(listRow && board.ticketDetail?.id === listRow.id));
+	let editingTicket = $derived(listRow && detailLoaded ? { ...listRow, ...board.ticketDetail } as Ticket : listRow);
 	let createProject = $derived(board.selectedProject === 'all' ? (project || board.raw?.projects[0]?.slug || '') : board.selectedProject);
 	let categories = $derived(board.raw?.categories ?? []);
 	let categoryValue = $derived.by(() => {
@@ -56,6 +58,7 @@
 	async function autosave(field: string, value: unknown) {
 		if (!editingTicket || saving) return;
 		if (field === 'title' && !String(value).trim()) return;
+		if (field === 'description' && !detailLoaded) return;
 		saving = true;
 		try { await board.autosaveTicket(editingTicket, { [field]: value }); }
 		finally { saving = false; }
@@ -114,7 +117,7 @@
 			<div class="main-grid">
 				<div class="fields">
 					<label><span>Title</span><input aria-label="Title" value={editingTicket?.title ?? title} onblur={(event) => autosave('title', event.currentTarget.value)} oninput={(event) => { if (!editingTicket) title = event.currentTarget.value; }} /></label>
-					<label><span>Details</span>{#if editingTicket && !detailsEditing}<button class="description" type="button" onclick={() => detailsEditing = true}>{#if editingTicket.description}<div class="markdown">{@html renderMarkdown(editingTicket.description)}</div>{:else}<span>Add details…</span>{/if}</button>{:else}<textarea aria-label="Details" value={editingTicket?.description ?? details} placeholder="Details" oninput={(event) => { if (!editingTicket) details = event.currentTarget.value; }} onblur={(event) => { detailsEditing = false; autosave('description', event.currentTarget.value); }}></textarea>{/if}</label>
+					<label><span>Details</span>{#if editingTicket && !detailLoaded}<div class="description" aria-busy="true"><span>Loading details…</span></div>{:else if editingTicket && !detailsEditing}<button class="description" type="button" onclick={() => detailsEditing = true}>{#if editingTicket.description}<div class="markdown">{@html renderMarkdown(editingTicket.description)}</div>{:else}<span>Add details…</span>{/if}</button>{:else}<textarea aria-label="Details" value={editingTicket?.description ?? details} placeholder="Details" oninput={(event) => { if (!editingTicket) details = event.currentTarget.value; }} onblur={(event) => { detailsEditing = false; autosave('description', event.currentTarget.value); }}></textarea>{/if}</label>
 					<div class="three"><label><span>Priority</span><Select label="Priority" value={editingTicket?.priority ?? priority} options={priorityOptions} onchange={(value) => updateField('priority', value)} /></label><label><span>Status</span><Select label="Status" value={editingTicket?.status ?? status} options={statusOptions} onchange={(value) => updateField('status', value)} /></label><label><span>Assignee</span><Select label="Assignee" value={editingTicket?.assignee === 'you' ? 'you' : assignee} options={assigneeOptions} onchange={(value) => updateField('assignee', value)} /></label></div>
 					{#if !editingTicket && board.selectedProject === 'all'}<label><span>Board</span><Select label="Board" bind:value={project} options={projectOptions} /></label>{/if}
 					<label><span>Category</span><Select label="Category" value={categoryValue} options={categoryOptions} onchange={(value) => updateField('category', value)} /></label>

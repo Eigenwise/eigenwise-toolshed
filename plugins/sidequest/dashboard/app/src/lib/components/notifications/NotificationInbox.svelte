@@ -50,10 +50,16 @@
     if (!isRead(notification)) await state.markNotificationsRead({ id: notification.id });
     const project = typeof notification.projectSlug === 'string' ? notification.projectSlug : undefined;
     if (project) state.selectProject(project);
-    const ticket = state.raw?.tickets.find((candidate) => candidate.id === notification.ticketId || candidate.ref === notification.ticketRef);
+    const listed = state.raw?.tickets.find((candidate) => candidate.id === notification.ticketId || candidate.ref === notification.ticketRef);
     state.popover = null;
-    if (ticket) {
-      state.openDialog = ticket.id;
+    if (listed) {
+      await state.openTicket(listed);
+      return;
+    }
+    const wanted = String(notification.ticketId ?? notification.ticketRef ?? '');
+    const ticket = project && wanted ? await state.findTicket(wanted, project) : null;
+    if (ticket && !ticket.archived) {
+      state.showTicketDetail(ticket);
       return;
     }
     if (project && notification.ticketRef) {
@@ -102,7 +108,7 @@
       notification.onclick = () => {
         globalThis.focus();
         if (project) state.selectProject(project);
-        state.openDialog = event.ticket.id;
+        void state.openTicket(event.ticket);
         notification.close();
       };
     }
