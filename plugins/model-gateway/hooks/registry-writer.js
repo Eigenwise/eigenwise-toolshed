@@ -54,7 +54,8 @@ let input;
 if (gate) {
   input = fs.readFileSync(0, 'utf8');
   const payload = JSON.parse(input);
-  if (typeof payload.cwd === 'string') process.chdir(payload.cwd);
+  // A deleted session cwd (a removed worktree) keeps the inherited cwd instead of blocking every prompt.
+  if (typeof payload.cwd === 'string') try { process.chdir(payload.cwd); } catch {}
   const { recoveryPolicy, pluginDisabledNotice } = (() => {
     const module = { exports: {} };
     ${fs.readFileSync(path.join(__dirname, '../lib/recovery-policy.js'), 'utf8')}
