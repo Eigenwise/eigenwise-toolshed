@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { runCoverageCommand } from './coverage-command.mjs';
 import { normalizedPath } from './core.mjs';
 import { sourceHashes } from './crap-inputs.mjs';
 
@@ -53,10 +53,9 @@ export function expandCommandVariables(command, env) {
   return command.replace(COMMAND_VARIABLE, (match, braced, bare, percent) => env[braced ?? bare ?? percent] ?? match);
 }
 
-function runCoverage(command, root, reportsDirectory) {
+async function runCoverage(command, root, reportsDirectory, timeout) {
   const env = { ...process.env, QUALITY_GATE_COVERAGE_DIR: reportsDirectory, QUARTERMASTER_COVERAGE_DIR: reportsDirectory };
-  const result = spawnSync(expandCommandVariables(command, env), { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 64 * 1024 * 1024, env });
-  if (result.status !== 0) throw new Error(`Coverage command failed: ${result.stderr || result.error?.message || result.status}. Fix coverageCommand, then rerun the gate.`);
+  await runCoverageCommand(expandCommandVariables(command, env), { cwd: root, env, timeout });
 }
 
 function coverageStamp(file) {
@@ -64,7 +63,7 @@ function coverageStamp(file) {
   return stat ? `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}` : null;
 }
 
-export function acquireCoverage(root, settings, files) {
+export async function acquireCoverage(root, settings, files) {
   const defaultPath = path.resolve(root, settings.fallbackLcov || 'coverage/lcov.info');
   const explicitPath = settings.lcov ? path.resolve(root, settings.lcov) : null;
   if (!settings.coverageCommand) {
@@ -73,7 +72,7 @@ export function acquireCoverage(root, settings, files) {
   }
   const reportsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-gate-coverage-'));
   try {
-    return captureCoverage(root, settings, files, { defaultPath, explicitPath, reportsDirectory });
+    return await captureCoverage(root, settings, files, { defaultPath, explicitPath, reportsDirectory });
   } finally {
     fs.rmSync(reportsDirectory, { recursive: true, force: true });
   }
@@ -86,10 +85,10 @@ function capturedPath({ defaultPath, explicitPath, reportsDirectory }, before) {
   return target;
 }
 
-function captureCoverage(root, settings, files, locations) {
+async function captureCoverage(root, settings, files, locations) {
   const hashes = sourceHashes(root, files);
   const before = new Map([locations.defaultPath, locations.explicitPath].filter(Boolean).map((file) => [file, coverageStamp(file)]));
-  runCoverage(settings.coverageCommand, root, locations.reportsDirectory);
+  await runCoverage(settings.coverageCommand, root, locations.reportsDirectory, settings.coverageTimeoutMs);
   const after = sourceHashes(root, files);
   if (JSON.stringify(hashes) !== JSON.stringify(after)) throw new Error('Scored source changed during coverageCommand. Stop source edits and rerun coverage on fixed bytes.');
   return readCoverage(capturedPath(locations, before), hashes);

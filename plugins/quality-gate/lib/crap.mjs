@@ -131,7 +131,7 @@ export async function crapReport(options = {}) {
   }
   report.signals = reuseSignals(root, report.changedMetrics, removedMetrics);
   report.nothingToScoreReason = emptyScopeReason(selected, files, report.metrics, report.changedMetrics);
-  return unsupportedSourceReport(measureReport(report, settings), settings, selected);
+  return unsupportedSourceReport(await measureReport(report, settings), settings, selected);
 }
 
 function unsupportedSourceReport(report, settings, selected) {
@@ -143,8 +143,8 @@ function unsupportedSourceReport(report, settings, selected) {
   return report;
 }
 
-function measureReport(report, settings) {
-  const input = report.ccOnly || !report.changedMetrics.length ? null : acquireCoverage(report.root, settings, Object.keys(report.files));
+async function measureReport(report, settings) {
+  const input = report.ccOnly || !report.changedMetrics.length ? null : await acquireCoverage(report.root, settings, Object.keys(report.files));
   const lines = input ? coverageByFile(input.text, report.root) : new Map();
   report.changedMetrics = report.changedMetrics.map((metric) => scoredMetric(metric, report, input, lines));
   report.checked = enforcedMetrics(report.changedMetrics).filter((metric) => !metric.informational).length;
