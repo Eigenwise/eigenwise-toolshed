@@ -91,6 +91,8 @@ JSON function rows include `branches: [{line, text, untaken}]`; the JSON and std
 
 The core preload records child environments that drop its canonical import or capture directory. A gap makes changed conditions conservatively UNVERIFIED by name, since the uncaptured child might have exercised them. Older captures need recapture for branch evidence. Loop outcomes that cannot be separated from `break`, `return` or `throw` also remain UNVERIFIED.
 
+For direct-source JavaScript `while`/`for` logical tests, function invocations are not guard evaluations. The gate instead combines body entries with independently proven natural continuations and follows proven parent-RHS counts through nested logical expressions. Returning or throwing bodies require a dedicated post-loop continuation; an abrupt exit never adds a final guard test. Initializers, updaters and nested functions keep their own evaluation context. Breaks, try/catch/finally, labeled continues, `do/while`, unsupported test/continuation shapes, transformed or unknown provenance and invalid or ambiguous counters stay named UNVERIFIED, never silently covered. Non-loop branch checks and source-map correspondence rules are unchanged.
+
 ## New JavaScript helpers outside a repository
 
 ```text

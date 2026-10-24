@@ -466,7 +466,8 @@ function branchRecords(descriptor, source, output) {
   return output.captures.map((capture) => {
     const owned = runtimeBodyRecords(descriptor, source, capture);
     if (owned.unverified) return owned;
-    const records = remapRecords(owned.records, (offset, isEnd) => isEnd ? mappedEnd(offset, owned.toOriginal) : owned.toOriginal(offset));
+    const records = remapRecords(owned.records, (offset, isEnd) => isEnd ? mappedEnd(offset, owned.toOriginal) : owned.toOriginal(offset))
+      .map((record) => ({ ...record, directSource: capture.text === source.text }));
     return records.length === owned.records.length ? { records } : { unverified: 'branch boundary has no exact source-map correspondence' };
   });
 }
