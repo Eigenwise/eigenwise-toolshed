@@ -52,7 +52,7 @@ Integration runs the pinned verifier on the merged tree, then runs additional te
 
 Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.
 
-Read-only and isolated executors can inspect the shared checkout with read-only Git commands, including `git -C <shared> worktree list` and `git -C <shared> status --porcelain -- <paths>`. This lets an executor check that it left the shared paths untouched. Git mutations against that checkout still refuse.
+Read-only and isolated executors can inspect the shared checkout with read-only Git commands, including `git -C <shared> worktree list` and `git -C <shared> status --porcelain -- <paths>`. This lets an executor check that it left the shared paths untouched. Queries such as `merge-base --is-ancestor`, `grep`, `for-each-ref`, `show-ref` and `ls-remote` also pass. Commands with write forms stay restricted to queries: `config --get/--get-all/--list`, `tag --list/--contains/--points-at`, `stash list/show`, `reflog show` and `remote -v/show/get-url`. Git mutations against that checkout still refuse. The refusal points to the `read-only-git.ts` allowlist.
 
 ## Completed review decisions
 
