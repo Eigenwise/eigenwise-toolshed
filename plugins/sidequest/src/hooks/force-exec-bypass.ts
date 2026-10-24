@@ -100,6 +100,7 @@ interface DispatchAdmission {
 }
 
 interface Store {
+  explicitProjectRoot: (directory: string) => string;
   findProject: (project: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   projectDispatchAdmission: (slug: string) => DispatchAdmission;
   getTicket: (slug: string, ref: string) => Ticket | null;
@@ -554,8 +555,13 @@ function registeredProjectPath(input: HookInput): string {
   }
 }
 
+function dispatchProject(input: HookInput): string {
+  if (String(toolInputOf(input)?.prompt ?? '').startsWith('[sidequest-route ')) return registeredResearchProject(input) || '';
+  return requestedProject(input);
+}
+
 function dispatchAdmission(input: HookInput): DispatchAdmission {
-  const project = requestedProject(input);
+  const project = dispatchProject(input);
   if (!project) return { status: 'no-project' };
   try {
     const store = require(runtimeModule('store')) as Store;
@@ -1178,13 +1184,11 @@ function categoryResearchSpawn(store: Store, researchSpawnFor: ResearchSpawnFor,
 }
 
 // Built from route_recipe's own research field, so the hook and the recipe cannot disagree on a live route.
-function liveResearchSpawns(input: HookInput): ResearchSpawn[] {
+function liveResearchSpawns(slug: string): ResearchSpawn[] {
   try {
     const store = require(runtimeModule('store')) as Store;
     const { researchSpawn } = require(runtimeModule('agentsync')) as { researchSpawn: ResearchSpawnFor };
-    const found = store.findProject(requestedProject(input));
-    if (!found.ok || !found.slug) return [];
-    return store.getCategories({ project: found.slug })
+    return store.getCategories({ project: slug })
       .filter((category) => category.enabled)
       .map((category) => categoryResearchSpawn(store, researchSpawn, category))
       .filter((spawn): spawn is ResearchSpawn => spawn !== null);
@@ -1193,10 +1197,10 @@ function liveResearchSpawns(input: HookInput): ResearchSpawn[] {
   }
 }
 
-function matchingResearchSpawn({ input, toolInput, type }: AgentSpawnRequest): ResearchSpawn | undefined {
+function matchingResearchSpawn({ input, toolInput, type }: AgentSpawnRequest, slug: string): ResearchSpawn | undefined {
   const prompt = String(toolInput.prompt ?? '');
   if (dispatchRouteMarkers(input).length !== 1) return undefined;
-  return liveResearchSpawns(input).find((spawn) =>
+  return liveResearchSpawns(slug).find((spawn) =>
     canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
 }
 
@@ -1216,9 +1220,37 @@ function isResearchAttempt({ toolInput, classification }: AgentSpawnRequest, dis
     && String(toolInput.prompt ?? '').startsWith('[sidequest-route ');
 }
 
+function researchProjectReference(input: HookInput): string | null {
+  const prompt = String(toolInputOf(input)?.prompt ?? '');
+  const leadingArgument = /^--project(?:=|\s)[^\r\n]*/.exec(prompt);
+  return stringField(input, 'project') || extractProjectArg(leadingArgument?.[0]);
+}
+
+function researchProjectSlug(store: Store, reference: string): string | undefined {
+  const direct = store.findProject(reference);
+  if (direct.ok) return direct.slug;
+  if (!path.isAbsolute(reference)) return undefined;
+  return store.findProject(store.explicitProjectRoot(reference)).slug;
+}
+
+function registeredResearchProject(input: HookInput): string | undefined {
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const reference = researchProjectReference(input) || stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR || '';
+    return researchProjectSlug(store, reference);
+  } catch (_) {
+    return undefined;
+  }
+}
+
 function decidedResearchSpawn(request: AgentSpawnRequest, dispatchValidation: PreparedDispatchValidation): boolean {
   if (!isResearchAttempt(request, dispatchValidation)) return false;
-  const research = matchingResearchSpawn(request);
+  const project = registeredResearchProject(request.input);
+  if (!project) {
+    writeDeny('PreToolUse', `sidequest: could not resolve a registered project from cwd ${stringField(request.input, 'cwd')}. Run from a registered project checkout or pass project as a hook argument.`);
+    return true;
+  }
+  const research = matchingResearchSpawn(request, project);
   if (!research) {
     writeDeny('PreToolUse', `sidequest: ${request.type} research prompt does not open with the live research prefix of an enabled category route. Re-fetch route_recipe(category).research and spawn its subagentType, model and promptPrefix unchanged.`);
     return true;

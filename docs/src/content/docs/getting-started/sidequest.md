@@ -194,6 +194,8 @@ unsupported measurement stays visible.
 
 A bounded fix defaults to one owner and a focused check. Small fixes in a few known files may run inline without a ticket. Read-only investigations need no ticket either: on a routed project, `route_recipe(category).research` gives one read-only spawn that runs on that category's model (so codebase research and UX research can use different models). Native Explore or general-purpose agents still cover tiny lookups and unrouted projects. A story or wave needs 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
 
+Ticketless research resolves the board from the session cwd, including repository subdirectories and linked worktrees. Quoted `--project` commands in the research task do not select a board. An unregistered cwd gets a project-resolution refusal; a mismatched research prefix gets the route-prefix refusal.
+
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
 tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine
 native baseline/candidate ownership, a runnable check and its actual timeout/resource fit. Small

@@ -1,7 +1,7 @@
 import './hooks.test.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -195,11 +195,11 @@ test('native write intent and undispatched Sidequest executor remain refused', (
 
 const RESEARCH_LINE = 'Read-only research run, no ticket: deliver your findings as your final message; do not claim, comment or write.';
 
-function researchDecision(project: string, toolInput: Record<string, unknown>): { denied: boolean; reason: string; updatedInput: Record<string, unknown> | undefined } {
+function researchDecision(project: string, toolInput: Record<string, unknown>, projectDirectory = project, requestedProject?: string): { denied: boolean; reason: string; updatedInput: Record<string, unknown> | undefined } {
   const result = spawnSync(process.execPath, [path.join(__dirname, '../hooks/force-exec-bypass.js')], {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', cwd: project, tool_input: toolInput }),
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', cwd: project, project: requestedProject, tool_input: toolInput }),
     encoding: 'utf8', windowsHide: true, timeout: 30_000,
-    env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_PROJECT_DIR: project },
+    env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_PROJECT_DIR: projectDirectory },
   });
   assert.equal(result.status, 0, result.stderr);
   const output = result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput : {};
@@ -261,4 +261,42 @@ test('evidence category keeps its ticketless readonly research recipe admissible
   assert.equal(recipe.research.subagentType, 'sidequest:sidequest-exec-readonly-medium');
   const decision = researchDecision(project, { subagent_type: recipe.research.subagentType, model: recipe.research.model, description: 'Evidence research', prompt: recipe.research.promptPrefix + 'Inspect only. Save nothing.' });
   assert.equal(decision.denied, false, decision.reason);
+});
+
+
+test('GH-602: research resolves subdirectories and linked worktrees without scanning task commands', () => {
+  const store = require('../lib/store.js');
+  const agentsync = require('../lib/agentsync.js');
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-602-research-'));
+  const project = path.join(fixture, 'repository');
+  fs.mkdirSync(project);
+  execFileSync('git', ['init', project], { windowsHide: true });
+  execFileSync('git', ['-C', project, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'Fixture'], { windowsHide: true });
+  const { slug } = store.ensureProject(project);
+  const category = store.getCategory('research.evidence', { project: slug });
+  const recipe = agentsync.workflowRecipe({ ...category, project: slug }, store.resolveCategoryRoute(category)).research;
+  const prompt = recipe.promptPrefix + 'Inspect the quoted command: \x60node tool.js --project missing-board\x60. Write nothing.';
+  const toolInput = { subagent_type: recipe.subagentType, model: recipe.model, prompt };
+  const subdirectory = path.join(project, 'nested');
+  fs.mkdirSync(subdirectory);
+  const internalWorktree = path.join(project, 'linked');
+  const externalWorktree = path.join(fixture, 'linked');
+  for (const worktree of [internalWorktree, externalWorktree]) {
+    execFileSync('git', ['-C', project, 'worktree', 'add', '--detach', worktree], { windowsHide: true });
+  }
+  for (const directory of [project, subdirectory, internalWorktree, externalWorktree]) {
+    const decision = researchDecision(directory, toolInput);
+    assert.equal(decision.updatedInput?.prompt, prompt, directory + ': ' + decision.reason);
+  }
+  assert.equal(researchDecision(subdirectory, toolInput, project).updatedInput?.prompt, prompt, 'cwd resolves with root CLAUDE_PROJECT_DIR');
+  const unknown = researchDecision(fixture, toolInput);
+  assert.equal(unknown.denied, true);
+  assert.ok(unknown.reason.includes('could not resolve a registered project from cwd ' + fixture), unknown.reason);
+  assert.equal(researchDecision(fixture, toolInput, fixture, slug).updatedInput?.prompt, prompt, 'explicit hook project selects a registered board');
+  assert.equal(researchDecision(fixture, toolInput, fixture, subdirectory).updatedInput?.prompt, prompt, 'explicit hook path uses the shared root resolver');
+  const wrongPrefix = researchDecision(project, { ...toolInput, prompt: prompt.replace('Read-only research run', 'Changed research run') });
+  assert.equal(wrongPrefix.denied, true);
+  assert.match(wrongPrefix.reason, /live research prefix/);
+  store.setProjectRouting(slug, false);
+  assert.match(researchDecision(subdirectory, toolInput).reason, /no usable executor route/, 'resolved research still respects disabled board routing');
 });
