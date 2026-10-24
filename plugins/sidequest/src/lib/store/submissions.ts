@@ -1296,14 +1296,15 @@ function withIntegrationCheckout<Result>(slug: string | undefined, repository: s
     if (!provisioning.ok) throw new Error(provisioning.message);
     return deliver(temporary);
   } finally {
-    removeCleanIntegrationCheckout(repository, temporary);
+    removeCleanIntegrationCheckout(slug, repository, temporary);
   }
 }
 
-function removeCleanIntegrationCheckout(repository: string, checkout: string): void {
+function removeCleanIntegrationCheckout(slug: string | undefined, repository: string, checkout: string): void {
   try {
     if (integrationGit(checkout, ['status', '--porcelain', '--untracked-files=all'])) return;
     if (integrationOperationResidue(checkout).length) return;
+    worktrees.releaseGateDependencyLinks(checkout, boardConfig(slug).worktreeDependencyPaths || []);
     integrationGit(repository, ['worktree', 'remove', checkout]);
   } catch (error: unknown) {
     process.stderr.write(`Integration checkout retained at ${checkout}: ${integrationGitError(error)}\n`);
@@ -4116,13 +4117,8 @@ function composedWaveCheckout(slug: any, tickets: any[], wave: any) {
   }
 }
 
-// Unlink provisioned dependency links before deleting the checkout: removing a Windows junction's
-// parent recursively can empty the linked source in the registered checkout.
 function removeComposedWaveCheckout(slug: any, repository: string, checkout: string) {
-  for (const dependency of boardConfig(slug).worktreeDependencyPaths) {
-    const link = path.resolve(checkout, dependency.path);
-    if (fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(link);
-  }
+  worktrees.releaseGateDependencyLinks(checkout, boardConfig(slug).worktreeDependencyPaths || []);
   fs.rmSync(checkout, { recursive: true, force: true });
   integrationGit(repository, ['worktree', 'prune']);
 }
