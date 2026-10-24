@@ -11,10 +11,10 @@ const DESTRUCTIVE: Array<{ pattern: RegExp; label: string }> = [
   { pattern: new RegExp(`${GIT}(?:checkout|restore)\\s+(?:[^\\n;|&]*\\s)?(?:--\\s+)?(?:\\.|:/)(?:\\s|$|;|&|\\|)`, 'i'), label: 'a whole-tree checkout/restore' },
   { pattern: new RegExp(`${GIT}(?:checkout|switch)\\s+[^\\n;|&]*(?:--force|\\s-f)\\b`, 'i'), label: 'a forced checkout/switch' },
 ];
-const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix)\s+${WORD}\s+|--?[^\s]+\s+)*)([a-z][a-z-]*)\b([^\n;|&]*)`, 'gi');
+const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix)\s+${WORD}\s+|--?[^\s]+\s+)*)([a-z][a-z-]*)\b((?:"[^"\n]*"|'[^'\n]*'|[^\n;|&])*)`, 'gi');
 // Case-sensitive: `-c name=value` sets config, only `-C` names a directory.
 const DASH_C = new RegExp(String.raw`(?:^|\s)-C\s+(${WORD})`, 'g');
-const CD = new RegExp(String.raw`(?:^|[\n;&|])\s*cd\s+(${WORD})`, 'gi');
+const CD = /(?:^|[\n;&|])\s*cd\s+((?:"[^"\n]*"|'[^'\n]*'|[^\n;&|])*)/gi;
 
 export type GitInvocation = { index: number; dashC: string | null; subcommand: string; args: string };
 export type DestructiveMatch = { label: string; index: number; dashC: string | null };
@@ -36,21 +36,32 @@ export function quotedAt(command: string, index: number): boolean {
 
 function lastDashC(text: string): string | null {
   const found = [...text.matchAll(DASH_C)].at(-1)?.[1];
-  return found ? unquote(found) : null;
+  return found ?? null;
+}
+
+function parsedInvocation(match: RegExpMatchArray): GitInvocation {
+  if (!BALANCED_QUOTES.test(match[0])) throw new Error(`could not parse command segment: ${match[0].trim()}`);
+  return { index: match.index!, dashC: lastDashC(match[1] ?? ''), subcommand: (match[2] ?? '').toLowerCase(), args: match[3] ?? '' };
 }
 
 export function gitInvocations(command: string): GitInvocation[] {
   return [...command.matchAll(INVOCATION)]
     .filter((match) => !quotedAt(command, match.index))
-    .map((match) => ({ index: match.index, dashC: lastDashC(match[1] ?? ''), subcommand: (match[2] ?? '').toLowerCase(), args: match[3] ?? '' }));
+    .map(parsedInvocation);
+}
+
+function destructiveInvocation(invocation: GitInvocation): DestructiveMatch[] {
+  const text = `git ${invocation.subcommand} ${invocation.args}`;
+  const found = DESTRUCTIVE.find(({ pattern }) => pattern.test(text));
+  return found ? [{ label: found.label, index: invocation.index, dashC: invocation.dashC }] : [];
+}
+
+export function destructiveMatches(command: string): DestructiveMatch[] {
+  return gitInvocations(command).flatMap(destructiveInvocation);
 }
 
 export function destructiveMatch(command: string): DestructiveMatch | null {
-  for (const { pattern, label } of DESTRUCTIVE) {
-    const match = pattern.exec(command);
-    if (match) return { label, index: match.index, dashC: lastDashC(match[0]) };
-  }
-  return null;
+  return destructiveMatches(command)[0] ?? null;
 }
 
 // Git Bash spells C:\x as /c/x; only Windows needs the drive put back.
@@ -65,11 +76,22 @@ export function shellPath(cwd: string, value: string, machine: Machine): string 
   return resolveAbsolute(absolute ? target : `${gitBashPath(cwd, machine)}/${target}`, machine);
 }
 
-// Where a git invocation at `index` acts: its own -C, taken from the last `cd` before it, else from cwd.
+function directoryChangeTarget(segment: string): string {
+  const tokens = shellTokens(segment.trim());
+  if (tokens[0] === '--') tokens.shift();
+  if (tokens.length !== 1 || /[$`()]|^\s*["']?~/.test(segment) || !BALANCED_QUOTES.test(segment)) {
+    throw new Error(`could not parse command segment: cd ${segment.trim()}`);
+  }
+  return tokens[0]!;
+}
+
+// Each relative cd starts from the preceding directory; -C starts from the final shell directory.
 export function invocationDirectory(command: string, index: number, dashC: string | null, cwd: string, machine: Machine): string {
-  const cd = [...command.slice(0, index).matchAll(CD)].at(-1)?.[1];
-  const base = shellPath(cwd, cd ? unquote(cd) : '.', machine);
-  return dashC ? shellPath(base, dashC, machine) : base;
+  let base = shellPath(cwd, '.', machine);
+  for (const change of command.slice(0, index).matchAll(CD)) {
+    if (!quotedAt(command, change.index)) base = shellPath(base, directoryChangeTarget(change[1] ?? ''), machine);
+  }
+  return dashC ? shellPath(base, directoryChangeTarget(dashC), machine) : base;
 }
 
 export function samePath(left: string, right: string, machine: Machine): boolean {
