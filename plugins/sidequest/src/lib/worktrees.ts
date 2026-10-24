@@ -2904,6 +2904,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
   const candidates = worktreeList
     .filter((entry) => canonicalPath(entry.worktree) !== canonicalPath(repo) && path.basename(entry.worktree).startsWith('agent-'))
+    .filter((entry) => !pathIsInside(quarantineRoot(options), entry.worktree))
     .filter((entry) => quarantineRetryDue(entry.worktree))
     .filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
   const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
