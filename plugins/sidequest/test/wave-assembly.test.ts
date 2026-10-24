@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 
 import type { Baseline } from '../src/lib/kernel/index.js';
@@ -9,7 +10,79 @@ const test = require('node:test');
 const assert = require('node:assert');
 const wave: typeof import('../src/lib/kernel/wave.js') = require('../lib/kernel/wave.js');
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const store = require('../lib/store.js');
+const commitScope = require('../lib/commit-scope.js');
+
 const observedAt = '2026-08-19T00:00:00.000Z';
+
+function git(repository: string, arguments_: string[]): string {
+  return execFileSync('git', arguments_, { cwd: repository, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function branchOverlapProject(): { repository: string; slug: string } {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-wave-target-'));
+  git(repository, ['init', '-b', 'main']);
+  git(repository, ['config', 'user.name', 'Sidequest Test']);
+  git(repository, ['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(repository, 'shared.txt'), 'base\n');
+  git(repository, ['add', '.']);
+  git(repository, ['commit', '-m', 'base']);
+  git(repository, ['branch', 'story-a']);
+  git(repository, ['branch', 'story-b']);
+  const { slug } = store.ensureProject(repository);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: 'main' });
+  const category = store.getCategory('codebase-exploration');
+  store.setCategory({ ...category, route: { model: 'sonnet', effort: 'medium' }, fallback: null });
+  return { repository, slug };
+}
+
+function submitBranchOverlapCandidate(repository: string, slug: string, branch: string, label: string): string {
+  git(repository, ['checkout', branch]);
+  const ticket = store.createTicket(slug, {
+    title: `overlapping ${label} candidate`, category: 'codebase-exploration',
+    description: 'Exercise recorded branch isolation for overlapping candidates.', files: ['shared.txt'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, integrationMode: 'local', integrationBranch: branch });
+  assert.equal(prepared.ticket.dispatch.integrationTarget.branch, branch);
+  assert.equal(store.claimTicket(slug, ticket.ref, label, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  git(repository, ['checkout', '-b', `candidate-${label}`, branch]);
+  fs.writeFileSync(path.join(repository, 'shared.txt'), `${label}\n`);
+  git(repository, ['add', 'shared.txt']);
+  git(repository, ['commit', '-m', label]);
+  const commit = git(repository, ['rev-parse', 'HEAD']);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  git(repository, ['update-ref', gitRef, commit]);
+  const range = commitScope.submissionRange(repository, { commit, gitRef, upstream: branch, integrationBranch: branch });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  const submitted = store.submitTicket(slug, ticket.ref, label, { commit, gitRef, range, worktree: repository });
+  assert.equal(submitted.ok, true, JSON.stringify(submitted));
+  return ticket.ref;
+}
+
+for (const siblingBranch of ['story-a', 'story-b']) {
+  test(`GH-630: pending overlap on ${siblingBranch} respects the story-a wave target`, () => {
+    const { repository, slug } = branchOverlapProject();
+    const participantRef = submitBranchOverlapCandidate(repository, slug, 'story-a', 'participant');
+    const siblingRef = submitBranchOverlapCandidate(repository, slug, siblingBranch, 'sibling');
+    const assembled = store.assembleSubmissionWave(slug, [participantRef], {
+      verification: store.getTicket(slug, participantRef).submission.verificationResult,
+    });
+    if (siblingBranch === 'story-b') {
+      assert.equal(assembled.ok, true, JSON.stringify(assembled));
+      assert.deepEqual(assembled.wave.participants, [participantRef]);
+    } else {
+      assert.equal(assembled.reason, 'candidate_overlap');
+      assert.deepEqual(assembled.conflicts, [{ participant: participantRef, sibling: siblingRef, surfaces: ['shared.txt'] }]);
+      assert.match(assembled.message, /Wave assembly paused because submitted candidates overlap/);
+    }
+  });
+}
 
 type CandidateOptions = Readonly<{
   baseline?: Baseline;
