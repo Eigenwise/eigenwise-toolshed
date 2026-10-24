@@ -430,6 +430,16 @@ test('a launched non-Git dispatch refuses without capturing a replacement snapsh
   assert.equal(fs.existsSync(prepared.ticket.dispatch.tokenFile), true, 'refusal keeps the launched token file');
 });
 
+test('live-claim recovery refusal names only accepted dispatch arguments', () => {
+  const ticket = createFixture('recovery argument schema fixture');
+  const refused = store.recoverLiveClaimDispatch(slug, ticket.ref, {});
+  assert.equal(refused.reason, 'missing_recovery_facts');
+  const descriptor = require('../lib/mcp.js').toolDescriptors().find((tool: { name: string }) => tool.name === 'dispatch');
+  const argumentsNamed = refused.message.match(/requires (.+), and a connected session/)[1].split(', ');
+  assert.deepEqual(argumentsNamed, ['claimHolder', 'worktree', 'recoveryEvidence']);
+  for (const argument of argumentsNamed) assert.ok(Object.hasOwn(descriptor.inputSchema.properties, argument), argument);
+});
+
 test('a recovery reuse avoids a replacement filesystem snapshot', () => {
   let hashCount = 0;
   withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
