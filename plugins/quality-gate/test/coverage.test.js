@@ -53,6 +53,22 @@ test('same-byte direct source owns nested callbacks and distinguishes duplicate 
   }
 });
 
+test('GH-627: Node line and native byte coverage measure expression-start fixtures', async () => {
+  const source = await fs.readFile(new URL('fixtures/lcov-expression-starts.ts', import.meta.url), 'utf8');
+  const fixture = await captureFixture(source + '\nparen([1]); declared(); uninit();\n');
+  try {
+    const metrics = await fixtureMetrics(fixture);
+    assert.deepEqual(metrics.map((metric) => [metric.name, metric.coverage]), [['paren', 1], ['<anonymous>', 1], ['declared', 1], ['uninit', 1]]);
+    assert.ok(metrics.every((metric) => !metric.unverified));
+    const { NODE_TEST_CONTEXT, NODE_V8_COVERAGE, NODE_OPTIONS, ...environment } = process.env;
+    const execution = spawnSync(process.execPath, ['--test', '--experimental-test-coverage', '--test-reporter=lcov', fixture.sourcePath], { encoding: 'utf8', timeout: 30000, env: environment });
+    assert.equal(execution.status, 0, execution.stderr);
+    for (const line of [2, 3, 8, 9, 10, 14, 15, 16]) assert.match(execution.stdout, new RegExp(`^DA:${line},[1-9]`, 'm'));
+  } finally {
+    await fs.rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('executed source mismatch stays unverified even when the path and ranges match', async () => {
   const fixture = await captureFixture('export function subject() { return 1; }\nsubject();\n');
   try {
