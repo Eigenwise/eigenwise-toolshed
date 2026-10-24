@@ -253,6 +253,19 @@ or User-scope edits cannot be promised to win. Disabling stays available.
 `stopped`. `ensure` leaves `running-ours` at the installed version alone and succeeds, waits up to its startup
 window for `starting` before replacing anything, and refuses `running-foreign`.
 
+After confirming a same-install current-version healthy shim, startup keeps protected orphan cleanup
+under the install lifecycle lock. It can stop an older-version worker only with a saved birth record
+under `~/.claude/model-gateway/worker-births/`: exact PID, start time, command, install root and version,
+plus the original parent's PID and start identity. The original parent must be conclusively gone or
+replaced, and current ancestry must exclude the serving supervisor. A reparented PID alone is not
+ownership evidence. The healthy supervisor, its workers and live requests remain running; legacy or
+unknown ownership/ancestry fails closed. Identity is checked again immediately before a single-target stop request,
+without tree termination or escalation (Windows uses Node's native, non-graceful termination);
+a requested stop alone never deletes a birth record. Cleanup retires that exact record only after
+confirming the old process identity is absent. Explicit stop/restart behavior is unchanged. Other
+`ensure` work, including ownership probes, settings/cache refresh and version reconciliation, still
+runs; this is not a globally read-only operation or a transactional guarantee for all PID records.
+
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
 date. It includes Codex, Grok, and native Claude pin rows. Its model-id check is useful for stale shim ids,

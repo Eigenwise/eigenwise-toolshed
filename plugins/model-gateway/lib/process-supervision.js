@@ -1,12 +1,13 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
-const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
+const { CLI_PATH, LOGS, PLUGIN_VERSION, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
 const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const { controlRequestHeaders } = require('./control-auth.js');
 const PROCESS_STOP_TIMEOUT_MS = 3000;
@@ -74,16 +75,21 @@ function writePidRecord(name, pid) {
     startedAt: process?.startedAt || null,
   }));
 }
-async function writePidRecordAsync(name, pid, { inspectProcess, probeChildren = null, stillActive = () => true } = {}) {
+function pidIdentityRecord(pid, info) {
+  return { pid, command: info?.command || null, startedAt: info?.startedAt || null };
+}
+function pidRecordStillActive(name, pid, stillActive = () => true) {
+  return stillActive() && readPid(name) === pid;
+}
+function inspectPidForRecord(pid, { inspectProcess, probeChildren = null }) {
+  return inspectProcess ? inspectProcess(pid) : processInfoAsync(pid, { probeChildren });
+}
+async function writePidRecordAsync(name, pid, options = {}) {
   fs.writeFileSync(pidFile(name), String(pid));
-  const readProcess = inspectProcess || ((processPid) => processInfoAsync(processPid, { probeChildren }));
-  const process = await readProcess(pid);
-  if (!stillActive() || readPid(name) !== pid) return;
-  fs.writeFileSync(pidRecordFile(name), JSON.stringify({
-    pid,
-    command: process?.command || null,
-    startedAt: process?.startedAt || null,
-  }));
+  const info = await inspectPidForRecord(pid, options);
+  if (!pidRecordStillActive(name, pid, options.stillActive)) return;
+  fs.writeFileSync(pidRecordFile(name), JSON.stringify(pidIdentityRecord(pid, info)));
+  await recordWorkerBirth(name, info, options);
 }
 function processDescription(process) {
   return process?.command || 'not a gateway process';
@@ -294,24 +300,34 @@ function processInfoSync(pid) {
     : commandResultSync('ps', ['-ww', '-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
   return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
 }
-function processTableFromOutput(output) {
-  if (WIN) {
-    try {
-      const entries = JSON.parse(String(output) || '[]');
-      return new Map((Array.isArray(entries) ? entries : [entries])
-        .filter((entry) => entry?.ProcessId)
-        .map((entry) => [Number(entry.ProcessId), {
-          command: entry.CommandLine || '',
-          parentPid: Number(entry.ParentProcessId) || null,
-          pid: Number(entry.ProcessId),
-          startedAt: entry.CreationDate || null,
-        }]));
-    } catch { return null; }
-  }
-  return new Map(String(output).trim().split(/\r?\n/).map((line) => {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/);
-    return match ? [Number(match[1]), { command: match[4], parentPid: Number(match[2]) || null, pid: Number(match[1]), startedAt: match[3] }] : null;
-  }).filter(Boolean));
+function processTableParentPid(value) {
+  if (!Number.isSafeInteger(value)) return undefined;
+  if (value < 0) return undefined;
+  // Preserve a proven root separately from missing or malformed parent data.
+  return value === 0 ? null : value;
+}
+function windowsProcessTableEntry(entry) {
+  return [Number(entry.ProcessId), {
+    command: entry.CommandLine || '', parentPid: processTableParentPid(entry.ParentProcessId),
+    pid: Number(entry.ProcessId), startedAt: entry.CreationDate || null,
+  }];
+}
+function windowsProcessTable(output) {
+  try {
+    const entries = JSON.parse(String(output) || '[]');
+    return new Map((Array.isArray(entries) ? entries : [entries])
+      .filter((entry) => entry?.ProcessId).map(windowsProcessTableEntry));
+  } catch { return null; }
+}
+function posixProcessTableEntry(line) {
+  const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/);
+  return match ? [Number(match[1]), {
+    command: match[4], parentPid: processTableParentPid(Number(match[2])), pid: Number(match[1]), startedAt: match[3],
+  }] : null;
+}
+function processTableFromOutput(output, windows = WIN) {
+  return windows ? windowsProcessTable(output)
+    : new Map(String(output).trim().split(/\r?\n/).map(posixProcessTableEntry).filter(Boolean));
 }
 function processTableSync() {
   const result = WIN
@@ -460,12 +476,15 @@ async function processInfoAsync(pid, { commandResult = commandResultAsync, probe
   if (result.timedOut) return undefined;
   return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
 }
-async function processTableAsync({ commandResult = commandResultAsync, probeChildren = null } = {}) {
-  const result = await commandResult(WIN ? 'powershell.exe' : 'ps', WIN
-    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress']
-    : ['-ww', '-eo', 'pid=,ppid=,lstart=,args='], { probeChildren });
+function processTableCommand(windows) {
+  return windows
+    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress']]
+    : ['ps', ['-ww', '-eo', 'pid=,ppid=,lstart=,args=']];
+}
+async function processTableAsync({ commandResult = commandResultAsync, probeChildren = null, windows = WIN } = {}) {
+  const result = await commandResult(...processTableCommand(windows), { probeChildren });
   if (result.timedOut) return undefined;
-  return result.status === 0 ? processTableFromOutput(result.stdout) : null;
+  return result.status === 0 ? processTableFromOutput(result.stdout, windows) : null;
 }
 function gatewayInstallRoot() {
   return path.resolve(path.join(CLI_PATH, '..', '..'));
@@ -617,15 +636,183 @@ async function killPidAsync(pid, { trusted = false, terminate = null, ...ownersh
   if (stillOwned !== true) return stillOwned;
   return forceTerminateProcess(pid);
 }
-function reapGatewayOrphans(supervisorPid = null) {
-  const reaped = [];
-  const processes = supervisorPid ? processTableSync() : null;
-  for (const name of ['guardian', 'shim', 'proxy']) {
-    const pid = recordedGatewayPid(name);
-    if (!pid || (processes && isDescendantInProcessTable(pid, supervisorPid, processes))) continue;
-    if (killPid(pid, { name, record: readPidRecord(name) })) reaped.push(pid);
+function workerBirthDirectory() { return path.join(STATE, 'worker-births'); }
+function nonemptyString(value) { return typeof value === 'string' && value.length > 0; }
+function positiveProcessPid(pid) { return Number.isSafeInteger(pid) && pid > 0; }
+function processBirthIdentified(info) {
+  return Boolean(info && positiveProcessPid(info.pid) && nonemptyString(info.startedAt) && nonemptyString(info.command));
+}
+function sameProcessBirth(record, info) {
+  return Boolean(info && info.pid === record.pid && info.startedAt === record.startedAt);
+}
+function oldProcessBirthAbsent(record, info) {
+  if (info === null) return true;
+  return Boolean(info?.startedAt && info.startedAt !== record.startedAt);
+}
+// A failed ps/CIM query is not evidence of exit. Only ESRCH proves absence;
+// EPERM and other probe failures remain unknown, including on Windows.
+function probeWorkerIdentity(pid, { inspectProcess = processInfoSync, kill = process.kill } = {}) {
+  const info = inspectProcess(pid);
+  if (info) return info;
+  try { kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return null; }
+  return undefined;
+}
+function workerVersion(installRoot) {
+  try {
+    const version = JSON.parse(fs.readFileSync(path.join(installRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version;
+    return /^\d+\.\d+\.\d+$/.test(version) ? version : null;
+  } catch { return null; }
+}
+function workerInstallFromCommand(command) {
+  return /\sserve-worker\s*$/.test(command) ? gatewayInstallRootFromCommand(command) : null;
+}
+function workerBirthFile(directory, record) {
+  const identity = crypto.createHash('sha256').update(record.startedAt).digest('hex');
+  return path.join(directory, `${record.pid}-${identity}.json`);
+}
+function workerBirthParentKnown(worker, parent) {
+  return processBirthIdentified(parent) && worker.parentPid === parent.pid;
+}
+function birthWorkerIsCurrentChild(name, worker) {
+  return name === 'shim' && processBirthIdentified(worker) && worker.parentPid === process.pid;
+}
+async function recordWorkerBirth(name, worker, options) {
+  if (!birthWorkerIsCurrentChild(name, worker)) return;
+  const parent = await inspectPidForRecord(process.pid, options);
+  if (!workerBirthParentKnown(worker, parent)) return;
+  const installRoot = workerInstallFromCommand(worker.command);
+  if (!installRoot) return;
+  const record = { schemaVersion: 1, ...pidIdentityRecord(worker.pid, worker),
+    installRoot, version: workerVersion(installRoot), parent: pidIdentityRecord(parent.pid, parent) };
+  const directory = workerBirthDirectory();
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(workerBirthFile(directory, record), JSON.stringify(record), { mode: 0o600 });
+}
+function readWorkerBirth(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+function workerBirthHeaderValid(record) {
+  return Boolean(record?.schemaVersion === 1 && processBirthIdentified(record) && processBirthIdentified(record.parent));
+}
+function olderWorkerVersion(recordedVersion, currentVersion) {
+  // shim-state depends on this module; defer this shared comparison until runtime.
+  const { parseSemver, semverLt } = require('./shim-state.js');
+  const recorded = parseSemver(recordedVersion);
+  const current = parseSemver(currentVersion);
+  return Boolean(recorded && current && semverLt(recorded, current));
+}
+function workerBirthVersionStale(record, currentVersion) {
+  return olderWorkerVersion(record.version, currentVersion) && record.version === workerVersion(record.installRoot);
+}
+function workerBirthInstallationValid(record, currentInstallRoot, currentVersion) {
+  const installRoot = workerInstallFromCommand(record.command);
+  if (!installRoot) return false;
+  return normalizedPath(installRoot) === normalizedPath(record.installRoot)
+    && installBelongsToThisPlugin(installRoot, currentInstallRoot) && workerBirthVersionStale(record, currentVersion);
+}
+function workerBirthMetadataValid(record) {
+  return nonemptyString(record.installRoot) && nonemptyString(record.version);
+}
+function workerBirthValid(record, context) {
+  return workerBirthHeaderValid(record) && workerBirthMetadataValid(record)
+    && workerBirthInstallationValid(record, context.currentInstallRoot, context.currentVersion);
+}
+function workerBirthFiles(directory) {
+  try { return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => path.join(directory, entry.name)); }
+  catch { return []; }
+}
+function retireWorkerBirth(file, record) {
+  try {
+    if (fs.readFileSync(file, 'utf8') === JSON.stringify(record)) fs.unlinkSync(file);
+  } catch { /* Retain any changed or unreadable birth record. */ }
+}
+function workerMatchesSnapshot(record, info, processes) {
+  const snapshot = processes.get(record.pid);
+  if (!sameProcessBirth(record, info) || !snapshot) return false;
+  return info.command === record.command && info.parentPid === snapshot.parentPid;
+}
+function windowsRetainsLostParent(record, processes, windows, parent) {
+  return windows && parent === null && processes.get(record.pid).parentPid === record.parent.pid;
+}
+function workerOutsideSupervisor(record, supervisorPid, processes, windows, parent) {
+  if (isDescendantInProcessTable(record.pid, supervisorPid, processes)) return false;
+  if (windowsRetainsLostParent(record, processes, windows, parent)) return true;
+  return isConfirmedOrphan(record.pid, supervisorPid, processes);
+}
+function freshOrphanWorker(record, supervisorPid, processes, context) {
+  const parent = context.inspectProcess(record.parent.pid);
+  if (!oldProcessBirthAbsent(record.parent, parent)) return false;
+  const fresh = context.inspectProcess(record.pid);
+  return workerMatchesSnapshot(record, fresh, processes)
+    && workerOutsideSupervisor(record, supervisorPid, processes, context.windows, parent);
+}
+// Node's Windows SIGTERM is native single-process termination, not a POSIX
+// graceful signal. Do not use taskkill /T: these records prove only this PID.
+function signalOrphanWorker(pid, signal = process.kill) { return signal(pid, 'SIGTERM'); }
+function requestOrphanWorkerStop(pid, terminate) {
+  try { return terminate(pid); } catch { return false; }
+}
+function reapWorkerBirthFile(file, supervisorPid, processes, context) {
+  const record = readWorkerBirth(file);
+  if (!workerBirthValid(record, context)) return null;
+  if (file !== workerBirthFile(context.directory, record)) return null;
+  return reapIdentifiedWorkerBirth(file, record, supervisorPid, processes, context);
+}
+function stopAndRetireWorkerBirth(file, record, context) {
+  const requested = requestOrphanWorkerStop(record.pid, context.terminate);
+  if (oldProcessBirthAbsent(record, context.inspectProcess(record.pid))) retireWorkerBirth(file, record);
+  return requested ? record.pid : null;
+}
+function reapIdentifiedWorkerBirth(file, record, supervisorPid, processes, context) {
+  const info = context.inspectProcess(record.pid);
+  if (oldProcessBirthAbsent(record, info)) { retireWorkerBirth(file, record); return null; }
+  if (!workerMatchesSnapshot(record, info, processes)) return null;
+  if (!freshOrphanWorker(record, supervisorPid, processes, context)) return null;
+  return stopAndRetireWorkerBirth(file, record, context);
+}
+function protectedSupervisorKnown(supervisorPid, processes, inspectProcess) {
+  const supervisor = processes.get(supervisorPid);
+  return processBirthIdentified(supervisor) && sameProcessBirth(supervisor, inspectProcess(supervisorPid));
+}
+function reapOwnedWorkerBirths(supervisorPid, {
+  directory = workerBirthDirectory(), currentInstallRoot = gatewayInstallRoot(), currentVersion = PLUGIN_VERSION,
+  processTable = processTableSync, inspectProcess = probeWorkerIdentity, terminate = signalOrphanWorker, windows = WIN,
+} = {}) {
+  const processes = processTable();
+  if (!processes?.has(supervisorPid)) return [];
+  if (!protectedSupervisorKnown(supervisorPid, processes, inspectProcess)) return [];
+  const context = { directory, currentInstallRoot, currentVersion, inspectProcess, terminate, windows };
+  return workerBirthFiles(directory).map((file) => reapWorkerBirthFile(file, supervisorPid, processes, context)).filter((pid) => pid !== null);
+}
+function reapProtectedWorkerBirths(supervisorPid, options) {
+  try { return reapOwnedWorkerBirths(supervisorPid, options); } catch { return []; }
+}
+
+// Unlike the positive descendant check, orphan cleanup needs proof of absence:
+// a missing node or a cycle is unknown, not evidence that a process is unrelated.
+function knownUnvisitedParent(pid, processes, visited) {
+  return !visited.has(pid) && processes.has(pid);
+}
+function orphanAncestryWalkable(pid, supervisorPid, processes, visited) {
+  return pid !== null && pid !== supervisorPid && knownUnvisitedParent(pid, processes, visited);
+}
+function isConfirmedOrphan(pid, supervisorPid, processes) {
+  const visited = new Set();
+  let currentPid = pid;
+  while (orphanAncestryWalkable(currentPid, supervisorPid, processes, visited)) {
+    visited.add(currentPid);
+    currentPid = processes.get(currentPid).parentPid;
   }
-  return reaped;
+  return currentPid === null;
+}
+function reapRecordedOrphan(name, { recordedPid = recordedGatewayPid, readRecord = readPidRecord, kill = killPid } = {}) {
+  const pid = recordedPid(name);
+  if (!pid) return null;
+  return kill(pid, { name, record: readRecord(name) }) ? pid : null;
+}
+function reapGatewayOrphans(supervisorPid = null, options = {}) {
+  if (supervisorPid !== null) return reapProtectedWorkerBirths(supervisorPid, options);
+  return ['guardian', 'shim', 'proxy'].map((name) => reapRecordedOrphan(name, options)).filter((pid) => pid !== null);
 }
 async function stopAll({ report = console.log, resolveOwner = resolvePortOwner } = {}) {
   const owner = await resolveOwner(PUBLIC_SHIM_PORT);
@@ -993,8 +1180,8 @@ function createProxyRecovery({
 }
 
 module.exports = {
-  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, gatewayInstallRootFromCommand, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, listeningPidsFromNetstat, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
-  probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
-  proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
+  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, gatewayInstallRootFromCommand, installBelongsToThisPlugin, isConfirmedOrphan, isDescendantOfAsync, killPid, killPidAsync, listeningPidsFromNetstat, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
+  probeTimeoutMs, probeWorkerIdentity, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
+  proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, signalOrphanWorker, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopProcessAsync, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };
