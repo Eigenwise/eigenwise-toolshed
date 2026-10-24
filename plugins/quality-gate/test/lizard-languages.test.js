@@ -56,7 +56,10 @@ test('GH-574 Rust CSV enforces cc 7 and preserves the LCOV inventory refusal', a
   assert.equal(coverage.verdict, 'failed');
   assert.deepEqual(coverage.failures.map((metric) => metric.name), ['g']);
   assert.match(formatCrapReport(coverage), /FAIL src\/lib.rs:5 g cc=7 coverage unverified .*fails at any coverage.*executable-line completeness is unverified/);
-  assert.deepEqual(coverage.unverified.map((metric) => metric.name), ['f'], 'the cc 1 body stays an open coverage question, the cc 7 body does not');
+  assert.deepEqual(coverage.unverified, []);
+  assert.equal(coverage.changedMetrics[0].boundVerdict, 'pass');
+  assert.match(coverage.changedMetrics[0].unverified, /executable-line completeness is unverified/);
+  assert.match(formatCrapReport(coverage), /PASS src\/lib.rs:1 f cc=1 coverage=unverified \(bound cc²\+cc=2 < 6\)/);
   assert.equal(coverage.changedMetrics[1].coverage, undefined);
 });
 

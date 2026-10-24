@@ -125,6 +125,13 @@ test('external measured-zero CC2 fails at six and absent nested bodies stay unve
   assert.equal(report.metrics[2].coverage, undefined);
 });
 
+function assertUnverifiedCoverageBound(report, reason) {
+  assert.deepEqual(report.unverified, []);
+  assert.equal(report.changedMetrics[0].boundVerdict, 'pass');
+  assert.equal(report.changedMetrics[0].coverage, undefined);
+  assert.match(report.changedMetrics[0].unverified, reason);
+}
+
 test('child-only external execution requires the inherited canonical core preload', async (context) => {
   const fixture = await externalFixture(context);
   capture(fixture, ['-e', `const { spawnSync } = require('node:child_process'); const execution = spawnSync(process.execPath, [${JSON.stringify(fixture.sourcePaths[0])}], { env: process.env, timeout: 10000 }); process.exitCode = execution.status;`]);
@@ -133,21 +140,21 @@ test('child-only external execution requires the inherited canonical core preloa
   assert.equal(childReport.metrics[0].coverage, 1, 'child report must measure the child-only external body');
   const uncaptured = await externalFixture(context);
   capture(uncaptured, ['-e', `const { spawnSync } = require('node:child_process'); const environment = { ...process.env }; delete environment.NODE_OPTIONS; const execution = spawnSync(process.execPath, [${JSON.stringify(uncaptured.sourcePaths[0])}], { env: environment, timeout: 10000 }); process.exitCode = execution.status;`]);
-  assert.match((await externalReport(uncaptured)).unverified[0].unverified, /no suite loaded.*child process/);
+  assertUnverifiedCoverageBound(await externalReport(uncaptured), /no suite loaded.*child process/);
   const interrupted = await externalFixture(context, { 'subject.cjs': calledSource + 'setInterval(() => {}, 1000);\n' });
   const execution = spawnSync(process.execPath, interrupted.sourcePaths, { timeout: 2000, env: { ...process.env, NODE_OPTIONS: '--import=' + coreUrl, QUALITY_GATE_V8_CAPTURE: interrupted.coverageDirectory } });
   assert.equal(execution.error.code, 'ETIMEDOUT');
   assert.deepEqual(await fs.readdir(interrupted.coverageDirectory), [], 'interrupted child must leave no completed capture');
-  assert.match((await externalReport(interrupted)).unverified[0].unverified, /no suite loaded/);
+  assertUnverifiedCoverageBound(await externalReport(interrupted), /no suite loaded/);
 });
 
-test('external one-byte source edits invalidate capture instead of acquiring a passing row', async (context) => {
+test('external one-byte source edits invalidate measured coverage while preserving the cc-1 bound', async (context) => {
   const fixture = await externalFixture(context);
   capture(fixture);
   await fs.writeFile(fixture.sourcePaths[0], calledSource.replace('+ 1', '+ 2'));
   const report = await externalReport(fixture);
   assert.ok(report.metrics.length > 0, 'explicit external sources must have independently measured runtime rows');
-  assert.match(report.unverified[0].unverified, /executed bytes.*differ/, 'post-capture byte change must stay unverified');
+  assertUnverifiedCoverageBound(report, /executed bytes.*differ/);
   assert.equal(report.metrics[0].coverage, undefined);
 });
 
@@ -160,22 +167,21 @@ test('external raw V8 and unmatched transformed source stay unverified', async (
   delete report.qualityGate;
   await fs.writeFile(capturePath, JSON.stringify(report));
   const rawReport = await externalReport(fixture);
-  assert.equal(rawReport.unverified.length, 1, 'raw V8 must produce an explicit unverified external row');
-  assert.match(rawReport.unverified[0].unverified, /capture binding/, 'raw V8 must never prove external-source bytes');
+  assertUnverifiedCoverageBound(rawReport, /capture binding/);
   const changed = await externalFixture(context);
   capture(changed);
   await fs.writeFile(changed.sourcePaths[0], calledSource + 'void 0;\n');
-  assert.match((await externalReport(changed)).unverified[0].unverified, /matching source map/);
+  assertUnverifiedCoverageBound(await externalReport(changed), /matching source map/);
   for (const sources of [['different.cjs'], ['subject.cjs', 'different.cjs']]) {
     const map = { version: 3, sources, sourcesContent: [calledSource], names: [], mappings: '' };
     const transformed = await externalFixture(context, { 'subject.cjs': calledSource + '//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(map)).toString('base64') + '\n' });
     capture(transformed);
     await fs.writeFile(transformed.sourcePaths[0], calledSource);
-    assert.match((await externalReport(transformed)).unverified[0].unverified, /matching source map/, 'unsupported maps must never acquire external-source proof');
+    assertUnverifiedCoverageBound(await externalReport(transformed), /matching source map/);
   }
   const wrapped = await externalFixture(context);
   capture(wrapped, ['-e', `const Module = require('node:module'); Module.wrapper[0] += 'void 0;'; require(${JSON.stringify(wrapped.sourcePaths[0])});`]);
-  assert.match((await externalReport(wrapped)).unverified[0].unverified, /executed bytes.*differ/, 'patched CJS wrapper must fail exact-byte admission');
+  assertUnverifiedCoverageBound(await externalReport(wrapped), /executed bytes.*differ/);
 });
 
 test('external path and UTF8 refusals identify the declaration and return no passing report', async (context) => {
