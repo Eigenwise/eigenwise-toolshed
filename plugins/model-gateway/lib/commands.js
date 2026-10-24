@@ -708,8 +708,9 @@ function refuseForeignShim(shim, { lifecycleOperation, recordLifecycle }) {
 }
 
 async function keepRunningShim(shim, context) {
-  // Health-confirmed startup must not turn concurrent SessionStart calls into
-  // destructive PID-record cleanup. Deliberate restart/stop paths still reap.
+  // The lifecycle lock serializes cleanup; only birth-identified stale workers
+  // with a conclusively lost parent can be reaped beside this healthy supervisor.
+  if (shim.owner.state === 'same-install') context.reapOrphans(shim.pid);
   noticeStaleSession(shim.health);
   // setup handed a replaced proxy to this supervisor, so it waits for that proxy to answer.
   if (context.preserveRunningSupervisor) return finishStartingShim([], context, shim.pid);
