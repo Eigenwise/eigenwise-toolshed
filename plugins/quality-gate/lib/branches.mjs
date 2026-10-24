@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { logicalLoopContext, logicalLoopOutcomes } from './loop-branches.mjs';
 
 export function conditionalDescriptors(ast, functionNode, forEachOwnNode) {
   const conditions = [];
@@ -18,7 +19,7 @@ function binaryCondition(ast, node) {
   if (!ast.isBinaryExpression(node)) return null;
   const operator = node.operatorToken.getText();
   if (!['&&', '||', '??'].includes(operator)) return null;
-  return { start: node.left.getStart(), end: node.end, evaluation: node.left.getStart(), taken: node.right.getStart(), sides: ['right', 'short-circuit'] };
+  return { start: node.left.getStart(), end: node.end, evaluation: node.left.getStart(), taken: node.right.getStart(), sides: ['right', 'short-circuit'], ...logicalLoopContext(ast, node) };
 }
 
 function conditionalNode(ast, node) {
@@ -99,12 +100,22 @@ function loopOutcomes(condition, ranges) {
   return [countAt(ranges, condition.taken) > initial, countAt(ranges, condition.after) > 0];
 }
 
+function executionResult(condition, record) {
+  return condition.logicalLoop ? logicalLoopOutcomes(condition, record) : sidesExecuted(condition, record.ranges);
+}
+
 export function conditionResult(condition, records, unverified) {
   const row = { line: condition.line, text: condition.text, untaken: [] };
   const reason = unverified ?? condition.unverified;
   if (reason) return { ...row, unverified: reason };
+  return measuredConditionResult(condition, records, row);
+}
+
+function measuredConditionResult(condition, records, row) {
   const sides = condition.sides ?? condition.arms.map((arm) => arm.name);
-  const executions = records.map((record) => sidesExecuted(condition, record.ranges));
+  const executions = records.map((record) => executionResult(condition, record));
+  const incomplete = executions.find((execution) => execution.unverified);
+  if (incomplete) return { ...row, unverified: incomplete.unverified };
   row.untaken = sides.filter((side, index) => !executions.some((counts) => counts[index]));
   return row.untaken.length ? row : null;
 }
