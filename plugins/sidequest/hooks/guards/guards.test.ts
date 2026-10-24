@@ -12,7 +12,7 @@ test('classic.PreToolUse carries only the tool envelope, and a guard deny comes 
     seen.push(Object.keys(e).sort())
     return next(e)
   })
-  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  passThrough(on)
 
   await $.tool.call({ tool: 'Bash', command: 'echo ok' })
   expect(seen).toEqual([['command', 'tool', 'tool_use_id']])
@@ -23,6 +23,9 @@ test('classic.PreToolUse carries only the tool envelope, and a guard deny comes 
 })
 
 function passThrough(on: On) {
+  on('session.id', () => ({ value: 'guards-session' }))
+  on('session.cwd', () => ({ value: 'C:/guards-project' }))
+  on('fs.read', () => ({ deny: 'ENOENT' }))
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
 }
 
@@ -48,4 +51,37 @@ test('the Windows-only guards stay silent off Windows', async ($, on) => {
   const ran = await $.tool.call({ tool: 'Bash', command: 'ls C:\\Users\\kenny\\x' })
   expect(ran).toMatchObject({ text: 'ran' })
   expect(ran.context).toBeUndefined()
+})
+
+test('an advisory guard error logs and toasts once without a duplicate plugin prefix or sticky status', async ($, on) => {
+  mock.env(on, WINDOWS)
+  passThrough(on)
+  const notices: string[] = []
+  const logs: object[] = []
+  const statuses: unknown[] = []
+  on('state.get', ($$, event, next) => {
+    if (event.key === 'inlineWork') return { deny: 'state unavailable' }
+    return next(event)
+  })
+  on('ui.toast', ($$, event) => { notices.push(event.text); return { value: undefined } })
+  on('ui.log', ($$, event) => { logs.push(event); return { value: undefined } })
+  on('ui.status', ($$, event) => { statuses.push(event.text); return { value: undefined } })
+  expect(await $.tool.call({ tool: 'Read', file_path: 'file.txt' })).toMatchObject({ text: 'ran' })
+  expect(notices).toEqual(['inline-work-nudge failed for Read: sidequest: $.state.get: state unavailable'])
+  expect(logs).toEqual([{ text: notices[0], to: 'debug' }])
+  expect(statuses).toEqual([])
+})
+
+test('a refusing guard error logs and toasts once and blocks the tool with its error', async ($, on) => {
+  mock.env(on, WINDOWS)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const notices: string[] = []
+  const logs: object[] = []
+  on('session.cwd', () => ({ deny: 'session cwd unavailable' }))
+  on('ui.toast', ($$, event) => { notices.push(event.text); return { value: undefined } })
+  on('ui.log', ($$, event) => { logs.push(event); return { value: undefined } })
+  const denied = await $.tool.call({ tool: 'Read', file_path: 'file.txt', agentId: 'executor' } as never)
+  expect(denied).toMatchObject({ deny: 'sidequest: guard-denied-tools failed for Read: sidequest: $.session.cwd: session cwd unavailable; tool call refused' })
+  expect(notices).toEqual(['guard-denied-tools failed for Read: sidequest: $.session.cwd: session cwd unavailable'])
+  expect(logs).toEqual([{ text: notices[0], to: 'debug' }])
 })

@@ -11,7 +11,7 @@ import { PYTHON_POLICIES, DEFAULT_PYTHON_POLICY } from '../lib/python.mjs';
 
 const HELP = `Usage:
   quality-gate crap [--project <root>] [--base <revision>] [--lcov <path>]
-                    [--coverage-command "<command>"] [--cc-only] [--json]
+                    [--coverage-command "<command>"] [--coverage-timeout-ms <ms>] [--cc-only] [--json]
                     [--complexity <lizard.csv>] [--python-policy <policy>] [--source <path>]...
   quality-gate provision
   quality-gate turn --json [--project <root>] [--since <iso>]
@@ -62,22 +62,26 @@ They use JS/TS/Python name regexes, never affect the verdict, and also run with 
 behind fresh isolated command output, then coverage/lcov.info when unset.
 Without a command, existing LCOV requires a sibling <lcov>.sources.json SHA-256 map
 from the same-byte coverage capture.
+--coverage-timeout-ms overrides config coverageTimeoutMs in either config path. Default 0 means no limit.
+Use an integer from 0 to 2147483647; 300000 is a 5-minute example. Timeouts kill the process tree.
 --coverage-command captures source hashes and requires fresh LCOV. It sets QUALITY_GATE_COVERAGE_DIR
 and QUARTERMASTER_COVERAGE_DIR to an empty isolated directory; write lcov.info there.
 $VAR, \${VAR} and %VAR% in the command expand before it runs, on every platform.
 Existing explicit or fallback output must be rewritten during the command. Missing or
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
-Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 unverified/prerequisite.
+Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 coverage-dependent unverified/prerequisite.
 crap and measure receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
 --receipts-dir <path> overrides QUALITY_GATE_RECEIPTS_DIR for both commands (relative to cwd).
 New or complexity-raised bodies at complexity 6 or more fail even with UNVERIFIED coverage.
 Coverage stays UNVERIFIED; the failure row says failure: complexity floor.
+UNVERIFIED coverage passes when cc²+cc < 6 (cc 1); cc 2 to 5 still need coverage.
+Bound passes retain the reason and boundVerdict=pass in changedMetrics; branch checks still apply.
 --ratchet is deprecated; use --base. The threshold is fixed at 6; remove --max or config max overrides.
 `;
 
 function argumentsForCommand() {
-  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'coverage-timeout-ms', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
   Object.assign(options, Object.fromEntries(['cc-only', 'json', 'help'].map((name) => [name, { type: 'boolean' }])));
   options.source = { type: 'string', multiple: true };
   options['new-external-file'] = { type: 'string', multiple: true };
@@ -107,7 +111,7 @@ async function runMeasure(values, files) {
 
 async function capturedReport(values) {
   try {
-    return await crapReport({ ...values, ccOnly: values['cc-only'], coverageCommand: values['coverage-command'], pythonPolicy: values['python-policy'] });
+    return await crapReport({ ...values, ccOnly: values['cc-only'], coverageCommand: values['coverage-command'], coverageTimeoutMs: values['coverage-timeout-ms'], pythonPolicy: values['python-policy'] });
   } catch (error) {
     const unverified = [{ relativePath: '<gate>', line: 1, name: 'prerequisite', unverified: error.message }];
     return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], signals: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };

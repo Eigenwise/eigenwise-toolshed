@@ -30,6 +30,8 @@ Start with one small task you actually need to finish. Ask Claude:
 
 Open the ticket and confirm those details are there. If the task has an executable check, record its exact command and last result; put prose acceptance criteria in the description or comments.
 
+Verify validation skips single-quoted text when checking placeholders and environment variables, so jq bindings, named captures and patterns such as `grep -c '<li>' index.html` are accepted when the executable is available. Outside single quotes, unresolved `<placeholder>` values and unset `$NAME`, `${NAME}` or `%NAME%` variables still refuse. Double quotes keep variable checks active. Each unset variable name produces one message.
+
 Start a new Claude Code session in the same project, then ask:
 
 > Read Sidequest ticket SQ-N and its full recorded discussion. Tell me the saved next action before continuing.
@@ -81,6 +83,8 @@ CLI, dashboard, report prose and generic ticket links cannot grant this decision
 ## Integration branches in linked worktrees
 
 If your integration branch is checked out in a linked worktree, Sidequest selects that checkout for `integrate` and manual delivery recording. Singleton and wave integration always deliver onto the ticket's recorded branch. If that branch has no checkout, `integrate` creates a separate worktree under the board worktree root, leaving the registered checkout's branch and files unchanged. Clean temporary worktrees are removed after delivery; apply mode retains staged changes in the integration record's `worktree` path. Passing a different `integrationBranch` refuses, so changing the delivery target requires redispatch. An explicit `groomClose.worktree` still selects another worktree of the same repository. Dispatch keeps qualified branch refs, and submit keeps the frozen dispatch base.
+
+Pending candidates block wave assembly for overlapping changed paths only when they target the same integration branch. Separate story branches can each have a pending candidate for the same file without causing `candidate_overlap` across branches.
 
 ## Integration quality receipts
 
@@ -193,6 +197,8 @@ unsupported measurement stays visible.
 ### Choose the planning depth
 
 A bounded fix defaults to one owner and a focused check. Small fixes in a few known files may run inline without a ticket. Read-only investigations need no ticket either: on a routed project, `route_recipe(category).research` gives one read-only spawn that runs on that category's model (so codebase research and UX research can use different models). Native Explore or general-purpose agents still cover tiny lookups and unrouted projects. A story or wave needs 3+ independently checkable pieces and a stated reason; a review panel needs a named risk for each lens. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
+
+Ticketless research resolves the board from the session cwd, including repository subdirectories and linked worktrees. Quoted `--project` commands in the research task do not select a board. An unregistered cwd gets a project-resolution refusal; a mismatched research prefix gets the route-prefix refusal.
 
 For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
 tests: shared authority and callers, the smallest existing seam, support for the project's configured quality gate, if any, genuine

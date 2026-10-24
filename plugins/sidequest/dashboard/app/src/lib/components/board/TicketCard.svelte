@@ -12,7 +12,7 @@
   const labels = $derived((data.labels ?? []).slice(0, 4) as string[]);
   const claim = $derived(data.claim as { by?: string; at?: string } | undefined);
   const files = $derived(Array.isArray(data.files) ? data.files as string[] : []);
-  const comments = $derived(Array.isArray(data.comments) ? data.comments as unknown[] : []);
+  const commentCount = $derived(Number(ticket.commentCount ?? 0));
   const questline = $derived(story?.color ?? `var(--status-${ticket.status ?? 'todo'})`);
 
   function showImage(filename: string) { state.selectLightboxImage(ticket, filename); }
@@ -29,10 +29,10 @@
 
 <article class:has-story={Boolean(story)} class="card" data-tour="ticket-card" style:--questline={questline} draggable="true" ondragstart={() => { ondragging(true); state.setDragging(true); }} ondragend={() => { ondragging(false); state.setDragging(false); }}>
   <span class="questline" aria-hidden="true"><span class="waypoint"></span>{#if claim?.by}<span class="claim-node"></span>{/if}</span>
-  <button class="card-main" onclick={() => state.openDialog = ticket.id}>
+  <button class="card-main" onclick={() => state.openTicket(ticket)}>
     <span class="topline"><code>{ticket.ref}</code>{#if state.selectedProject === 'all'}<span class="project">{project?.name ?? projectFor(ticket)}</span>{/if}{#if story}<span class="story" style:--story={story.color}>{story.title}</span>{/if}{#if category?.name}<span class="category">{category.name}</span>{/if}<span class={`priority ${ticket.priority ?? 'normal'}`}>{ticket.priority ?? 'normal'}</span></span>
     <strong>{ticket.title}</strong>
-    {#if ticket.description}<span class="description">{plainText(ticket.description)}</span>{/if}
+    {#if ticket.summary}<span class="description">{plainText(ticket.summary)}</span>{/if}
     <span class="footer">
       {#if data.needsReply}<span class="chip reply">needs reply</span>{/if}
       {#if data.blocked}<span class="chip blocked">blocked</span>{/if}
@@ -42,7 +42,7 @@
       {#if data.model || data.effort}<span class="chip route">{String(data.model ?? 'any')}{data.effort ? ` · ${String(data.effort)}` : ''}{data.complexity ? ` · C${String(data.complexity)}` : ''}</span>{/if}
       {#each labels as label (label)}<span class="chip label">{label}</span>{/each}
       {#if files.length}<span class="meta" title={files.join(', ')}>files {files.length}</span>{/if}
-      {#if comments.length}<span class="meta">comments {comments.length}</span>{/if}
+      {#if commentCount}<span class="meta">comments {commentCount}</span>{/if}
       <time datetime={String(ticket.updatedAt ?? '')}>{relativeTime(ticket.updatedAt)}</time>
     </span>
   </button>

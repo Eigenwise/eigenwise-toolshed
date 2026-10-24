@@ -43,6 +43,7 @@ function parseConfig(configPath) {
 
 function validateConfig(config) {
   if (Object.prototype.toString.call(config) !== '[object Object]') throw new Error('Config must be a JSON object');
+  validateCoverageTimeout(config.coverageTimeoutMs);
   for (const key of ['sources', 'exclude']) validateStringArray(config[key], key);
   for (const key of ['base', 'ratchet', 'lcov', 'coverageCommand', 'pythonPolicy']) validateString(config[key], key);
 }
@@ -61,6 +62,19 @@ function firstDefined(values) {
   return values.find((value) => value != null);
 }
 
+function validateCoverageTimeout(value) {
+  if (value !== undefined && typeof value !== 'number') throw new Error('coverageTimeoutMs must be a number');
+  coverageTimeoutMs(value);
+}
+
+function coverageTimeoutMs(value = 0) {
+  const timeout = Number(value);
+  if (String(value).trim() === '' || !Number.isInteger(timeout) || timeout < 0 || timeout > 2147483647) {
+    throw new Error('coverageTimeoutMs / --coverage-timeout-ms must be an integer from 0 to 2147483647 (0 means no limit)');
+  }
+  return timeout;
+}
+
 function assertCcOnlyOptions(options) {
   if (options.ccOnly && firstDefined([options.lcov, options.coverageCommand])) throw new Error('--cc-only runs no coverage. Drop --cc-only, or drop --lcov and --coverage-command.');
 }
@@ -74,6 +88,7 @@ export function gateSettings(options, config) {
     source: options.source, sources: firstDefined([config.sources, ['.']]), trackedOnly: !config.sources?.length,
     exclude: config.exclude ?? ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/vendor/**', '**/test/fixtures/**'],
     base: firstDefined([options.base, config.base, options.ratchet, config.ratchet]),
+    coverageTimeoutMs: coverageTimeoutMs(firstDefined([options.coverageTimeoutMs, config.coverageTimeoutMs])),
     lcov: options.lcov, fallbackLcov: config.lcov, coverageCommand: firstDefined([options.coverageCommand, config.coverageCommand]),
     usedDeprecatedRatchet: !firstDefined([options.base, config.base]) && Boolean(firstDefined([options.ratchet, config.ratchet])),
   };

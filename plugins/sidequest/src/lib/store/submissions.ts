@@ -3913,13 +3913,16 @@ function collidingChangedPaths(participant: any, sibling: any) {
   return scopedPaths(participant?.submission?.changedPaths).filter((surface: string) => isInScope(surface, siblingChanges));
 }
 
-function waveScopeConflicts(slug: any, tickets: any[]) {
+function waveScopeConflicts(slug: any, tickets: any[], targetBranch?: string) {
   const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
-  const boardTickets = listTickets(slug);
+  const boardTickets: Array<WaveTicket & { archived?: boolean; status?: string }> = listTickets(slug);
+  const pendingSiblings = boardTickets.filter((sibling) =>
+    !sibling.archived && sibling.status !== 'done' && !participantRefs.has(sibling.ref) && pendingCandidateBlocksWave(slug, sibling, boardTickets));
+  const sameTargetSiblings = pendingSiblings.filter((sibling) =>
+    !targetBranch || ticketIntegrationTarget(slug, sibling).branch === targetBranch);
   const conflicts: any[] = [];
   for (const participant of tickets) {
-    for (const sibling of boardTickets) {
-      if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !pendingCandidateBlocksWave(slug, sibling, boardTickets)) continue;
+    for (const sibling of sameTargetSiblings) {
       if (!submissionWasRecordedAfter(sibling, participant)) continue;
       if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
       const surfaces = collidingChangedPaths(participant, sibling);
@@ -4311,7 +4314,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
     return { ok: false, reason: 'wave_baseline_required', message: 'Every submitted candidate must retain its dispatch baseline, changed surfaces, and verifier evidence before wave assembly.' };
   }
   const waveCandidates = candidates.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
-  const scopeConflicts = waveScopeConflicts(slug, tickets);
+  const scopeConflicts = waveScopeConflicts(slug, tickets, target?.branch);
   if (scopeConflicts.length) {
     return {
       ok: false,

@@ -10,6 +10,7 @@ export interface Project {
   archivedAt?: string | null;
   routing?: 'enabled' | 'disabled';
   notify?: boolean;
+  counts?: { todo: number; doing: number; done: number };
   [key: string]: unknown;
 }
 
@@ -26,7 +27,10 @@ export interface Ticket {
   project?: string;
   projectSlug?: string;
   title: string;
+  /** Only on the full ticket from `ApiClient.ticket`; list rows carry `summary`. */
   description?: string;
+  summary?: string;
+  commentCount?: number;
   status: Status;
   priority?: Priority;
   labels?: string[];
