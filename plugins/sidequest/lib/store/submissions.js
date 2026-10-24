@@ -1042,13 +1042,14 @@ ${verify.outputTail}` : null
       if (!provisioning.ok) throw new Error(provisioning.message);
       return deliver(temporary);
     } finally {
-      removeCleanIntegrationCheckout(repository, temporary);
+      removeCleanIntegrationCheckout(slug, repository, temporary);
     }
   }
-  function removeCleanIntegrationCheckout(repository, checkout) {
+  function removeCleanIntegrationCheckout(slug, repository, checkout) {
     try {
       if (integrationGit(checkout, ["status", "--porcelain", "--untracked-files=all"])) return;
       if (integrationOperationResidue(checkout).length) return;
+      worktrees.releaseGateDependencyLinks(checkout, boardConfig(slug).worktreeDependencyPaths || []);
       integrationGit(repository, ["worktree", "remove", checkout]);
     } catch (error) {
       process.stderr.write(`Integration checkout retained at ${checkout}: ${integrationGitError(error)}
@@ -3455,10 +3456,7 @@ ${parts.join("\n\n")}` });
     }
   }
   function removeComposedWaveCheckout(slug, repository, checkout) {
-    for (const dependency of boardConfig(slug).worktreeDependencyPaths) {
-      const link = path.resolve(checkout, dependency.path);
-      if (fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(link);
-    }
+    worktrees.releaseGateDependencyLinks(checkout, boardConfig(slug).worktreeDependencyPaths || []);
     fs.rmSync(checkout, { recursive: true, force: true });
     integrationGit(repository, ["worktree", "prune"]);
   }
