@@ -1,6 +1,6 @@
 "use strict";
-const BOARD_CONFIG_PATCH_KEYS = /* @__PURE__ */ new Set(["githubSync", "jiraBaseUrl", "name", "alwaysInScope", "investigationDataRoots", "readOnlyDeniedTools", "deniedTools", "generatedPairs", "integrationMode", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "worktreeIsolation", "verifyEnvironment", "worktreeBase", "notIntegratedSalvageAgeHours", "worktreeRecoveryRetentionAgeHours", "autoApproveTestScope", "autoApproveScope", "worktreeSetup", "worktreeDependencyPaths"]);
-const BOARD_CONFIG_NULL_LEAVES_ALONE = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "verifyEnvironment"]);
+const BOARD_CONFIG_PATCH_KEYS = /* @__PURE__ */ new Set(["githubSync", "jiraBaseUrl", "name", "alwaysInScope", "investigationDataRoots", "readOnlyDeniedTools", "deniedTools", "generatedPairs", "integrationMode", "integrationQuality", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "worktreeIsolation", "verifyEnvironment", "worktreeBase", "notIntegratedSalvageAgeHours", "worktreeRecoveryRetentionAgeHours", "autoApproveTestScope", "autoApproveScope", "worktreeSetup", "worktreeDependencyPaths"]);
+const BOARD_CONFIG_NULL_LEAVES_ALONE = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationQuality", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "verifyEnvironment"]);
 function boardConfigPatchAccepts(key, value) {
   if (!BOARD_CONFIG_PATCH_KEYS.has(key) || value === void 0) return false;
   return value !== null || !BOARD_CONFIG_NULL_LEAVES_ALONE.has(key);
@@ -439,6 +439,7 @@ const tools = [
         deniedTools: { type: "array", items: { type: "string" } },
         generatedPairs: {},
         integrationMode: { type: "string", description: "auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode." },
+        integrationQuality: { type: "string", enum: ["enforce", "report", "off"], description: "Integration quality: enforce (default) refuses measured failures, report records without refusing, off skips measurement. Whole-run capture gaps create no debt tickets; captures are removed after measurement." },
         integrationBranch: { type: "string", minLength: 1, description: "Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>." },
         delivery: { type: "string", description: "Default submission delivery mode. Defaults to merge." },
         integrationVerifyTimeoutMs: { type: "integer" },

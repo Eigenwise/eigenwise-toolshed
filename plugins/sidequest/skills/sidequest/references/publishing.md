@@ -50,8 +50,15 @@ merge commit as an automatic refusal.
 
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
-Use the project's configured quality gate, if any. Hold integration for missing quality measurement
-only when a gate is configured. Without one, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. User rules injected by
+Use the project's configured quality gate, if any. Board setting `integrationQuality` accepts
+`enforce` (default), `report`, or `off`; CLI: `board-config --integration-quality enforce|report|off`.
+`enforce` refuses measured failures. `report` records the same receipt without refusing delivery for
+quality failures. `off` skips measurement and capture, but still runs the pinned verifier.
+Coverage gaps stay UNVERIFIED. When every row has the same missing-coverage-record reason, the receipt
+records that whole-run capture gap without creating debt tickets. Partial gaps still create debt.
+Vitest-run projects get no measurement until quality-gate supports Vitest workers.
+Raw coverage captures are removed after measurement by default; receipts remain. The internal
+`keepCapture` debugging option retains a capture when explicitly requested. Without one, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. User rules injected by
 the host still apply; gate absence alone never holds, parks or marks work UNVERIFIED.
 
 ## When to run it (event-driven, never polled)

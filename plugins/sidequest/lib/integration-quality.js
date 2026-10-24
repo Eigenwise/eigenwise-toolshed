@@ -82,6 +82,13 @@ function emptyQuality(status) {
 function unverifiedQuality(error) {
   return { ...emptyQuality("unverified"), unverified: [{ name: "integration measurement", unverified: String(error) }] };
 }
+function wholeRunCaptureGap(report) {
+  const reason = report.unverified[0]?.unverified;
+  if (!reason?.startsWith("no suite loaded this file, so it has no coverage record")) return void 0;
+  const rows = report.changedMetrics ?? [];
+  if (!rows.length) return void 0;
+  return rows.every((row) => row.unverified === reason) ? reason : void 0;
+}
 function reportQuality(report, base) {
   const enforced = (report.changedMetrics ?? []).filter((row) => row.classification !== "legacy-unchanged");
   const floorFailures = enforced.filter((row) => (row.complexity ?? 0) >= 6).map((row) => `${row.relativePath}:${row.line} ${row.name} cc=${row.complexity} (complexity floor)`);
@@ -90,6 +97,7 @@ function reportQuality(report, base) {
   const measured = { ...emptyQuality("measured"), baseline: base, enforced: enforced.length, failures, unverified };
   return {
     ...measured,
+    captureGap: wholeRunCaptureGap(report),
     status: qualityStatus(failures, unverified),
     worstBody: enforced.slice().sort((left, right) => (right.crap ?? -1) - (left.crap ?? -1))[0],
     branches: enforced.map((row) => ({ file: row.relativePath, name: row.name, conditions: row.branches ?? [] }))
@@ -107,7 +115,7 @@ function measuredQuality(gate, input, captureDirectory) {
 }
 function persistQuality(input, quality) {
   const receipt = import_node_path.default.join(input.directory, "receipt.json");
-  const recorded = { ...quality, receipt };
+  const recorded = { ...quality, receipt, coverageSupport: "Vitest-run projects get no measurement until quality-gate supports Vitest workers." };
   import_node_fs.default.writeFileSync(receipt, JSON.stringify(recorded, null, 2) + "\n");
   return recorded;
 }
@@ -115,7 +123,7 @@ function captureEnvironment(gate, directory, environment) {
   const preload = "--import=" + (0, import_node_url.pathToFileURL)(import_node_path.default.join(gate, "lib", "core.mjs")).href;
   return { ...environment, NODE_OPTIONS: [environment.NODE_OPTIONS, preload].filter(Boolean).join(" "), QUALITY_GATE_V8_CAPTURE: import_node_path.default.join(directory, "coverage") };
 }
-function participantQuality(gate, input, captureDirectory) {
+function participantQuality(gate, input, captureDirectory, mode) {
   import_node_fs.default.mkdirSync(input.directory, { recursive: true });
   let quality;
   try {
@@ -123,31 +131,46 @@ function participantQuality(gate, input, captureDirectory) {
   } catch (error) {
     quality = unverifiedQuality(error);
   }
-  return persistQuality(input, quality);
+  return persistQuality(input, { ...quality, mode });
 }
-function unavailableQuality(inputs, verify, error, environment) {
+function unavailableQuality(inputs, verify, error, environment, mode) {
   const quality = inputs.map((input) => {
     import_node_fs.default.mkdirSync(input.directory, { recursive: true });
-    return persistQuality(input, unverifiedQuality(error));
+    return persistQuality(input, { ...unverifiedQuality(error), mode });
   });
   return { ...verify(environment), quality };
 }
-function runIntegrationQuality(inputs, verify, environment = process.env) {
+function captureQuality(gate, inputs, verify, environment, options) {
+  const primary = inputs[0];
+  const captureDirectory = import_node_path.default.join(primary.directory, "coverage");
+  import_node_fs.default.mkdirSync(captureDirectory, { recursive: true });
+  try {
+    const verification = verify(captureEnvironment(gate, primary.directory, environment));
+    const quality = inputs.map((input) => participantQuality(gate, input, captureDirectory, options.mode ?? "enforce"));
+    return { ...verification, quality };
+  } finally {
+    if (!options.keepCapture) import_node_fs.default.rmSync(captureDirectory, { recursive: true, force: true });
+  }
+}
+function runIntegrationQuality(inputs, verify, environment = process.env, options = {}) {
+  const mode = options.mode ?? "enforce";
+  if (mode === "off") return { ...verify(environment), quality: inputs.map(() => emptyQuality("none")) };
   const primary = inputs[0];
   let gate;
   try {
     gate = configuredIntegrationGate(primary.registeredProject);
   } catch (error) {
-    return unavailableQuality(inputs, verify, error, environment);
+    return unavailableQuality(inputs, verify, error, environment, mode);
   }
-  if (!gate) return { ...verify(environment), quality: [emptyQuality("none")] };
-  const captureDirectory = import_node_path.default.join(primary.directory, "coverage");
-  import_node_fs.default.mkdirSync(captureDirectory, { recursive: true });
-  const verification = verify(captureEnvironment(gate, primary.directory, environment));
-  const quality = inputs.map((input) => participantQuality(gate, input, captureDirectory));
-  const failures = quality.flatMap((result) => result.failures);
-  if (!failures.length) return { ...verification, quality };
-  return { ...verification, quality, status: "failed_check", evidence: "Native quality gate refused delivery: " + failures.map((row) => JSON.stringify(row)).join("; "), failureIdentities: ["quality:measured-failure"] };
+  if (!gate) return { ...verify(environment), quality: inputs.map(() => emptyQuality("none")) };
+  const result = captureQuality(gate, inputs, verify, environment, options);
+  return enforceQuality(result, mode);
+}
+function enforceQuality(result, mode) {
+  if (mode === "report") return result;
+  const failures = result.quality.flatMap((quality) => quality.failures);
+  if (!failures.length) return result;
+  return { ...result, status: "failed_check", evidence: "Native quality gate refused delivery: " + failures.map((row) => JSON.stringify(row)).join("; "), failureIdentities: ["quality:measured-failure"] };
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

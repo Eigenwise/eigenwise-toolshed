@@ -861,7 +861,7 @@ function qualityInput(slug: string, ticket: QualityTicket, project: string, time
 }
 
 function recordQualityDebt(slug: string, ticket: QualityTicket, quality: IntegrationQuality) {
-  if (!quality.unverified.length) return;
+  if (!quality.unverified.length || quality.captureGap) return;
   const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
   transaction(() => {
     if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
@@ -881,7 +881,7 @@ function recordQualityDebt(slug: string, ticket: QualityTicket, quality: Integra
 
 function verifyCandidateQuality(slug: string, tickets: QualityTicket[], project: string, timeoutMilliseconds: number, verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv) {
   const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
-  const result = runIntegrationQuality(inputs, verify, environment);
+  const result = runIntegrationQuality(inputs, verify, environment, { mode: boardConfig(slug)?.integrationQuality });
   result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index]!, quality));
   return result;
 }

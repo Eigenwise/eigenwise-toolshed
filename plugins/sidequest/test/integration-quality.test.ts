@@ -97,3 +97,124 @@ test('native quality orchestration records none when no gate is registered for t
   assert.equal(result.quality[0]!.status, 'none');
   assert.equal(fs.existsSync(input.directory), false);
 });
+
+const captureGapReason = 'no suite loaded this file, so it has no coverage record (a child process needs QUALITY_GATE_V8_CAPTURE and the shared core preload in NODE_OPTIONS)';
+
+function writeGapReport(input: QualityInput, partial: boolean): void {
+  const missing = { relativePath: 'source.js', name: 'missingBody', complexity: 2, classification: 'new', unverified: captureGapReason };
+  const other = partial
+    ? { relativePath: 'source.js', name: 'coveredBody', complexity: 2, classification: 'new', crap: 2, coverage: 1 }
+    : { ...missing, name: 'anotherMissingBody' };
+  const report = { changedMetrics: [missing, other], failures: [], unverified: partial ? [missing] : [missing, other] };
+  fs.writeFileSync(path.join(input.project, 'gate', 'bin', 'quality-gate.js'), 'process.stdout.write(' + JSON.stringify(JSON.stringify(report)) + ');');
+}
+
+function verifyDeliveredQuality(input: QualityInput, mode = 'enforce') {
+  const { createSubmissions } = require('../src/lib/store/submissions.js');
+  const ticket = {
+    id: 'quality-fixture', ref: 'SQ-quality', comments: [],
+    executorVerify: 'node -e "process.exit(0)"', executorVerifyKind: 'command',
+    submission: { base: input.base, commit: 'candidate', changedPaths: input.changedPaths, integration: { outcome: 'delivered' } },
+  };
+  const debts: unknown[] = [];
+  fs.mkdirSync(path.join(input.project, 'gate', 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(input.project, 'gate', 'lib', 'core.mjs'), '');
+  const submissions = createSubmissions({
+    fs, path, crypto: require('node:crypto'),
+    getTicket: () => ticket, readMeta: () => ({ path: input.project }),
+    boardConfig: () => ({ integrationQuality: mode }),
+    normalizeIntegrationVerifyTimeoutMs: () => input.timeoutMilliseconds,
+    verifyCommandError: () => null, dispatchState: () => ({ evidenceDirectory: input.directory }),
+    ensureDir: (directory: string) => fs.mkdirSync(directory, { recursive: true }),
+    listTickets: () => [], createTicket: (_slug: string, debt: unknown) => debts.push(debt),
+    transaction: (callback: () => void) => callback(),
+    withTicketLock: (_slug: string, _id: string, callback: () => unknown) => callback(),
+    putTicket: () => {}, queueEventNotification: () => {}, addComment: () => ({ ticket }),
+  });
+  return { result: submissions.verifyIntegration('quality-project', ticket.ref), debts };
+}
+
+test('whole-run capture gaps record their reason without filing debt tickets', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, false);
+  const { result, debts } = verifyDeliveredQuality(input);
+  assert.equal(result.ok, true);
+  assert.deepEqual(debts, []);
+  const quality = result.verify.quality[0];
+  assert.equal(quality.captureGap, captureGapReason);
+  const receipt = JSON.parse(fs.readFileSync(quality.receipt, 'utf8'));
+  assert.equal(receipt.captureGap, captureGapReason);
+  assert.match(receipt.coverageSupport, /Vitest.*no measurement.*Vitest workers/);
+  assert.equal(fs.existsSync(path.join(path.dirname(quality.receipt), 'coverage')), false);
+});
+
+test('partial capture gaps still file one debt ticket', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, true);
+  const { result, debts } = verifyDeliveredQuality(input);
+  assert.equal(result.ok, true);
+  assert.equal(result.verify.quality[0].captureGap, undefined);
+  assert.equal(debts.length, 1);
+});
+
+test('report mode records measured failures without refusing the verifier', (context) => {
+  const input = withQualityFixture(context, 7, true);
+  const { result } = verifyDeliveredQuality(input, 'report');
+  assert.equal(result.ok, true);
+  assert.equal(result.verify.status, 'passed');
+  const quality = result.verify.quality[0];
+  assert.equal(quality.status, 'failed');
+  assert.equal(quality.failures.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(quality.receipt, 'utf8')).mode, 'report');
+});
+
+test('off mode skips registry access and capture while verifying once', (context) => {
+  const input = withQualityFixture(context, 7, true);
+  fs.writeFileSync(path.join(input.project, 'claude', 'plugins', 'installed_plugins.json'), '{invalid');
+  let calls = 0;
+  const result = runIntegrationQuality([input], (environment) => {
+    calls += 1;
+    assert.equal(environment, process.env);
+    return { kind: 'command', status: 'passed', evidence: 'off verifier' };
+  }, process.env, { mode: 'off' });
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.quality[0]!.status, 'none');
+  assert.equal(fs.existsSync(input.directory), false);
+});
+
+test('capture is removed after measurement and when verification throws', (context) => {
+  const input = withQualityFixture(context, 3, true);
+  runIntegrationQuality([input], (environment) => {
+    fs.writeFileSync(path.join(environment.QUALITY_GATE_V8_CAPTURE!, 'capture.json'), '{}');
+    return { kind: 'command', status: 'passed', evidence: 'captured' };
+  });
+  assert.equal(fs.existsSync(path.join(input.directory, 'coverage')), false);
+  assert.throws(() => runIntegrationQuality([input], () => { throw new Error('verifier threw'); }), /verifier threw/);
+  assert.equal(fs.existsSync(path.join(input.directory, 'coverage')), false);
+});
+
+test('keepCapture retains raw evidence only when explicitly requested', (context) => {
+  const input = withQualityFixture(context, 3, true);
+  runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'debug capture' }), process.env, { keepCapture: true });
+  assert.equal(fs.existsSync(path.join(input.directory, 'coverage')), true);
+});
+
+test('board configuration validates integration quality and MCP exposes the same modes', (context) => {
+  const input = withQualityFixture(context, 3, true);
+  const store = require('../lib/store.js');
+  const { slug } = store.ensureProject(input.project);
+  assert.equal(store.boardConfig(slug).integrationQuality, 'enforce');
+  for (const mode of ['report', 'off', 'enforce']) {
+    assert.equal(store.setBoardConfig(slug, { integrationQuality: mode }).config.integrationQuality, mode);
+  }
+  assert.throws(() => store.setBoardConfig(slug, { integrationQuality: 'ignore' }), /integrationQuality must be/);
+  const mcp = require('../lib/mcp.js');
+  const { makeCliRunner } = require('./_helpers.js');
+  const { runCli } = makeCliRunner(path.resolve(__dirname, '../bin/sidequest.js'), { ...process.env, CLAUDE_PROJECT_DIR: input.project }, { cwd: input.project });
+  const cli = runCli(['board-config', '--integration-quality', 'report', '--json']);
+  assert.equal(cli.status, 0, cli.stderr + cli.stdout);
+  assert.equal(JSON.parse(cli.stdout).integrationQuality, 'report');
+  const tools = mcp.tools || mcp.TOOLS;
+  assert.deepEqual(tools.find((tool: { name: string }) => tool.name === 'board_config').inputSchema.properties.integrationQuality.enum, ['enforce', 'report', 'off']);
+});
