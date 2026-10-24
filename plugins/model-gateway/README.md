@@ -1,6 +1,6 @@
 # Model Gateway
 
-Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Claude Code v2.1.129+ can show those gateway models in its `/model` picker. It keeps normal Claude models on Anthropic and routes only the selected gateway models through your subscription.
+Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code, with an experimental native Antigravity frontend when a compatible proxy explicitly enables it. Claude Code v2.1.129+ can show gateway models in its `/model` picker. Normal Claude models stay on Anthropic; reserved invalid Antigravity selectors are refused, never rerouted.
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/model-gateway/) · [Toolshed marketplace](../../README.md)
 
@@ -68,11 +68,35 @@ That’s it for daily use. The plugin keeps the gateway running: its shim superv
 
 On Windows, startup uses WMI to launch the supervisor outside the calling terminal or hook's process tree and Job Object. Closing or timing out that caller therefore leaves the shared gateway running. Startup preserves the caller's environment, hides the launcher window, and reports a launch failure instead of falling back to a process that can be killed with the hook.
 
-SessionStart stops waiting after 12 seconds, well inside its 30-second hook budget. The supervisor keeps starting in the background, and Claude tells you to retry a Codex model in a few seconds if it is not ready yet.
+SessionStart stops waiting after 12 seconds, well inside its 30-second hook budget. The supervisor keeps starting in the background, and Claude tells you to retry the selected onboarding provider's model in a few seconds if it is not ready yet.
+
+## Experimental native Antigravity
+
+This frontend requires the proxy's compatible schema-v1 **native** capability contract; an old binary, version number, or `models.json` entry cannot establish support. Native backend availability in an upstream release and live Google access are not verified by this frontend. Sidequest's requested-provider refresh/missing-row support is a separate dependent update; the committed generic pinned-executor path is covered by synthetic consumer fixtures.
+
+| Picker ID | Native proxy ID |
+| --- | --- |
+| `claude-antigravity-gemini-4-argon-low` | `antigravity/gemini-4-argon-low` |
+| `claude-antigravity-gemini-4-argon-medium` | `antigravity/gemini-4-argon-medium` |
+| `claude-antigravity-gemini-4-argon-high` | `antigravity/gemini-4-argon-high` |
+
+Only those exact forms are direct routes. Discovery advertises picker IDs; responses retain the exact requested form. Keep model, tier, selector spelling and native profile fixed for a session. Start fresh when any changes. Antigravity is not supported through `claude-codex-auto` markers or cached/inherited routes; even an invalid slash/bracket marker in earlier user history is refused before fallback or persistence. Tool results, assistant text and bare prose are not routing authority.
+
+Use `auth antigravity login`, `auth antigravity status [--json]`, and `auth antigravity logout` for native auth. They work while inference is disabled, do not import other credentials, and never enable the provider. There is no Antigravity device flow. `setup --provider antigravity` selects onboarding/readiness guidance, not backend enablement or a model tier. A compatible explicitly enabled serving backend and locally usable auth/project configuration are required; ChatGPT login is not. Bare `login [--device]` remains Codex-only.
+
+The nonsecret `~/.claude/model-gateway/onboarding.json` preference is `{ "schemaVersion": 1, "provider": "antigravity" }` (the other valid provider is `codex`). Missing means Codex without creating a file. Only explicit `setup --provider` changes it; plain setup and `--preserve-wiring` keep it. Invalid/future records are preserved with an error. When Antigravity compatibility is required, setup probes the staged candidate read-only before replacing the installed binary or restarting services. It refuses an incompatible candidate without replacing the current installation; local prerelease integration is not permission to bypass that check.
+
+Antigravity advertises a conservative **unmeasured 200,000-token** client window. Its native backend window is unverified. It has no `[1m]`, context-1m beta, Codex window override, synthetic sentry or Codex billing/compaction policy. Only Messages and count_tokens are supported, not OpenAI-compatible endpoints. Requests preserve original bytes except the top-level model token; native replay/schema handling stays in the proxy. Response identity rewriting touches only JSON `message.model` and SSE `message_start.message.model`, never nested tool fields or opaque carriers.
+
+Generation is never automatically resent through either local hop. Client cancellation cancels only its owned request, not processes, and cannot undo charges already incurred. Ambiguous generation failures carry `x-should-retry: false`; retry manually only if another generation is intended. The dedicated relay limits SSE frames to 16 MiB, nonstream bodies to 24 MiB, total streamed wire data to 32 MiB and elapsed relay time to 900,000 ms. Error/truncated streams remain failures; no stop or text is synthesized. The real `message_stop` and any following tail are held within the stream budget until clean HTTP-body EOF, not TCP socket close, so a client finishing on that event cannot miss a later failure. Multiline SSE data prefixes and line endings are preserved when rewriting model identity. These rules do not alter legacy Codex/Grok retry behavior.
+
+Capability discovery is conditional and read-only. Only exact native-listed IDs are admitted. Authoritative disable/model removal removes stale Antigravity rows; missing auth alone does not. Transient/malformed observations retain historical identity with unready status, not refreshed readiness. An empty shim list does not refresh the catalog timestamp unless a validated AGY model removal is observed. Retained Codex rows use current Codex readiness, never a restored historical ready flag. Schema-4 catalogs keep provider readiness to `ready`, `state`, `message`; `codexReadiness` still means Codex. Local readiness never verifies Google access.
 
 ## Local gateway records
 
 The shim writes request-route metadata to `~/.claude/model-gateway/logs/request-routes.jsonl` by default. Each JSONL record contains the time, backend, model, request path, and, when available, route, effort, session, agent, parent-agent, dispatch-marker length, and session-source fields. It does not write request bodies, prompts, messages, tools, authentication, or arbitrary headers. Set `CODEX_GATEWAY_REQUEST_LOG=0` before the shim starts, then restart the shim through the normal setup or ensure path, to disable this route log. The setting is read by the shim process at startup, not by `/reload-plugins` in an already-running process. The path can be changed with `CODEX_GATEWAY_REQUEST_LOG_PATH`.
+
+Antigravity usage is aggregate-only: validated provider input/output/cache/reasoning counters and actual wire-byte counts. Carrier overhead is not a tokenizer measurement. No byte-derived token, tool, section-cache, TTL or subscription-price attribution is invented; existing telemetry consent switches remain in effect.
 
 When consent-gated route telemetry is enabled, compaction route spans add a fixed outcome, upstream status, terminal or allowlisted error code, elapsed time, and observed input/output/cache counters. Outcomes are `completed`, `empty_summary`, `incomplete`, `aborted`, `upstream_error`, or `unknown_error`. These fields never include summary text, prompts, raw responses, or arbitrary provider error text.
 
@@ -110,7 +134,7 @@ Tell Claude what happened, for example:
 
 Claude checks authentication, local processes, ports, model discovery, updates, and settings precedence through the bundled skill. You don’t need to run the gateway’s internal commands yourself.
 
-Authentication recovery and picker recovery have different boundaries. If auth is missing, complete `login` and let Claude run `setup` again; the already-running proxy can use the refreshed credential without killing the current Claude Code process. If settings, discovery cache, plugin files, or model rows changed, fully restart the Claude Code process for the affected project. `/reload-plugins` alone does not refresh the picker.
+Authentication recovery and picker recovery have different boundaries. For Codex, if auth is missing, complete `login` and let Claude run `setup` again; the already-running proxy can use the refreshed credential without killing the current Claude Code process. If settings, discovery cache, plugin files, or model rows changed, fully restart the Claude Code process for the affected project. `/reload-plugins` alone does not refresh the picker.
 
 ## Remote Control
 

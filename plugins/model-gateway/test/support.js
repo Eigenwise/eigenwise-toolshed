@@ -660,6 +660,12 @@ const ISOLATED_GATEWAY_ENVIRONMENT_KEYS = [
   'HOME',
   'USERPROFILE',
   'CLAUDE_CONFIG_DIR',
+  'MODEL_GATEWAY_CLAUDE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_STATE_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_DATA_HOME',
+  'XDG_RUNTIME_DIR',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_UNIX_SOCKET',
   'CODEX_HOME',
@@ -674,9 +680,12 @@ const ISOLATED_GATEWAY_ENVIRONMENT_KEYS = [
   'no_proxy',
 ];
 
+function isolatedGatewayKey(key) {
+  return key.startsWith('CODEX_GATEWAY_') || key.startsWith('CCP_') || ISOLATED_GATEWAY_ENVIRONMENT_KEYS.includes(key);
+}
+
 function isInheritedGatewayOverride(key, value) {
-  return (key.startsWith('CODEX_GATEWAY_') || ISOLATED_GATEWAY_ENVIRONMENT_KEYS.includes(key))
-    && value === process.env[key];
+  return isolatedGatewayKey(key) && value === process.env[key];
 }
 
 function testSocketPath(home) {
@@ -684,23 +693,31 @@ function testSocketPath(home) {
   return path.join(home, 'gateway.sock');
 }
 
-function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
+function fixtureHome(overrides) {
   const suppliedHome = overrides.HOME || overrides.USERPROFILE;
-  const home = suppliedHome && suppliedHome !== process.env.HOME && suppliedHome !== process.env.USERPROFILE
-    ? suppliedHome
-    : fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-test-'));
-  const ownsHome = home !== suppliedHome;
-  const environment = { ...process.env };
-  for (const key of Object.keys(environment)) {
-    if (key.startsWith('CODEX_GATEWAY_') || ISOLATED_GATEWAY_ENVIRONMENT_KEYS.includes(key)) delete environment[key];
-  }
+  const sharedHome = [process.env.HOME, process.env.USERPROFILE].includes(suppliedHome);
+  const home = suppliedHome && !sharedHome ? suppliedHome : fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-test-'));
+  return { home, ownsHome: home !== suppliedHome };
+}
+
+function applyFixtureOverrides(environment, overrides) {
   for (const [key, value] of Object.entries(overrides)) {
     if (!isInheritedGatewayOverride(key, value)) environment[key] = value;
   }
-  Object.assign(environment, {
+}
+
+function fixtureEnvironmentRoots(home) {
+  return {
     HOME: home,
     USERPROFILE: home,
     CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+    MODEL_GATEWAY_CLAUDE_HOME: path.join(home, '.claude'),
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+    XDG_STATE_HOME: path.join(home, '.local', 'state'),
+    XDG_CACHE_HOME: path.join(home, '.cache'),
+    XDG_DATA_HOME: path.join(home, '.local', 'share'),
+    XDG_RUNTIME_DIR: path.join(home, 'runtime'),
+    CCP_CONFIG_DIR: path.join(home, '.config', 'claude-code-proxy'),
     CODEX_HOME: path.join(home, '.codex'),
     MODEL_GATEWAY_REQUEST_BODY_DIR: path.join(home, '.claude', 'model-gateway', 'request-body'),
     HTTP_PROXY: '',
@@ -724,11 +741,15 @@ function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
     CODEX_GATEWAY_DISPATCH_CACHE_PATH: path.join(home, 'dispatch-routes.json'),
     CODEX_GATEWAY_REQUEST_LOG_PATH: path.join(home, 'request-routes.jsonl'),
     CODEX_GATEWAY_TELEMETRY_ENDPOINT: 'http://127.0.0.1:9',
-  });
-  for (const [key, value] of Object.entries(overrides)) {
-    if (!isInheritedGatewayOverride(key, value)) environment[key] = value;
-  }
-  for (const [key, value] of Object.entries(isolatedOverrides)) environment[key] = value;
+  };
+}
+
+function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
+  const { home, ownsHome } = fixtureHome(overrides);
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !isolatedGatewayKey(key)));
+  Object.assign(environment, fixtureEnvironmentRoots(home));
+  applyFixtureOverrides(environment, overrides);
+  Object.assign(environment, isolatedOverrides);
   return { environment, home, ownsHome };
 }
 

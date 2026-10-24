@@ -81,10 +81,18 @@ function runStateControl(t, environment) {
     state.setUpstreamBlocked({ statusCode: 429, evidence: 'headers:x-openai-request-id' });
     const suppressed = state.setUpstreamUnavailable({ statusCode: 502, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 2 });
     const beforeSetup = { unavailable: state.readUpstreamUnavailable(state.UPSTREAM_UNAVAILABLE_TTL_MS + 1), blocked: state.readUpstreamBlocked() };
-    state.clearUpstreamBlocked();
-    state.clearUpstreamUnavailable();
-    const afterSetup = { unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() };
-    process.stdout.write(JSON.stringify({ expired, retained, suppressed, beforeSetup, afterSetup }));
+    const gateway = require(${JSON.stringify(CLI)});
+    const stage = fs.mkdtempSync(require('node:path').join(process.env.HOME, 'fake-stage-'));
+    const lifecycle = [];
+    gateway.setup({ selection: { provider: 'codex', explicit: false, preserveWiring: true },
+      requires: async () => false, stage: async () => ({ stage }),
+      activate: async () => { lifecycle.push('activate'); return {}; },
+      start: async () => { lifecycle.push('start'); return true; },
+      finish: async () => { lifecycle.push('finish'); await gateway.setupProviderReady('codex', { auth: () => false, report: () => {} }); },
+    }).then(() => {
+      const afterSetup = { unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() };
+      process.stdout.write(JSON.stringify({ expired, retained, suppressed, beforeSetup, afterSetup, lifecycle }));
+    }).catch((error) => { console.error(error.message); process.exitCode = 1; });
   `;
   return new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, ['-e', script], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -177,7 +185,6 @@ test('readiness reports each local failure state from an isolated home', async (
 
 test('setup clears both isolated upstream records without reader mutation', async (t) => {
   const result = await runStateControl(t, gatewayTestEnvironment(t));
-  const setupSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'commands.js'), 'utf8');
 
   assert.equal(result.expired, null);
   assert.equal(result.retained.state, 'upstream-unavailable');
@@ -188,7 +195,7 @@ test('setup clears both isolated upstream records without reader mutation', asyn
   assert.equal(result.beforeSetup.blocked.state, 'upstream-blocked');
   assert.equal(result.afterSetup.unavailable, null);
   assert.equal(result.afterSetup.blocked, null);
-  assert.match(setupSource, /const r = await startAll\([\s\S]*?\);\s+if \(!r\.ok\) die\(r\.reason\);\s+clearUpstreamBlocked\(\);\s+clearUpstreamUnavailable\(\);/);
+  assert.deepEqual(result.lifecycle, ['activate', 'start', 'finish']);
 });
 
 test('upstream-blocked survives a health check and clears on a successful Codex request', async (t) => {

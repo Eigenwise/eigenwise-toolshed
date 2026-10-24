@@ -296,9 +296,12 @@ test('Codex sentry logs a startup policy line for every advertised model row', a
   });
   await waitForShim(shimPort);
 
-  const { MODEL_WINDOW_POLICY } = require(RUNTIME);
-  const startupPolicyLines = await waitForStartupPolicyLines(output, Object.values(MODEL_WINDOW_POLICY).length);
-  for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
+  const { resolveGatewayModelPolicy } = require(RUNTIME);
+  const advertised = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body).data;
+  const policies = advertised.map((model) => resolveGatewayModelPolicy(model.id));
+  const startupPolicyLines = await waitForStartupPolicyLines(output, policies.length);
+  assert.equal(startupPolicyLines.some((line) => line.includes('antigravity')), false, 'unconfirmed provider policies are not advertised');
+  for (const policy of policies) {
     const matchingLines = startupPolicyLines.filter((line) => line.includes(`id=${policy.backendId} `));
     assert.equal(matchingLines.length, 1, `expected one startup sentry policy line for ${policy.backendId}, got ${matchingLines.length}`);
     if (policy.sentry === 'none') {
