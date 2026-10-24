@@ -3,7 +3,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { SnapshotRow } from './context-guards.js'
 import {
-  branchName, destructiveMatch, gitInvocations, invocationDirectory, isTagRef, pushesEverything, samePath, shellTokens, tagAction,
+  branchName, destructiveMatch, destructiveMatches, gitInvocations, invocationDirectory, isTagRef, pushesEverything, samePath, shellTokens, tagAction,
 } from './git-command.js'
 import type { GitInvocation } from './git-command.js'
 import { withoutHereDocBodies } from './heredocs.js'
@@ -87,12 +87,13 @@ function isolatedMutationRefusal(root: string): string {
 }
 
 async function dirtyCheckoutDenial($: EngineInterface, shell: Shell): Promise<string | null> {
-  const destructive = destructiveMatch(shell.command)
-  if (!destructive) return null
-  const { root } = await repoAt($, shell, destructive.index, destructive.dashC)
-  if (!(await registeredRoot($, root, shell.host))) return null
-  const dirty = (await git($, root, ['status', '--porcelain'])).split(/\r?\n/).filter(Boolean)
-  return dirty.length ? destructiveRefusal(destructive.label, root, dirty) : null
+  for (const destructive of destructiveMatches(shell.command)) {
+    const { root } = await repoAt($, shell, destructive.index, destructive.dashC)
+    if (!(await registeredRoot($, root, shell.host))) continue
+    const dirty = (await git($, root, ['status', '--porcelain'])).split(/\r?\n/).filter(Boolean)
+    if (dirty.length) return destructiveRefusal(destructive.label, root, dirty)
+  }
+  return null
 }
 
 async function upstreamOf($: EngineInterface, root: string): Promise<Upstream | null> {
@@ -191,7 +192,7 @@ async function publicationDenial($: EngineInterface, shell: Shell): Promise<stri
   for (const invocation of gitInvocations(shell.command).filter(publicationVerb)) {
     const repo = await repoAt($, shell, invocation.index, invocation.dashC)
     const label = await publicationLabel($, shell, invocation, repo.root)
-    if (label) return (await publishLockHeld($, shell, repo)) ? null : publicationRefusal(label, repo.root)
+    if (label && !(await publishLockHeld($, shell, repo))) return publicationRefusal(label, repo.root)
   }
   return null
 }

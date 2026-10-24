@@ -65,6 +65,7 @@ export class ApiClient {
   routingModels(project?: string) { return this.request<RoutingCatalog>('GET', `/api/routing-models${query({ project })}`); }
 
   tickets(project: string = 'all', archived = false) { return this.request<{ project: string; tickets: Ticket[] }>('GET', `/api/tickets${query({ project, archived: archived || undefined })}`); }
+  ticket(id: string, project: string) { return this.request<{ ticket: Ticket }>('GET', `/api/tickets/${path(id)}${query({ project })}`); }
   createTicket(body: JsonRecord) { return this.request<{ ticket: Ticket }>('POST', '/api/tickets', { ...body, source: 'dashboard' }); }
   updateTicket(id: string, project: string, body: JsonRecord) { return this.request<{ ticket: Ticket }>('PATCH', `/api/tickets/${path(id)}${query({ project })}`, { ...body, source: 'dashboard' }); }
   uploadAttachments(id: string, project: string, imagesData: { name: string; base64: string }[]) { return this.updateTicket(id, project, { imagesData }); }

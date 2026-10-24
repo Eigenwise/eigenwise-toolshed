@@ -136,6 +136,11 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     }
     return value;
   }
+  function normalizeIntegrationQuality(value) {
+    if (value == null) return "enforce";
+    if (value === "enforce" || value === "report" || value === "off") return value;
+    throw new Error('integrationQuality must be "enforce", "report", or "off".');
+  }
   function normalizeIntegrationBranch(value) {
     const branch = String(value == null ? "main" : value).trim();
     if (!branch || branch === "@" || branch.startsWith("/") || branch.endsWith("/") || branch.endsWith(".") || branch.includes("//") || branch.includes("/.") || branch.endsWith(".lock") || branch.includes("..") || branch.includes("@{") || /[\s~^:?*\[\\]/.test(branch)) {
@@ -350,6 +355,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       deniedTools: normalizeDeniedTools(meta.deniedTools),
       generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
       integrationMode: normalizeIntegrationMode(meta.integrationMode),
+      integrationQuality: normalizeIntegrationQuality(meta.integrationQuality),
       integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
       delivery: normalizeDeliveryMode(meta.delivery),
       integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
@@ -397,6 +403,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     deniedTools: normalizeDeniedTools,
     generatedPairs: normalizeGeneratedPairs,
     integrationMode: normalizeIntegrationMode,
+    integrationQuality: normalizeIntegrationQuality,
     integrationBranch: normalizeIntegrationBranch,
     delivery: normalizeDeliveryMode,
     integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs,

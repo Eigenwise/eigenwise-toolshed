@@ -500,3 +500,20 @@ test('ensureProject on an already-current board does not queue for the write loc
 });
 
 export {};
+
+
+test('GH-602: shared explicitProjectRoot resolves nested and linked checkout paths to the registered board', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-602-resolution-'));
+  const project = path.join(fixture, 'repository');
+  fs.mkdirSync(project);
+  execFileSync('git', ['init', '-b', 'main', project], { windowsHide: true });
+  execFileSync('git', ['-C', project, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'Fixture'], { windowsHide: true });
+  const { slug } = store.ensureProject(project);
+  const nested = path.join(project, 'nested');
+  fs.mkdirSync(nested);
+  const linked = path.join(fixture, 'linked');
+  execFileSync('git', ['-C', project, 'worktree', 'add', '--detach', linked], { windowsHide: true });
+  for (const directory of [nested, linked]) {
+    assert.strictEqual(store.findProject(store.explicitProjectRoot(directory)).slug, slug);
+  }
+});

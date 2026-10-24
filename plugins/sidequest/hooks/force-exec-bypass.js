@@ -1301,8 +1301,12 @@ function registeredProjectPath(input) {
     return "";
   }
 }
+function dispatchProject(input) {
+  if (String(toolInputOf(input)?.prompt ?? "").startsWith("[sidequest-route ")) return registeredResearchProject(input) || "";
+  return requestedProject(input);
+}
 function dispatchAdmission(input) {
-  const project = requestedProject(input);
+  const project = dispatchProject(input);
   if (!project) return { status: "no-project" };
   try {
     const store = require(runtimeModule("store"));
@@ -1810,21 +1814,19 @@ function categoryResearchSpawn(store, researchSpawnFor, category) {
   const route = store.resolveCategoryRoute(category);
   return route?.exec ? researchSpawnFor(route.exec, route.effort) : null;
 }
-function liveResearchSpawns(input) {
+function liveResearchSpawns(slug) {
   try {
     const store = require(runtimeModule("store"));
     const { researchSpawn } = require(runtimeModule("agentsync"));
-    const found = store.findProject(requestedProject(input));
-    if (!found.ok || !found.slug) return [];
-    return store.getCategories({ project: found.slug }).filter((category) => category.enabled).map((category) => categoryResearchSpawn(store, researchSpawn, category)).filter((spawn) => spawn !== null);
+    return store.getCategories({ project: slug }).filter((category) => category.enabled).map((category) => categoryResearchSpawn(store, researchSpawn, category)).filter((spawn) => spawn !== null);
   } catch (_) {
     return [];
   }
 }
-function matchingResearchSpawn({ input, toolInput, type }) {
+function matchingResearchSpawn({ input, toolInput, type }, slug) {
   const prompt = String(toolInput.prompt ?? "");
   if (dispatchRouteMarkers(input).length !== 1) return void 0;
-  return liveResearchSpawns(input).find((spawn) => canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
+  return liveResearchSpawns(slug).find((spawn) => canonicalExecutorName(spawn.subagentType) === type && prompt.startsWith(spawn.promptPrefix.trimEnd()));
 }
 function researchSpawnInput(toolInput, research) {
   const updatedInput = { ...toolInput };
@@ -1837,9 +1839,34 @@ function researchSpawnInput(toolInput, research) {
 function isResearchAttempt({ toolInput, classification }, dispatchValidation) {
   return dispatchValidation.status === "none" && RESEARCH_KINDS.has(classification.kind) && String(toolInput.prompt ?? "").startsWith("[sidequest-route ");
 }
+function researchProjectReference(input) {
+  const prompt = String(toolInputOf(input)?.prompt ?? "");
+  const leadingArgument = /^--project(?:=|\s)[^\r\n]*/.exec(prompt);
+  return stringField(input, "project") || extractProjectArg(leadingArgument?.[0]);
+}
+function researchProjectSlug(store, reference) {
+  const direct = store.findProject(reference);
+  if (direct.ok) return direct.slug;
+  if (!import_node_path9.default.isAbsolute(reference)) return void 0;
+  return store.findProject(store.explicitProjectRoot(reference)).slug;
+}
+function registeredResearchProject(input) {
+  try {
+    const store = require(runtimeModule("store"));
+    const reference = researchProjectReference(input) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || "";
+    return researchProjectSlug(store, reference);
+  } catch (_) {
+    return void 0;
+  }
+}
 function decidedResearchSpawn(request, dispatchValidation) {
   if (!isResearchAttempt(request, dispatchValidation)) return false;
-  const research = matchingResearchSpawn(request);
+  const project = registeredResearchProject(request.input);
+  if (!project) {
+    writeDeny("PreToolUse", `sidequest: could not resolve a registered project from cwd ${stringField(request.input, "cwd")}. Run from a registered project checkout or pass project as a hook argument.`);
+    return true;
+  }
+  const research = matchingResearchSpawn(request, project);
   if (!research) {
     writeDeny("PreToolUse", `sidequest: ${request.type} research prompt does not open with the live research prefix of an enabled category route. Re-fetch route_recipe(category).research and spawn its subagentType, model and promptPrefix unchanged.`);
     return true;

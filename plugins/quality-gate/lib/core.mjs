@@ -73,8 +73,8 @@ export async function createAnalyzer(projectRoot) {
     return pieces.join('') + text.slice(cursor, functionNode.end);
   }
   
-  // LCOV only reports lines, so the denominator is the start line of each emitted statement the
-  // body owns: blocks, empty statements and type-only or ambient declarations emit no code.
+  // LCOV needs mapper anchors rather than declaration keywords or wrapping parentheses.
+  // Blocks, empty statements and type-only or ambient declarations emit no code.
   const NON_EXECUTABLE_STATEMENTS = new Set([ast.SyntaxKind.Block, ast.SyntaxKind.EmptyStatement, ast.SyntaxKind.InterfaceDeclaration, ast.SyntaxKind.TypeAliasDeclaration]);
 
   function isExecutableStatement(node) {
@@ -86,9 +86,22 @@ export async function createAnalyzer(projectRoot) {
     return lastDecorator ? ast.skipTrivia(text, lastDecorator.end) : node.getStart();
   }
 
+  function expressionStart(node) {
+    while (ast.isParenthesizedExpression(node)) node = node.expression;
+    return node.getStart();
+  }
+
+  function executableStatementStarts(node, text) {
+    if (!isExecutableStatement(node)) return [];
+    if (ast.isVariableStatement(node)) {
+      return node.declarationList.declarations.flatMap((declaration) => declaration.initializer ? [expressionStart(declaration.initializer)] : []);
+    }
+    return [statementStartAfterDecorators(node, text)];
+  }
+
   function executableLines(functionNode, sourceFile, text) {
-    const starts = ast.isBlock(functionNode.body) ? [] : [functionNode.body.getStart()];
-    forEachOwnNode(functionNode, (node) => { if (isExecutableStatement(node)) starts.push(statementStartAfterDecorators(node, text)); }, () => {});
+    const starts = ast.isBlock(functionNode.body) ? [] : [expressionStart(functionNode.body)];
+    forEachOwnNode(functionNode, (node) => { starts.push(...executableStatementStarts(node, text)); }, () => {});
     return [...new Set(starts.map((start) => sourceFile.getLineAndCharacterOfPosition(start).line + 1))].sort((left, right) => left - right);
   }
 

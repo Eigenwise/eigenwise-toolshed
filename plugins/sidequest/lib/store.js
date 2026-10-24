@@ -2025,38 +2025,6 @@ function worktreeGcProjects(currentSlug, limit = 3) {
   writeGlobal("worktree-gc-project-cursor", result[result.length - 1].slug);
   return result;
 }
-function listAllProjectTickets(archivedOnly = false) {
-  const cache = residentCache();
-  const cacheKey = `all-project-tickets:${archivedOnly ? "archived" : "active"}`;
-  const cached = cache.snapshots.get(cacheKey);
-  if (cached) return cloneCached(cached);
-  const rows = db.selectRows(database(), `
-    WITH active_projects AS (
-      SELECT
-        p.slug,
-        p.data,
-        COALESCE(MAX(json_extract(all_t.data, '$.updatedAt')), json_extract(p.data, '$.createdAt'), '') AS last_activity
-      FROM projects p
-      LEFT JOIN tickets all_t ON all_t.project = p.slug
-      WHERE json_extract(p.data, '$.archivedAt') IS NULL
-      GROUP BY p.slug, p.data
-    )
-    SELECT
-      tickets.data,
-      active_projects.slug AS project,
-      COALESCE(json_extract(active_projects.data, '$.name'), active_projects.slug) AS project_name
-    FROM active_projects
-    JOIN tickets ON tickets.project = active_projects.slug
-    WHERE tickets.archived = ?
-    ORDER BY active_projects.last_activity DESC, tickets.ord DESC
-  `, [archivedOnly ? 1 : 0]);
-  const tickets = rows.map((row) => {
-    const ticket = parseTicketData(row.project, row.data);
-    return ticket ? Object.assign({}, ticket, { project: row.project, projectName: row.project_name }) : null;
-  }).filter(Boolean);
-  cache.snapshots.set(cacheKey, tickets);
-  return cloneCached(tickets);
-}
 function getTicket(slug, idOrRef) {
   const wanted = String(idOrRef);
   const row = db.selectRow(
@@ -4129,7 +4097,7 @@ module.exports = {
   listTickets,
   worktreeGcTickets,
   worktreeGcProjects,
-  listAllProjectTickets,
+  queryTickets,
   getTicket,
   createTicket,
   updateTicket,

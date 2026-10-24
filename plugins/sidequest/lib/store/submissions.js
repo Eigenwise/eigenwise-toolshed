@@ -692,7 +692,7 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
     };
   }
   function recordQualityDebt(slug, ticket, quality) {
-    if (!quality.unverified.length) return;
+    if (!quality.unverified.length || quality.captureGap) return;
     const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
     transaction(() => {
       if (listTickets(slug).some((existing) => existing.title === title)) return;
@@ -712,7 +712,7 @@ ${JSON.stringify(quality.unverified)}`,
   }
   function verifyCandidateQuality(slug, tickets, project, timeoutMilliseconds, verify, environment) {
     const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
-    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify, environment);
+    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify, environment, { mode: boardConfig(slug)?.integrationQuality });
     result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index], quality));
     return result;
   }
@@ -3293,13 +3293,14 @@ ${parts.join("\n\n")}` });
     const siblingChanges = scopedPaths(sibling?.submission?.changedPaths);
     return scopedPaths(participant?.submission?.changedPaths).filter((surface) => isInScope(surface, siblingChanges));
   }
-  function waveScopeConflicts(slug, tickets) {
+  function waveScopeConflicts(slug, tickets, targetBranch) {
     const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
     const boardTickets = listTickets(slug);
+    const pendingSiblings = boardTickets.filter((sibling) => !sibling.archived && sibling.status !== "done" && !participantRefs.has(sibling.ref) && pendingCandidateBlocksWave(slug, sibling, boardTickets));
+    const sameTargetSiblings = pendingSiblings.filter((sibling) => !targetBranch || ticketIntegrationTarget(slug, sibling).branch === targetBranch);
     const conflicts = [];
     for (const participant of tickets) {
-      for (const sibling of boardTickets) {
-        if (sibling.archived || sibling.status === "done" || participantRefs.has(sibling.ref) || !pendingCandidateBlocksWave(slug, sibling, boardTickets)) continue;
+      for (const sibling of sameTargetSiblings) {
         if (!submissionWasRecordedAfter(sibling, participant)) continue;
         if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
         const surfaces = collidingChangedPaths(participant, sibling);
@@ -3630,7 +3631,7 @@ ${parts.join("\n\n")}` });
       return { ok: false, reason: "wave_baseline_required", message: "Every submitted candidate must retain its dispatch baseline, changed surfaces, and verifier evidence before wave assembly." };
     }
     const waveCandidates = candidates.filter((candidate) => candidate !== null);
-    const scopeConflicts = waveScopeConflicts(slug, tickets);
+    const scopeConflicts = waveScopeConflicts(slug, tickets, target?.branch);
     if (scopeConflicts.length) {
       return {
         ok: false,

@@ -2603,6 +2603,14 @@ async function parkedGitDirectory(destination: string): Promise<string | null> {
   }
 }
 
+async function registeredCheckoutCommonDirectory(worktree: string): Promise<string> {
+  const identity = await git(worktree, ['rev-parse', '--show-toplevel', '--git-common-dir']);
+  if (!identity.ok) return '';
+  const [topLevel, commonDirectory = ''] = identity.stdout.split(/\r?\n/);
+  return canonicalPath(topLevel) === canonicalPath(worktree)
+    ? canonicalPath(path.resolve(worktree, commonDirectory)) : '';
+}
+
 async function repositoryCommonDirectory(repo: string): Promise<string> {
   const common = await git(repo, ['rev-parse', '--git-common-dir']);
   return common.ok ? canonicalPath(path.resolve(repo, common.stdout)) : '';
@@ -2903,11 +2911,16 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const worktreeList = parseWorktreeList(listed.stdout);
   const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
   const candidates = worktreeList
-    .filter((entry) => isAgentWorktree(repo, entry.worktree))
+    .filter((entry) => canonicalPath(entry.worktree) !== canonicalPath(repo) && path.basename(entry.worktree).startsWith('agent-'))
+    .filter((entry) => !pathIsInside(canonicalPath(quarantineRoot(options)), canonicalPath(entry.worktree)))
     .filter((entry) => quarantineRetryDue(entry.worktree))
     .filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
+  const commonDirectory = await repositoryCommonDirectory(repo);
+  const candidateRepositories = await mapWithConcurrency(candidates, SWEEP_CLASSIFICATION_CONCURRENCY,
+    (entry) => registeredCheckoutCommonDirectory(entry.worktree));
+  const ownedCandidates = candidates.filter((entry, index) => commonDirectory !== '' && candidateRepositories[index] === commonDirectory);
   const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
-  const allCandidates = [...candidates, ...orphanCandidates];
+  const allCandidates = [...ownedCandidates, ...orphanCandidates];
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0
     ? Math.floor(Number(options.maxCandidates))
     : allCandidates.length;

@@ -1201,6 +1201,179 @@ test('isolated ensure preserves a foreign serve-shim process and cleans its own 
   assert.equal(processIsRunning(guardianPid), false, 'sync fixture cleanup stopped its supervisor');
 });
 
+function openHeldGatewayStream(port) {
+  let client;
+  let receivedChunk;
+  const firstChunk = new Promise((resolve) => { receivedChunk = resolve; });
+  const completed = new Promise((resolve, reject) => {
+    client = http.request({ host: '127.0.0.1', port, path: '/v1/messages', method: 'POST', headers: { 'content-type': 'application/json' } }, (response) => {
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; receivedChunk(); });
+      response.once('end', () => resolve({ status: response.statusCode, body }));
+      response.once('error', reject);
+    });
+    client.once('error', reject);
+    client.setTimeout(60000, () => client.destroy(new Error('fixture stream timed out')));
+    client.end(JSON.stringify({ model: 'claude-native-fixture', stream: true, messages: [{ role: 'user', content: 'lifecycle fixture' }] }));
+  });
+  // Observe early failure even while the test is waiting for the first SSE chunk.
+  completed.catch(() => {});
+  return { client, completed, started: Promise.race([firstChunk, completed]) };
+}
+
+function isolatedStreamEnvironment(t, upstreamPort) {
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
+  const systemKeys = ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'LANG', 'NODE_OPTIONS', 'NODE_V8_COVERAGE', 'QUALITY_GATE_V8_CAPTURE'];
+  const system = Object.fromEntries(systemKeys.filter((key) => environment[key] !== undefined).map((key) => [key, environment[key]]));
+  for (const key of Object.keys(environment)) delete environment[key];
+  Object.assign(environment, system, {
+    HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), CODEX_HOME: path.join(home, '.codex'),
+    XDG_CONFIG_HOME: path.join(home, 'config'), XDG_CACHE_HOME: path.join(home, 'cache'),
+    XDG_DATA_HOME: path.join(home, 'data'), XDG_STATE_HOME: path.join(home, 'state'), XDG_RUNTIME_DIR: path.join(home, 'run'),
+    APPDATA: path.join(home, 'appdata'), LOCALAPPDATA: path.join(home, 'localappdata'),
+    TMPDIR: home, TMP: home, TEMP: home, HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', http_proxy: '', https_proxy: '', all_proxy: '', NO_PROXY: '*', no_proxy: '*',
+    CODEX_GATEWAY_PORT: '0', CODEX_GATEWAY_WORKER_PORT: '0', CODEX_GATEWAY_COMPAT_PORT: '0',
+    CODEX_GATEWAY_SOCKET_PATH: path.join(home, 'stream-fixture.sock'),
+    CODEX_GATEWAY_PROXY_PORT: String(upstreamPort), CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${upstreamPort}`,
+    CODEX_GATEWAY_TELEMETRY_ENDPOINT: 'http://127.0.0.1:9', CODEX_GATEWAY_USAGE_ENDPOINT: '0',
+    CODEX_GATEWAY_REQUEST_LOG: '0', CODEX_GATEWAY_PROBE_TIMEOUT_MS: '20000',
+    CODEX_GATEWAY_HOSTS_FILE: path.join(home, 'hosts'), CODEX_GATEWAY_CLAUDE_BIN: path.join(home, 'missing-claude'),
+    MODEL_GATEWAY_REQUEST_BODY_DIR: path.join(home, 'request-body'),
+  });
+  return environment;
+}
+
+async function stopOwnedStaleFixture(fixture, {
+  inspectProcess = require('../lib/process-supervision.js').processInfoSync, signal = process.kill, awaitExit = waitForProcessesToExit,
+} = {}) {
+  if (!fixture) return;
+  const current = inspectProcess(fixture.pid);
+  if (!current || current.startedAt !== fixture.startedAt) return;
+  assert.equal(current.command, fixture.command, 'only the exact fixture birth may be signaled');
+  signal(fixture.pid, 'SIGTERM');
+  await awaitExit([fixture.pid], 5000);
+}
+
+async function startStaleWorkerFixture(cli, environment) {
+  const script = path.join(environment.HOME, 'worker-birth.cjs');
+  const log = path.join(environment.HOME, 'stale-worker.log');
+  fs.writeFileSync(script, `
+    const fs = require('node:fs');
+    const { spawn } = require('node:child_process');
+    const supervision = require(${JSON.stringify(path.join(path.dirname(cli), '..', 'lib', 'process-supervision.js'))});
+    (async () => {
+      const output = fs.openSync(${JSON.stringify(log)}, 'a');
+      const worker = spawn(process.execPath, [${JSON.stringify(cli)}, 'serve-worker'], { env: process.env, stdio: ['ignore', output, output] });
+      fs.closeSync(output);
+      const deadline = Date.now() + 5000;
+      let match;
+      while (!(match = fs.readFileSync(${JSON.stringify(log)}, 'utf8').match(/listening on 127\\.0\\.0\\.1:(\\d+)/))) {
+        if (Date.now() >= deadline) throw new Error('real stale worker did not listen');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await supervision.writePidRecordAsync('shim', worker.pid);
+      const identity = await supervision.processInfoAsync(worker.pid);
+      console.log(JSON.stringify({ ...identity, port: Number(match[1]) }));
+      worker.unref();
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `);
+  const result = await runGatewayCli(script, 'birth', environment, { cwd: environment.HOME });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout.trim());
+}
+
+function assertSuccessfulEnsures(results) {
+  for (const result of results) {
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout + result.stderr, /could not start|still starting|pid record .*retired/);
+  }
+}
+
+test('stale-worker fixture cleanup fails closed for absent and reused birth identities', async () => {
+  const fixture = { pid: 702, startedAt: 'owned-birth', command: 'owned-worker' };
+  const signals = [];
+  const options = { windows: false, signal: (pid) => signals.push(pid), awaitExit: async () => {} };
+  await stopOwnedStaleFixture(undefined, options);
+  await stopOwnedStaleFixture(fixture, { ...options, inspectProcess: () => null });
+  await stopOwnedStaleFixture(fixture, { ...options, inspectProcess: () => ({ ...fixture, startedAt: 'reused-birth' }) });
+  assert.deepEqual(signals, []);
+});
+
+test('stale-worker fixture cleanup requests one TERM only after exact identity verification', async () => {
+  const fixture = { pid: 702, startedAt: 'owned-birth', command: 'owned-worker' };
+  const events = [];
+  await stopOwnedStaleFixture(fixture, { windows: false,
+    inspectProcess: (pid) => { events.push(['inspect', pid]); return fixture; },
+    signal: (pid, signal) => events.push([signal, pid]),
+    awaitExit: async (pids) => events.push(['confirmed', ...pids]) });
+  assert.deepEqual(events, [['inspect', 702], ['SIGTERM', 702], ['confirmed', 702]]);
+  await assert.rejects(stopOwnedStaleFixture(fixture, { windows: false,
+    inspectProcess: () => ({ ...fixture, command: 'foreign-worker' }), signal: () => assert.fail('foreign birth must survive') }), /exact fixture birth/);
+});
+
+test('parallel healthy ensures reap a real owned stale-version orphan while the current worker and stream survive', { skip: process.platform === 'win32' ? 'real POSIX reparenting; injected POSIX and native Windows ownership cases run on every platform' : false }, async (t) => {
+  let stale;
+  t.after(() => stopOwnedStaleFixture(stale));
+  let heldResponse;
+  const upstream = http.createServer((request, response) => {
+    if (request.url === '/v1/models') return response.end(JSON.stringify({ data: [{ id: 'gpt-6-astra' }] }));
+    request.resume();
+    request.once('end', () => {
+      if (heldResponse) return response.end(JSON.stringify({ type: 'message', content: [] }));
+      heldResponse = response;
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+  assert.ok(![18764, 18765, 18766, 29113].includes(upstreamPort));
+  const environment = isolatedStreamEnvironment(t, upstreamPort);
+  installNodeProxy(environment.HOME);
+  const { olderCli, newerCli } = installCachedGatewayCliVersions(environment.HOME);
+  stale = await startStaleWorkerFixture(olderCli, environment);
+  assert.ok(![18764, 18765, 18766, 29113].includes(stale.port));
+  assert.equal(processIsRunning(stale.parentPid), false, 'the recorded birth parent has really exited');
+  const supervisor = await startGateway(t, 'serve-shim', environment, { cliPath: newerCli });
+  const state = path.join(environment.HOME, '.claude', 'model-gateway');
+  const workerPid = await waitForPidRecord(path.join(state, 'shim.pid'));
+  await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), workerPid);
+  const stream = openHeldGatewayStream(supervisor.port);
+  try {
+    await stream.started;
+    assert.ok(heldResponse, 'the synthetic upstream stream is open before ensure starts');
+    const cliEnvironment = {
+      ...environment,
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${supervisor.port}`,
+      CODEX_GATEWAY_PORT: String(supervisor.port),
+      CODEX_GATEWAY_WORKER_PORT: String(supervisor.port),
+    };
+    const results = await Promise.all(Array.from({ length: 5 }, () => runGatewayCli(newerCli, 'ensure', cliEnvironment, {
+      arguments: ['--quiet'], cwd: environment.HOME,
+    })));
+    assertSuccessfulEnsures(results);
+    await waitForProcessesToExit([stale.pid], 5000);
+    assertSuccessfulEnsures([await runGatewayCli(newerCli, 'ensure', cliEnvironment, { arguments: ['--quiet'], cwd: environment.HOME })]);
+    heldResponse.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    const response = await stream.completed;
+    assert.equal(response.status, 200);
+    assert.match(response.body, /event: message_start/);
+    assert.match(response.body, /event: message_stop/);
+    assert.equal(supervisor.child.exitCode, null, 'the original supervisor remains alive');
+    assert.equal(Number(fs.readFileSync(path.join(state, 'shim.pid'), 'utf8')), workerPid, 'the original worker remains recorded');
+    assert.equal(processIsRunning(stale.pid), false, 'the real stale-version orphan exited');
+    const births = fs.readdirSync(path.join(state, 'worker-births')).map((file) => JSON.parse(fs.readFileSync(path.join(state, 'worker-births', file), 'utf8')));
+    assert.equal(births.some((birth) => birth.pid === stale.pid), false, 'the exited orphan birth was retired');
+    assert.equal(births.some((birth) => birth.pid === workerPid), true, 'the healthy worker birth remains');
+    assert.equal(fs.existsSync(path.join(state, 'shim-supervisor-failure.txt')), false);
+    assert.equal(await request(supervisor.port, codexMessage()), 200, 'the listener serves another request');
+  } finally {
+    stream.client.destroy();
+    heldResponse?.end();
+  }
+});
+
 test('sibling ensure retires dead records without deleting replacement worker and proxy records', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-record-replacement-'));
   const { olderCli, newerCli } = installCachedGatewayCliVersions(home);

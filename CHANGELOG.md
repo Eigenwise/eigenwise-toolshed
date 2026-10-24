@@ -8,6 +8,51 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.611.0 (2026-10-24)
+
+### model-gateway 0.55.1 → 0.55.2
+
+#### Fixes
+
+- Reap birth-identified stale gateway workers without interrupting healthy streams (GH-577) [`f36e415`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f36e4150778d054e56cca8db2ff191bfb0015620)
+  Keep healthy-start orphan cleanup, but require an install-scoped worker birth record, exact live PID/start identity, an older version, a conclusively lost birth parent, and ancestry outside the serving supervisor. Request only single-target termination without escalation. Preserve healthy workers, streams, foreign processes and unknown ownership.
+- Keep the readiness gate working when a session's directory was deleted (GH-618) [`5e0109e`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5e0109e14)
+  A worktree removed under a live session no longer blocks every prompt with a chdir ENOENT; the gate keeps the directory it inherited from the host.
+
+### quality-gate 1.2.1 → 1.3.0
+
+#### Features
+
+- Configurable coverage command timeouts (SQ-3873)
+  Fixes GH-599. Coverage commands run without a time limit by default. Set `coverageTimeoutMs` in current or legacy CRAP config, or override it with `--coverage-timeout-ms`. Zero means unlimited. Timeouts kill the coverage process tree on Windows and POSIX and report the duration plus both controls.
+
+#### Fixes
+
+- Pass coverage-independent CRAP bounds with unverified coverage (SQ-3871)
+  A cc 1 body now passes when coverage is UNVERIFIED because its maximum CRAP is 2, below the strict threshold of 6. Reports keep the coverage reason and show the bound. cc 2 to 5 still need coverage; cc 6 and above still fail. The same rule applies to measure JSON without bypassing branch checks.
+- Match TypeScript executable lines to Vitest v8 LCOV (SQ-3872)
+  Use initializer and inner expression lines for split variable declarations and parenthesized arrow bodies. Skip uninitialized declarations so complete Vitest v8 coverage stays measured (GH-627).
+
+### sidequest 6.2.0 → 6.3.0
+
+#### Features
+
+- Dashboard ticket list serves card rows, not whole tickets (SQ-3863)
+  Fixes GH-629. `GET /api/tickets` now returns card rows (a 280-character `summary`, `commentCount`, a slim `category`, no dispatch, submission, comment or verification history), takes `?status=todo,doing` alongside `?project=` and `?archived=1`, and builds in 25-ticket pages that yield to the event loop, so `/api/health` keeps answering while a big home lists. The new `GET /api/tickets/:id?project=slug` returns the whole ticket, and the dashboard reads it when a ticket dialog opens. The dashboard polls only the selected board and takes per-board counts from `/api/projects`. On a seeded 11-board, 2,255-ticket home the all-project list went from 35.8 MB to 1.5 MB and health latency during the build from 1.5 to 2 s down to 25 to 54 ms. Board search now matches the title, ref, labels and the description summary, not text deep in a long description.
+
+#### Fixes
+
+- Accept single-quoted literals in verify commands (SQ-3864)
+  Verify commands now accept single-quoted jq bindings, named captures and grep patterns. Placeholder and environment-variable checks still apply outside single quotes, including variables inside double quotes. Repeated unset variable names produce one message.
+- Keep candidate overlap checks within the recorded integration branch (SQ-3865)
+  Wave assembly ignores overlapping pending candidates targeting another integration branch. Same-branch candidates still refuse with `candidate_overlap`.
+- Fix compound Git guard checks and report guard failures (SQ-3869)
+  Resolve chained relative `cd` commands before checking each Git segment. Keep destructive and publication checks active across the whole compound command, and name unsupported directory expressions in parse refusals.
+
+  Guard errors now name the guard, tool, and error in the debug log and a transient toast. Refusing guards block unchecked calls; advisory guards continue with a visible diagnostic.
+- Resolve research spawns from subdirectories and linked worktrees (SQ-3876)
+  Ticketless research uses the shared project-root resolver and ignores --project inside task commands. Unresolved projects get a project-resolution refusal instead of a misleading prefix error.
+
 ## v3.610.0 (2026-10-22)
 
 ### quality-gate 1.2.0 → 1.2.1
