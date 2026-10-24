@@ -3,7 +3,7 @@
 import { isInScope } from '../scope-match.js';
 import type { Baseline, Diagnostic, SourceRevision } from './index.js';
 import type { VerificationResult } from './verification.js';
-import { verificationAccepted } from './verification.js';
+import { verificationAccepted, verificationAdmitted } from './verification.js';
 
 export type WaveParticipant = Readonly<{
   ref: string;
@@ -137,12 +137,6 @@ export function openWave(input: Readonly<{
     }))),
     declaredSurfaces: normalizedSurfaces(surfaces),
   });
-}
-
-// A deferred result is admitted into the wave but never read as accepted: the pinned command runs
-// once, in the shared checkout, when integrate delivers the wave.
-function verificationAdmitted(verification: VerificationResult): boolean {
-  return verificationAccepted(verification) || verification.status === 'deferred';
 }
 
 function baselineMoved(wave: Wave, candidate: WaveCandidate): boolean {

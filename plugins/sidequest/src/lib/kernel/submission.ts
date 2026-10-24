@@ -2,7 +2,7 @@
 
 import type { Authority, Baseline, Diagnostic, SourceRevision, VerificationResult } from './index';
 import { isInScope } from '../scope-match.js';
-import { verificationAccepted } from './verification.js';
+import { verificationAdmitted } from './verification.js';
 
 export type SubmissionTicket = Readonly<{ ref: string }>;
 export type SubmissionFailure = Readonly<{ code: string; message: string; actionable?: boolean; retryable?: boolean }>;
@@ -84,12 +84,6 @@ function baselineBoundToCandidate(facts: SubmissionAdmissionFacts): boolean {
   if (!facts.sourceBaseline) return true;
   return sameSourceRevision(facts.baseline.candidate, facts.candidate)
     && sameBaseline(facts.baseline.dispatchBaseline, facts.sourceBaseline);
-}
-
-// A deferred result is admitted at submit but never read as accepted: the pinned command runs once,
-// in the shared checkout, when integrate delivers the candidate.
-function verificationAdmitted(result: VerificationResult): boolean {
-  return verificationAccepted(result) || result.status === 'deferred';
 }
 
 function candidateOwner(authority: SubmissionAuthority): string | null {

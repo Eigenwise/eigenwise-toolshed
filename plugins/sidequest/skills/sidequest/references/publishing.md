@@ -21,6 +21,8 @@ then the board default; a deleted frozen target may use the abandonment path's v
 The publish transaction is lock → delivery → merged-tree gate → central version → review → push →
 reachability → `done`.
 
+The merged-tree gate never records `passed` without a command, exit code and log path. When the dispatch pinned no verifier (the legacy `custom` placeholder), the gate runs the ticket's own runnable verify (`executorVerify`, else the submitted `verify`) and records it; genuine `manual:` evidence still stands as `manual`. With no verifier at all, the gate returns `status: "unverified"` with evidence "no project verifier and no pinned verify" and integrate refuses `verification_unverified` before anything merges. Record a runnable verify on the ticket and integrate again, or pass `skipVerify` with a structured `verificationWaiver` (authority, reason, affectedGate, and scope or expiresAt) to deliver it as `skipped` with the waiver recorded.
+
 At integration, the merged-tree gate also follows static imports from each changed plugin's test directory to the delivery's changed paths, including Sidequest's compiled `lib/` to `src/lib/` identities. The delivery's `verify.integrationTests` records the selected files (including empty selections). Files already covered by the pinned command are excluded from extra runs. Each extra file runs serially with at most 600 seconds, using `test:files` where available, never `test:full`; a failing extra run blocks delivery. `verify.importingTestResults` records those runs.
 
 At integration, read the submit report, deliver the range, and run the merged-tree gate once per

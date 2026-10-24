@@ -83,9 +83,6 @@ function openWave(input) {
     declaredSurfaces: normalizedSurfaces(surfaces)
   });
 }
-function verificationAdmitted(verification) {
-  return (0, import_verification.verificationAccepted)(verification) || verification.status === "deferred";
-}
 function baselineMoved(wave, candidate) {
   return !sameBaseline(wave.baseline, candidate.baseline) && !candidate.baselineCompatible;
 }
@@ -94,7 +91,7 @@ function participantInvalidation(wave, participant, candidate) {
   if (baselineMoved(wave, candidate)) {
     return invalidation(candidate.ref, "baseline_moved", `${candidate.ref} was verified against ${candidate.baseline.revision.source}:${candidate.baseline.revision.value}, but this wave is pinned to ${wave.baseline.revision.source}:${wave.baseline.revision.value}.`);
   }
-  if (!verificationAdmitted(candidate.verification)) {
+  if (!(0, import_verification.verificationAdmitted)(candidate.verification)) {
     return invalidation(candidate.ref, "verification_required", `${candidate.ref} has no accepted verifier evidence for the opened wave.`);
   }
   const outside = candidate.surfaces.filter((surface) => !(0, import_scope_match.isInScope)(surface, participant.declaredSurfaces));

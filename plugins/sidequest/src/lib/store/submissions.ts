@@ -729,19 +729,56 @@ function directClaimCaptureInvocation(slug: any, ticket: any) {
   return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
 }
 
+// The placeholder a dispatch pins when the ticket recorded no verifier. It names a requirement and is
+// never the evidence of a passed result (GH-643).
+const LEGACY_UNRECORDED_VERIFIER = 'legacy project verifier was not recorded';
+const NO_VERIFIER_REASON = 'no project verifier and no pinned verify';
+
+function recordedTicketVerifier(ticket: any) {
+  return String(ticket.executorVerify || ticket.submission?.verify || '').trim();
+}
+
+function ticketVerifierRequirement(ticket: any, command: string) {
+  return verificationRequirement({
+    kind: classifyVerificationKind(command, ticket.executorVerifyKind),
+    command,
+    evidence: command,
+    artifact: ticket.executorAttestationArtifact,
+  });
+}
+
 function pinnedVerificationRequirement(ticket: any) {
   const pinned = dispatchPinnedRequirement(ticket);
   if (pinned instanceof Object) return pinned;
-  const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || '').trim();
-  if (!legacyCommand) {
-    return verificationRequirement({ kind: 'custom', evidence: 'legacy project verifier was not recorded' });
-  }
-  return verificationRequirement({
-    kind: classifyVerificationKind(legacyCommand, ticket.executorVerifyKind),
-    command: legacyCommand,
-    evidence: legacyCommand,
-    artifact: ticket.executorAttestationArtifact,
-  });
+  const command = recordedTicketVerifier(ticket);
+  return command ? ticketVerifierRequirement(ticket, command) : verificationRequirement({ kind: 'custom', evidence: LEGACY_UNRECORDED_VERIFIER });
+}
+
+// GH-643: a dispatch prepared before the ticket recorded a verifier pinned the legacy placeholder, which
+// once let delivery record `passed` with nothing run. The merged-tree gate runs the ticket's own runnable
+// verify instead; without one the placeholder stays, and only genuine submitted evidence can stand for it.
+function deliveryVerificationRequirement(ticket: any) {
+  const pinned = pinnedVerificationRequirement(ticket);
+  if (!legacyCustomRequirement(pinned)) return pinned;
+  const recorded = ticketVerifierRequirement(ticket, recordedTicketVerifier(ticket));
+  return recorded.command ? recorded : pinned;
+}
+
+// The legacy placeholder's old submitted pass and an unverified result both ran nothing.
+function standsForDelivery(submitted: any) {
+  return submitted instanceof Object && submitted.status !== 'unverified' && submitted.evidence !== LEGACY_UNRECORDED_VERIFIER;
+}
+
+function unverifiedDelivery(requirement: any) {
+  return {
+    kind: requirement.kind,
+    status: 'unverified',
+    evidence: NO_VERIFIER_REASON,
+    command: null,
+    logPath: null,
+    exitCode: null,
+    failureIdentities: ['verification:no-verifier'],
+  };
 }
 
 function replacementVerificationRequirement(value: any) {
@@ -892,31 +929,52 @@ function verifyWithFullSuiteCapture(command: string, project: string, verify: (e
     : verify(process.env);
 }
 
-function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
-  const requirement = opts?.requirement || pinnedVerificationRequirement(ticket);
+function reusableSubmittedVerification(ticket: any, requirement: any) {
   const submitted = ticket.submission?.verificationResult;
-  if (submitted && typeof submitted === 'object' && !requirement.command) return submitted;
+  return requirement.command || !standsForDelivery(submitted) ? null : submitted;
+}
+
+function attestationDeliveryVerification(ticket: any, requirement: any) {
+  return {
+    kind: 'attestation',
+    status: 'attestation',
+    artifact: ticket.submission?.sourceRevision?.value || requirement.artifact || null,
+    evidence: String(ticket.submission?.verify || '').trim(),
+  };
+}
+
+function manualDeliveryVerification(ticket: any, requirement: any) {
+  return { kind: 'manual', status: 'manual', evidence: String(ticket.submission?.verify || requirement.evidenceContract), command: requirement.command || null };
+}
+
+function missingCommandVerification(requirement: any) {
+  return {
+    kind: requirement.kind,
+    status: 'could_not_run',
+    evidence: 'The prepared verification requirement has no executable command.',
+    command: null,
+    failureIdentities: ['could_not_run:missing-command'],
+  };
+}
+
+function evidenceDeliveryVerification(ticket: any, requirement: any) {
+  if (requirement.kind === 'attestation' || isArtifactSubmission(ticket.submission)) return attestationDeliveryVerification(ticket, requirement);
+  if (requirement.kind === 'manual') return manualDeliveryVerification(ticket, requirement);
+  return requirement.command ? null : missingCommandVerification(requirement);
+}
+
+function unexecutedDeliveryVerification(ticket: any, requirement: any, opts?: any) {
+  const submitted = reusableSubmittedVerification(ticket, requirement);
+  if (submitted) return submitted;
   if (opts?.skipVerify === true) return skippedVerification(requirement, opts.verificationWaiver);
-  if (requirement.kind === 'attestation' || isArtifactSubmission(ticket.submission)) {
-    return {
-      kind: 'attestation',
-      status: 'attestation',
-      artifact: ticket.submission?.sourceRevision?.value || requirement.artifact || null,
-      evidence: String(ticket.submission?.verify || '').trim(),
-    };
-  }
-  if (requirement.kind === 'manual') {
-    return { kind: 'manual', status: 'manual', evidence: String(ticket.submission?.verify || requirement.evidenceContract), command: requirement.command || null };
-  }
-  if (!requirement.command) {
-    return {
-      kind: requirement.kind,
-      status: 'could_not_run',
-      evidence: 'The prepared verification requirement has no executable command.',
-      command: null,
-      failureIdentities: ['could_not_run:missing-command'],
-    };
-  }
+  if (legacyCustomRequirement(requirement)) return unverifiedDelivery(requirement);
+  return evidenceDeliveryVerification(ticket, requirement);
+}
+
+function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
+  const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
+  const unexecuted = unexecutedDeliveryVerification(ticket, requirement, opts);
+  if (unexecuted) return unexecuted;
   const validationError = verifyCommandError(requirement.command);
   if (validationError) {
     return {
@@ -1435,7 +1493,7 @@ function deliveryLockHolder(slug: any, ticket: any, refs: string) {
   return {
     ticket: refs,
     pinnedCommit: String(ticket.submission?.commit || ''),
-    command: pinnedVerificationRequirement(ticket).command || null,
+    command: deliveryVerificationRequirement(ticket).command || null,
     logPath: integrationVerifyLogPath(slug, ticket),
     startedAt: new Date().toISOString(),
   };
@@ -3061,11 +3119,11 @@ function attestationSubmissionVerification(requirement: any, sourceRevision: any
 }
 
 function legacyCustomRequirement(requirement: any) {
-  return requirement.kind === 'custom' && requirement.evidenceContract === 'legacy project verifier was not recorded';
+  return requirement.kind === 'custom' && requirement.evidenceContract === LEGACY_UNRECORDED_VERIFIER;
 }
 
 function legacyCustomSubmissionVerification(requirement: any, evidence: string) {
-  if (!evidence) return { result: { kind: 'custom', status: 'passed', evidence: requirement.evidenceContract }, expectedEvidence: null };
+  if (!evidence) return { result: unverifiedDelivery(requirement), expectedEvidence: null };
   const error = verifyCommandError(evidence);
   if (error) {
     return {
@@ -3987,7 +4045,7 @@ function waveVerifierMismatchMessage(tickets: any[], requirements: any[]) {
 }
 
 function waveVerificationRequirement(tickets: any[]) {
-  const requirements = tickets.map(pinnedVerificationRequirement);
+  const requirements = tickets.map(deliveryVerificationRequirement);
   const first = requirements[0];
   if (!first) return { ok: false, reason: 'wave_verification_required', message: 'Wave assembly requires a pinned project verification requirement.' };
   const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
@@ -4079,6 +4137,7 @@ function authoritativeWaveVerification(slug: any, tickets: any[], wave: any, sup
 }
 
 function suppliedWaveVerification(waveId: string, requirement: any, supplied: any) {
+  if (legacyCustomRequirement(requirement) && !standsForDelivery(supplied)) return { ok: true, verification: unverifiedDelivery(requirement) };
   if (supplied?.kind === requirement.kind) return { ok: true, verification: supplied };
   return {
     ok: false,
@@ -4290,6 +4349,23 @@ function waveBaselineMismatchDetail(invalidated: readonly CandidateInvalidation[
   return ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(', ')}.`;
 }
 
+function waveGateFailure(gate: any, provisioning?: string) {
+  const status = gate.verification.status;
+  if (status === 'toolchain_missing') {
+    const provisioningEvidence = provisioning || 'The gate did not use an isolated candidate worktree, so worktree provisioning was skipped.';
+    return { reason: 'assembled_wave_environment_problem', message: `gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${provisioningEvidence} Provision the missing toolchain and retry; no candidate was rejected.` };
+  }
+  if (status === 'unverified') {
+    return { reason: 'verification_unverified', message: `gate returned unverified: ${gate.verification.evidence}, so nothing ran. Record a runnable verify on the ticket and integrate again, or pass skipVerify with a verificationWaiver (authority, reason, affectedGate, and scope or expiresAt) to deliver it unverified.` };
+  }
+  return { reason: 'assembled_wave_gate_failed', message: `gate returned ${status}. Refresh and reverify its candidates before delivery.` };
+}
+
+function failedWaveGateRefusal(wave: any, gate: any, assembly: any, provisioning?: string) {
+  const failure = waveGateFailure(gate, provisioning);
+  return { ok: false, reason: failure.reason, message: `Wave ${wave.id} ${failure.message}`, wave, assembly, gate };
+}
+
 function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || '').trim()).filter(Boolean)));
   if (!participantRefs.length) return { ok: false, reason: 'wave_participants_required', message: 'Wave assembly requires one or more submitted participant refs.' };
@@ -4396,26 +4472,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
     }
   });
   if (gate.state === 'gate_failed') {
-    const wave = { id: waveId, baseline: opened.baseline, participants: participantRefs };
-    if (gate.verification.status === 'toolchain_missing') {
-      const provisioningEvidence = verification.provisioning || 'The gate did not use an isolated candidate worktree, so worktree provisioning was skipped.';
-      return {
-        ok: false,
-        reason: 'assembled_wave_environment_problem',
-        message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${provisioningEvidence} Provision the missing toolchain and retry; no candidate was rejected.`,
-        wave,
-        assembly: decision.assembly,
-        gate,
-      };
-    }
-    return {
-      ok: false,
-      reason: 'assembled_wave_gate_failed',
-      message: `Wave ${waveId} gate returned ${gate.verification.status}. Refresh and reverify its candidates before delivery.`,
-      wave,
-      assembly: decision.assembly,
-      gate,
-    };
+    return failedWaveGateRefusal({ id: waveId, baseline: opened.baseline, participants: participantRefs }, gate, decision.assembly, verification.provisioning);
   }
   return {
     ok: true,
