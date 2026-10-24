@@ -301,14 +301,98 @@ function storiesWithCounts(slug) {
     (s) => Object.assign({}, s, { projectSlug: slug, projectName: meta ? meta.name : slug, ticketCount: counts[s.id] || 0 })
   );
 }
-function annotateReminders(tickets) {
-  const map = store.pendingReminders();
+function annotateReminders(tickets, map = store.pendingReminders()) {
   const now = Date.now();
   for (const t of tickets) {
     t.reminder = map.get(t.id) || null;
     if (t.claim?.by) t.claim = { ...t.claim, ...store.claimPulse(t, now) };
   }
   return tickets;
+}
+const TICKET_LIST_FIELDS = [
+  "id",
+  "ref",
+  "title",
+  "status",
+  "priority",
+  "labels",
+  "order",
+  "createdAt",
+  "updatedAt",
+  "archived",
+  "archivedAt",
+  "storyId",
+  "categoryId",
+  "assets",
+  "files",
+  "assignee",
+  "model",
+  "effort",
+  "complexity",
+  "source",
+  "lastEventType",
+  "lastEventSource",
+  "reminder",
+  "claim"
+];
+const TICKET_SUMMARY_CHARS = 280;
+const TICKET_LIST_PAGE_SIZE = 25;
+function categoryNameAndId(category) {
+  return category ? { id: category.id, name: category.name } : null;
+}
+function ticketListRow(ticket, project) {
+  const row = {
+    project: project.slug,
+    projectName: project.name,
+    category: categoryNameAndId(ticket.category),
+    summary: String(ticket.description ?? "").slice(0, TICKET_SUMMARY_CHARS),
+    commentCount: Array.isArray(ticket.comments) ? ticket.comments.length : 0
+  };
+  for (const field of TICKET_LIST_FIELDS) if (ticket[field] !== void 0) row[field] = ticket[field];
+  return row;
+}
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+async function ticketListRows(projects, filter) {
+  const rows = [];
+  const reminders = store.pendingReminders();
+  for (const project of projects) {
+    for (let offset = 0; ; offset += TICKET_LIST_PAGE_SIZE) {
+      const page = store.queryTickets(project.slug, { archived: filter.archived, status: filter.status, limit: TICKET_LIST_PAGE_SIZE, offset });
+      for (const ticket of annotateReminders(page, reminders)) rows.push(ticketListRow(ticket, project));
+      await yieldToEventLoop();
+      if (page.length < TICKET_LIST_PAGE_SIZE) break;
+    }
+  }
+  return rows;
+}
+function requestedStatuses(value) {
+  const statuses = String(value || "").split(",").map((status) => status.trim().toLowerCase()).filter(Boolean);
+  return statuses.length ? statuses : void 0;
+}
+async function sendTicketList(res, q) {
+  const project = q.project ? String(q.project) : "all";
+  const archived = q.archived === "1" || q.archived === "true";
+  const filter = { archived, status: requestedStatuses(q.status) };
+  if (project === "all") {
+    sendJson(res, 200, { project, archived, tickets: await ticketListRows(store.listProjects(), filter) });
+    return;
+  }
+  const meta = store.readMeta(project);
+  if (!meta) {
+    sendJson(res, 404, { error: "unknown project" });
+    return;
+  }
+  sendJson(res, 200, { project, archived, tickets: await ticketListRows([{ slug: project, name: meta.name }], filter) });
+}
+function sendTicketDetail(res, slug, idOrRef) {
+  const ticket = store.getTicket(slug, idOrRef);
+  if (!ticket) {
+    sendJson(res, 404, { error: "ticket not found" });
+    return;
+  }
+  sendJson(res, 200, { ticket: annotateReminders([Object.assign(ticket, { project: slug })])[0] });
 }
 async function handle(req, res) {
   const parsed = url.parse(req.url, true);
@@ -801,19 +885,7 @@ async function handle(req, res) {
     return;
   }
   if (req.method === "GET" && pathname === "/api/tickets") {
-    const project = q.project ? String(q.project) : "all";
-    const archivedOnly = q.archived === "1" || q.archived === "true";
-    if (project === "all" || project === "") {
-      sendJson(res, 200, { project: "all", archived: archivedOnly, tickets: annotateReminders(store.listAllProjectTickets(archivedOnly)) });
-    } else {
-      const meta = store.readMeta(project);
-      if (!meta) {
-        sendJson(res, 404, { error: "unknown project" });
-        return;
-      }
-      const tickets = store.listTickets(project).filter((t) => archivedOnly ? t.archived : !t.archived);
-      sendJson(res, 200, { project, archived: archivedOnly, tickets: annotateReminders(tickets) });
-    }
+    await sendTicketList(res, q);
     return;
   }
   if (req.method === "POST" && pathname === "/api/tickets") {
@@ -880,6 +952,10 @@ async function handle(req, res) {
     const slug = q.project ? String(q.project) : null;
     if (!slug || slug === "all") {
       sendJson(res, 400, { error: "project query param is required" });
+      return;
+    }
+    if (req.method === "GET") {
+      sendTicketDetail(res, slug, String(idOrRef));
       return;
     }
     if (req.method === "PATCH" || req.method === "PUT") {

@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { SnapshotRow } from './context-guards.js'
 import {
-  ADMISSION_FAILED, finishedExecutorUnproven, needsDecision, parseDecision, rewrittenCall, shellNeedsDecision, writeNeedsDecision,
+  finishedExecutorUnproven, needsDecision, parseDecision, rewrittenCall, shellNeedsDecision, writeNeedsDecision,
 } from './executor-admission.js'
 import type { Caller } from './executor-admission.js'
 
@@ -88,7 +88,7 @@ test('an Agent spawn fails closed when the admission decision cannot run', async
   on('process.run', () => ({ deny: 'node missing' }))
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   const denied = await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'sidequest-exec-high' })
-  expect(denied).toMatchObject({ deny: ADMISSION_FAILED })
+  expect(denied).toMatchObject({ deny: expect.stringMatching(/guard-executor-admission failed for Agent:.*node missing/) })
 })
 
 test('an admitted spawn runs with the decision\'s rewritten arguments and its note', async ($, on) => {

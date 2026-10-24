@@ -30,6 +30,8 @@ Start with one small task you actually need to finish. Ask Claude:
 
 Open the ticket and confirm those details are there. If the task has an executable check, record its exact command and last result; put prose acceptance criteria in the description or comments.
 
+Verify validation skips single-quoted text when checking placeholders and environment variables, so jq bindings, named captures and patterns such as `grep -c '<li>' index.html` are accepted when the executable is available. Outside single quotes, unresolved `<placeholder>` values and unset `$NAME`, `${NAME}` or `%NAME%` variables still refuse. Double quotes keep variable checks active. Each unset variable name produces one message.
+
 Start a new Claude Code session in the same project, then ask:
 
 > Read Sidequest ticket SQ-N and its full recorded discussion. Tell me the saved next action before continuing.

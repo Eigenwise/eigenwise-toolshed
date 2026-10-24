@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createAnalyzer, changedMetricsAgainstBase, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
-import { crapScore, enforcedMetrics, THRESHOLD } from './measure.mjs';
+import { crapScore, enforcedMetrics, THRESHOLD, hasOpenCoverageQuestion, withCoverageBound } from './measure.mjs';
 import { JAVASCRIPT_SOURCE, SOURCE, unsupportedSources, projectRoot, readConfig, gateSettings, selectedFiles, filesChangedSince, selectedDeletedFiles, sourceHashes, baseRevision, runGit, tryGit } from './crap-inputs.mjs';
 import { acquireCoverage, coverageByFile, coverageTrust, functionLineCoverage } from './lcov.mjs';
 import { lizardDescriptors, parseLizardCsv } from './lizard.mjs';
@@ -58,7 +58,7 @@ function failsRegardlessOfCoverage(metric) {
   return !metric.unverified && metric.crap >= THRESHOLD;
 }
 
-const openCoverageQuestion = (metric) => Boolean(metric.unverified) && !failsRegardlessOfCoverage(metric);
+const openCoverageQuestion = (metric) => hasOpenCoverageQuestion(metric) && !failsRegardlessOfCoverage(metric);
 
 function verdictLabel(report, blockingUnverified) {
   if (!report.changedMetrics.length) return 'nothing to score';
@@ -68,6 +68,7 @@ function verdictLabel(report, blockingUnverified) {
 }
 
 function verdict(report) {
+  report.changedMetrics = report.changedMetrics.map(withCoverageBound);
   const enforced = enforcedMetrics(report.changedMetrics).filter((metric) => !metric.informational);
   report.failures = enforced.filter(failsRegardlessOfCoverage);
   report.unverified = report.changedMetrics.filter(openCoverageQuestion);
@@ -180,8 +181,10 @@ function coverageNoteSuffix(metric) {
 }
 
 function unverifiedLine(metric, label, legacy) {
-  if (!legacy && metric.complexity >= THRESHOLD) return `FAIL ${label} cc=${metric.complexity} coverage unverified source=${metric.source}${complexityFailureAdvice(metric)}; ${metric.unverified}`;
-  return `${legacy ? 'LEGACY UNVERIFIED' : 'UNVERIFIED'} ${label}: ${metric.unverified}`;
+  if (legacy) return `LEGACY UNVERIFIED ${label}: ${metric.unverified}`;
+  if (metric.boundVerdict === 'pass') return `PASS ${label} cc=${metric.complexity} coverage=unverified (bound cc²+cc=${crapScore(metric.complexity, 0)} < ${THRESHOLD}); ${metric.unverified}`;
+  if (metric.complexity >= THRESHOLD) return `FAIL ${label} cc=${metric.complexity} coverage unverified source=${metric.source}${complexityFailureAdvice(metric)}; ${metric.unverified}`;
+  return `UNVERIFIED ${label}: ${metric.unverified}`;
 }
 
 function metricLine(metric, ccOnly) {

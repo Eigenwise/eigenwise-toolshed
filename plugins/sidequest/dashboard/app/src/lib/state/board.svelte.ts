@@ -24,6 +24,7 @@ export class BoardState {
   raw = $state.raw<Snapshot | null>(null);
   archivedProjects = $state.raw<Project[]>([]);
   archivedTickets = $state.raw<Ticket[]>([]);
+  ticketDetail = $state.raw<Ticket | null>(null);
   routingCatalog = $state.raw<RoutingCatalog>({});
   routingProfiles = $state.raw<RoutingProfile[]>([]);
   notifyPreferences = $state.raw<JsonRecord>({});
@@ -102,7 +103,41 @@ export class BoardState {
     }
   }
 
-  selectProject(project: Scope) { this.selectedProject = project; this.view = 'board'; }
+  selectProject(project: Scope) {
+    const changed = project !== this.selectedProject;
+    this.selectedProject = project;
+    this.view = 'board';
+    if (changed) this.requestRefresh();
+  }
+
+  // List rows carry only what a card shows, so the dialog reads the whole ticket.
+  openTicket(ticket: Ticket) {
+    this.openDialog = ticket.id;
+    if (this.ticketDetail?.id !== ticket.id) this.ticketDetail = null;
+    return this.loadTicketDetail();
+  }
+
+  showTicketDetail(ticket: Ticket) {
+    this.ticketDetail = ticket;
+    this.openDialog = ticket.id;
+  }
+
+  async loadTicketDetail() {
+    const row = this.openTicketRow();
+    if (!row) return;
+    const detail = await this.findTicket(row.id, this.ticketProject(row));
+    if (detail && this.openDialog === row.id) this.ticketDetail = detail;
+  }
+
+  private openTicketRow() {
+    const id = this.openDialog;
+    return id && id !== 'create' ? this.raw?.tickets.find((ticket) => ticket.id === id) : undefined;
+  }
+
+  async findTicket(idOrRef: string, project: string) {
+    try { return (await this.api.ticket(idOrRef, project)).ticket; }
+    catch { return null; }
+  }
   openArchive() { this.view = 'archive'; this.requestRefresh(); }
   closeArchive() { this.view = 'board'; }
   setDragging(value: boolean) { this.dragging = value; if (!value) this.flushPendingSnapshot(); }
@@ -196,7 +231,7 @@ export class BoardState {
   }
   private matches(ticket: Ticket) {
     const needle = this.search.trim().toLowerCase();
-    const text = [ticket.ref, ticket.title, ticket.description, ...(ticket.labels ?? [])].join(' ').toLowerCase();
+    const text = [ticket.ref, ticket.title, ticket.summary, ...(ticket.labels ?? [])].join(' ').toLowerCase();
     if (needle && !text.includes(needle)) return false;
     if (this.priority !== 'all' && ticket.priority !== this.priority) return false;
     if (this.assignee === 'you' && !this.isAssignedToYou(ticket)) return false;

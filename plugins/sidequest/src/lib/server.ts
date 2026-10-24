@@ -342,14 +342,96 @@ function storiesWithCounts(slug?: any) {
 // read of the notifications file rather than one per ticket. The reminder
 // itself lives in the notifications store, not the ticket file, so this is
 // purely a response-shape convenience for the dashboard's "bell in 1h" chip.
-function annotateReminders(tickets?: any) {
-  const map = store.pendingReminders();
+function annotateReminders(tickets?: any, map: Map<string, any> = store.pendingReminders()) {
   const now = Date.now();
   for (const t of tickets) {
     t.reminder = map.get(t.id) || null;
     if (t.claim?.by) t.claim = { ...t.claim, ...store.claimPulse(t, now) };
   }
   return tickets;
+}
+
+// GET /api/tickets serves board-card rows, never whole tickets: a home with a
+// few thousand executor-worked tickets carries ~25 KB of dispatch, submission,
+// comment and verification history per ticket, which made the all-project
+// feed 40 MB and blocked the event loop for seconds (GH-629). The full ticket
+// is read per ticket from GET /api/tickets/:id when its dialog opens.
+const TICKET_LIST_FIELDS = [
+  'id', 'ref', 'title', 'status', 'priority', 'labels', 'order', 'createdAt', 'updatedAt',
+  'archived', 'archivedAt', 'storyId', 'categoryId', 'assets', 'files', 'assignee',
+  'model', 'effort', 'complexity', 'source', 'lastEventType', 'lastEventSource', 'reminder', 'claim',
+];
+const TICKET_SUMMARY_CHARS = 280;
+const TICKET_LIST_PAGE_SIZE = 25;
+
+function categoryNameAndId(category: any) {
+  return category ? { id: category.id, name: category.name } : null;
+}
+
+function ticketListRow(ticket: any, project: { slug: string; name?: string }) {
+  const row: any = {
+    project: project.slug,
+    projectName: project.name,
+    category: categoryNameAndId(ticket.category),
+    summary: String(ticket.description ?? '').slice(0, TICKET_SUMMARY_CHARS),
+    commentCount: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
+  };
+  for (const field of TICKET_LIST_FIELDS) if (ticket[field] !== undefined) row[field] = ticket[field];
+  return row;
+}
+
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+// Paged reads with a yield between pages keep /api/health and every other
+// request answering while a large board builds its list.
+async function ticketListRows(projects: { slug: string; name?: string }[], filter: { archived: boolean; status?: string[] }) {
+  const rows: any[] = [];
+  const reminders = store.pendingReminders();
+  for (const project of projects) {
+    for (let offset = 0; ; offset += TICKET_LIST_PAGE_SIZE) {
+      const page = store.queryTickets(project.slug, { archived: filter.archived, status: filter.status, limit: TICKET_LIST_PAGE_SIZE, offset });
+      for (const ticket of annotateReminders(page, reminders)) rows.push(ticketListRow(ticket, project));
+      await yieldToEventLoop();
+      if (page.length < TICKET_LIST_PAGE_SIZE) break;
+    }
+  }
+  return rows;
+}
+
+function requestedStatuses(value: unknown): string[] | undefined {
+  const statuses = String(value || '').split(',').map((status) => status.trim().toLowerCase()).filter(Boolean);
+  return statuses.length ? statuses : undefined;
+}
+
+// GET /api/tickets: list rows (see ticketListRow) for ?project=slug|all,
+// ?archived=1 for the archive, ?status=todo,doing to filter.
+async function sendTicketList(res: any, q: any) {
+  const project = q.project ? String(q.project) : 'all';
+  const archived = q.archived === '1' || q.archived === 'true';
+  const filter = { archived, status: requestedStatuses(q.status) };
+  if (project === 'all') {
+    sendJson(res, 200, { project, archived, tickets: await ticketListRows(store.listProjects(), filter) });
+    return;
+  }
+  const meta = store.readMeta(project);
+  if (!meta) {
+    sendJson(res, 404, { error: 'unknown project' });
+    return;
+  }
+  sendJson(res, 200, { project, archived, tickets: await ticketListRows([{ slug: project, name: meta.name }], filter) });
+}
+
+// GET /api/tickets/:id?project=slug: the whole ticket a dialog edits, with the
+// reminder and claim pulse a list row carries.
+function sendTicketDetail(res: any, slug: string, idOrRef: string) {
+  const ticket = store.getTicket(slug, idOrRef);
+  if (!ticket) {
+    sendJson(res, 404, { error: 'ticket not found' });
+    return;
+  }
+  sendJson(res, 200, { ticket: annotateReminders([Object.assign(ticket, { project: slug })])[0] });
 }
 
 /* ------------------------------------------------------------------ *
@@ -839,20 +921,7 @@ async function handle(req?: any, res?: any) {
   }
 
   if (req.method === 'GET' && pathname === '/api/tickets') {
-    const project = q.project ? String(q.project) : 'all';
-    // Board shows active tickets; ?archived=1 returns the archive instead.
-    const archivedOnly = q.archived === '1' || q.archived === 'true';
-    if (project === 'all' || project === '') {
-      sendJson(res, 200, { project: 'all', archived: archivedOnly, tickets: annotateReminders(store.listAllProjectTickets(archivedOnly)) });
-    } else {
-      const meta = store.readMeta(project);
-      if (!meta) {
-        sendJson(res, 404, { error: 'unknown project' });
-        return;
-      }
-      const tickets = store.listTickets(project).filter((t?: any) => (archivedOnly ? t.archived : !t.archived));
-      sendJson(res, 200, { project, archived: archivedOnly, tickets: annotateReminders(tickets) });
-    }
+    await sendTicketList(res, q);
     return;
   }
 
@@ -927,6 +996,10 @@ async function handle(req?: any, res?: any) {
     const slug = q.project ? String(q.project) : null;
     if (!slug || slug === 'all') {
       sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    if (req.method === 'GET') {
+      sendTicketDetail(res, slug, String(idOrRef));
       return;
     }
     if (req.method === 'PATCH' || req.method === 'PUT') {

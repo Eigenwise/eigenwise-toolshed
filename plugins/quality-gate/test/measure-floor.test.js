@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { measureFiles } from '../lib/measure.mjs';
+import * as measurement from '../lib/measure.mjs';
+import { measureFiles, gateVerdict } from '../lib/measure.mjs';
 
 const entry = fileURLToPath(new URL('../bin/quality-gate.js', import.meta.url));
 
@@ -87,3 +88,44 @@ for (const command of ['crap', 'measure']) {
     });
   }
 }
+
+for (const [complexity, exitCode, boundVerdict, verdict, unresolved, failures] of [
+  [1, 0, 'pass', 'passed', 0, 0],
+  [2, 1, undefined, 'unverified', 1, 0],
+  [3, 1, undefined, 'unverified', 1, 0],
+  [6, 1, undefined, 'failed', 1, 1],
+]) {
+  test(`GH-628 measure cc-${complexity} resolves only coverage-independent verdicts`, async (context) => {
+    const setup = await fixture(context);
+    await fs.writeFile(path.join(setup.root, 'subject.mjs'), source(complexity));
+    const execution = spawnSync(process.execPath, [entry, 'measure', '--project', setup.root, '--base', setup.head, '--coverage', setup.coverageDirectory, '--receipts-dir', path.join(setup.directory, 'receipts'), 'subject.mjs'], {
+      cwd: setup.directory, encoding: 'utf8', timeout: 60000,
+    });
+    assert.equal(execution.status, exitCode, execution.stderr);
+    const report = JSON.parse(execution.stdout);
+    const metric = report.changedMetrics[0];
+    assert.equal(metric.complexity, complexity);
+    assert.match(metric.unverified, /no suite loaded/);
+    assert.equal(metric.coverage, undefined);
+    assert.equal(metric.crap, undefined);
+    assert.equal(metric.boundVerdict, boundVerdict);
+    assert.equal(report.unverified.length, unresolved);
+    assert.equal(report.failures.length, failures);
+    const receipt = JSON.parse(await fs.readFile(report.receipt, 'utf8'));
+    assert.equal(receipt.verdict, verdict);
+  });
+}
+
+test('GH-628 bound passes preserve independent branch obligations and reject unknown complexity', () => {
+  assert.equal(typeof measurement.withCoverageBound, 'function');
+  const { withCoverageBound } = measurement;
+  const metric = { complexity: 1, classification: 'new', unverified: 'coverage missing', relativePath: 'subject.mjs', line: 1, name: 'subject' };
+  assert.equal(withCoverageBound(metric).boundVerdict, 'pass');
+  for (const complexity of [null, undefined, NaN, 0, -1, 2, 6]) {
+    assert.equal(withCoverageBound({ ...metric, complexity }).boundVerdict, undefined);
+  }
+  assert.equal(withCoverageBound({ ...metric, informational: true }).boundVerdict, undefined);
+  const branch = { line: 1, text: 'condition', untaken: [], unverified: 'branch missing' };
+  assert.equal(gateVerdict([{ ...metric, branches: [branch] }]).unverified.length, 1);
+  assert.equal(gateVerdict([{ ...metric, unverified: undefined, coverage: 1, crap: 1, branches: [{ ...branch, unverified: undefined, untaken: ['false'] }] }]).failures.length, 1);
+});
