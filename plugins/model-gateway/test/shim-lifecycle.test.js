@@ -179,12 +179,23 @@ const oursOutdated = { state: 'running-ours', pid: 811, version: '0.0.1', owner:
 const starting = { state: 'starting', pid: 812, since: null, owner: { state: 'same-install', pid: 812 }, health: null };
 const stopped = { state: 'stopped', owner: { state: 'unowned', pid: null }, health: null };
 
-test('ensure against its own healthy shim at the installed version is a no-op success (#230)', async () => {
+test('healthy startup reaps only stale owned orphans without stopping or spawning', async () => {
   const { calls, run } = startHarness([oursCurrent]);
   const result = await run({ lifecycleOperation: 'ensure' });
 
   assert.deepEqual(result, { ok: true, started: [], recoveryAttempted: false });
   assert.deepEqual(calls, [`report:${describeShimState(oursCurrent)}`, 'reap:810', 'catalog']);
+});
+
+test('concurrent healthy starts retain protected orphan cleanup under the lifecycle lock', async () => {
+  const { calls, run } = startHarness([oursCurrent]);
+  const results = await Promise.all(Array.from({ length: 5 }, () => run({ quiet: true, lifecycleOperation: 'ensure' })));
+
+  for (const result of results) {
+    assert.equal(result.ok, true);
+    assert.equal(result.recoveryAttempted, false);
+  }
+  assert.deepEqual(calls, Array(5).fill(['reap:810', 'catalog']).flat());
 });
 
 test('ensure waits for a starting shim instead of binding a second supervisor (#230, #251)', async () => {

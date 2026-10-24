@@ -229,6 +229,7 @@ const BOARD_CONFIG_OPTION_PATCH_KEYS = {
   "always-in-scope": "alwaysInScope",
   "read-only-denied-tool": "readOnlyDeniedTools",
   "integration-mode": "integrationMode",
+  "integration-quality": "integrationQuality",
   "integration-branch": "integrationBranch",
   delivery: "delivery",
   "integration-verify-timeout-ms": "integrationVerifyTimeoutMs",
@@ -282,6 +283,7 @@ function printBoardConfig(payload) {
   console.log(`always in scope: ${listOrNone(payload.alwaysInScope)}`);
   console.log(`generated pairs: ${listOrNone(payload.generatedPairs.map(generatedPairLabel))}`);
   console.log(`integration mode: ${payload.integrationMode}`);
+  console.log(`integration quality: ${payload.integrationQuality}`);
   console.log(`integration branch: ${payload.integrationBranch}`);
   console.log(`delivery: ${payload.delivery}`);
   console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);

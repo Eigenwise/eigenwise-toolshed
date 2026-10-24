@@ -48,15 +48,16 @@ export const TOUR_STEPS: TourStep[] = [
     available: (board) => board.visibleTickets.length > 0,
     enter: (board) => {
       const score = (ticket: typeof board.visibleTickets[number]) =>
-        (Array.isArray(ticket.comments) && ticket.comments.length ? 8 : 0) +
-        (typeof ticket.description === 'string' && ticket.description.trim() ? 4 : 0) +
+        (ticket.commentCount ? 8 : 0) +
+        (ticket.summary?.trim() ? 4 : 0) +
         (ticket.claim?.by ? 2 : 0) +
         (ticket.storyId ? 1 : 0);
       const ticket = board.visibleTickets.reduce(
         (best, candidate) => score(candidate) > score(best) ? candidate : best,
         board.visibleTickets[0]
       );
-      board.openDialog = ticket?.id ?? null;
+      if (ticket) void board.openTicket(ticket);
+      else board.openDialog = null;
     },
     exit: (board) => { board.openDialog = null; }
   },

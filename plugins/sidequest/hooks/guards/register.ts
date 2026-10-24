@@ -6,6 +6,7 @@ import {
 } from './context-guards.js'
 import type { InlineWork } from '../../types/index.js'
 import { destructiveGitDenial, sharedCheckoutGitDenial } from './git-guards.js'
+import { guardFailure } from './guard-errors.js'
 import { registerExecutorAdmission } from './executor-admission.js'
 import { boardExists, caller, machine, projectDirectory, readSnapshot, sessionRows, worktreeExists } from './snapshot.js'
 import { bashWindowsPathVerdict, homeDeleteDenial, powershellShimContext } from './text-guards.js'
@@ -75,9 +76,8 @@ async function repeatedCommandWarning($: EngineInterface, agentId: string, comma
 async function deniedToolsGuard($: EngineInterface, e: { tool: string; agentId?: string }): Promise<string | null> {
   try {
     return deniedToolsDenial(e.tool, await caller($, e.agentId))
-  } catch {
-    $.ui.status('sidequest: guard-denied-tools skipped')
-    return null
+  } catch (error) {
+    return guardFailure($, 'guard-denied-tools', e.tool, 'closed', error)
   }
 }
 
@@ -87,8 +87,8 @@ async function inlineWorkGuard($: EngineInterface, e: { tool: string; agentId?: 
     const advice = await inlineWorkAdvice($, e.tool, textField(e, 'command'), textField(e, 'subagent_type'))
     if (advice) $.ui.toast(advice)
     return advice
-  } catch {
-    $.ui.status('sidequest: inline-work-nudge skipped')
+  } catch (error) {
+    guardFailure($, 'inline-work-nudge', e.tool, 'open', error)
     return null
   }
 }
@@ -100,20 +100,19 @@ export const register: Register = on => {
     try {
       const denial = homeDeleteDenial(textField(e, 'command'), await machine($))
       if (denial) return { deny: denial }
-    } catch {
-      $.ui.status('sidequest: guard-home-delete skipped')
+    } catch (error) {
+      return { deny: guardFailure($, 'guard-home-delete', e.tool, 'closed', error)! }
     }
     return next(e)
   })
 
-  // The one guard that fails closed: a reset or push it could not check may destroy or publish work.
   on('tool.call', { tool: /^(Bash|PowerShell)$/ }, async ($, e, next) => {
     const command = textField(e, 'command')
     let denial: string | null
     try {
       denial = await destructiveGitDenial($, command)
-    } catch {
-      denial = `sidequest: destructive git guard could not run; refusing ${command.slice(0, 300)}`
+    } catch (error) {
+      denial = guardFailure($, 'guard-destructive-git', e.tool, 'closed', error)
     }
     return denial ? { deny: denial } : next(e)
   })
@@ -122,8 +121,8 @@ export const register: Register = on => {
     try {
       const denial = await sharedCheckoutGitDenial($, textField(e, 'command'), e.agentId)
       if (denial) return { deny: denial }
-    } catch {
-      $.ui.status('sidequest: guard-shared-checkout-git skipped')
+    } catch (error) {
+      return { deny: guardFailure($, 'guard-shared-checkout-git', e.tool, 'closed', error)! }
     }
     return next(e)
   })
@@ -132,8 +131,8 @@ export const register: Register = on => {
     let verdict: GuardVerdict = null
     try {
       if ((await machine($)).windows) verdict = bashWindowsPathVerdict(textField(e, 'command'))
-    } catch {
-      $.ui.status('sidequest: guard-bash-windows-paths skipped')
+    } catch (error) {
+      verdict = { deny: guardFailure($, 'guard-bash-windows-paths', e.tool, 'closed', error)! }
     }
     if (verdict && 'deny' in verdict) return { deny: verdict.deny }
     return withContext(await next(e), contextOf(verdict))
@@ -143,8 +142,8 @@ export const register: Register = on => {
     try {
       const denial = heredocDenial(textField(e, 'command'), await caller($, e.agentId), await $.session.cwd())
       if (denial) return { deny: denial }
-    } catch {
-      $.ui.status('sidequest: guard-heredoc-isolated skipped')
+    } catch (error) {
+      return { deny: guardFailure($, 'guard-heredoc-isolated', e.tool, 'closed', error)! }
     }
     return next(e)
   })
@@ -153,8 +152,8 @@ export const register: Register = on => {
     let context: string | null = null
     try {
       if ((await machine($)).windows) context = powershellShimContext(textField(e, 'command'))
-    } catch {
-      $.ui.status('sidequest: guard-powershell-cmd-shims skipped')
+    } catch (error) {
+      guardFailure($, 'guard-powershell-cmd-shims', e.tool, 'open', error)
     }
     return withContext(await next(e), context)
   })
@@ -163,8 +162,8 @@ export const register: Register = on => {
     let warning: string | null = null
     try {
       if (e.agentId) warning = await repeatedCommandWarning($, e.agentId, textField(e, 'command'))
-    } catch {
-      $.ui.status('sidequest: repeated-command-warn skipped')
+    } catch (error) {
+      guardFailure($, 'repeated-command-warn', e.tool, 'open', error)
     }
     return withContext(await next(e), warning)
   })
@@ -180,8 +179,8 @@ export const register: Register = on => {
     try {
       const denial = e.agentId ? null : taskOutputDenial({ task_id: Reflect.get(e, 'task_id'), id: Reflect.get(e, 'id') }, await sessionRows($), await $.session.id())
       if (denial) return { deny: denial }
-    } catch {
-      $.ui.status('sidequest: guard-task-output skipped')
+    } catch (error) {
+      return { deny: guardFailure($, 'guard-task-output', e.tool, 'closed', error)! }
     }
     return next(e)
   })
@@ -190,8 +189,8 @@ export const register: Register = on => {
     try {
       const denial = await peerMessageDenial($, textField(e, 'to').trim())
       if (denial) return { deny: denial }
-    } catch {
-      $.ui.status('sidequest: guard-peer-message skipped')
+    } catch (error) {
+      return { deny: guardFailure($, 'guard-peer-message', e.tool, 'closed', error)! }
     }
     return next(e)
   })
@@ -204,8 +203,8 @@ export const register: Register = on => {
       if (!e.isMeta && !AUTOMATION_TAG.test(e.text.trim()) && value?.boardInteraction) {
         await $.state.set(INLINE_WORK, { advisorySurfaced: value.advisorySurfaced } satisfies InlineWork)
       }
-    } catch {
-      $.ui.status('sidequest: inline-work-nudge skipped')
+    } catch (error) {
+      guardFailure($, 'inline-work-nudge', 'prompt.submit', 'open', error)
     }
     return next(e)
   })

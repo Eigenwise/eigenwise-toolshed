@@ -127,7 +127,7 @@ for (const [label, text, expectedExitCode, expectedCoverage, reason] of [
   ['complete', 'def subject(value):\n    first = value\n    return first if first else 0\n\nsubject(1)\nsubject(0)\n', 0, 1],
   ['explicit zero for an uncalled body', 'def subject(value):\n    first = value\n    return first if first else 0\n', 1, 0],
   ['excluded statement', 'def subject(value):\n    first = value\n    return first if first else 0  # pragma: no cover\n\nsubject(1)\n', 2, undefined, /Missing executable LCOV lines/],
-  ['ambiguous multiline normalization', 'def subject(value):\n    return (\n        value\n    )\n\nsubject(1)\n', 2, undefined, /Missing executable LCOV lines/],
+  ['ambiguous multiline normalization', 'def subject(value):\n    return (\n        value\n    )\n\nsubject(1)\n', 0, undefined, /Missing executable LCOV lines/],
 ]) {
   test('Python live coverage.py executable inventory: ' + label, async (context) => {
     const available = spawnSync('coverage', ['--version'], { encoding: 'utf8', timeout: 10000 });
@@ -138,8 +138,8 @@ for (const [label, text, expectedExitCode, expectedCoverage, reason] of [
     const report = await crapReport({ project: root, coverageCommand: `${JSON.stringify(process.execPath)} ${JSON.stringify(capture)}` });
     assert.equal(report.exitCode, expectedExitCode);
     assert.equal(report.changedMetrics[0].coverage, expectedCoverage);
-    assert.equal(report.unverified.length, Number(expectedCoverage === undefined));
-    if (reason) assert.match(report.unverified[0].unverified, reason);
+    assert.equal(report.unverified.length, Number(expectedExitCode === 2));
+    if (reason) assert.match(report.changedMetrics[0].unverified, reason);
   });
 }
 

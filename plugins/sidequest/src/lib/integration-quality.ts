@@ -35,8 +35,18 @@ export interface IntegrationQuality {
   enforced: number;
   failures: unknown[];
   unverified: QualityRow[];
+  captureGap?: string;
+  coverageSupport?: string;
+  mode?: IntegrationQualityMode;
   worstBody?: QualityRow;
   branches: { file?: string; name?: string; conditions: unknown[] }[];
+}
+
+export type IntegrationQualityMode = 'enforce' | 'report' | 'off';
+
+export interface IntegrationQualityOptions {
+  mode?: IntegrationQualityMode;
+  keepCapture?: boolean;
 }
 
 export interface QualityInput {
@@ -104,6 +114,14 @@ function unverifiedQuality(error: unknown): IntegrationQuality {
   return { ...emptyQuality('unverified'), unverified: [{ name: 'integration measurement', unverified: String(error) }] };
 }
 
+function wholeRunCaptureGap(report: NativeReport): string | undefined {
+  const reason = report.unverified[0]?.unverified;
+  if (!reason?.startsWith('no suite loaded this file, so it has no coverage record')) return undefined;
+  const rows = report.changedMetrics ?? [];
+  if (!rows.length) return undefined;
+  return rows.every((row) => row.unverified === reason) ? reason : undefined;
+}
+
 function reportQuality(report: NativeReport, base: string): IntegrationQuality {
   const enforced = (report.changedMetrics ?? []).filter((row) => row.classification !== 'legacy-unchanged');
   const floorFailures = enforced.filter((row) => (row.complexity ?? 0) >= 6).map((row) => `${row.relativePath}:${row.line} ${row.name} cc=${row.complexity} (complexity floor)`);
@@ -112,6 +130,7 @@ function reportQuality(report: NativeReport, base: string): IntegrationQuality {
   const measured = { ...emptyQuality('measured'), baseline: base, enforced: enforced.length, failures, unverified };
   return {
     ...measured,
+    captureGap: wholeRunCaptureGap(report),
     status: qualityStatus(failures, unverified),
     worstBody: enforced.slice().sort((left, right) => (right.crap ?? -1) - (left.crap ?? -1))[0],
     branches: enforced.map((row) => ({ file: row.relativePath, name: row.name, conditions: row.branches ?? [] })),
@@ -132,7 +151,7 @@ function measuredQuality(gate: string, input: QualityInput, captureDirectory: st
 
 function persistQuality(input: QualityInput, quality: IntegrationQuality): IntegrationQuality {
   const receipt = path.join(input.directory, 'receipt.json');
-  const recorded = { ...quality, receipt };
+  const recorded = { ...quality, receipt, coverageSupport: 'Vitest-run projects get no measurement until quality-gate supports Vitest workers.' };
   fs.writeFileSync(receipt, JSON.stringify(recorded, null, 2) + '\n');
   return recorded;
 }
@@ -142,7 +161,7 @@ function captureEnvironment(gate: string, directory: string, environment: NodeJS
   return { ...environment, NODE_OPTIONS: [environment.NODE_OPTIONS, preload].filter(Boolean).join(' '), QUALITY_GATE_V8_CAPTURE: path.join(directory, 'coverage') };
 }
 
-function participantQuality(gate: string, input: QualityInput, captureDirectory: string): IntegrationQuality {
+function participantQuality(gate: string, input: QualityInput, captureDirectory: string, mode: IntegrationQualityMode): IntegrationQuality {
   fs.mkdirSync(input.directory, { recursive: true });
   let quality: IntegrationQuality;
   try {
@@ -150,31 +169,48 @@ function participantQuality(gate: string, input: QualityInput, captureDirectory:
   } catch (error) {
     quality = unverifiedQuality(error);
   }
-  return persistQuality(input, quality);
+  return persistQuality(input, { ...quality, mode });
 }
 
-function unavailableQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, error: unknown, environment: NodeJS.ProcessEnv) {
+function unavailableQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, error: unknown, environment: NodeJS.ProcessEnv, mode: IntegrationQualityMode) {
   const quality = inputs.map((input) => {
     fs.mkdirSync(input.directory, { recursive: true });
-    return persistQuality(input, unverifiedQuality(error));
+    return persistQuality(input, { ...unverifiedQuality(error), mode });
   });
   return { ...verify(environment), quality };
 }
 
-export function runIntegrationQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv = process.env): VerificationResult & { quality: IntegrationQuality[] } {
+function captureQuality(gate: string, inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv, options: IntegrationQualityOptions) {
+  const primary = inputs[0]!;
+  const captureDirectory = path.join(primary.directory, 'coverage');
+  fs.mkdirSync(captureDirectory, { recursive: true });
+  try {
+    const verification = verify(captureEnvironment(gate, primary.directory, environment));
+    const quality = inputs.map((input) => participantQuality(gate, input, captureDirectory, options.mode ?? 'enforce'));
+    return { ...verification, quality };
+  } finally {
+    if (!options.keepCapture) fs.rmSync(captureDirectory, { recursive: true, force: true });
+  }
+}
+
+export function runIntegrationQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv = process.env, options: IntegrationQualityOptions = {}): VerificationResult & { quality: IntegrationQuality[] } {
+  const mode = options.mode ?? 'enforce';
+  if (mode === 'off') return { ...verify(environment), quality: inputs.map(() => emptyQuality('none')) };
   const primary = inputs[0]!;
   let gate: string | undefined;
   try {
     gate = configuredIntegrationGate(primary.registeredProject);
   } catch (error) {
-    return unavailableQuality(inputs, verify, error, environment);
+    return unavailableQuality(inputs, verify, error, environment, mode);
   }
-  if (!gate) return { ...verify(environment), quality: [emptyQuality('none')] };
-  const captureDirectory = path.join(primary.directory, 'coverage');
-  fs.mkdirSync(captureDirectory, { recursive: true });
-  const verification = verify(captureEnvironment(gate, primary.directory, environment));
-  const quality = inputs.map((input) => participantQuality(gate, input, captureDirectory));
-  const failures = quality.flatMap((result) => result.failures);
-  if (!failures.length) return { ...verification, quality };
-  return { ...verification, quality, status: 'failed_check', evidence: 'Native quality gate refused delivery: ' + failures.map((row) => JSON.stringify(row)).join('; '), failureIdentities: ['quality:measured-failure'] };
+  if (!gate) return { ...verify(environment), quality: inputs.map(() => emptyQuality('none')) };
+  const result = captureQuality(gate, inputs, verify, environment, options);
+  return enforceQuality(result, mode);
+}
+
+function enforceQuality(result: VerificationResult & { quality: IntegrationQuality[] }, mode: IntegrationQualityMode): VerificationResult & { quality: IntegrationQuality[] } {
+  if (mode === 'report') return result;
+  const failures = result.quality.flatMap((quality) => quality.failures);
+  if (!failures.length) return result;
+  return { ...result, status: 'failed_check', evidence: 'Native quality gate refused delivery: ' + failures.map((row) => JSON.stringify(row)).join('; '), failureIdentities: ['quality:measured-failure'] };
 }
