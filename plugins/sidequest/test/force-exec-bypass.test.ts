@@ -43,6 +43,45 @@ test('SQ-3835: shared-checkout mutations retain the read-only refusal after glob
   }
 });
 
+const ISSUE_641_READS = [
+  'merge-base HEAD main', 'merge-base --is-ancestor HEAD main', 'grep pattern',
+  'for-each-ref refs/heads', 'show-ref --verify refs/heads/main', 'config --get user.name',
+  'config --get-all remote.origin.fetch', 'config --list', 'config -l', 'config --local --get user.name',
+  'shortlog -sn HEAD', 'reflog', 'reflog show HEAD', 'reflog HEAD', 'stash list', 'stash show -p',
+  'tag --list', 'tag -l v*', 'tag --contains HEAD', 'tag --points-at=HEAD',
+  'remote show origin', 'remote get-url origin', 'remote -v', 'ls-remote origin', 'name-rev HEAD',
+  'count-objects -v', 'check-ignore file', 'check-attr -a file', 'diff-tree HEAD', 'diff-index HEAD',
+];
+const ISSUE_641_WRITES = [
+  'commit -m message', 'branch -D feature', 'tag version', 'tag --list --delete version',
+  'tag --contains HEAD --force version', 'stash push', 'stash pop', 'config user.name other',
+  'config --get user.name other', 'config --get user.name --replace-all', 'config --list --unset user.name',
+  'config --get-all user.name other', 'reflog expire --all', 'reflog delete HEAD@{0}',
+  'reflog drop HEAD', 'reflog write HEAD old new message', 'remote add origin url',
+  'remote -v add origin url', 'remote set-url origin url', 'update-ref refs/heads/main HEAD', 'archive -o output.tar HEAD',
+  'grep --output=result pattern', 'for-each-ref --output result',
+];
+
+test('GH-641: read-only Git queries pass with plain and directory-prefixed commands', () => {
+  for (const prefix of ['git', 'git -C "C:/shared checkout"']) {
+    for (const suffix of ISSUE_641_READS) {
+      const command = prefix + ' ' + suffix;
+      assert.equal(namesShellWrite(command), false, command);
+      assert.equal(readOnlyShellRefusal(command, process.cwd()), null, command);
+    }
+  }
+});
+
+test('GH-641: Git mutations remain refused with plain and directory-prefixed commands', () => {
+  for (const prefix of ['git', 'git -C "C:/shared checkout"']) {
+    for (const suffix of ISSUE_641_WRITES) {
+      const command = prefix + ' ' + suffix;
+      assert.equal(namesShellWrite(command), true, command);
+      assert.match(readOnlyShellRefusal(command, process.cwd())!, /read-only-git\.ts/, command);
+    }
+  }
+});
+
 test('SQ-3808: heredoc bodies never become shell write targets', () => {
   assert.deepEqual(shellSegments("cat > /scratch/probe.py <<'EOF'\ndef f() -> int:\n    return 2 > 1\nEOF").flatMap((segment) => segment.redirects), ['/scratch/probe.py']);
   assert.deepEqual(shellSegments('cat > repo/probe.py <<"EOF"\ndef f() -> int:\nEOF').flatMap((segment) => segment.redirects), ['repo/probe.py']);

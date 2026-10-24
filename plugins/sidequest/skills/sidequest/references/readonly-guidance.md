@@ -8,8 +8,15 @@ These reports need Sidequest installed in the host. When it is unavailable, say 
 
 Read-only guards allow read-only Git against the shared checkout from isolated and read-only
 executors. Verify untouched paths with `git -C <shared> status --porcelain -- <paths>`;
-`git -C <shared> worktree list` is also allowed. Mutations still require the assigned worktree
-and write authority.
+`git -C <shared> worktree list` is also allowed. The allowlist in
+`plugins/sidequest/src/hooks/shared/read-only-git.ts` also permits `merge-base` (including
+`--is-ancestor`), `grep`, `for-each-ref`, `show-ref`, `shortlog`, `ls-remote`, `name-rev`,
+`count-objects`, `check-ignore`, `check-attr`, `diff-tree`, and `diff-index`.
+Use query forms for commands that also write: `config --get/--get-all <key>` or `--list/-l`
+(optionally after `--global/--local/--system/--worktree`); `tag --list/-l/--contains/--points-at`;
+`stash list/show`; `reflog [show]`; and `remote -v/show/get-url`. Output-file flags remain refused.
+Mutations, including `tag <name>`, `stash push/pop`, `config <key> <value>`, `reflog expire`,
+`remote add`, and `archive -o`, require write authority in the assigned worktree.
 
 Between dispatch and submission, avoid routine pulses, comment reads and source peeks. Explicitly
 assigned builders and readonly advisors may exchange direct native messages and inspect authorized

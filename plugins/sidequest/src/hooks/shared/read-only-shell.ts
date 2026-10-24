@@ -70,7 +70,7 @@ function firstCheckoutWrite(command: string, cwd: string): string | null {
 
 export function readOnlyShellRefusal(command: string, cwd: string): string | null {
   if (shellSegments(command).some((segment) => isGitMutation(segment.words))) {
-    return 'sidequest: read-only executor, refusing a git mutation. Comment the needed change and release the ticket.';
+    return 'sidequest: read-only executor, refusing a git mutation. Allowed read-only forms are defined in plugins/sidequest/src/hooks/shared/read-only-git.ts. Comment the needed change and release the ticket.';
   }
   const blocked = firstCheckoutWrite(command, cwd);
   return blocked
