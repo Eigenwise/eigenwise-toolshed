@@ -21,8 +21,8 @@ function coverageDirectoryFor(inherited, local) {
   return inherited || local;
 }
 
-async function captured(context, source, calls) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'quality-logical-loops-'));
+async function captured(context, source, calls, temporaryDirectory = os.tmpdir()) {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(temporaryDirectory, 'quality-logical-loops-')));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
   const subject = path.join(root, 'subject.cjs');
   await fs.writeFile(subject, source);
@@ -39,6 +39,24 @@ async function captured(context, source, calls) {
   assert.ok(metric);
   return { subject, source, coverageDirectory, metric, metrics: result.metrics };
 }
+
+test('aliased temporary bases produce canonical subject and capture identities', async (context) => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'quality-temp-alias-')));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const real = path.join(root, 'real');
+  const alias = path.join(root, 'alias');
+  await fs.mkdir(real);
+  await fs.symlink(real, alias, 'junction');
+  const setup = await captured(context, 'module.exports = function subject(value) { return value; };', 'assert.equal(subject(1),1);', alias);
+  assert.equal(path.dirname(path.dirname(setup.subject)), real);
+  assert.equal(setup.subject, await fs.realpath(setup.subject));
+  assert.equal(setup.metric.coverage, 1);
+  const aliasedSubject = path.join(alias, path.relative(real, setup.subject));
+  const captures = await readCoverage(setup.coverageDirectory);
+  assert.ok(captures.has(normalizedPath(setup.subject)));
+  assert.equal(captures.has(normalizedPath(aliasedSubject)), false);
+  await assert.rejects(measureFiles([aliasedSubject], { projectRoot: pluginRoot, coverageDirectory: setup.coverageDirectory, externalNewFiles: [aliasedSubject] }), /external declaration is an alias/);
+});
 
 function logicalRows(metric) {
   return metric.branches.filter((row) => logicalRow(row));
