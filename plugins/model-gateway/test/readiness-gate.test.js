@@ -22,9 +22,9 @@ function installedGateFixture(t) {
   return { home, registry, launcher, environment };
 }
 
-function invokeGate(fixture, event, extraEnvironment = {}) {
+function invokeGate(fixture, event, extraEnvironment = {}, payloadCwd = fixture.home) {
   return spawnSync(process.execPath, [fixture.launcher, 'readiness-gate'], {
-    input: JSON.stringify({ hook_event_name: event, cwd: fixture.home }),
+    input: JSON.stringify({ hook_event_name: event, cwd: payloadCwd }),
     cwd: fixture.home, env: { ...fixture.environment, ...extraEnvironment }, encoding: 'utf8', timeout: 30000, windowsHide: true,
   });
 }
@@ -56,6 +56,23 @@ test('installed stable gate accepts startup and resume stdin without enabled plu
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.existsSync(path.join(fixture.home, '.claude', 'model-gateway', 'guardian.pid')), false);
   }
+});
+
+test('stable gate keeps its inherited cwd when the session cwd was deleted', (t) => {
+  const fixture = installedGateFixture(t);
+  const deleted = path.join(fixture.home, 'removed-worktree', 'nested');
+  const result = invokeGate(fixture, 'UserPromptSubmit', {}, deleted);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /ENOENT/);
+});
+
+test('wired gate reports gateway readiness, not a chdir crash, when the session cwd was deleted', (t) => {
+  const fixture = installedGateFixture(t);
+  const deleted = path.join(fixture.home, 'removed-worktree', 'nested');
+  const result = invokeGate(fixture, 'UserPromptSubmit', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' }, deleted);
+  assert.equal(result.status, 2, result.stderr);
+  assert.doesNotMatch(result.stderr, /ENOENT/);
+  assert.match(result.stderr, /proxy binary missing/);
 });
 
 test('installed prompt gate blocks missing setup with local recovery guidance', (t) => {
