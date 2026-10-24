@@ -136,8 +136,9 @@ function main() {
     }
     return false;
   };
+  const clientConnection = { notify: writeMessage, isolateLongRunningWork: true };
   const dispatchMessage = (message) => {
-    const operation = Promise.resolve(mcp.handleRequest(message)).then(
+    const operation = Promise.resolve(mcp.handleRequest(message, clientConnection)).then(
       (response) => {
         writeMessage(response);
       },

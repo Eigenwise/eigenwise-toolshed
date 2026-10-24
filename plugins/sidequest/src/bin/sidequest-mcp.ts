@@ -165,8 +165,10 @@ function main() {
     return false;
   };
 
+  const clientConnection = { notify: writeMessage, isolateLongRunningWork: true };
+
   const dispatchMessage = (message: unknown) => {
-    const operation: Promise<void> = Promise.resolve(mcp.handleRequest(message)).then(
+    const operation: Promise<void> = Promise.resolve(mcp.handleRequest(message, clientConnection)).then(
       (response: unknown) => { writeMessage(response); },
       () => undefined,
     );

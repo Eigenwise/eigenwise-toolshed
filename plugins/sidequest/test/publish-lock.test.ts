@@ -163,3 +163,37 @@ test('TTL expiry, dead non-transient pids, and corrupt records read as stale and
   assert.strictEqual((await publish.publishLockStatus(repo)).stale, true);
   assert.strictEqual((await publish.acquirePublishLock(repo, { by: 'orch-new', sessionId: 'sess-new' })).ok, true);
 });
+
+test('SQ-3884: an isolated MCP integrate checks the publish lock in its delivery process under the session the server resolved', async () => {
+  const store = require('../lib/store.js');
+  const mcp = require('../lib/mcp.js');
+  const repo = tempRepo();
+  const { slug } = store.ensureProject(repo);
+  const ticket = store.createTicket(slug, { title: 'locked delivery', category: 'codebase-exploration', description: 'A delivery refused while another worker holds the publish lock.' });
+  await publish.acquirePublishLock(repo, { by: 'orch-b', sessionId: 'holder-session', transient: true });
+  const sessions = path.join(String(process.env.SIDEQUEST_CLAUDE_HOME), 'sessions');
+  fs.mkdirSync(sessions, { recursive: true });
+  const hostRecord = path.join(sessions, `${process.ppid}.json`);
+  fs.writeFileSync(hostRecord, JSON.stringify({ pid: process.ppid, sessionId: 'host-switched-session' }));
+  const startupSession = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = 'stale-startup-session';
+  const notifications: any[] = [];
+  try {
+    const response = await mcp.handleRequest({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'integrate', arguments: { project: repo, ref: ticket.ref, by: 'orch-a' }, _meta: { progressToken: 'locked' } },
+    }, { notify: (message: any) => notifications.push(message), isolateLongRunningWork: true });
+    const payload = JSON.parse(response.result.content[0].text);
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, 'publish_lock_required');
+    assert.match(payload.message, /publish lock is held by orch-b/);
+    assert.match(payload.message, /MCP runtime session host-switched-session/, 'the delivery process keeps the session the server resolved, not its stale startup id');
+    assert.ok(notifications.some((message) => message.method === 'notifications/progress' && message.params.progressToken === 'locked'));
+  } finally {
+    if (startupSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = startupSession;
+    fs.rmSync(hostRecord, { force: true });
+  }
+});

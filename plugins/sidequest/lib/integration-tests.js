@@ -28,7 +28,15 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var integration_tests_exports = {};
 __export(integration_tests_exports, {
+  beginIntegrationProgress: () => beginIntegrationProgress,
+  deliveryOutcomeState: () => deliveryOutcomeState,
+  finishIntegrationProgress: () => finishIntegrationProgress,
+  integrationProgressPath: () => integrationProgressPath,
+  integrationProgressSummary: () => integrationProgressSummary,
   integrationTestBatches: () => integrationTestBatches,
+  onIntegrationProgress: () => onIntegrationProgress,
+  readIntegrationProgress: () => readIntegrationProgress,
+  reportIntegrationProgress: () => reportIntegrationProgress,
   runImportingIntegrationTests: () => runImportingIntegrationTests,
   selectIntegrationTests: () => selectIntegrationTests
 });
@@ -150,6 +158,7 @@ function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMill
   const results = [];
   for (const batch of batches) {
     if (pinned.status !== "passed") break;
+    reportIntegrationProgress("importing tests", `${batch.plugin}/${batch.file}`, { index: results.length + 1, count: batches.length });
     const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing test file passes on the merged tree" }, {
       cwd: import_node_path.default.join(project, batch.plugin),
       timeoutMilliseconds: batch.timeoutMilliseconds,
@@ -165,9 +174,120 @@ function selectIntegrationTests(project, changedPaths) {
   const pluginNames = changedPaths.map((file) => /^plugins\/([^/]+)\//.exec(file.replaceAll("\\", "/"))?.[1]).filter((name) => name !== void 0);
   return Array.from(new Set(pluginNames), (plugin) => pluginSelection(project, plugin, changedPaths));
 }
+const progressListeners = /* @__PURE__ */ new Set();
+let activeProgress = null;
+function integrationProgressPath(boardDirectory, ref) {
+  return import_node_path.default.join(boardDirectory, "integrations", `${ref.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`);
+}
+function onIntegrationProgress(listener) {
+  progressListeners.add(listener);
+  return () => {
+    progressListeners.delete(listener);
+  };
+}
+function writeProgressFile(file, record) {
+  try {
+    import_node_fs.default.mkdirSync(import_node_path.default.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    import_node_fs.default.writeFileSync(temporary, JSON.stringify(record));
+    import_node_fs.default.renameSync(temporary, file);
+  } catch {
+    try {
+      import_node_fs.default.writeFileSync(file, JSON.stringify(record));
+    } catch {
+    }
+  }
+}
+function publishProgress() {
+  if (!activeProgress) return;
+  const { files, record } = activeProgress;
+  for (const file of files) writeProgressFile(file, record);
+  for (const listener of progressListeners) {
+    try {
+      listener(record);
+    } catch {
+    }
+  }
+}
+function beginIntegrationProgress(files, refs, logPath) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  activeProgress = {
+    files,
+    record: { state: "running", refs, logPath, phase: "merging", currentFile: null, fileIndex: null, fileCount: null, startedAt: now, updatedAt: now, pid: process.pid }
+  };
+  publishProgress();
+}
+function reportIntegrationProgress(phase, currentFile = null, position = null) {
+  if (!activeProgress) return;
+  activeProgress.record = {
+    ...activeProgress.record,
+    phase,
+    currentFile,
+    fileIndex: position ? position.index : null,
+    fileCount: position ? position.count : null,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  publishProgress();
+}
+function integrationProgressSummary(progress) {
+  const file = progress.currentFile ? ` ${progress.currentFile}` : "";
+  const position = progress.fileIndex ? ` (${progress.fileIndex}/${progress.fileCount})` : "";
+  return `integrate ${progress.refs}: ${progress.phase}${file}${position}`;
+}
+function deliveryOutcomeState(outcome) {
+  if (outcome.ok) return "delivered";
+  const reason = String(outcome.reason || "");
+  if (reason.endsWith("rollback_failed")) return "rollback_failed";
+  return /_(?:post_merge|wave_delivery)$/.test(reason) ? "rolled_back" : "refused";
+}
+function finishIntegrationProgress(outcome) {
+  if (!activeProgress) return;
+  const state = deliveryOutcomeState(outcome);
+  activeProgress.record = {
+    ...activeProgress.record,
+    state,
+    phase: "finished",
+    currentFile: null,
+    fileIndex: null,
+    fileCount: null,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    ...state === "delivered" ? {} : { reason: String(outcome.reason || "unknown") }
+  };
+  publishProgress();
+  activeProgress = null;
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+function isIntegrationProgress(value) {
+  return typeof value === "object" && value !== null && "state" in value && "refs" in value && "pid" in value;
+}
+function readIntegrationProgress(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(import_node_fs.default.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isIntegrationProgress(parsed)) return null;
+  return parsed.state === "running" ? { ...parsed, writerAlive: processAlive(Number(parsed.pid)) } : parsed;
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  beginIntegrationProgress,
+  deliveryOutcomeState,
+  finishIntegrationProgress,
+  integrationProgressPath,
+  integrationProgressSummary,
   integrationTestBatches,
+  onIntegrationProgress,
+  readIntegrationProgress,
+  reportIntegrationProgress,
   runImportingIntegrationTests,
   selectIntegrationTests
 });
