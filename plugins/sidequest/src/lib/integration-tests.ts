@@ -6,6 +6,7 @@ import { runProcessVerification } from './ports/process.js';
 export interface IntegrationTestSelection {
   plugin: string;
   files: string[];
+  excludedFiles?: string[];
 }
 
 const MODULE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
@@ -104,7 +105,7 @@ function pluginSelection(project: string, pluginName: string, changedPaths: stri
 
 export interface IntegrationTestBatch {
   plugin: string;
-  file: string;
+  files: string[];
   command: string;
   timeoutMilliseconds: number;
 }
@@ -124,41 +125,75 @@ function pinnedTestFile(selection: IntegrationTestSelection, file: string, patte
   return patterns.some((pattern) => (localPathsApply && path.matchesGlob(file, pattern)) || path.matchesGlob(`${selection.plugin}/${file}`, pattern));
 }
 
-function testFileCommand(project: string, plugin: string, file: string): string {
+function performanceTest(file: string): boolean {
+  return /(?:^|[./_-])(?:perf|benchmark)(?:[./_-]|$)/i.test(file);
+}
+
+function testScripts(project: string, plugin: string): Record<string, string> {
   const manifestPath = path.join(project, plugin, 'package.json');
-  const manifest = (fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : {}) as { scripts?: Record<string, string> };
-  const runner = manifest.scripts?.['test:files'] ? 'npm run test:files --' : 'node --test';
-  return `${runner} --test-concurrency=1 ${quoteArgument(file.replaceAll('[', '[[]'))}`;
+  if (!fs.existsSync(manifestPath)) return {};
+  return JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts ?? {};
+}
+
+function pluginTestFiles(project: string, plugin: string): string[] {
+  const root = path.join(project, plugin);
+  return directoryFiles(path.join(root, 'test')).filter(importingTest).map((file) => path.relative(root, file).replaceAll('\\', '/')).sort();
+}
+
+function testBatchCommand(scripts: Record<string, string>, files: string[], normalSuite: boolean): string {
+  if (normalSuite && scripts.test) return 'npm test';
+  const runner = scripts['test:files'] ? 'npm run test:files --' : 'node --test';
+  return runner + ' --test-concurrency=1 ' + files.map((file) => quoteArgument(file.replaceAll('[', '[[]'))).join(' ');
+}
+
+function pluginTestBatch(project: string, selection: IntegrationTestSelection, patterns: string[], timeoutMilliseconds: number): IntegrationTestBatch[] {
+  const files = selection.files.filter((file) => !performanceTest(file) && !pinnedTestFile(selection, file, patterns));
+  if (!files.length) return [];
+  const normalSuite = files.length > 40;
+  const batchFiles = normalSuite ? pluginTestFiles(project, selection.plugin).filter((file) => !performanceTest(file)) : files;
+  return [{
+    plugin: selection.plugin,
+    files: batchFiles,
+    command: testBatchCommand(testScripts(project, selection.plugin), batchFiles, normalSuite),
+    timeoutMilliseconds: Math.min(timeoutMilliseconds, 600_000),
+  }];
 }
 
 export function integrationTestBatches(project: string, selections: IntegrationTestSelection[], pinnedCommand: string, timeoutMilliseconds: number): IntegrationTestBatch[] {
   if (/\btest:full\b/.test(pinnedCommand)) return [];
   const patterns = pinnedTestPatterns(pinnedCommand);
-  return selections.flatMap((selection) => selection.files.filter((file) => !pinnedTestFile(selection, file, patterns)).map((file) => ({
-    plugin: selection.plugin,
-    file,
-    command: testFileCommand(project, selection.plugin, file),
-    timeoutMilliseconds: Math.min(timeoutMilliseconds, 600_000),
-  })));
+  return selections.flatMap((selection) => pluginTestBatch(project, selection, patterns, timeoutMilliseconds));
 }
 
-export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[] } {
-  const selections = selectIntegrationTests(project, changedPaths);
-  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds);
-  const results: VerificationResult[] = [];
-  for (const batch of batches) {
-    if (pinned.status !== 'passed') break;
-    reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.file}`, { index: results.length + 1, count: batches.length });
-    const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing test file passes on the merged tree' }, {
+function selectionWithExclusions(project: string, selection: IntegrationTestSelection): IntegrationTestSelection {
+  const excludedFiles = pluginTestFiles(project, selection.plugin).filter(performanceTest);
+  return { ...selection, excludedFiles };
+}
+
+function executeImportBatches(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult[] {
+  if (pinned.status !== 'passed') return [];
+  const failures: VerificationResult[] = [];
+  for (const [index, batch] of batches.entries()) {
+    reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.files.join(', ')}`, { index: index + 1, count: batches.length });
+    const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
       cwd: path.join(project, batch.plugin),
       timeoutMilliseconds: batch.timeoutMilliseconds,
-      logPath: `${pinned.logPath}.import-${results.length}.log`,
+      logPath: pinned.logPath + '.import-' + index + '.log',
       environment,
     });
-    results.push(result);
-    if (result.status !== 'passed') return { ...result, integrationTests: selections, importingTestResults: results };
+    if (result.status !== 'passed') { failures.push(result); break; }
   }
-  return { ...pinned, integrationTests: selections, importingTestResults: results };
+  return failures;
+}
+
+export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; exclusionReason: string } } {
+  const started = Date.now();
+  const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
+  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds);
+  const failures = executeImportBatches(project, batches, pinned, environment);
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, exclusionReason: 'Wall-clock performance and benchmark tests remain in CI and test:full.' };
+  if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches }) + '\n');
+  return { ...(failures[0] ?? pinned), integrationTests: selections, importingTestResults: failures, importingTestSummary };
 }
 
 export function selectIntegrationTests(project: string, changedPaths: string[]): IntegrationTestSelection[] {
