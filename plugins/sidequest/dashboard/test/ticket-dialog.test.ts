@@ -27,6 +27,35 @@ describe('ticket dialog actions', () => {
 		expect(requests[3].url).toContain('/link/SQ-2?project=demo');
 	});
 
+	it('reads the full ticket when its dialog opens, since list rows carry only a summary', async () => {
+		const row: Ticket = { ...ticket, summary: 'Short', commentCount: 1 };
+		const full: Ticket = { ...ticket, description: 'Short and then the whole story', comments: [{ id: 'c-1', body: 'Report' }] };
+		const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => response(String(input).startsWith('/api/tickets/t-1') ? { ticket: full } : { method: init?.method }));
+		const state = new BoardState(new ApiClient(fetcher));
+		state.applySnapshot({ projects: [{ slug: 'demo', name: 'Demo' }], tickets: [row], stories: [], categories: [], notifications: { notifications: [], unread: 0, unreadNeeds: 0 }, health: { ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' } });
+
+		await state.openTicket(row);
+
+		expect(fetcher).toHaveBeenCalledWith('/api/tickets/t-1?project=demo', expect.objectContaining({ method: 'GET' }));
+		expect(state.openDialog).toBe('t-1');
+		expect(state.ticketDetail?.description).toBe('Short and then the whole story');
+		expect(state.ticketDetail?.comments).toHaveLength(1);
+
+		state.openDialog = null;
+		await state.openTicket({ ...row, id: 't-2', ref: 'SQ-2' });
+		expect(state.ticketDetail).toBeNull();
+	});
+
+	it('requests list rows for the selected board only', async () => {
+		const fetcher = vi.fn((input: RequestInfo | URL) => response(String(input).startsWith('/api/health') ? { ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' } : {}));
+		const state = new BoardState(new ApiClient(fetcher));
+		state.selectedProject = 'demo';
+		const { PollingController } = await import('../app/src/lib/state/polling');
+		new PollingController(state).refresh();
+
+		await vi.waitFor(() => expect(fetcher.mock.calls.map(([input]) => String(input))).toContain('/api/tickets?project=demo'));
+	});
+
 	it('escapes source HTML and rejects unsafe markdown links', () => {
 		const html = renderMarkdown('<img src=x onerror=alert(1)> [bad](javascript:alert(1)) [safe](https://example.test)');
 		expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');

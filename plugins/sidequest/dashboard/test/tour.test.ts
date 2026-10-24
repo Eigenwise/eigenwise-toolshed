@@ -141,7 +141,7 @@ describe('TourState', () => {
   it('opens the most illustrative visible ticket and closes it in both directions', () => {
     const board = boardWithTickets([
       { id: 'bare', ref: 'SQ-1', title: 'Bare', status: 'todo', priority: 'normal', projectSlug: 'alpha' },
-      { id: 'commented', ref: 'SQ-2', title: 'Commented', status: 'todo', priority: 'normal', projectSlug: 'alpha', comments: [{ id: 'comment-1', body: 'Report' }] }
+      { id: 'commented', ref: 'SQ-2', title: 'Commented', status: 'todo', priority: 'normal', projectSlug: 'alpha', commentCount: 1 }
     ]);
     const state = new TourState(board);
     const querySelector = vi.mocked(document.querySelector);
