@@ -26,7 +26,15 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // src/hooks/worktree-create.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
-var import_node_child_process = require("node:child_process");
+
+// src/lib/git-process.ts
+var import_node_child_process = __toESM(require("node:child_process"));
+var import_node_util = require("node:util");
+var GIT_OUTPUT_MAX_BUFFER = 256 * 1024 * 1024;
+var execFileCallback = (0, import_node_util.promisify)(import_node_child_process.default.execFile);
+function execFileSync(file, args, options = {}) {
+  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
+}
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -231,7 +239,7 @@ var INHERITED_REJECTED_REFUSALS = Object.freeze({
 // src/hooks/worktree-create.ts
 var leaseKernel = require(runtimeModule("kernel/worktree"));
 function git(repository, args) {
-  return (0, import_node_child_process.execFileSync)("git", args, {
+  return execFileSync("git", args, {
     cwd: repository,
     encoding: "utf8",
     windowsHide: true,
@@ -247,7 +255,7 @@ function gitSucceeds(repository, args) {
   }
 }
 function repositoryFor(cwd) {
-  return import_node_path2.default.resolve(git(cwd, ["rev-parse", "--show-toplevel"]));
+  return import_node_path2.default.dirname(import_node_path2.default.resolve(cwd, git(cwd, ["rev-parse", "--git-common-dir"])));
 }
 function reservedDispatchRepository(sessionId) {
   try {

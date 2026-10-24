@@ -1,3 +1,5 @@
+import './_sidequest-install-fixture.js';
+import './_hook-runtime.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -3025,5 +3027,59 @@ test('sweep removes an empty unregistered worktree directory directly', async ()
   } finally {
     fs.rmSync(orphan, { recursive: true, force: true });
     fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+
+test('WorktreeCreate from a linked checkout uses the main checkout group folder', () => {
+  const { repository } = repositoryFixture();
+  const linked = path.join(repository, '.claude', 'worktrees', 'feature-a');
+  git(repository, ['worktree', 'add', '-b', 'feature-a', linked]);
+  const store = require('../lib/store.js');
+  const { slug } = store.ensureProject(repository);
+  const category = store.getCategory('codebase-exploration');
+  store.setCategory({ ...category, route: { model: 'sonnet', effort: 'medium' }, fallback: null });
+  const ticket = store.createTicket(slug, { title: 'linked checkout creation', category: 'codebase-exploration', files: ['README.md'] });
+  const sessionId = 'sq3868-linked-creation';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const name = 'agent-sq3868-linked';
+  const expected = worktrees.namedWorktreePath(repository, name);
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: name }).ok, true);
+    const output = execFileSync(process.execPath, [path.join(__dirname, '../hooks/worktree-create.js')], {
+      cwd: linked,
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', cwd: linked, session_id: sessionId, name }),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env },
+      timeout: 30000,
+    }).trim();
+    assert.equal(worktrees.canonicalPath(output), worktrees.canonicalPath(expected), 'the created executor uses the main checkout group folder');
+    assert.equal(worktrees.agentIdFromWorktreePath(repository, output), 'sq3868-linked');
+    assert.equal(fs.existsSync(expected), true);
+  } finally {
+    if (fs.existsSync(expected)) git(repository, ['worktree', 'remove', '--force', expected]);
+    git(repository, ['worktree', 'remove', '--force', linked]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep removes a done agent worktree registered under an old linked checkout group', async () => {
+  const { repository, baseCommit } = repositoryFixture();
+  const oldGroup = fs.mkdtempSync(path.join(os.tmpdir(), 'feature-a-group-'));
+  const worktree = createAgentWorktree(repository, oldGroup, 'old-group');
+  const ticket = integratedTicket('SQ-OLD-GROUP', 'old-group', worktree, baseCommit);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: { path: string }) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+    assert.ok(entry, 'the registered agent worktree outside known roots is listed');
+    assert.equal(entry.reason, 'ticket_closed_settled');
+    assert.equal(entry.action, 'remove');
+    assert.equal(fs.existsSync(worktree), false, 'the done ticket worktree is removed from its old group');
+    assert.deepEqual(result.failures, []);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(oldGroup, { recursive: true, force: true });
   }
 });
