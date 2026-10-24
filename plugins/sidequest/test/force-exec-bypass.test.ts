@@ -297,6 +297,6 @@ test('GH-602: research resolves subdirectories and linked worktrees without scan
   const wrongPrefix = researchDecision(project, { ...toolInput, prompt: prompt.replace('Read-only research run', 'Changed research run') });
   assert.equal(wrongPrefix.denied, true);
   assert.match(wrongPrefix.reason, /live research prefix/);
-  store.setProjectRouting(slug, false);
+  store.setProjectRouting(slug, 'disabled');
   assert.match(researchDecision(subdirectory, toolInput).reason, /no usable executor route/, 'resolved research still respects disabled board routing');
 });
