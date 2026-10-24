@@ -4032,7 +4032,7 @@ test('worktree-create binds a linked checkout to its registered main board', () 
   }).ok, true);
   gitFixture(['worktree', 'add', '--detach', linkedCheckout], repository);
   const name = `agent-linked-${sqSeq}`;
-  const target = worktrees.namedWorktreePath(linkedCheckout, name);
+  const target = worktrees.namedWorktreePath(repository, name);
   try {
     assert.equal(store.findProject(linkedCheckout).ok, false);
     const output = execFileSync(process.execPath, [WORKTREE_CREATE], {
