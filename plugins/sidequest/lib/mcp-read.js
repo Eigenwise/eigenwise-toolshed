@@ -1,4 +1,5 @@
 "use strict";
+var import_integration_tests = require("./integration-tests.js");
 const {
   path,
   fs,
@@ -186,7 +187,7 @@ const tools = [
   },
   {
     name: "pulse",
-    description: "Compact liveness read: status, claim, latest comment, dispatch state, invalidated wave state, git activity.",
+    description: "Compact liveness read: status, claim, latest comment, dispatch state, invalidated wave state, git activity, integration gate state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -201,7 +202,8 @@ const tools = [
       const pulse = store.pulsePayload(slug, args.ref);
       if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
       const payload = args.full ? withoutCategories(pulse) : compactPulse(pulse);
-      return Object.assign({ project: slug }, payload);
+      const integration = (0, import_integration_tests.readIntegrationProgress)((0, import_integration_tests.integrationProgressPath)(store.projectDir(slug), pulse.ref));
+      return Object.assign({ project: slug }, payload, integration ? { integration } : {});
     }
   },
   {

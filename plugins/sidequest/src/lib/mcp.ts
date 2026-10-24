@@ -36,8 +36,13 @@ type ToolDefinition = {
   name: string;
   description: string;
   inputSchema: any;
-  handler: (args: any) => any | Promise<any>;
+  handler: (args: any, context?: ToolCallContext) => any | Promise<any>;
 };
+// The stdio transport that owns the client connection. Only it can send a notification mid-call, and only
+// the real server isolates long work in a child process; in-process callers (tests, the CLI) keep the
+// handler in their own process.
+type ToolCallContext = { progress: (message: string) => void; isolateLongRunningWork: boolean };
+type ClientConnection = { notify: (message: object) => void; isolateLongRunningWork?: boolean };
 type RpcId = string | number | null | undefined;
 type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any };
 
@@ -138,10 +143,16 @@ function toolMutates(name: string, args: Record<string, unknown> = {}) {
 function mutationQueueKey(name?: any, args?: any) {
   if (name === 'new_board_profile') return '<global>';
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return '<global>';
-  const board = resolveProject(args.project).slug;
+  return boardMutationQueueKey(resolveProject(args.project).slug, name, args);
+}
+
+function boardMutationQueueKey(board: string, name: unknown, args: any) {
   // A commit runs the repository's hooks, which can take minutes; in the board-wide queue it held
   // every other write on the board that long (GH-314). Its own board writes take the ticket lock.
-  return name === 'commit' ? `${board}\0commit\0${args.ref}` : board;
+  if (name === 'commit') return `${board}\0commit\0${args.ref}`;
+  // integrate runs the merged-tree gate for up to the integration timeout, and in the board-wide queue every
+  // comment, dispatch and claim waited behind it (SQ-3884). The delivery and publish locks serialize deliveries.
+  return name === 'integrate' ? `${board}\0integrate` : board;
 }
 
 async function enqueueMutation<T>(board: string, operation: () => T | Promise<T>): Promise<T> {
@@ -297,17 +308,31 @@ function controlPlaneByArgs(tool: ToolDefinition, args: Record<string, unknown>)
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
 
-async function runTool(tool: ToolDefinition, rawArgs: any) {
+async function runTool(tool: ToolDefinition, rawArgs: any, context: ToolCallContext) {
   const validated = validateToolArguments(tool, rawArgs);
   const args = controlPlaneByArgs(tool, validated.args);
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
-    const output = await tool.handler(args);
+    const output = await tool.handler(args, context);
     return acknowledgeAliases(tool.name === 'context_page' ? output : boundedReadPayload(tool.name, output), aliases);
   }
   assertMutationFreshness(args.project);
   const board = mutationQueueKey(tool.name, args);
-  return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
+  return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args, context), aliases));
+}
+
+// MCP progress reaches only a client that asked for it with a progressToken; the notification is what
+// resets that client's idle timeout while a long call is still working.
+function toolCallContext(params: any, connection: ClientConnection | undefined): ToolCallContext {
+  const progressToken = params?._meta?.progressToken;
+  let progress = 0;
+  return {
+    isolateLongRunningWork: connection?.isolateLongRunningWork === true,
+    progress(message: string) {
+      if (progressToken === undefined || progressToken === null || !connection) return;
+      connection.notify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken, progress: ++progress, message } });
+    },
+  };
 }
 
 
@@ -424,7 +449,7 @@ function rpcError(id?: RpcId, code?: any, message?: any) {
   return { jsonrpc: '2.0', id, error: { code, message } };
 }
 
-async function handleRequest(msg?: RpcMessage) {
+async function handleRequest(msg?: RpcMessage, connection?: ClientConnection) {
   if (!msg || msg.jsonrpc !== '2.0') return null;
   const { id, method, params } = msg;
   const isNotification = id === undefined || id === null;
@@ -456,7 +481,7 @@ async function handleRequest(msg?: RpcMessage) {
       return rpcResult(id, { content: [{ type: 'text', text: `Unknown tool "${name}".` }], isError: true });
     }
     try {
-      const out = await runTool(tool, args);
+      const out = await runTool(tool, args, toolCallContext(params, connection));
       return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
     } catch (e) {
       const error = e as any;

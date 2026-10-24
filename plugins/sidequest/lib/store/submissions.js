@@ -757,13 +757,16 @@ ${JSON.stringify(quality.unverified)}`,
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
     const project = String(opts?.cwd || "").trim() || readMeta(slug)?.path;
     const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
-    const verify = (environment) => runProcessVerification(requirement, {
-      cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
-      timeoutMilliseconds,
-      logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
-      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
-      environment
-    });
+    const verify = (environment) => {
+      (0, import_integration_tests.reportIntegrationProgress)("pinned verifier", requirement.command);
+      return runProcessVerification(requirement, {
+        cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
+        timeoutMilliseconds,
+        logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
+        outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+        environment
+      });
+    };
     const participants = opts?.qualityTickets || [ticket];
     const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
     const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
@@ -1156,6 +1159,17 @@ ${verify.outputTail}` : null
       logPath: integrationVerifyLogPath(slug, ticket),
       startedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
+  }
+  function withIntegrationProgress(slug, refs, holder, deliver) {
+    (0, import_integration_tests.beginIntegrationProgress)(refs.map((ref) => (0, import_integration_tests.integrationProgressPath)(projectDir(slug), ref)), holder.ticket, holder.logPath);
+    let outcome = { ok: false, reason: "integration_error" };
+    try {
+      const result = deliver();
+      outcome = result;
+      return result;
+    } finally {
+      (0, import_integration_tests.finishIntegrationProgress)(outcome);
+    }
   }
   function deliveryInProgress(ticket, lock) {
     const holder = readLockHolder(fs, lock);
@@ -2036,7 +2050,7 @@ ${verify.outputTail}` : null
     const lockLease = acquireLock(lock, { wait: false, holder });
     if (!lockLease) return deliveryInProgress(ticket, lock);
     try {
-      return withIntegrationCheckout(slug, readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () => deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }))));
+      return withIntegrationProgress(slug, [String(ticket.ref)], holder, () => withIntegrationCheckout(slug, readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () => deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath })))));
     } finally {
       lockLease.refresh();
       releaseLock(lock, lockLease);
@@ -2171,12 +2185,17 @@ ${verify.outputTail}` : null
     const lockLease = acquireLock(lock, { wait: false, holder });
     if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
     try {
-      return withIntegrationCheckout(slug, repo, target.branch, (checkout) => deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, checkout, target));
-    } catch (error) {
-      return { ok: false, reason: "wave_delivery_error", tickets: assembled.tickets, message: integrationGitError(error) };
+      return withIntegrationProgress(slug, assembled.participantRefs, holder, () => deliverLockedGitWaveCheckout(slug, assembled, opts, repo, target, holder.logPath));
     } finally {
       lockLease.refresh();
       releaseLock(lock, lockLease);
+    }
+  }
+  function deliverLockedGitWaveCheckout(slug, assembled, opts, repo, target, verifyLogPath) {
+    try {
+      return withIntegrationCheckout(slug, repo, target.branch, (checkout) => deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath }, checkout, target));
+    } catch (error) {
+      return { ok: false, reason: "wave_delivery_error", tickets: assembled.tickets, message: integrationGitError(error) };
     }
   }
   function deliverLockedGitWave(slug, assembled, opts, repo, target) {
@@ -3471,6 +3490,7 @@ ${parts.join("\n\n")}` });
         message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`
       };
     }
+    (0, import_integration_tests.reportIntegrationProgress)("wave gate", requirement.command);
     const verification = runProcessVerification(requirement, {
       cwd: checkout.cwd,
       timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),

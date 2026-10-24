@@ -148,6 +148,7 @@ export function runImportingIntegrationTests(project: string, changedPaths: stri
   const results: VerificationResult[] = [];
   for (const batch of batches) {
     if (pinned.status !== 'passed') break;
+    reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.file}`, { index: results.length + 1, count: batches.length });
     const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing test file passes on the merged tree' }, {
       cwd: path.join(project, batch.plugin),
       timeoutMilliseconds: batch.timeoutMilliseconds,
@@ -163,4 +164,141 @@ export function runImportingIntegrationTests(project: string, changedPaths: stri
 export function selectIntegrationTests(project: string, changedPaths: string[]): IntegrationTestSelection[] {
   const pluginNames = changedPaths.map((file) => /^plugins\/([^/]+)\//.exec(file.replaceAll('\\', '/'))?.[1]).filter((name): name is string => name !== undefined);
   return Array.from(new Set(pluginNames), (plugin) => pluginSelection(project, plugin, changedPaths));
+}
+
+// A delivery records where its merged-tree gate is in a per-ticket file, so pulse can answer "is it
+// still running, which file, and how did it end" from any process, including after the MCP client that
+// started it gave up waiting (SQ-3884).
+export type IntegrationProgressState = 'running' | 'delivered' | 'rolled_back' | 'rollback_failed' | 'refused';
+
+export interface IntegrationProgress {
+  state: IntegrationProgressState;
+  refs: string;
+  logPath: string | null;
+  phase: string;
+  currentFile: string | null;
+  fileIndex: number | null;
+  fileCount: number | null;
+  startedAt: string;
+  updatedAt: string;
+  pid: number;
+  reason?: string;
+}
+
+export interface DeliveryOutcome {
+  ok?: boolean;
+  reason?: unknown;
+}
+
+type IntegrationProgressListener = (progress: IntegrationProgress) => void;
+
+const progressListeners = new Set<IntegrationProgressListener>();
+let activeProgress: { files: string[]; record: IntegrationProgress } | null = null;
+
+export function integrationProgressPath(boardDirectory: string, ref: string): string {
+  return path.join(boardDirectory, 'integrations', `${ref.replace(/[^a-zA-Z0-9._-]/g, '_')}.json`);
+}
+
+export function onIntegrationProgress(listener: IntegrationProgressListener): () => void {
+  progressListeners.add(listener);
+  return () => { progressListeners.delete(listener); };
+}
+
+// Progress is advisory: a full disk or a reader holding the file open must never fail the delivery.
+function writeProgressFile(file: string, record: IntegrationProgress): void {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(record));
+    fs.renameSync(temporary, file);
+  } catch {
+    try { fs.writeFileSync(file, JSON.stringify(record)); } catch { /* advisory */ }
+  }
+}
+
+function publishProgress(): void {
+  if (!activeProgress) return;
+  const { files, record } = activeProgress;
+  for (const file of files) writeProgressFile(file, record);
+  for (const listener of progressListeners) {
+    try { listener(record); } catch { /* a listener never fails the delivery */ }
+  }
+}
+
+export function beginIntegrationProgress(files: string[], refs: string, logPath: string | null): void {
+  const now = new Date().toISOString();
+  activeProgress = {
+    files,
+    record: { state: 'running', refs, logPath, phase: 'merging', currentFile: null, fileIndex: null, fileCount: null, startedAt: now, updatedAt: now, pid: process.pid },
+  };
+  publishProgress();
+}
+
+export function reportIntegrationProgress(phase: string, currentFile: string | null = null, position: { index: number; count: number } | null = null): void {
+  if (!activeProgress) return;
+  activeProgress.record = {
+    ...activeProgress.record,
+    phase,
+    currentFile,
+    fileIndex: position ? position.index : null,
+    fileCount: position ? position.count : null,
+    updatedAt: new Date().toISOString(),
+  };
+  publishProgress();
+}
+
+export function integrationProgressSummary(progress: IntegrationProgress): string {
+  const file = progress.currentFile ? ` ${progress.currentFile}` : '';
+  const position = progress.fileIndex ? ` (${progress.fileIndex}/${progress.fileCount})` : '';
+  return `integrate ${progress.refs}: ${progress.phase}${file}${position}`;
+}
+
+export function deliveryOutcomeState(outcome: DeliveryOutcome): IntegrationProgressState {
+  if (outcome.ok) return 'delivered';
+  const reason = String(outcome.reason || '');
+  if (reason.endsWith('rollback_failed')) return 'rollback_failed';
+  return /_(?:post_merge|wave_delivery)$/.test(reason) ? 'rolled_back' : 'refused';
+}
+
+export function finishIntegrationProgress(outcome: DeliveryOutcome): void {
+  if (!activeProgress) return;
+  const state = deliveryOutcomeState(outcome);
+  activeProgress.record = {
+    ...activeProgress.record,
+    state,
+    phase: 'finished',
+    currentFile: null,
+    fileIndex: null,
+    fileCount: null,
+    updatedAt: new Date().toISOString(),
+    ...(state === 'delivered' ? {} : { reason: String(outcome.reason || 'unknown') }),
+  };
+  publishProgress();
+  activeProgress = null;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
+}
+
+function isIntegrationProgress(value: unknown): value is IntegrationProgress {
+  return typeof value === 'object' && value !== null && 'state' in value && 'refs' in value && 'pid' in value;
+}
+
+// A running record whose writer is gone was cut short (the process was killed mid-gate); saying so
+// beats showing it as running forever.
+export function readIntegrationProgress(file: string): (IntegrationProgress & { writerAlive?: boolean }) | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isIntegrationProgress(parsed)) return null;
+  return parsed.state === 'running' ? { ...parsed, writerAlive: processAlive(Number(parsed.pid)) } : parsed;
 }
