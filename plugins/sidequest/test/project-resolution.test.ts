@@ -506,7 +506,7 @@ test('GH-602: shared explicitProjectRoot resolves nested and linked checkout pat
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-602-resolution-'));
   const project = path.join(fixture, 'repository');
   fs.mkdirSync(project);
-  execFileSync('git', ['init', project], { windowsHide: true });
+  execFileSync('git', ['init', '-b', 'main', project], { windowsHide: true });
   execFileSync('git', ['-C', project, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'Fixture'], { windowsHide: true });
   const { slug } = store.ensureProject(project);
   const nested = path.join(project, 'nested');
