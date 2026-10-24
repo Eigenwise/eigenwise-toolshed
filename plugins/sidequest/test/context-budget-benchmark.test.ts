@@ -6,8 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-home-'));
-const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-board-'));
+const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-'));
+const home = path.join(homeRoot, 'windows-ci-home'.padEnd(Math.max(15, 90 - homeRoot.length - 1), 'x'));
+fs.mkdirSync(home);
+const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-context-budget-board-'));
+const projectPath = path.join(projectRoot, 'windows-length-checkout'.padEnd(Math.max(22, 90 - projectRoot.length - 1), 'x'));
+fs.mkdirSync(projectPath);
 process.env.SIDEQUEST_HOME = home;
 process.env.CLAUDE_PROJECT_DIR = projectPath;
 process.env.CLAUDE_CODE_SESSION_ID = `context-budget-${process.pid}`;
@@ -59,8 +63,16 @@ function hookOutput(expression: string) {
   }));
 }
 
+function dispatchByteBreakdown(text: string): string {
+  const payload: { spawn: { prompt: string }; [field: string]: unknown } = JSON.parse(text);
+  const fields = Object.entries(payload).map(([field, value]) => `${field}=${Buffer.byteLength(JSON.stringify({ [field]: value }), 'utf8')}B`);
+  const sentences = payload.spawn.prompt.split(/\n|(?<=\.) /).map((sentence, index) => `prompt[${index}] ${JSON.stringify(sentence)}=${Buffer.byteLength(JSON.stringify(sentence), 'utf8')}B`);
+  return [...fields, ...sentences].join('; ');
+}
+
 test('end-to-end context budgets preserve real storage, retrieval, and model seams', async () => {
   const project = store.ensureProject(projectPath).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main' });
   const story = store.createStory(project, { title: 'Context budget benchmark' });
   store.updateStory(project, story.ref, { executionContract: `Contract ${'測🧪'.repeat(5000)}` });
   store.setProjectCategory(project, 'benchmark', 'ADD', {
@@ -128,7 +140,16 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
     process.chdir(originalWorkingDirectory);
   }
   assert.ok(!dispatch.isError, dispatch.content?.[0]?.text);
-  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes`);
+  process.stdout.write(`dispatch benchmark ${Buffer.byteLength(dispatch.content[0].text)}B projectPath=${projectPath.length}\n`);
+  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes; ${dispatchByteBreakdown(dispatch.content[0].text)}`);
+  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1260, `dispatch needs 60B margin below 1320B; ${dispatchByteBreakdown(dispatch.content[0].text)}`);
+  const payload = JSON.parse(dispatch.content[0].text);
+  const dispatchedTicket = store.getTicket(project, orientationTicket.ref);
+  const baseCommit = dispatchedTicket.dispatch.baseCommit;
+  assert.match(payload.worktreeBase, /^[a-f0-9]{12} \(main\)$/);
+  assert.ok(payload.spawn.prompt.includes(`worktreeBase: ${payload.worktreeBase}`));
+  assert.ok(!dispatch.content[0].text.includes(baseCommit));
+  assert.ok(agentsync.renderTicketBriefing(dispatchedTicket, 'benchmark-token', project, projectPath).includes(`worktreeBase: ${baseCommit} (main)`));
 
   const context = hookOutput("output.writeContext('SessionStart', 'Recover with the typed board call. ' + '🙂'.repeat(4000))");
   const contextText = context.hookSpecificOutput.additionalContext;

@@ -21,7 +21,9 @@ Before findings, print one row per changed body (all selected bodies for repo):
 | Body (file:line) | CC | Coverage | CRAP | State |
 | --- | --- | --- | --- | --- |
 
-Use actual numbers only. Show `legacy-unchanged` as LEGACY (informational, not a failure). Show missing measurements as UNVERIFIED; a cc-only value is CC, never a measured CRAP score. Keep LEGACY and UNVERIFIED visible together when both apply.
+Use actual numbers only. New or complexity-raised bodies at CC 6 or more fail regardless of coverage, including UNVERIFIED coverage. Keep that coverage state visible alongside `failure: complexity floor`; below the floor, unverified coverage stays measurement debt. `crap` and `measure` accept `--receipts-dir <path>` or `QUALITY_GATE_RECEIPTS_DIR` to keep receipts outside the measured tree (the flag wins).
+
+Show `legacy-unchanged` as LEGACY (informational, not a failure). Show missing measurements as UNVERIFIED; a cc-only value is CC, never a measured CRAP score. Keep LEGACY and UNVERIFIED visible together when both apply.
 
 ## Native V8 branch evidence
 

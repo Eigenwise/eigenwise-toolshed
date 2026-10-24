@@ -150,13 +150,13 @@ function measureReport(report, settings) {
   return verdict(report);
 }
 
-export function writeReceipt(report) {
+export function writeReceipt(report, receiptsDirectory = process.env.QUALITY_GATE_RECEIPTS_DIR) {
   const head = tryGit(report.root, ['rev-parse', 'HEAD']);
   if (!head) return null;
   const rowCounts = Object.fromEntries(['new', 'modified-raised', LEGACY_UNCHANGED].map((classification) => [classification, report.changedMetrics.filter((metric) => metric.classification === classification).length]));
   rowCounts.unverified = report.unverified.length;
   const receipt = { gateVersion: GATE_VERSION, pythonPolicy: report.pythonPolicy, pythonOracles: report.pythonOracles, project: report.root, base: report.base, head, files: report.files, rowCounts, verdict: report.verdict, timestamp: new Date().toISOString(), ccOnly: report.ccOnly, reasons: report.unverified.map((metric) => `${metric.relativePath}:${metric.line} ${metric.name}: ${metric.unverified}`) };
-  const directory = path.join(report.root, '.claude/quality-gate/receipts');
+  const directory = receiptsDirectory ? path.resolve(receiptsDirectory) : path.join(report.root, '.claude/quality-gate/receipts');
   fs.mkdirSync(directory, { recursive: true });
   const target = path.join(directory, head + '.json');
   const temporary = target + '.' + crypto.randomUUID() + '.tmp';

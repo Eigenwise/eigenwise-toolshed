@@ -38,7 +38,7 @@ const { createWorkers } = require("./store/workers.js");
 const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
-const { createReviewCorrections } = require("./store/review-corrections.js");
+const { createReviewCorrections, pendingOracleVerdictRefusal } = require("./store/review-corrections.js");
 const { createReviewFinalization } = require("./store/review-finalization.js");
 const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
@@ -1107,8 +1107,53 @@ function attributeOwnChanges(slug, ticket, workspace, working, changedPaths) {
 }
 function negativeControlChanges(slug, ticket, delta, changedPaths) {
   const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
-  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  if (!workspace?.base) return { paths: changedPaths, testNames: [], inheritedTests: [] };
+  const own = attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
+  const inheritedTests = inheritedTestClassifications(slug, ticket, workspace.root, changedPaths, own.testNames);
+  const inheritedNames = new Set(inheritedTests.flatMap((entry) => entry.tests));
+  return { ...own, testNames: own.testNames.filter((name) => !inheritedNames.has(name)), inheritedTests };
+}
+function inheritedTestBodies(source) {
+  const lines = source.split(/(?<=\n)/);
+  const definitions = testDefinitions(source, true);
+  return definitions.map((entry, index) => ({
+    name: entry.name,
+    bytes: lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1].line - 1 : lines.length).join("")
+  }));
+}
+function uniqueInheritedTestBodies(root, revision, files) {
+  const bodies = files.flatMap((file) => inheritedTestBodies(sourceAt(root, revision, file)).map((entry) => ({ ...entry, file })));
+  const counts = /* @__PURE__ */ new Map();
+  for (const body of bodies) counts.set(body.name, (counts.get(body.name) || 0) + 1);
+  return new Map(bodies.filter((body) => counts.get(body.name) === 1).map((body) => [body.name, body]));
+}
+function inheritedCandidateTests(root, candidate, files) {
+  const testFiles = files.filter(isTestSidePath);
+  const inherited = uniqueInheritedTestBodies(root, candidate, testFiles);
+  const current = uniqueInheritedTestBodies(root, null, testFiles);
+  return [...current].filter(([name, body]) => {
+    const previous = inherited.get(name);
+    return previous?.file === body.file && previous.bytes === body.bytes;
+  }).map(([name]) => name);
+}
+function rejectedAncestor(root, source) {
+  const submission = source?.submission;
+  if (submission?.review?.outcome !== "rejected" || !submission.commit) return null;
+  try {
+    gitOutput(root, ["merge-base", "--is-ancestor", submission.commit, "HEAD"]);
+    return submission.commit;
+  } catch {
+    return null;
+  }
+}
+function inheritedTestClassifications(slug, ticket, root, files, expected) {
+  return (ticket.links || []).filter((link) => link.type === "related").flatMap((link) => {
+    const candidate = rejectedAncestor(root, getTicket(slug, link.ref));
+    if (!candidate) return [];
+    const unchanged = new Set(inheritedCandidateTests(root, candidate, files));
+    const tests = expected.filter((name) => unchanged.has(name));
+    return tests.length ? [{ classification: "inherited-unchanged", sourceRef: link.ref, candidate, tests }] : [];
+  });
 }
 function mergeResolvedPaths(workspace) {
   if (!workspace?.base) return [];
@@ -1280,11 +1325,13 @@ function mixedChange(paths) {
 }
 function ownedControlCheck(slug, ticket, delta, ownedPaths) {
   const kind = ticket.dispatch?.workProvenance?.kind;
-  if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, negativeControl: "not_required(" + kind + ")" };
+  if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, inheritedTests: [], negativeControl: "not_required(" + kind + ")" };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
-  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)" };
+  const inheritedTests = own.inheritedTests;
+  if ([inheritedTests.length, !own.testNames.length].every(Boolean)) return { ok: true, negativeControl: "not_required(inherited-unchanged)", inheritedTests };
+  if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)", inheritedTests };
   const control = negativeControlResult(ticket, own.testNames);
-  return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind } : negativeControlRefusal(ticket, control);
+  return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 function completionTreeCheck(slug, ticket, opts) {
   const facts = completionWorkFacts(slug, ticket);
@@ -1301,7 +1348,8 @@ function completionTreeCheck(slug, ticket, opts) {
     ownedPaths: facts.ownedPaths,
     noOp: !facts.changedPaths.length,
     workProvenance: facts.provenance,
-    negativeControl: control.negativeControl
+    negativeControl: control.negativeControl,
+    inheritedTests: control.inheritedTests
   };
 }
 const {
@@ -1594,6 +1642,7 @@ const {
   recordSubmissionWaveDelivery,
   submissionsPayload
 } = createSubmissions({
+  createTicket,
   afterCommit,
   EXECUTOR_VERIFY_MAX,
   INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
@@ -1621,6 +1670,7 @@ const {
   integrationTarget,
   integrationTargetCommit,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   listTickets,
@@ -3355,7 +3405,15 @@ function commitReachedRef(repo, commit, ref) {
   }
 }
 function ticketIntegrationTarget(slug, ticket) {
-  return integrationTarget(slug, ticket?.dispatch?.integrationTarget || void 0);
+  return integrationTarget(slug, recordedTicketIntegrationTarget(ticket));
+}
+function recordedTicketIntegrationTarget(ticket) {
+  return ticket?.dispatch?.integrationTarget || deliveredIntegrationTarget(ticket?.submission?.integration);
+}
+function deliveredIntegrationTarget(delivery) {
+  if (!delivery?.deliveredAt) return void 0;
+  if (!delivery.targetBranch) return void 0;
+  return { branch: delivery.targetBranch, mode: delivery.targetUpstream === `origin/${delivery.targetBranch}` ? "remote" : "local" };
 }
 function abandonmentFallbackTarget(slug) {
   try {
@@ -3407,24 +3465,10 @@ function sameBranchWaveTarget(slug, targets) {
   return localAheadOfUpstreamWarning(readMeta(slug)?.path || "", local.branch) ? local : remote;
 }
 function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
-  const repository = branchOwningWorktree(readMeta(slug)?.path, recorded.branch);
-  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(repository, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
-  if (!branch || branch === recorded.branch) return recorded;
-  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
-}
-function deliveryBranchMode(slug, recordedMode, branch) {
-  return recordedMode === "remote" && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? "remote" : "local";
-}
-function checkedOutBranchDescendingFrom(repo, ref) {
-  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: "pipe" }).trim();
-  const currentBranch = git(["branch", "--show-current"]);
-  try {
-    git(["merge-base", "--is-ancestor", ref, "HEAD"]);
-    return currentBranch;
-  } catch (error) {
-    if (error?.status === 1) return "";
-    throw error;
+  if (integrationBranch != null && normalizeIntegrationBranch(integrationBranch) !== recorded.branch) {
+    throw new Error(`Delivery targets the recorded integration branch ${recorded.branch}; integrationBranch ${integrationBranch} cannot override it. Redispatch on the intended integration branch before submitting.`);
   }
+  return recorded;
 }
 function recordedDelivery(slug, ticket, commit, evidence) {
   const requestedCommit = String(commit || "").trim();
@@ -3545,15 +3589,19 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
     return { ok: true, ticket };
   });
 }
+function dispatchAlreadyTerminal(ticket) {
+  return Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+}
 function groomCloseRecovery(slug, idOrRef, opts) {
   const evidence = String(opts?.evidence || "").trim();
   const reason = String(opts?.reason || "");
-  if (!evidence) return { ok: true, reason };
   const ticket = getTicket(slug, idOrRef);
+  const pendingVerdict = pendingOracleVerdictRefusal(ticket);
+  if (pendingVerdict) return { ok: false, recovered: pendingVerdict };
+  if (!evidence) return { ok: true, reason };
   const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
   if (recovered.ok) return { ok: true, reason };
-  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
-  if (!terminalDispatch) return { ok: false, recovered };
+  if (!dispatchAlreadyTerminal(ticket)) return { ok: false, recovered };
   return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 function unconsumedPreparedDispatch(ticket, state) {
@@ -4027,6 +4075,7 @@ module.exports = {
   setBoardConfig: refreshingDispatchSnapshot(setBoardConfig),
   integrationTarget,
   ticketIntegrationTarget,
+  recordedTicketIntegrationTarget,
   ticketIntegrationTargets,
   deliveryIntegrationTarget,
   normalizeDeliveryMode,

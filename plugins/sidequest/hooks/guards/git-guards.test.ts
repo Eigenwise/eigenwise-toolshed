@@ -91,6 +91,16 @@ function wholeTreeWrites(target: string): string[] {
 const projectRepo: Repo = { root: PROJECT, commonDir: `${PROJECT}\\.git` }
 const CLONE = `${HOME}\\projects\\proj-x\\verification\\SQ-3436\\pr450`
 
+for (const suffix of ['status --porcelain -- app routes', 'log', 'show', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'branch', 'branch --list feature*', 'branch --show-current', 'worktree list', 'remote -v', 'describe', 'blame']) {
+  test(`SQ-3835: isolated executor can read shared checkout with ${suffix}`, async ($, on) => {
+    const worktree = `${await worktreeRoot()}\\agent-reader`
+    await world(on, { cwd: worktree, repos: [projectRepo], registered: [PROJECT], rows: [
+      { ref: 'SQ-3835', agentId: 'reader', worktree, sharedTree: false, state: 'claimed' },
+    ] })
+    expect((await bash($, `git -C "${PROJECT}" -c color.ui=false ${suffix}`, 'reader')).deny).toBeUndefined()
+  })
+}
+
 test('destructive git: an evidence clone under the ticket verification directory is not the shared checkout', async ($, on) => {
   const clone: Repo = { root: CLONE, commonDir: `${CLONE}\\.git`, dirty: [' D README.md'] }
   await world(on, { cwd: PROJECT, repos: [projectRepo, clone], registered: [PROJECT] })

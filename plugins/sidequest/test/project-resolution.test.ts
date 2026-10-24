@@ -464,4 +464,39 @@ test('ensureProject moves a snapshot board to git once a .git exists at or above
   }
 });
 
+function holdStoreWriteLock(durationMs: number): Promise<any> {
+  const child = require('child_process').spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const database = new DatabaseSync(${JSON.stringify(path.join(SIDEQUEST_HOME, 'sidequest.db'))});
+    database.exec('BEGIN IMMEDIATE');
+    process.stdout.write('locked');
+    setTimeout(() => { database.exec('COMMIT'); database.close(); }, ${durationMs});
+  `], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.stdout.once('data', () => resolve(child));
+    child.stderr.once('data', (data: Buffer) => reject(new Error(String(data))));
+  });
+}
+
+// SQ-3844: every CLI and hook call registers its board, so a write lock taken just to find nothing changed
+// queued each of them behind every other writer in a burst.
+test('ensureProject on an already-current board does not queue for the write lock', async () => {
+  const boardPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-current-board-'));
+  try {
+    const { slug } = store.ensureProject(boardPath, 'Current Board');
+    const holder = await holdStoreWriteLock(3000);
+    const exited = new Promise((resolve) => holder.once('close', resolve));
+    const startedAt = Date.now();
+    const again = store.ensureProject(boardPath, 'Current Board');
+    const elapsedMs = Date.now() - startedAt;
+    assert.strictEqual(again.slug, slug);
+    assert.strictEqual(again.meta.name, 'Current Board');
+    assert.ok(elapsedMs < 1000, `an unchanged board must not wait on the write lock, took ${elapsedMs}ms`);
+    await exited;
+  } finally {
+    fs.rmSync(boardPath, { recursive: true, force: true });
+  }
+});
+
 export {};

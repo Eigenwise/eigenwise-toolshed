@@ -3687,7 +3687,7 @@ test('GH-125: a committed checkpoint on a newer base replays onto an explicitly 
     );
     assert.equal(spawn.isolation, 'worktree');
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
-    assert.ok(briefing.includes(`git cherry-pick ${checkpoint}`));
+    assert.ok(briefing.includes(`git merge --no-ff ${checkpoint}`));
     assert.match(briefing, /Validation evidence: the dispatch explicitly names integration base/);
     assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim(), checkpoint, 'the retained checkout is left as it was');
   });
@@ -3712,7 +3712,7 @@ test('GH-125: uncommitted work on a newer base stays retained, names the explici
   });
 });
 
-test('dirty released worktrees with checkpoints fall back to cherry-picking the commit range', () => {
+test('dirty released worktrees with checkpoints fall back to merging the candidate', () => {
   const ticket = createFixture('dirty checkpoint fallback fixture');
   const sessionId = `dirty-checkpoint-${Date.now()}`;
   const agentId = `dirty-checkpoint-${Date.now()}`;
@@ -3754,7 +3754,7 @@ test('dirty released worktrees with checkpoints fall back to cherry-picking the 
     assert.equal(continued.ticket.dispatch.continuation, undefined);
     assert.deepEqual(continued.ticket.dispatch.continuationFallback.commits, [checkpoint]);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
-    assert.match(briefing, new RegExp(`git cherry-pick ${checkpoint}`));
+    assert.match(briefing, new RegExp(`git merge --no-ff ${checkpoint}`));
   } finally {
     store.releaseTicket(slug, ticket.ref, 'dirty-checkpoint-cleanup', { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
@@ -4514,7 +4514,7 @@ test('a dispatch records the configured local integration branch without an over
   }
 });
 
-test('configured worktree bases apply to readonly isolated dispatches without changing current-tree defaults', () => {
+test('readonly isolated dispatches default to the integration branch and honor configured worktree bases', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-remote-'));
   const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-executor-'));
@@ -4563,6 +4563,13 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
       const ticket = store.createTicket(baseSlug, { title, category, files: ['tracked.js'] });
       const dispatch = store.prepareDispatch(baseSlug, ticket.ref, { sessionId: `${title}-${Date.now()}-${worktreeSequence}`, ...options });
       assertCreatedWorktree(dispatch, expectedBase);
+      const target = dispatch.ticket.dispatch.integrationTarget;
+      const branch = target.mode === 'remote' ? `origin/${target.branch}` : target.branch;
+      const stub = agentsync.renderDispatchStub(dispatch.ticket, repository);
+      const briefing = agentsync.renderTicketBriefing(dispatch.ticket, dispatch.token, baseSlug, repository);
+      assert.ok(stub.includes(`worktreeBase: ${expectedBase.slice(0, 12)} (${branch})`));
+      assert.ok(!stub.includes(expectedBase), 'spawn keeps the full base SHA in the briefing only');
+      assert.ok(briefing.includes(`worktreeBase: ${expectedBase} (${branch})`));
       return dispatch;
     };
 
@@ -4602,8 +4609,9 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
     store.setBoardConfig(baseSlug, { worktreeBase: 'auto' });
     const writerAuto = prepare('writer auto worktree base', 'dispatch.lifecycle', localMain);
     assert.deepEqual(writerAuto.ticket.dispatch.integrationTarget, localTarget);
-    const readonlyAuto = prepare('readonly auto worktree base', 'research', featureHead);
-    assert.equal(readonlyAuto.ticket.dispatch.integrationTarget, undefined);
+    const readonlyAuto = prepare('readonly auto worktree base', 'research', localMain);
+    assert.deepEqual(readonlyAuto.ticket.dispatch.integrationTarget, localTarget);
+    assert.notEqual(readonlyAuto.ticket.dispatch.baseCommit, featureHead);
 
     store.setBoardConfig(baseSlug, { worktreeBase: 'origin-main' });
     const writerExplicitLocal = prepare('writer explicit local override', 'dispatch.lifecycle', localMain, { integrationMode: 'local' });

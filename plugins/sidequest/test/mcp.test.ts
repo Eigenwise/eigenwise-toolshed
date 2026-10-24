@@ -1750,7 +1750,8 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1300, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
-  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'writeScope']);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'worktreeBase', 'writeScope']);
+  assert.equal(dispatchPayload.worktreeBase, null);
   assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
   assert.equal(dispatchPayload.token, undefined);
   assert.equal(dispatchPayload.agent, undefined);
@@ -2969,18 +2970,26 @@ test('SQ-2638: dispatch-recorded targets govern submit, waves, MCP delivery, and
     mode: 'merge',
     ...waivedDelivery(wrongCheckout.ticket.ref),
   });
-  assert.equal(wrongCheckoutDelivery.reason, 'branch_not_checked_out');
-  assert.match(wrongCheckoutDelivery.message, /branch-a must be checked out/);
+  assert.equal(wrongCheckoutDelivery.ok, true, wrongCheckoutDelivery.message || wrongCheckoutDelivery.reason);
+  assert.equal(wrongCheckoutDelivery.delivery.targetBranch, 'branch-a');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'branch-b');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', wrongCheckout.commit, 'branch-a']), '');
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-a' });
+  const cliCandidate = await submittedTargetCandidate(repository, project, 'branch-a', 'cli-checkout.js');
+  gitAt(repository, ['switch', 'branch-b']);
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
-  const cliRefusal = spawnSync(process.execPath, [cli, 'integrate', wrongCheckout.ticket.ref, '--project', repository, '--by', 'target-cli-integrator', '--mode', 'merge', '--skip-verify', '--waiver-authority', 'fixture release manager', '--waiver-reason', 'the target routing fixture checks the delivery policy itself', '--waiver-gate', 'manual: verified the isolated target fixture', '--waiver-scope', wrongCheckout.ticket.ref, '--json'], {
+  const cliDelivery = spawnSync(process.execPath, [cli, 'integrate', cliCandidate.ticket.ref, '--project', repository, '--by', 'target-cli-integrator', '--mode', 'merge', '--skip-verify', '--waiver-authority', 'fixture release manager', '--waiver-reason', 'the target routing fixture checks the delivery policy itself', '--waiver-gate', 'manual: verified the isolated target fixture', '--waiver-scope', cliCandidate.ticket.ref, '--json'], {
     cwd: repository,
     encoding: 'utf8',
     windowsHide: true,
     env: process.env,
   });
-  assert.equal(cliRefusal.status, 1, cliRefusal.stdout + cliRefusal.stderr);
-  assert.equal(JSON.parse(cliRefusal.stdout).reason, 'branch_not_checked_out');
+  assert.equal(cliDelivery.status, 0, cliDelivery.stdout + cliDelivery.stderr);
+  assert.equal(JSON.parse(cliDelivery.stdout).delivery.targetBranch, 'branch-a');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'branch-b');
+});
 
+test('SQ-2638: wave assembly rejects different branches and accepts local and remote targets on the same branch', async () => {
   const modeRepository = createGitWorktree();
   gitAt(modeRepository, ['switch', '-c', 'branch-a']);
   gitAt(modeRepository, ['push', '-u', 'origin', 'branch-a']);
@@ -4968,8 +4977,8 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.equal(Object.hasOwn(instant, 'briefing'), false);
   assert.ok(Buffer.byteLength(instant.spawn.prompt) < 1200, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
-  assert.match(instant.spawn.prompt, /Title: instant dispatch/);
-  assert.ok(instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
+  assert.match(instant.spawn.prompt, /instant dispatch/);
+  assert.ok(!instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
   assert.ok(instant.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
   assert.match(instant.spawn.prompt, /FIRST action:/);
   assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high ticket=SQ-\d+\]/);
@@ -6028,6 +6037,82 @@ test('MCP verdict creates a missing oracle round and refuses a ticket with no or
   });
   assert.equal(refused.ok, false);
   assert.match(refused.message, /not awaiting an oracle verdict/i);
+});
+
+// SQ-3840: a readonly bound review released with kind oracle, groomClosed before its verdict, then every
+// verdict shape the main thread tried that day. The refusals used to point at each other in a loop.
+test('MCP verdict routes every shape on an oracle review closed before its verdict to one working recovery', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const candidate = gitAt(worktree, ['rev-parse', 'HEAD']);
+  const source = store.createTicket(project, { title: 'oracle-reviewed source', files: ['README.md'] });
+  const terminalAt = new Date().toISOString();
+  Object.assign(source, {
+    status: 'doing', claim: null,
+    dispatch: { terminalAt, outcome: 'submitted', agentId: 'source-agent', attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'source-agent', terminalAt }] },
+    submission: { by: 'implementer', at: terminalAt, commit: candidate, verify: 'manual: fixture', changedPaths: ['README.md'], integratedAt: null },
+  });
+  persistTicket(project, source);
+  const created = store.createTicket(project, { title: 'readonly oracle review', category: 'review-audit', files: ['README.md'] }, { ref: source.ref, commit: candidate });
+  const review = store.getTicket(project, created.ref);
+  Object.assign(review, {
+    status: 'doing', claim: { by: 'oracle-reviewer', at: terminalAt },
+    dispatch: { launchSeq: 1, readonly: true, executor: 'sidequest-exec-dispatch-readonly', agentId: 'reviewer-agent' },
+  });
+  persistTicket(project, review);
+  assert.equal((await callTool('release', {
+    project, ref: review.ref, by: 'oracle-reviewer', kind: 'oracle', oracle: 'Accept or reject the reproduced defect on this candidate.',
+  })).ok, true);
+
+  const prematureClose = await callTool('groomClose', { project, ref: review.ref, by: 'orchestrator', reason: 'closing before the verdict' });
+  assert.equal(prematureClose.reason, 'oracle_verdict_pending');
+  assert.match(prematureClose.message, new RegExp(`verdict \\{ref: "${review.ref}"`));
+  assert.equal(store.getTicket(project, review.ref).status, 'awaiting-oracle', 'groomClose leaves the pending verdict reachable');
+
+  // The state the pre-fix groomClose left behind.
+  const closed = store.getTicket(project, review.ref);
+  Object.assign(closed, { status: 'done', completion: { key: `${closed.id}:groomed`, by: 'orchestrator', state: 'done', at: terminalAt, purpose: 'grooming' } });
+  persistTicket(project, closed);
+
+  const evidence = 'Reproduced on the exact candidate.';
+  const shapes: Record<string, any> = {
+    'plain verdict on the source': { ref: source.ref, outcome: 'rejected', by: 'main', why: 'defect', text: 'Reject.' },
+    'finalize true on the source': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: true },
+    'finalize without sourceRef': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { candidate, evidence } },
+    'finalize with swapped refs and candidate': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { sourceRef: review.ref, candidate, evidence } },
+    'finalize with swapped refs and commit': { ref: source.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { sourceRef: review.ref, commit: candidate, evidence } },
+    'finalize on the review': { ref: review.ref, outcome: 'rejected', by: 'main', text: 'Reject.', finalize: { sourceRef: source.ref, commit: candidate, evidence } },
+    'plain verdict on the review': { ref: review.ref, outcome: 'rejected', by: 'main', text: 'Reject.' },
+  };
+  const before = JSON.stringify([store.getTicket(project, source.ref), store.getTicket(project, review.ref)]);
+  const results: Record<string, any> = {};
+  for (const [shape, args] of Object.entries(shapes)) {
+    try {
+      results[shape] = await callTool('verdict', { project, ...args });
+    } catch (error: any) {
+      results[shape] = { thrown: error.message };
+    }
+  }
+  const recovery = `update {ref: "${review.ref}", status: "awaiting-oracle"}`;
+  for (const [shape, result] of Object.entries(results)) {
+    assert.equal(result.ok, false, `${shape} records nothing`);
+    assert.ok(String(result.message).includes(recovery), `${shape} names the one recovery: ${result.message ?? result.thrown}`);
+  }
+  assert.deepEqual(Object.values(results).map((result) => result.reason), [
+    'review_ref_required', 'review_ref_required', 'review_ref_required', 'review_ref_required', 'review_ref_required',
+    'oracle_round_closed', 'oracle_round_closed',
+  ]);
+  assert.equal(JSON.stringify([store.getTicket(project, source.ref), store.getTicket(project, review.ref)]), before, 'refusals write nothing');
+
+  assert.equal((await callTool('update', { project, ref: review.ref, status: 'awaiting-oracle' })).ok, true);
+  const recorded = await callTool('verdict', { project, ref: review.ref, outcome: 'rejected', by: 'main', text: 'Reject the candidate.' });
+  assert.equal(recorded.ok, true, recorded.message);
+  assert.equal(store.getTicket(project, source.ref).submission.review.outcome, 'rejected');
+  const answered = store.getTicket(project, review.ref);
+  assert.equal(answered.reviewTarget.outcome, 'rejected');
+  assert.equal(answered.oracle.verdict.outcome, 'rejected');
+  assert.equal(answered.status, 'todo');
+  assert.equal((await callTool('groomClose', { project, ref: review.ref, by: 'orchestrator', reason: 'verdict recorded' })).ok, true);
 });
 
 test('MCP executor comments without an author keep the active claim holder identity', async () => {
@@ -7458,6 +7543,92 @@ async function submittedLandedProofCandidate(repository: string, project: string
   assert.equal(submitted.ok, true, submitted.message || submitted.reason);
   return { ticket, by, worktree, commit: committed.commit, marker, file };
 }
+
+test('SQ-3843: singleton merge and replay move only the recorded integration branch', async () => {
+  for (const mode of ['merge', 'replay']) {
+    const repository = landedProofWorktree();
+    const project = store.ensureProject(repository).slug;
+    gitAt(repository, ['branch', 'develop']);
+    store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+    const candidate = await submittedLandedProofCandidate(repository, project, `${mode}.txt`, `sq3843-${mode}`);
+    gitAt(repository, ['switch', '-c', 'release/next']);
+    const checkoutHead = gitAt(repository, ['rev-parse', 'HEAD']);
+    const delivered = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'target-integrator', mode });
+    assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+    assert.equal(delivered.delivery.targetBranch, 'develop', 'delivery records the frozen branch');
+    assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next', 'delivery never switches the checkout');
+    assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead, 'delivery never moves the checkout branch');
+    assert.equal(gitAt(repository, ['show', `develop:${mode}.txt`]), candidate.marker, 'the candidate content reaches develop');
+  }
+});
+
+test('SQ-3843: apply retains staged delivery in the recorded integration checkout', async () => {
+  const repository = createGitWorktree();
+  gitAt(repository, ['branch', 'develop']);
+  const project = store.ensureProject(repository).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+  const candidate = await submittedTargetCandidate(repository, project, 'develop', 'applied.js');
+  gitAt(repository, ['switch', '-c', 'release/next']);
+  const checkoutHead = gitAt(repository, ['rev-parse', 'HEAD']);
+  const delivered = await callTool('integrate', {
+    project, ref: candidate.ticket.ref, by: 'target-integrator', mode: 'apply', ...waivedDelivery(candidate.ticket.ref),
+  });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.delivery.targetBranch, 'develop');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next');
+  assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead);
+  const checkout = store.getTicket(project, candidate.ticket.ref).submission.integration.worktree;
+  assert.ok(fs.existsSync(checkout), 'apply keeps the checkout holding the staged content');
+  assert.equal(gitAt(checkout, ['show', ':applied.js']), candidate.ticket.ref);
+  assert.equal(gitAt(checkout, ['diff', '--cached', '--name-only']), 'applied.js');
+});
+
+test('SQ-3843: configured dependencies are provisioned and cleanup failures preserve delivery', async () => {
+  const repository = landedProofWorktree();
+  gitAt(repository, ['branch', 'develop']);
+  const project = store.ensureProject(repository).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+  const candidate = await submittedLandedProofCandidate(repository, project, 'dependency.txt', 'configured dependency delivery');
+  const dependency = 'fixture-dependency.txt';
+  fs.writeFileSync(path.join(repository, dependency), 'configured dependency bytes\n');
+  const exclude = gitAt(repository, ['rev-parse', '--git-path', 'info/exclude']);
+  fs.appendFileSync(path.resolve(repository, exclude), `\n${dependency}\n`);
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [{ path: dependency, mode: 'copy' }],
+    worktreeSetup: 'git worktree lock .',
+  });
+  gitAt(repository, ['switch', '-c', 'release/next']);
+  const delivered = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'target-integrator', mode: 'merge' });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  const integration = store.getTicket(project, candidate.ticket.ref).submission.integration;
+  assert.equal(integration.targetBranch, 'develop');
+  assert.equal(integration.outcome, 'verified', 'cleanup failure cannot hide durable delivery');
+  assert.equal(fs.readFileSync(path.join(integration.worktree, dependency), 'utf8'), 'configured dependency bytes\n');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next');
+  assert.equal(gitAt(repository, ['show', 'develop:dependency.txt']), candidate.marker);
+  gitAt(repository, ['worktree', 'unlock', integration.worktree]);
+});
+
+test('SQ-3843: wave delivery moves develop while the release checkout stays unchanged', async () => {
+  const repository = landedProofWorktree();
+  const project = store.ensureProject(repository).slug;
+  gitAt(repository, ['branch', 'develop']);
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'develop' });
+  const first = await submittedLandedProofCandidate(repository, project, 'wave-first.txt', 'sq3843-first');
+  const second = await submittedLandedProofCandidate(repository, project, 'wave-second.txt', 'sq3843-second');
+  gitAt(repository, ['switch', '-c', 'release/next']);
+  const checkoutHead = gitAt(repository, ['rev-parse', 'HEAD']);
+  const refs = `${first.ticket.ref},${second.ticket.ref}`;
+  const assembled = await callTool('integrate', { project, ref: refs, by: 'target-integrator', wave: {} });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  const delivered = await callTool('integrate', { project, ref: refs, by: 'target-integrator', mode: 'merge' });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.delivery.targetBranch, 'develop', 'the wave record names develop');
+  assert.equal(gitAt(repository, ['branch', '--show-current']), 'release/next');
+  assert.equal(gitAt(repository, ['rev-parse', 'HEAD']), checkoutHead, 'the wave leaves the release tip unchanged');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', first.commit, 'develop']), '');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', second.commit, 'develop']), '');
+});
 
 test('SQ-2717: default auto integration merges single and wave candidates into the local branch and never touches origin', async () => {
   const repository = landedProofWorktree();

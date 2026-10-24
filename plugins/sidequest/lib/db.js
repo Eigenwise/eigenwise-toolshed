@@ -29,6 +29,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var db_exports = {};
 __export(db_exports, {
   CURRENT_SCHEMA_VERSION: () => CURRENT_SCHEMA_VERSION,
+  SQLITE_BUSY_MOVING_QUEUE_CEILING_MS: () => SQLITE_BUSY_MOVING_QUEUE_CEILING_MS,
   SQLITE_BUSY_RETRY_ATTEMPTS: () => SQLITE_BUSY_RETRY_ATTEMPTS,
   SQLITE_BUSY_RETRY_DELAYS_MS: () => SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS: () => SQLITE_BUSY_TIMEOUT_MS,
@@ -78,6 +79,7 @@ const SQLITE_BUSY_TIMEOUT_MS = 2e3;
 const SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 15e3;
 const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
 const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100];
+const SQLITE_BUSY_MOVING_QUEUE_CEILING_MS = 15e3;
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
 const OLD_CODEBASE_EXPLORATION = {
   description: "Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.",
@@ -119,28 +121,41 @@ function isSqliteBusy(error) {
   if (/database is (?:locked|busy)/i.test(error.message)) return true;
   return isSqliteBusy(Reflect.get(error, "cause"));
 }
-function sqliteBusyError(operation, startedAt, cause, timeoutMs) {
-  const elapsedMs = Date.now() - startedAt;
+function sqliteBusyError(operation, progress, cause, timeoutMs) {
+  const elapsedMs = Date.now() - progress.startedAt;
   const originalMessage = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${timeoutMs}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
+    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${progress.attempts} attempts, each waiting up to ${timeoutMs}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
     { cause }
   );
 }
-function retryWhenSqliteBusy(operation, work, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
-  const startedAt = Date.now();
-  for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
+function busyRetryExhausted(progress, otherWriterCommitted) {
+  progress.stalledAttempts = otherWriterCommitted() ? 0 : progress.stalledAttempts + 1;
+  const pastMovingQueueCeiling = progress.attempts >= SQLITE_BUSY_RETRY_ATTEMPTS && Date.now() - progress.startedAt >= SQLITE_BUSY_MOVING_QUEUE_CEILING_MS;
+  return progress.stalledAttempts >= SQLITE_BUSY_RETRY_ATTEMPTS || pastMovingQueueCeiling;
+}
+function retryWhenSqliteBusy(operation, work, timeoutMs = SQLITE_BUSY_TIMEOUT_MS, otherWriterCommitted = () => false) {
+  const progress = { startedAt: Date.now(), attempts: 0, stalledAttempts: 0 };
+  for (; ; ) {
+    progress.attempts += 1;
     try {
       return work();
     } catch (error) {
-      if (!isSqliteBusy(error) || attempt === SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
-        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error, timeoutMs);
-        throw error;
-      }
-      Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[attempt] ?? 0);
+      if (!isSqliteBusy(error)) throw error;
+      if (busyRetryExhausted(progress, otherWriterCommitted)) throw sqliteBusyError(operation, progress, error, timeoutMs);
+      Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[progress.stalledAttempts - 1] ?? 0);
     }
   }
-  throw new Error(`SQLite busy retry exhausted without an error while ${operation}.`);
+}
+function otherWriterCommittedSince(database) {
+  const readDataVersion = () => Number(prepareCached(database, "PRAGMA data_version").get()?.data_version);
+  let seen = readDataVersion();
+  return () => {
+    const current = readDataVersion();
+    const moved = current !== seen;
+    seen = current;
+    return moved;
+  };
 }
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -788,11 +803,12 @@ function txn(database, fn, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
       }
       throw error;
     }
-  }, timeoutMs);
+  }, timeoutMs, otherWriterCommittedSince(database));
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CURRENT_SCHEMA_VERSION,
+  SQLITE_BUSY_MOVING_QUEUE_CEILING_MS,
   SQLITE_BUSY_RETRY_ATTEMPTS,
   SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS,

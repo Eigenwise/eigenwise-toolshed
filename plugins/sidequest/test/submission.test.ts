@@ -616,6 +616,118 @@ test('integration keeps a recorded verifier instead of re-deriving a plugin gate
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
+test('integration records exactly importing tests and runs only files outside the pinned verifier', (context: import('node:test').TestContext) => {
+  const inheritedTestContext = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  context.after(() => {
+    if (inheritedTestContext !== undefined) process.env.NODE_TEST_CONTEXT = inheritedTestContext;
+  });
+  const pluginDirectory = path.join(PROJECT_DIR, 'plugins', 'importing-gate-fixture');
+  fs.mkdirSync(path.join(pluginDirectory, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(pluginDirectory, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(pluginDirectory, 'package.json'), '{}');
+  fs.writeFileSync(path.join(pluginDirectory, 'lib', 'changed.js'), 'module.exports = true;');
+  const testSource = "const assert = require('node:assert/strict'); const { test } = require('node:test'); const value = require('../lib/changed.js'); test('changed module is true', () => assert.equal(value, true));";
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'first.test.js'), testSource);
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'second.test.js'), testSource);
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'unrelated.test.js'), "throw new Error('unrelated test must not run');");
+  const ticket = addTicket('importing test delivery');
+  ticket.submission = {
+    commit: COMMIT, changedPaths: ['plugins/importing-gate-fixture/lib/changed.js'],
+    verify: 'cd plugins/importing-gate-fixture && node --test test/first.test.js', integration: { outcome: 'delivered' },
+  };
+  persist(ticket);
+  const result = store.verifyIntegration(slug, ticket.ref);
+  assert.equal(result.ok, true, result.verify.evidence);
+  const recorded = store.getTicket(slug, ticket.ref).submission.integration.verify;
+  assert.deepEqual(recorded.integrationTests, [{ plugin: 'plugins/importing-gate-fixture', files: ['test/first.test.js', 'test/second.test.js'] }]);
+  assert.equal(recorded.importingTestResults.length, 1);
+  assert.match(recorded.importingTestResults[0].command, /second\.test\.js/);
+  const stored = store.getTicket(slug, ticket.ref);
+  stored.submission.changedPaths = ['plugins/importing-gate-fixture/lib/unreached.js'];
+  stored.submission.integration = { outcome: 'delivered' };
+  persist(stored);
+  assert.equal(store.verifyIntegration(slug, ticket.ref).ok, true);
+  assert.deepEqual(store.getTicket(slug, ticket.ref).submission.integration.verify.integrationTests, [{ plugin: 'plugins/importing-gate-fixture', files: [] }]);
+  fs.writeFileSync(path.join(pluginDirectory, 'test', 'second.test.js'), testSource.replace('assert.equal(value, true)', 'assert.equal(value, false)'));
+  const failing = store.getTicket(slug, ticket.ref);
+  failing.submission.changedPaths = ['plugins/importing-gate-fixture/lib/changed.js'];
+  failing.submission.integration = { outcome: 'delivered' };
+  persist(failing);
+  const refused = store.verifyIntegration(slug, ticket.ref);
+  assert.equal(refused.ok, false, fs.readFileSync(refused.verify.importingTestResults[0].logPath, 'utf8'));
+  assert.equal(refused.verify.status, 'failed_suite');
+  assert.match(refused.verify.command, /second\.test\.js/);
+});
+
+function installFixtureQualityGate(complexity: number, covered: boolean) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-integration-quality-home-'));
+  const gate = path.join(home, 'gate');
+  fs.mkdirSync(path.join(home, 'plugins'), { recursive: true });
+  fs.mkdirSync(path.join(gate, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(gate, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(gate, 'lib', 'core.mjs'), '');
+  const row = { relativePath: 'lib/quality.js', name: 'candidateBody', complexity, classification: 'new', line: 1,
+    ...(covered ? { coverage: 1, crap: complexity } : { unverified: 'TypeScript executed bytes have no authentic map' }) };
+  const report = { changedMetrics: [row], failures: [], unverified: covered ? [] : [row] };
+  fs.writeFileSync(path.join(gate, 'bin', 'quality-gate.js'), `process.stdout.write(${JSON.stringify(JSON.stringify(report))});`);
+  fs.writeFileSync(path.join(home, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: {
+    'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: PROJECT_DIR, installPath: gate }],
+  } }));
+  return home;
+}
+
+function qualityDeliveryCandidate() {
+  const commit = createCandidateCommit('quality.js', 'function candidateBody() { return true; }');
+  const ticket = addTicket('native integration quality', { files: ['lib/quality.js'] });
+  ticket.submission = { commit, base: git(['rev-parse', 'origin/main']), changedPaths: ['lib/quality.js'],
+    verify: 'node -e "process.exit(0)"', integration: { outcome: 'delivered' } };
+  persist(ticket);
+  return ticket;
+}
+
+function verifyFixtureQuality(complexity: number, covered: boolean) {
+  const ticket = qualityDeliveryCandidate();
+  const home = installFixtureQualityGate(complexity, covered);
+  const previous = process.env.SIDEQUEST_CLAUDE_HOME;
+  process.env.SIDEQUEST_CLAUDE_HOME = home;
+  try {
+    const first = store.verifyIntegration(slug, ticket.ref);
+    const stored = store.getTicket(slug, ticket.ref);
+    stored.submission.integration = { outcome: 'delivered' };
+    persist(stored);
+    return { ticket, first, second: store.verifyIntegration(slug, ticket.ref) };
+  } finally {
+    if (previous === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('integration native quality refuses CC seven with the failing body named', () => {
+  const { first } = verifyFixtureQuality(7, false);
+  assert.strictEqual(first.ok, false);
+  assert.match(first.verify.evidence, /candidateBody cc=7/);
+  assert.strictEqual(first.verify.quality[0].status, 'failed');
+});
+
+test('integration native quality records a covered CC three receipt on the delivery', () => {
+  const { first, ticket } = verifyFixtureQuality(3, true);
+  assert.strictEqual(first.ok, true);
+  const quality = store.getTicket(slug, ticket.ref).submission.integration.verify.quality[0];
+  assert.strictEqual(quality.status, 'measured');
+  assert.strictEqual(quality.worstBody.crap, 3);
+  assert.ok(fs.existsSync(quality.receipt));
+});
+
+test('integration native quality records unmapped evidence and files candidate debt once', () => {
+  const { first, second } = verifyFixtureQuality(3, false);
+  assert.strictEqual(first.ok, true);
+  assert.strictEqual(second.ok, true);
+  assert.strictEqual(first.verify.quality[0].status, 'unverified');
+  assert.strictEqual(store.listTickets(slug).filter((ticket: { source: string }) => ticket.source === 'integration-quality').length, 1);
+});
+
 test('SQ-1875: every rejected submission range reason gives a pinned-base remedy', () => {
   const ticket = { ref: 'SQ-1875', dispatch: { baseCommit: '1234567890abcdef1234567890abcdef12345678' } };
   const reasons = ['empty_range', 'base_not_reachable', 'range_changed', 'no_op_changed', 'reconciled_path_diverged'];
@@ -2185,8 +2297,6 @@ test('integration closure consumes an in-scope submission with control-plane pro
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });
 
-// SQ-3144: dispatch freezes the integration branch it saw, but the orchestrator may
-// fast-forward another branch past it and stay there, or deliberately name another one.
 function sq3144SubmittedOnRecordedBranch(label: string) {
   const stamp = `${process.pid}-${Date.now()}`;
   const recorded = `sq3144-develop-${label}-${stamp}`;
@@ -2215,7 +2325,7 @@ function sq3144SubmittedOnRecordedBranch(label: string) {
   return { t, recorded, commit, stamp };
 }
 
-test('SQ-3144: integrate delivers onto a branch fast-forwarded past the dispatch-recorded one and records it as the target', () => {
+test('SQ-3843: integrate keeps its recorded target when the checkout descends from it', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   try {
@@ -2223,25 +2333,21 @@ test('SQ-3144: integrate delivers onto a branch fast-forwarded past the dispatch
     const current = `sq3144-main-ff-${stamp}`;
     git(['checkout', '-f', '-B', current, 'origin/main']);
     git(['merge', '--ff-only', recorded]);
-    const recordedHead = git(['rev-parse', recorded]);
-
+    const checkoutHead = git(['rev-parse', 'HEAD']);
     const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
     assert.strictEqual(delivered.ok, true, delivered.message);
-    assert.strictEqual(delivered.integration.targetBranch, current);
-    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, current]), '');
-    assert.strictEqual(git(['rev-parse', recorded]), recordedHead, 'the recorded branch is left where it was');
-
-    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${current}.`]);
+    assert.strictEqual(delivered.integration.targetBranch, recorded);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, recorded]), '');
+    assert.strictEqual(git(['rev-parse', current]), checkoutHead, 'the checkout branch stays unchanged');
+    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${recorded}.`]);
     assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
-    const after = store.getTicket(slug, t.ref);
-    assert.strictEqual(after.status, 'done');
-    assert.strictEqual(after.submission.integration.targetBranch, current);
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.targetBranch, recorded);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
   }
 });
 
-test('SQ-3144: integrate refuses a checkout that does not descend from the recorded branch unless integrationBranch names it', () => {
+test('SQ-3843: integrate rejects target overrides and delivers from an unrelated checkout', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   try {
@@ -2249,29 +2355,17 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
     const unrelated = `sq3144-unrelated-${stamp}`;
     git(['checkout', '-f', '-B', unrelated, 'origin/main']);
     git(['commit', '--allow-empty', '-m', 'unrelated branch work']);
-    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
-    assert.strictEqual(refused.ok, false);
-    assert.strictEqual(refused.reason, 'branch_not_checked_out');
-    assert.ok(refused.message.startsWith(`${recorded} must be checked out in the registered checkout or a linked worktree before integration; currently on ${unrelated}.`), refused.message);
-    assert.match(refused.message, /pass integrationBranch \(CLI --integration-branch\)/);
-
-    // The recorded branch moved on after another branch was fast-forwarded to its old
-    // tip: no longer a fast-forward, so only an explicit integrationBranch delivers there.
-    const current = `sq3144-main-unrelated-${stamp}`;
-    git(['checkout', '-f', '-B', current, recorded]);
-    git(['checkout', '-f', recorded]);
-    git(['commit', '--allow-empty', '-m', 'recorded branch moves on']);
-    git(['checkout', '-f', current]);
-    const stillRefused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
-    assert.strictEqual(stillRefused.reason, 'branch_not_checked_out');
-
-    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge', integrationBranch: current });
+    const checkoutHead = git(['rev-parse', 'HEAD']);
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', integrationBranch: unrelated });
+    assert.strictEqual(refused.reason, 'integration_target_unavailable');
+    assert.match(refused.message, /cannot override it/);
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
     assert.strictEqual(delivered.ok, true, delivered.message);
-    assert.strictEqual(delivered.integration.targetBranch, current);
-    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, current]), '');
-    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${current}.`]);
-    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
-    assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.targetBranch, current);
+    assert.strictEqual(delivered.integration.targetBranch, recorded);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, recorded]), '');
+    assert.strictEqual(git(['rev-parse', 'HEAD']), checkoutHead);
+    assert.strictEqual(git(['branch', '--show-current']), unrelated);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
   }

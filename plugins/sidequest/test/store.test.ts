@@ -21,6 +21,16 @@ const store = require('../lib/store.js');
 const { resolveProject } = require('../lib/mcp-shared.js');
 const { start } = require('../lib/server.js');
 
+test('SQ-3848: recorded target selection is safe under the SQLite write lock', () => {
+  const { guardedWrite } = require('../lib/db.js');
+  const delivery = { deliveredAt: '2026-10-21T00:00:00Z', targetBranch: 'delivered', targetUpstream: 'origin/delivered' };
+  guardedWrite(() => {
+    assert.deepStrictEqual(store.recordedTicketIntegrationTarget({ submission: { integration: delivery } }), { branch: 'delivered', mode: 'remote' });
+    assert.deepStrictEqual(store.recordedTicketIntegrationTarget({ dispatch: { integrationTarget: { branch: 'frozen', mode: 'local' } }, submission: { integration: delivery } }), { branch: 'frozen', mode: 'local' });
+    assert.strictEqual(store.recordedTicketIntegrationTarget({ submission: { integration: { targetBranch: 'unchecked' } } }), undefined);
+  });
+});
+
 const CLI = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const realTemp = os.tmpdir();
 const fixtureRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(realTemp, 'sq-project-root-')));
