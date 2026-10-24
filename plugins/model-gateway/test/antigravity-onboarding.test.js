@@ -1,9 +1,11 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { createRequire } = require('node:module');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 const { isolateInProcessGatewayEnvironment, spawnGatewayProcessSync } = require('./support.js');
 const home = isolateInProcessGatewayEnvironment(test);
 const commands = require('../lib/commands.js');
@@ -11,6 +13,27 @@ const { capability, envelope, native, server } = require('./fixtures/antigravity
 const onboarding = () => require('../lib/onboarding.js');
 const report = (overrides = {}) => ({ schema_version: 1, provider: 'antigravity', ...capability(overrides) });
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+
+function windowsConfigPath() {
+  const subject = path.join(__dirname, '..', 'lib', 'antigravity-config-intent.js');
+  const subjectRequire = createRequire(subject);
+  const injectedCwd = 'C:\\syntheticcwd';
+  const defaultCwd = 'D:\\workspace';
+  const windowsPath = {
+    join: path.win32.join,
+    resolve: (...segments) => path.win32.resolve(...(
+      segments[0] === injectedCwd ? segments : [defaultCwd, ...segments]
+    )),
+  };
+  const subjectModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(subject, 'utf8'), {
+    module: subjectModule,
+    exports: subjectModule.exports,
+    process: { cwd: () => defaultCwd, env: {} },
+    require: (specifier) => specifier === 'node:path' ? windowsPath : subjectRequire(specifier),
+  }, { filename: subject });
+  return subjectModule.exports.configPath;
+}
 
 test('onboarding is guidance-only: missing Codex default, explicit provider changes only, invalid files preserved', () => {
   const api = onboarding();
@@ -325,11 +348,30 @@ test('upgrade checks serving native support conditionally without probing ordina
   assert.equal(await api.compatibilityRequired({ ...options, port: 0 }), false);
 });
 
+test('native config path honors the injected Windows cwd across C, drive-less and relative roots', () => {
+  const configPath = windowsConfigPath();
+  const cwd = 'C:\\syntheticcwd';
+  const cases = [
+    ['CCP_CONFIG_DIR absolute C root wins', { CCP_CONFIG_DIR: 'C:\\synthetic\\ccp', XDG_CONFIG_HOME: 'C:\\ignored\\xdg' }, 'C:\\synthetic\\ccp\\config.json'],
+    ['CCP_CONFIG_DIR drive-less root inherits C cwd', { CCP_CONFIG_DIR: '\\synthetic\\ccp' }, 'C:\\synthetic\\ccp\\config.json'],
+    ['CCP_CONFIG_DIR relative root uses C cwd', { CCP_CONFIG_DIR: 'relative-ccp' }, 'C:\\syntheticcwd\\relative-ccp\\config.json'],
+    ['XDG absolute C root takes precedence over HOME', { XDG_CONFIG_HOME: 'C:\\synthetic\\xdg', HOME: 'C:\\ignored\\home' }, 'C:\\synthetic\\xdg\\claude-code-proxy\\config.json'],
+    ['XDG drive-less root inherits C cwd', { XDG_CONFIG_HOME: '\\synthetic\\xdg' }, 'C:\\synthetic\\xdg\\claude-code-proxy\\config.json'],
+    ['XDG relative root uses C cwd', { XDG_CONFIG_HOME: 'relative-xdg' }, 'C:\\syntheticcwd\\relative-xdg\\claude-code-proxy\\config.json'],
+    ['HOME absolute C root takes precedence over USERPROFILE', { HOME: 'C:\\synthetic\\home', USERPROFILE: 'C:\\ignored\\profile' }, 'C:\\synthetic\\home\\.config\\claude-code-proxy\\config.json'],
+    ['HOME drive-less root inherits C cwd', { HOME: '\\synthetic\\home' }, 'C:\\synthetic\\home\\.config\\claude-code-proxy\\config.json'],
+    ['USERPROFILE absolute C root is the HOME fallback', { USERPROFILE: 'C:\\synthetic\\profile' }, 'C:\\synthetic\\profile\\.config\\claude-code-proxy\\config.json'],
+  ];
+  for (const [label, environment, expected] of cases) assert.equal(configPath(environment, cwd), expected, label);
+  assert.equal(configPath({ CCP_CONFIG_DIR: 'relative-ccp' }, 'project'), 'D:\\workspace\\project\\relative-ccp\\config.json',
+    'relative cwd resolution uses the simulated process cwd');
+});
+
 test('native config intent is bounded, redacted and uses the actual CCP/XDG/HOME resolver', () => {
   const { configPath, configRequiresCompatibility } = require('../lib/antigravity-config-intent.js');
   const directory = path.join(home, 'config-checks'); fs.mkdirSync(directory, { recursive: true });
-  assert.equal(configPath({ HOME: '/fixture-home', APPDATA: '/ignored' }, directory), path.resolve('/fixture-home', '.config', 'claude-code-proxy', 'config.json'));
-  assert.equal(configPath({ USERPROFILE: '/fixture-profile' }, directory), path.resolve('/fixture-profile', '.config', 'claude-code-proxy', 'config.json'));
+  assert.equal(configPath({ HOME: '/fixture-home', APPDATA: '/ignored' }, directory), path.resolve(directory, '/fixture-home', '.config', 'claude-code-proxy', 'config.json'));
+  assert.equal(configPath({ USERPROFILE: '/fixture-profile' }, directory), path.resolve(directory, '/fixture-profile', '.config', 'claude-code-proxy', 'config.json'));
   assert.equal(configPath({ XDG_CONFIG_HOME: 'relative' }, directory), path.join(directory, 'relative', 'claude-code-proxy', 'config.json'));
   const environment = { CCP_CONFIG_DIR: directory };
   const file = path.join(directory, 'config.json');

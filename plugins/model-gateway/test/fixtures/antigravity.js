@@ -57,9 +57,12 @@ function request(port, body, headers = {}, pathname = '/v1/messages', method = '
 async function waitFor(check, timeout = 5000) {
   const deadline = Date.now() + timeout;
   let value;
-  while (Date.now() < deadline && !value) {
+  let pending = Date.now() < deadline;
+  while (pending) {
     value = await check();
     if (!value) await pause(20);
+    pending = Date.now() < deadline;
+    if (value) pending = false;
   }
   if (!value) throw new Error('fixture condition timed out');
   return value;

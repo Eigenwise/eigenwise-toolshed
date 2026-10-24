@@ -182,7 +182,8 @@ function stopGatewayChild(child) {
 async function stopGatewayFixtureProcesses(home) {
   const children = [...(gatewayFixtureProcesses.get(home) || [])];
   const outcomes = await Promise.all(children.map(stopGatewayChild));
-  return { children, pids: children.map((child) => child.pid).filter(Boolean), closed: outcomes.every(Boolean) };
+  return { children, pids: children.map((child) => child.pid).filter(Boolean), closed: outcomes.every(Boolean),
+    stopResults: children.map((child, index) => ({ pid: child.pid, source: 'direct', result: outcomes[index] })) };
 }
 
 function trackGatewayFixtureProcess(home, child) {
@@ -190,20 +191,25 @@ function trackGatewayFixtureProcess(home, child) {
   gatewayFixtureProcesses.get(home).add(child);
 }
 
-function stopRecordedGatewayProcesses(home, pids = []) {
+function readRecordedGatewayPid(home, name, fsImpl = fs) {
+  try { return Number(fsImpl.readFileSync(gatewayPidFile(home, name), 'utf8').trim()) || null; }
+  catch { return null; }
+}
+
+function stopRecordedGatewayProcesses(home, pids = [], stopResults = []) {
   for (const name of ['shim', 'guardian', 'proxy']) {
-    let pid;
-    try { pid = Number(fs.readFileSync(gatewayPidFile(home, name), 'utf8').trim()) || null; } catch { pid = null; }
+    const pid = readRecordedGatewayPid(home, name);
     if (!pid || pids.includes(pid)) continue;
     pids.push(pid);
-    requestGatewayProcessStop(pid);
+    const stopped = requestGatewayProcessStop(pid);
+    stopResults.push({ pid, source: 'recorded', result: stopped });
   }
   return pids;
 }
 
 async function stopTrackedGatewayProcesses(home) {
   const shutdown = await stopGatewayFixtureProcesses(home);
-  shutdown.pids = stopRecordedGatewayProcesses(home, shutdown.pids);
+  shutdown.pids = stopRecordedGatewayProcesses(home, shutdown.pids, shutdown.stopResults);
   return shutdown;
 }
 
@@ -403,7 +409,13 @@ function requireFixtureShutdown(home, shutdown, isRunning = processIsRunning) {
   if (!shutdown.closed) throw fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_CLOSE_TIMEOUT', home);
   const closedPids = new Set(shutdown.children.filter((child) => gatewayFixtureChildClosures.get(child)?.closed === true)
     .map((child) => child.pid));
-  if (shutdown.pids.some((pid) => !closedPids.has(pid) && isRunning(pid))) throw fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_PROCESS_ALIVE', home);
+  let livePid = null;
+  const live = shutdown.pids.some((pid) => {
+    const running = !closedPids.has(pid) && isRunning(pid);
+    if (running) livePid = pid;
+    return running;
+  });
+  if (live) throw Object.assign(fixtureCleanupInvariant('ERR_GATEWAY_FIXTURE_PROCESS_ALIVE', home), { fixturePid: livePid });
 }
 
 function removalDeadlineError(context) {
@@ -444,28 +456,84 @@ function cleanupDiagnostic(value, fallback = 'unknown') {
   return String(value ?? fallback).slice(0, 512);
 }
 
-function knownFixtureChildState(child) {
+function fixtureFailurePath(home, failedPath) {
+  if (typeof failedPath !== 'string') return { relativePath: null, pathInsideOwnedRoot: null };
+  const relative = path.relative(home, failedPath);
+  const outside = /^(?:\.\.(?:[\\/]|$)|[A-Za-z]:[\\/]|[\\/])/.test(relative);
+  return { relativePath: outside ? null : cleanupDiagnostic(relative || '.'), pathInsideOwnedRoot: !outside };
+}
+
+function fixtureChildRegistered(home, child) {
+  return gatewayFixtureProcesses.get(home)?.has(child) === true;
+}
+
+function fixtureProbeDiagnostic(pid, probe) {
+  try { probe(pid, 0); return { state: 'probe-succeeded', errorCode: null }; }
+  catch (error) {
+    return { state: error.code === 'ESRCH' ? 'absent' : 'unknown', errorCode: cleanupDiagnostic(error.code) };
+  }
+}
+
+function fixtureChildLiveness(child, home, probe) {
+  if (gatewayFixtureChildClosures.get(child)?.closed) return { state: 'close-observed', errorCode: null };
+  if (!gatewayChildNeedsStop(child)) return { state: 'exit-observed', errorCode: null };
+  if (!fixtureChildRegistered(home, child)) return { state: 'not-probed', errorCode: null };
+  return fixtureProbeDiagnostic(child.pid, probe);
+}
+
+function fixtureStopResult(pid, stopResults) {
+  const latest = stopResults.filter((entry) => entry.pid === pid).at(-1);
+  return latest ? latest.result : null;
+}
+
+function fixtureResourceRelease(child) {
+  return typeof child.fixtureResourcesReleased === 'boolean' ? child.fixtureResourcesReleased : null;
+}
+
+function fixtureChildFailureDetails(child, home, probe, stopResults) {
+  return { ownership: 'direct-child',
+    identityState: fixtureChildRegistered(home, child) ? 'tracked-child-handle' : 'unverified-child-handle',
+    resourceReleased: fixtureResourceRelease(child), stopResult: fixtureStopResult(child.pid, stopResults),
+    liveness: fixtureChildLiveness(child, home, probe) };
+}
+
+function knownFixtureChildState(child, home, probe, stopResults) {
   const state = gatewayFixtureChildClosures.get(child);
   return {
     pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode,
     closeObserved: state?.closed === true, control: state?.control?.code ?? null,
+    ...fixtureChildFailureDetails(child, home, probe, stopResults),
   };
 }
 
-function ownedFixtureCleanupError(error, context, shutdown) {
+function recordedFixturePidState(pid, stopResults) {
+  // An integer in a pid file is not a fresh process birth/ownership proof. Do
+  // not add a liveness probe or termination authority for recorded-only IDs.
+  return { pid, ownership: 'recorded-only', identityState: 'unverified-recorded-pid',
+    closeObserved: null, resourceReleased: null, stopResult: fixtureStopResult(pid, stopResults),
+    liveness: { state: 'not-probed', errorCode: null } };
+}
+
+function ownedFixtureCleanupError(error, context, shutdown, diagnosticProbe) {
+  const stopResults = shutdown.stopResults || [];
+  const children = shutdown.children.slice(0, 32)
+    .map((child) => knownFixtureChildState(child, context.home, diagnosticProbe, stopResults));
   const details = {
     code: cleanupDiagnostic(error.code), path: cleanupDiagnostic(error.path, context.home),
     syscall: cleanupDiagnostic(error.syscall), attempts: context.attempts,
     elapsedMs: Math.max(0, context.now() - context.startedAt),
-    knownPids: shutdown.pids.slice(0, 32),
-    children: shutdown.children.slice(0, 32).map(knownFixtureChildState),
+    knownPids: shutdown.pids.slice(0, 32), children,
+    ...fixtureFailurePath(context.home, error.path),
+    failingPid: Number.isSafeInteger(error.fixturePid) ? error.fixturePid : null,
+    processes: shutdown.pids.slice(0, 32).map((pid) => children.find((child) => child.pid === pid)
+      || recordedFixturePidState(pid, stopResults)),
   };
   return Object.assign(new Error(`gateway test fixture cleanup failed: ${JSON.stringify(details)}`, { cause: error }), { details });
 }
 
 async function removeOwnedGatewayTestHome(home, {
   timeout = FIXTURE_REMOVAL_BUDGET_MS, now = Date.now, pause = sleep, remove = fs.promises.rm,
-  shutdown = { pids: [], children: [], closed: true },
+  shutdown = { pids: [], children: [], closed: true }, diagnosticProbe = process.kill,
 } = {}) {
   const startedAt = now();
   const context = { home, owner: ownedGatewayTestEnvironments.get(home), startedAt, deadline: startedAt + timeout,
@@ -476,7 +544,7 @@ async function removeOwnedGatewayTestHome(home, {
     ownedGatewayTestEnvironments.delete(home);
     gatewayFixtureProcesses.delete(home);
   } catch (error) {
-    throw ownedFixtureCleanupError(error, context, shutdown);
+    throw ownedFixtureCleanupError(error, context, shutdown, diagnosticProbe);
   }
 }
 
@@ -877,4 +945,4 @@ async function startCountingProxy(t) {
 
 module.exports = { gatewayTestEnvironment, isolateInProcessGatewayEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild, waitForFixtureProxy,
   removeOwnedGatewayTestHome, observeGatewayChildClose, waitForGatewayChildClose, requestFixtureWorkerDrain,
-  processIsRunning, requireFixtureShutdown };
+  processIsRunning, requireFixtureShutdown, readRecordedGatewayPid };

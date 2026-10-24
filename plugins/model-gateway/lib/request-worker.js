@@ -1141,7 +1141,7 @@ function runWorker() {
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
     source: 'fallback',
-    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
+    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)),
   };
   const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
   const antigravityDiscovery = createDiscoveryTracker({ port: PROXY_PORT, file: path.join(STATE, 'antigravity-discovery.json') });
