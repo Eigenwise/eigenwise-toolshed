@@ -692,7 +692,7 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
     };
   }
   function recordQualityDebt(slug, ticket, quality) {
-    if (!quality.unverified.length) return;
+    if (!quality.unverified.length || quality.captureGap) return;
     const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
     transaction(() => {
       if (listTickets(slug).some((existing) => existing.title === title)) return;
@@ -712,7 +712,7 @@ ${JSON.stringify(quality.unverified)}`,
   }
   function verifyCandidateQuality(slug, tickets, project, timeoutMilliseconds, verify, environment) {
     const inputs = tickets.map((participant) => qualityInput(slug, participant, project, timeoutMilliseconds));
-    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify, environment);
+    const result = (0, import_integration_quality.runIntegrationQuality)(inputs, verify, environment, { mode: boardConfig(slug)?.integrationQuality });
     result.quality.forEach((quality, index) => recordQualityDebt(slug, tickets[index], quality));
     return result;
   }
