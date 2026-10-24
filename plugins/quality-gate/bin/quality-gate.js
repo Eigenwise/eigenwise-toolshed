@@ -68,11 +68,13 @@ $VAR, \${VAR} and %VAR% in the command expand before it runs, on every platform.
 Existing explicit or fallback output must be rewritten during the command. Missing or
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
-Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 unverified/prerequisite.
+Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 coverage-dependent unverified/prerequisite.
 crap and measure receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
 --receipts-dir <path> overrides QUALITY_GATE_RECEIPTS_DIR for both commands (relative to cwd).
 New or complexity-raised bodies at complexity 6 or more fail even with UNVERIFIED coverage.
 Coverage stays UNVERIFIED; the failure row says failure: complexity floor.
+UNVERIFIED coverage passes when cc²+cc < 6 (cc 1); cc 2 to 5 still need coverage.
+Bound passes retain the reason and boundVerdict=pass in changedMetrics; branch checks still apply.
 --ratchet is deprecated; use --base. The threshold is fixed at 6; remove --max or config max overrides.
 `;
 
