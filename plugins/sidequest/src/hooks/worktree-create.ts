@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from '../lib/git-process.js';
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
 import { worktreeSetupDeadlineMs } from '../lib/hook-timeouts.js';
@@ -34,7 +34,7 @@ function gitSucceeds(repository: string, args: string[]): boolean {
 }
 
 function repositoryFor(cwd: string): string {
-  return path.resolve(git(cwd, ['rev-parse', '--show-toplevel']));
+  return path.dirname(path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir'])));
 }
 
 // This hook only learns the spawning checkout's cwd, so a dispatch prepared for a
