@@ -46,7 +46,8 @@ node plugins/quality-gate/bin/quality-gate.js crap --project <root> --base <revi
   "base": "main",
   "pythonPolicy": "python-ast-1",
   "lcov": "coverage/lcov.info",
-  "coverageCommand": "your coverage command"
+  "coverageCommand": "your coverage command",
+  "coverageTimeoutMs": 300000
 }
 ```
 
@@ -100,7 +101,7 @@ Use locally installed `coverage.py` (for example `pipx install coverage`) to gen
 
 ## Upgrade to measured coverage
 
-`--coverage-command` runs in the measured tree with a 5-minute timeout. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. `$VAR`, `${VAR}` and `%VAR%` in the command are expanded from its environment before it is spawned, so one command works under cmd.exe and sh alike; an unset name stays as written. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
+`--coverage-command` runs in the measured tree with no time limit by default. Set `coverageTimeoutMs` in either config path, or override it with `--coverage-timeout-ms <ms>`. Values are integers from 0 to 2147483647 milliseconds; 0 disables the limit. The 300000 value above is an optional 5-minute example. On timeout the gate names the elapsed limit, setting and flag, kills the shell and its process tree (Windows and POSIX), and leaves coverage UNVERIFIED. Sources are hashed before and after; a source edit invalidates the run. `QUALITY_GATE_COVERAGE_DIR` and the compatible `QUARTERMASTER_COVERAGE_DIR` name a fresh empty report directory. Write `lcov.info` there. `$VAR`, `${VAR}` and `%VAR%` in the command are expanded from its environment before it is spawned, so one command works under cmd.exe and sh alike; an unset name stays as written. Explicit CLI `--lcov` wins over isolated output and config. Otherwise isolated output wins over config `lcov`, which is a fallback (default `coverage/lcov.info`). Without a command, the CLI path, configured path or default is read in that order. Existing fallback or explicit output must be rewritten during the command. Missing or invalid selected output stays unverified; a stale configured file never replaces fresh isolated output.
 
 For pre-existing LCOV, supply a sibling `<lcov>.sources.json` containing SHA-256 hashes captured alongside that coverage, keyed by project-relative source path:
 
