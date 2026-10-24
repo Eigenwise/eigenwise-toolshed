@@ -1202,11 +1202,23 @@ function reconciledDeliveryWave(slug: any, ticket: any, revision: any, verificat
   };
 }
 
+function archiveIntegrationAttempt(current: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const { attempts = [], ...attempt } = current;
+  return { ...patch, attempts: [...(Array.isArray(attempts) ? attempts : []), attempt] };
+}
+
+function nextIntegrationRecord(current: Record<string, unknown> | undefined, patch: Record<string, unknown>): Record<string, unknown> {
+  if (!current) return { ...patch };
+  if (patch.outcome === 'pending') return archiveIntegrationAttempt(current, patch);
+  if (current.outcome === 'failed' && patch.deliveredAt) return archiveIntegrationAttempt(current, patch);
+  return { ...current, ...patch };
+}
+
 function updateSubmissionIntegration(slug: any, id: any, patch: any, submissionPatch?: any, resolvedRecordingBranch?: string) {
   return withTicketLock(slug, id, () => {
     const ticket = getTicket(slug, id);
     if (!ticket || !ticket.submission) return { ok: false, reason: 'submission_required', ticket };
-    ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
+    ticket.submission.integration = nextIntegrationRecord(ticket.submission.integration, patch);
     if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
     ticket.updatedAt = new Date().toISOString();
     persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch);
