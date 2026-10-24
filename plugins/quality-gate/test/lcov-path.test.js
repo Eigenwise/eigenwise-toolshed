@@ -41,7 +41,7 @@ for (const output of JSON.parse(fs.readFileSync('captures.json', 'utf8'))) {
 `);
   const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(script.replaceAll('\\', '/'))}`;
   await captures(root, [{ path: 'configured.info', run: false }]);
-  const existing = acquireCoverage(root, { lcov: 'configured.info', coverageCommand: command }, ['subject.py']);
+  const existing = await acquireCoverage(root, { lcov: 'configured.info', coverageCommand: command }, ['subject.py']);
   await fs.writeFile(path.join(root, 'configured.info.sources.json'), JSON.stringify(existing.hashes));
   await captures(root, [{ path: 'isolated', run: true }]);
   await fs.mkdir(path.join(root, '.claude/quality-gate'), { recursive: true });

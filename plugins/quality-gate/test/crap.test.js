@@ -200,6 +200,23 @@ test('a TS function added on a branch is measured from complete LCOV (GH-563)', 
   assert.match(missingLine.stdout, /UNVERIFIED src\/a\.ts:5 g: Missing executable LCOV lines/);
 });
 
+test('GH-627: Vitest LCOV measures parenthesized arrows, split initializers and uninitialized declarations', async (context) => {
+  const file = 'lcov-expression-starts.ts';
+  const text = await fs.readFile(path.join(pluginRoot, 'test/fixtures', file), 'utf8');
+  const root = await fixture(context, { [file]: text });
+  await lcov(root, file, text);
+  const recordedLines = [1, 2, 3, 7, 9, 10, 13, 15, 16];
+  await fs.writeFile(path.join(root, 'coverage/lcov.info'), `SF:${file}\n${recordedLines.map((line) => `DA:${line},1`).join('\n')}\nend_of_record\n`);
+  const report = await crapReport({ project: root });
+  assert.deepEqual(report.changedMetrics.map((row) => [row.name, row.executableLines]), [
+    ['paren', [2]], ['<anonymous>', [3]], ['declared', [9, 10]], ['uninit', [15, 16]],
+  ]);
+  assert.ok(report.changedMetrics.every((row) => row.coverage === 1 && !row.unverified));
+  assert.equal(report.exitCode, 0);
+  await fs.writeFile(path.join(root, 'coverage/lcov.info'), `SF:${file}\n${recordedLines.filter((line) => line !== 9).map((line) => `DA:${line},1`).join('\n')}\nend_of_record\n`);
+  assert.match((await crapReport({ project: root })).changedMetrics.find((row) => row.name === 'declared').unverified, /Missing executable LCOV lines/);
+});
+
 test('the TS executable-line inventory skips decorators, blocks, empty, type-only and ambient statements', async () => {
   const text = [
     'export function g(a: number): number {',
