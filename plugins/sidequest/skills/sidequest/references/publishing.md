@@ -252,6 +252,20 @@ upstream, so the same rollback rewrites that record back to the pre-merge head. 
 the sibling, or a retry of the failed candidate, then runs normally. When the rollback itself is refused
 because the target moved past the delivery, nothing is rewritten; follow the refusal's manual recovery.
 
+### Watching a long gate
+
+MCP `integrate` delivers in a separate process, so the board keeps answering `pulse`, `comment`, `claim`
+and `dispatch` for every ticket while the merged-tree gate runs. It has its own mutation queue; the
+delivery lock and the publish lock still serialize deliveries. A client that sends a `progressToken` gets
+`notifications/progress` at every gate phase and file and at least every 30 s, so its idle timeout does not
+fire while the gate is alive. If the client still gives up, or the board server goes away, the delivery
+process finishes and records the outcome itself. `pulse <ref>` then carries an `integration` block:
+`state` (`running`, `delivered`, `rolled_back`, `rollback_failed` or `refused`), `phase` (`merging`,
+`wave gate`, `pinned verifier`, `importing tests`, `finished`), `currentFile` with `fileIndex`/`fileCount`
+during the import walk, `logPath`, `startedAt`/`updatedAt`, and `reason` for a failure. A `running` block
+with `writerAlive: false` means the delivery process died mid-gate: inspect the target and its log before
+retrying. Read the outcome there instead of waiting on node processes.
+
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
 ## Integration mode: where delivery happens versus what proves a candidate landed

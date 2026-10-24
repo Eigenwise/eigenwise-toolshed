@@ -52,7 +52,7 @@ Integration runs the pinned verifier on the merged tree, then runs additional te
 
 Read-only executors can redirect output to scratch files or their ticket's verification directory. The shell guard treats Bash heredoc bodies (`<<`, `<<-`) and here-string values (`<<<`) as input data, so annotations such as `-> int:` inside a probe script don't become write targets. A real output redirect into the repository still refuses, even when the command also has a heredoc.
 
-Read-only and isolated executors can inspect the shared checkout with read-only Git commands, including `git -C <shared> worktree list` and `git -C <shared> status --porcelain -- <paths>`. This lets an executor check that it left the shared paths untouched. Git mutations against that checkout still refuse.
+Read-only and isolated executors can inspect the shared checkout with read-only Git commands, including `git -C <shared> worktree list` and `git -C <shared> status --porcelain -- <paths>`. This lets an executor check that it left the shared paths untouched. Queries such as `merge-base --is-ancestor`, `grep`, `for-each-ref`, `show-ref` and `ls-remote` also pass. Commands with write forms stay restricted to queries: `config --get/--get-all/--list`, `tag --list/--contains/--points-at`, `stash list/show`, `reflog show` and `remote -v/show/get-url`. Git mutations against that checkout still refuse. The refusal points to the `read-only-git.ts` allowlist.
 
 ## Completed review decisions
 
@@ -97,6 +97,12 @@ When Quality Gate is registered for the project, integration captures the pinned
 3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default. Integration keeps that recorded target through submission and delivery; a group with different targets stops before changing either branch.
 5. When a ticket is ready, ask Claude to integrate it if its checks pass. Independent review is required only for a contract-named seam the check cannot exercise or a required high-stakes review. Multiple review lenses need distinct named risks; wave count alone adds no review.
+
+The merged-tree gate can take a while. The board server runs it in a separate delivery process, so the board
+stays usable for every other ticket meanwhile, and Claude Code gets progress updates instead of timing out. If
+the call is abandoned anyway, the delivery still finishes and records itself: `pulse` on the ticket shows an
+`integration` block with the state (`running`, `delivered`, `rolled_back`, `rollback_failed` or `refused`),
+the gate phase and current test file, and the gate log path.
 
 Each ticket carries a focused check that decides whether its work is ready. Claude records that check against
 the final clean committed candidate once and reports what passed, failed, or needs your decision,

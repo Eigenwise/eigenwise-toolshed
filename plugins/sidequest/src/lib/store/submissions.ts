@@ -19,7 +19,7 @@ const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require
 const { stillSpawnsInsideItsWrite } = require('../db');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
-import { runImportingIntegrationTests } from '../integration-tests.js';
+import { beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
@@ -933,13 +933,16 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   // that worktree never held.
   const project = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
   const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
-  const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
-    cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
-    timeoutMilliseconds,
-    logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
-    outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
-    environment,
-  });
+  const verify = (environment: NodeJS.ProcessEnv) => {
+    reportIntegrationProgress('pinned verifier', requirement.command);
+    return runProcessVerification(requirement, {
+      cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
+      timeoutMilliseconds,
+      logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
+      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+      environment,
+    });
+  };
   const participants = opts?.qualityTickets || [ticket];
   const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
   const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
@@ -1436,6 +1439,19 @@ function deliveryLockHolder(slug: any, ticket: any, refs: string) {
     logPath: integrationVerifyLogPath(slug, ticket),
     startedAt: new Date().toISOString(),
   };
+}
+
+// Runs inside the delivery lock, so at most one progress record is active per process.
+function withIntegrationProgress<Result extends { ok?: boolean; reason?: unknown }>(slug: string | undefined, refs: string[], holder: { ticket: string; logPath: string }, deliver: () => Result): Result {
+  beginIntegrationProgress(refs.map((ref) => integrationProgressPath(projectDir(slug), ref)), holder.ticket, holder.logPath);
+  let outcome: { ok?: boolean; reason?: unknown } = { ok: false, reason: 'integration_error' };
+  try {
+    const result = deliver();
+    outcome = result;
+    return result;
+  } finally {
+    finishIntegrationProgress(outcome);
+  }
 }
 
 function deliveryInProgress(ticket: any, lock: string) {
@@ -2507,8 +2523,8 @@ function integrateUnderDeliveryLease(slug: string, idOrRef: string, opts: { inte
   const lockLease = acquireLock(lock, { wait: false, holder });
   if (!lockLease) return deliveryInProgress(ticket, lock);
   try {
-    return withIntegrationCheckout(slug, readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () =>
-      deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath }))));
+    return withIntegrationProgress(slug, [String(ticket.ref)], holder, () => withIntegrationCheckout(slug, readMeta(slug).path, ticketIntegrationTarget(slug, ticket).branch, () =>
+      deliverUnderCompositionLocks(slug, ticket, () => bounceFailedLaneRun(slug, integrateSubmissionUnlocked(slug, idOrRef, { ...opts, verifyLogPath: holder.logPath })))));
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
@@ -2664,13 +2680,19 @@ function deliverGitWaveUnderLease(slug: string | undefined, assembled: Assembled
   const lockLease = acquireLock(lock, { wait: false, holder });
   if (!lockLease) return deliveryInProgress(assembled.tickets[0], lock);
   try {
-    return withIntegrationCheckout(slug, repo, target.branch, (checkout) =>
-      deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath: holder.logPath }, checkout, target));
-  } catch (error: any) {
-    return { ok: false, reason: 'wave_delivery_error', tickets: assembled.tickets, message: integrationGitError(error) };
+    return withIntegrationProgress(slug, assembled.participantRefs, holder, () => deliverLockedGitWaveCheckout(slug, assembled, opts, repo, target, holder.logPath));
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
+  }
+}
+
+function deliverLockedGitWaveCheckout(slug: string | undefined, assembled: AssembledWave, opts: WaveDeliveryOptions, repo: string, target: any, verifyLogPath: string) {
+  try {
+    return withIntegrationCheckout(slug, repo, target.branch, (checkout) =>
+      deliverLockedGitWave(slug, assembled, { ...opts, verifyLogPath }, checkout, target));
+  } catch (error: any) {
+    return { ok: false, reason: 'wave_delivery_error', tickets: assembled.tickets, message: integrationGitError(error) };
   }
 }
 
@@ -4132,6 +4154,7 @@ function verifyWaveGateCheckout(slug: any, waveId: string, requirement: any, che
       message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`,
     };
   }
+  reportIntegrationProgress('wave gate', requirement.command);
   const verification = runProcessVerification(requirement, {
     cwd: checkout.cwd,
     timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
