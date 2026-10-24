@@ -3083,3 +3083,44 @@ test('sweep removes a done agent worktree registered under an old linked checkou
     fs.rmSync(oldGroup, { recursive: true, force: true });
   }
 });
+
+test('sweep excludes a foreign checkout named by a stale registration', async () => {
+  const { repository, worktreeRoot } = repositoryFixture();
+  const { repository: other, worktreeRoot: otherRoot } = repositoryFixture();
+  const stale = createAgentWorktree(repository, worktreeRoot, 'stale-foreign');
+  const foreign = createAgentWorktree(other, otherRoot, 'foreign-checkout');
+  const registration = path.join(repository, '.git', 'worktrees', 'agent-stale-foreign', 'gitdir');
+  fs.writeFileSync(registration, path.join(foreign, '.git').split(path.sep).join('/') + os.EOL);
+  try {
+    assert.ok(registeredWorktreePaths(repository).includes(worktrees.canonicalPath(foreign)), 'the stale registration lists another repository checkout');
+    const result = await worktrees.sweep(repository, [], { minAgeMs: 0, integrationTarget: localMainTarget });
+    assert.equal(result.entries.length, 0, 'a foreign common directory never becomes an ordinary candidate');
+    assert.equal(fs.existsSync(foreign), true, 'the foreign checkout stays untouched');
+  } finally {
+    fs.writeFileSync(registration, path.join(stale, '.git').split(path.sep).join('/') + os.EOL);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  }
+});
+
+test('sweep excludes an unrepaired park through a quarantine path alias', { skip: process.platform !== 'win32' }, async () => {
+  const { repository } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-park-alias-'));
+  const alias = path.join(repository, 'quarantine-alias');
+  const parked = parkInQuarantine(repository, quarantineDir, 'alias-park');
+  const registration = path.join(repository, '.git', 'worktrees', 'agent-alias-park', 'gitdir');
+  const originalRegistration = fs.readFileSync(registration, 'utf8');
+  fs.symlinkSync(quarantineDir, alias, 'junction');
+  fs.chmodSync(registration, 0o444);
+  try {
+    const result = await worktrees.sweep(repository, [], { minAgeMs: 0, integrationTarget: localMainTarget, quarantineDir: alias });
+    assert.equal(result.entries.length, 0, 'an unrepaired park stays outside ordinary candidates across path aliases');
+    assert.equal(fs.readFileSync(registration, 'utf8'), originalRegistration, 'native repair could not rewrite the registration to the alias spelling');
+    assert.ok(registeredWorktreePaths(repository).includes(worktrees.canonicalPath(parked)), 'the park keeps its original registration');
+  } finally {
+    fs.chmodSync(registration, 0o644);
+    fs.unlinkSync(alias);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
