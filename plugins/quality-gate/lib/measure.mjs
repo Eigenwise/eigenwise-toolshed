@@ -18,7 +18,7 @@ export function gateVerdict(changedMetrics) {
   const enforced = enforcedMetrics(changedMetrics);
   return {
     failures: enforced.filter(measuredFailure).map(formatMetric),
-    unverified: enforced.filter((metric) => metric.unverified || metric.branches?.some((branch) => branch.unverified)),
+    unverified: enforced.filter((metric) => hasOpenCoverageQuestion(metric) || metric.branches?.some((branch) => branch.unverified)),
   };
 }
 
@@ -30,6 +30,18 @@ function measuredFailure(metric) {
 
 export function crapScore(complexity, coverage) {
   return complexity ** 2 * (1 - coverage) ** 3 + complexity;
+}
+
+export function passesRegardlessOfCoverage(metric) {
+  return !metric.informational && Number.isFinite(metric.complexity) && metric.complexity > 0 && crapScore(metric.complexity, 0) < THRESHOLD;
+}
+
+export function hasOpenCoverageQuestion(metric) {
+  return Boolean(metric.unverified) && !passesRegardlessOfCoverage(metric);
+}
+
+export function withCoverageBound(metric) {
+  return metric.unverified && passesRegardlessOfCoverage(metric) ? { ...metric, boundVerdict: 'pass' } : metric;
 }
 
 export async function readOutput(outputPath, coverageScripts, needsFunctions, { projectRoot, analyzer, text }) {
@@ -157,7 +169,7 @@ async function measureWithAnalyzer(analyzer, { projectRoot, base, coverageDirect
     if (result.status !== 0) throw new Error(result.stderr.trim());
     return analyzer.collectFunctions(result.stdout, relativePath);
   };
-  const changedMetrics = await changedMetricsAgainstBase(metrics, relativePaths, base, readBaseline);
+  const changedMetrics = (await changedMetricsAgainstBase(metrics, relativePaths, base, readBaseline)).map(withCoverageBound);
   return { metrics, changedMetrics, ...gateVerdict(changedMetrics), summary: branchSummary(changedMetrics) };
 }
 
