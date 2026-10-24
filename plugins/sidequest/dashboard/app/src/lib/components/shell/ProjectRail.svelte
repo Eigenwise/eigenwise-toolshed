@@ -12,17 +12,13 @@
   const activeProjects = $derived(board.raw?.projects ?? []);
   const archivedCount = $derived(board.archivedTickets.filter((ticket) => board.selectedProject === 'all' || projectFor(ticket) === board.selectedProject).length);
 
-  function projectTickets(project: Project) {
-    return board.raw?.tickets.filter((ticket) => projectFor(ticket) === project.slug) ?? [];
-  }
-
+  // The ticket feed only holds the selected board, so every board's counts come from /api/projects.
   function counts(project?: Project) {
-    const tickets = project ? projectTickets(project) : board.raw?.tickets ?? [];
-    return {
-      todo: tickets.filter((ticket) => ticket.status === 'todo').length,
-      doing: tickets.filter((ticket) => ticket.status === 'doing').length,
-      done: tickets.filter((ticket) => ticket.status === 'done').length
-    };
+    return (project ? [project] : activeProjects).reduce((total, item) => ({
+      todo: total.todo + (item.counts?.todo ?? 0),
+      doing: total.doing + (item.counts?.doing ?? 0),
+      done: total.done + (item.counts?.done ?? 0)
+    }), { todo: 0, doing: 0, done: 0 });
   }
 
   function openCount(project?: Project) {
