@@ -2445,7 +2445,7 @@ function createDispatch(dependencies) {
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
     if (Object.values(request).some((value) => !value)) {
-      return { ok: false, reason: "missing_recovery_facts", message: "Live-claim recovery requires claimHolder, executor, worktree, recoveryEvidence, and a connected session." };
+      return { ok: false, reason: "missing_recovery_facts", message: "Live-claim recovery requires claimHolder, worktree, recoveryEvidence, and a connected session." };
     }
     const lockKeys = recoveryLockKeys(slug, found, request.worktree);
     return withTicketLocks(lockKeys, () => recoverLockedLiveClaim(slug, found.id, idOrRef, request, lockKeys));

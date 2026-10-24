@@ -971,11 +971,21 @@ ${verify.outputTail}` : null
       delivery: { state: "delivered", revision, verification }
     };
   }
+  function archiveIntegrationAttempt(current, patch) {
+    const { attempts = [], ...attempt } = current;
+    return { ...patch, attempts: [...Array.isArray(attempts) ? attempts : [], attempt] };
+  }
+  function nextIntegrationRecord(current, patch) {
+    if (!current) return { ...patch };
+    if (patch.outcome === "pending") return archiveIntegrationAttempt(current, patch);
+    if (current.outcome === "failed" && patch.deliveredAt) return archiveIntegrationAttempt(current, patch);
+    return { ...current, ...patch };
+  }
   function updateSubmissionIntegration(slug, id, patch, submissionPatch, resolvedRecordingBranch) {
     return withTicketLock(slug, id, () => {
       const ticket = getTicket(slug, id);
       if (!ticket || !ticket.submission) return { ok: false, reason: "submission_required", ticket };
-      ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
+      ticket.submission.integration = nextIntegrationRecord(ticket.submission.integration, patch);
       if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch);
