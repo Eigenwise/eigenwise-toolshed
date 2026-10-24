@@ -69,7 +69,7 @@ function hasReservedRouteMarker(messages) {
   return Array.isArray(messages) && messages.flatMap(userText).some(reservedMarker);
 }
 
-function localConfigurationReady(status) {
+function localReadinessPrerequisites(status) {
   return status.configuration === 'valid' && ['ready', 'refresh_required'].includes(status.auth) && status.project === 'configured';
 }
 
@@ -80,7 +80,9 @@ function validStatus(status) {
     ['missing', 'invalid', 'unreadable', 'ready', 'refresh_required', 'login_required'].includes(status.auth),
     ['missing', 'configured'].includes(status.project),
     typeof status.configuration_ready === 'boolean', status.live_verified === false,
-    status.configuration_ready === localConfigurationReady(status),
+    // False can reflect required application configuration omitted from this
+    // redacted status. Enum fields alone never establish native readiness.
+    !status.configuration_ready || localReadinessPrerequisites(status),
   ];
   return checks.every(Boolean);
 }
@@ -148,6 +150,7 @@ const STATE_MESSAGES = Object.freeze({
   'transport-error': 'Antigravity serving capability metadata is unavailable; readiness is unconfirmed.',
   disabled: 'Antigravity inference is explicitly disabled. Enable it in the native proxy configuration; gateway onboarding does not enable it.',
   'configuration-invalid': 'Antigravity local configuration is invalid. Inspect native auth status and configuration.',
+  'configuration-unready': 'Antigravity local configuration is not ready. Inspect native auth status and required application configuration; normal credential refresh remains provider-owned.',
   'auth-missing': 'Antigravity sign-in is required. Run auth antigravity login, then setup --provider antigravity.',
   'auth-invalid': 'Antigravity credentials are invalid. Run auth antigravity login in the intended profile.',
   'auth-unreadable': 'Antigravity credentials are unreadable. Inspect the intended native profile locally.',
@@ -158,9 +161,9 @@ const STATE_MESSAGES = Object.freeze({
 });
 
 function configurationState(status) {
-  if (status.configuration !== 'valid') return 'configuration-invalid';
   if (!['ready', 'refresh_required'].includes(status.auth)) return `auth-${status.auth}`;
-  return status.project === 'configured' ? 'ready' : 'project-missing';
+  if (status.project !== 'configured') return 'project-missing';
+  return status.configuration_ready ? 'ready' : 'configuration-unready';
 }
 
 function readinessState(snapshot, shimReady) {

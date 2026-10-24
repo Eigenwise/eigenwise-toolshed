@@ -48,6 +48,64 @@ test('aggregate usage retains safe request and project correlation without chang
   assert.equal(usage.createAggregateUsageEmitter({ environment: { CODEX_GATEWAY_USAGE_ENDPOINT: '0' } }).enabled, false);
 });
 
+test('aggregate telemetry defaults never expose unsafe model identifiers or project resolver errors', () => {
+  assert.equal(usage.safeModelId('gpt-6-astra'), 'gpt-6-astra');
+  assert.equal(usage.safeModelId('other/private-model'), null);
+  assert.equal(usage.safeModelId(undefined), null);
+  const capture = usage.createAggregateUsageCapture({ requestBodyBytes: 0,
+    resolveProjectId: () => { throw new Error('fixture private resolver failure'); } });
+  capture.setResponse(200, {});
+  capture.observeEvent({ type: 'message_delta', usage: { input_tokens: 1 } });
+  const record = capture.finish();
+  assert.equal(record.attributes.model, null);
+  assert.equal(record.attributes.requested_model, null);
+  assert.equal(record.projectId, null);
+  assert.equal(record.attributes.request_id_source, 'generated');
+  assert.doesNotMatch(JSON.stringify(record), /fixture private resolver failure/);
+});
+
+test('incomplete, empty and unobserved responses cannot fabricate aggregate token or limit events', () => {
+  const records = [];
+  const incomplete = usage.createAggregateUsageCapture({ emit: (record) => records.push(record) });
+  incomplete.setResponse(200, {});
+  incomplete.observeEvent({ type: 'message_delta', usage: { input_tokens: 7 } });
+  incomplete.setResponseComplete(false);
+  assert.equal(incomplete.finish(), null);
+  const empty = usage.createAggregateUsageCapture({ emit: (record) => records.push(record) });
+  empty.setResponse(200, {});
+  assert.equal(empty.finish(), null);
+  const failure = usage.createAggregateUsageCapture({ emit: (record) => records.push(record) });
+  failure.setResponse(503, {});
+  assert.equal(failure.finish(), null);
+  const noResponse = usage.createAggregateUsageCapture({ emit: (record) => records.push(record) });
+  assert.equal(noResponse.finish(), null);
+  assert.deepEqual(records, []);
+});
+
+test('an explicit quota header can emit a limit signal without inventing token usage from a failed body', () => {
+  const capture = usage.createAggregateUsageCapture({});
+  capture.setResponse(429, { 'retry-after': '3' });
+  capture.setResponseComplete(false);
+  capture.observeEvent({ type: 'message_delta', usage: { input_tokens: 999 } });
+  const record = capture.finish();
+  assert.equal(record.eventName, 'gateway.limit.signal');
+  assert.equal(record.attributes.status_code, 429);
+  assert.equal(record.attributes.input_tokens, undefined);
+});
+
+test('disabled aggregate export remains disabled even if its caller completes a capture', (t) => {
+  let requests = 0;
+  t.mock.method(require('node:http'), 'request', () => { requests++; throw new Error('unexpected fixture export'); });
+  t.mock.method(require('node:https'), 'request', () => { requests++; throw new Error('unexpected fixture export'); });
+  const emitter = usage.createAggregateUsageEmitter({ environment: { CODEX_GATEWAY_USAGE_ENDPOINT: '0' } });
+  const capture = emitter.start({ requestBodyBytes: 0 });
+  capture.setResponse(200, {});
+  capture.observeEvent({ type: 'message_delta', usage: { output_tokens: 1 } });
+  assert.equal(capture.finish().eventName, 'gateway.token.usage');
+  assert.equal(emitter.enabled, false);
+  assert.equal(requests, 0);
+});
+
 test('active AGY telemetry uses existing consent and event names, exact wire bytes and canonical slash model', async (t) => {
   const logs = [];
   const spans = [];
@@ -61,7 +119,8 @@ test('active AGY telemetry uses existing consent and event names, exact wire byt
     CODEX_GATEWAY_TELEMETRY_ENDPOINT: `http://127.0.0.1:${collector.port}/v1/traces`, CLAUDE_CODE_PROPAGATE_TRACEPARENT: '1' } });
   const response = await request(gateway.port, { model: picker(), messages: [{ role: 'user', content: carrier() }] }, { 'x-claude-code-session-id': 'aggregate-session' });
   assert.equal(response.status, 200);
-  await waitFor(() => logs.length && spans.length);
+  await waitFor(() => logs.length);
+  await waitFor(() => spans.length);
   const logRecords = logs.flatMap((payload) => payload.resourceLogs.flatMap((resource) => resource.scopeLogs.flatMap((scope) => scope.logRecords)));
   assert.equal(logRecords.length, 1);
   const attributes = Object.fromEntries(logRecords[0].attributes.map(({ key, value }) => [key, value.stringValue ?? Number(value.intValue)]));

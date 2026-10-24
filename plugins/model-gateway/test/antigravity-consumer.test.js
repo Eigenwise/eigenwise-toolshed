@@ -55,7 +55,7 @@ test('committed Sidequest generic consumer keeps all exact AGY picker ids, pinne
 });
 
 test('schema4 safe AGY readiness state strings hide unready rows in the actual generic consumer', () => {
-  for (const state of ['disabled', 'auth-missing', 'auth-invalid', 'auth-unreadable', 'configuration-invalid', 'project-missing', 'unknown-version', 'transport-error']) {
+  for (const state of ['disabled', 'auth-missing', 'auth-invalid', 'auth-unreadable', 'configuration-invalid', 'configuration-unready', 'project-missing', 'unknown-version', 'transport-error']) {
     publish({ ready: false, state, message: `Antigravity ${state}; local only.` });
     assert.deepEqual(discovery.discoverExternalModels(), []);
     assert.deepEqual(discovery.providerReadiness('antigravity'), { provider: 'antigravity', ready: false, state, message: `Antigravity ${state}; local only.` });

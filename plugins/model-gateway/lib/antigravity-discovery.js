@@ -8,15 +8,16 @@ const { inspectCapabilities, unconfirmed, readiness, isReservedModel, pickerId }
 
 // Read-only metadata probes are independent of generation and bounded by elapsed
 // time and bytes. No version check, refresh, project lookup or state write occurs.
+function appendBoundedChunk(state, chunk, maximumBytes) {
+  state.bytes += chunk.length;
+  if (state.bytes > maximumBytes) throw new Error('Antigravity response exceeds its byte budget');
+  state.chunks.push(chunk);
+}
+
 async function readBoundedBody(response, maximumBytes) {
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of response) {
-    bytes += chunk.length;
-    if (bytes > maximumBytes) throw new Error('Antigravity response exceeds its byte budget');
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks, bytes);
+  const state = { chunks: [], bytes: 0 };
+  for await (const chunk of response) appendBoundedChunk(state, chunk, maximumBytes);
+  return Buffer.concat(state.chunks, state.bytes);
 }
 
 function openResponse(url, { body = null, ...options } = {}) {

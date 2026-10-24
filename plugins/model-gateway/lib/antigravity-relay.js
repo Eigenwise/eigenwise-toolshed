@@ -64,16 +64,16 @@ function dataLines(frame) {
 
 function rewrittenFrame(frame, data) {
   const values = data.split('\n');
+  const lines = frame.split(/(\r?\n)/);
+  if (lines.filter((line) => line.startsWith('data:')).length !== values.length) {
+    throw new Error('Antigravity identity rewrite changed SSE data-line structure');
+  }
   let index = 0;
-  const rewritten = frame.split(/(\r?\n)/).map((line) => {
+  return lines.map((line) => {
     if (!line.startsWith('data:')) return line;
-    const value = values[index++];
-    if (value === undefined) throw new Error('Antigravity identity rewrite changed SSE data-line structure');
     const prefix = line.startsWith('data: ') ? 'data: ' : 'data:';
-    return prefix + value;
+    return prefix + values[index++];
   }).join('');
-  if (index !== values.length) throw new Error('Antigravity identity rewrite changed SSE data-line structure');
-  return rewritten;
 }
 
 function noteNamedError(state, text) {

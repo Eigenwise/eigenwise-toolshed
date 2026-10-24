@@ -6,7 +6,8 @@ const { jsonTokens } = require('./json-model-identity.js');
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const SETTINGS = Object.freeze({ baseUrl: 'CCP_ANTIGRAVITY_BASE_URL', clientId: 'CCP_ANTIGRAVITY_CLIENT_ID',
-  clientSecret: 'CCP_ANTIGRAVITY_CLIENT_SECRET', projectId: 'CCP_ANTIGRAVITY_PROJECT_ID' });
+  clientSecret: 'CCP_ANTIGRAVITY_CLIENT_SECRET', projectId: 'CCP_ANTIGRAVITY_PROJECT_ID',
+  userAgent: 'CCP_ANTIGRAVITY_USER_AGENT' });
 function indeterminate() { return new Error('Antigravity configuration intent is indeterminate; installed binary and services were left unchanged. Inspect the native configuration locally before updating.'); }
 
 function configPath(environment, cwd) {
@@ -75,13 +76,23 @@ function assertOrigin(value) {
   if (![url.protocol === 'https:', url.hostname !== '', url.pathname === '/', !url.username, !url.password, !url.search, !url.hash].every(Boolean)) throw indeterminate();
 }
 
+function assertUserAgent(value) {
+  if (!/^[\x20-\x7e]+$/.test(value) || value.trim() !== value) throw indeterminate();
+}
+
 function assertSetting(key, value) {
   if (value === undefined) return;
   if (!validSetting(value)) throw indeterminate();
   if (key === 'baseUrl') assertOrigin(value);
+  if (key === 'userAgent') assertUserAgent(value);
+}
+
+function assertFileUserAgent(section) {
+  if (Object.hasOwn(section, 'userAgent') && typeof section.userAgent !== 'string') throw indeterminate();
 }
 
 function assertSettings(section, environment) {
+  assertFileUserAgent(section);
   for (const [key, variable] of Object.entries(SETTINGS)) assertSetting(key, environment[variable] ?? section[key]);
 }
 

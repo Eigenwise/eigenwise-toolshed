@@ -13,14 +13,55 @@ const { fixture, request, waitFor, tiers, picker, native, envelope, capability }
 async function models(port) { return JSON.parse((await request(port, null, {}, '/v1/models', 'GET')).body).data; }
 function agyIds(rows) { return rows.filter((row) => row.id.startsWith('claude-antigravity-')).map((row) => row.id); }
 
+test('bounded capability reads preserve complete bytes and reject over-budget or failed streams', async () => {
+  const { Readable } = require('node:stream');
+  const { readBoundedBody } = require('../lib/antigravity-discovery.js');
+  assert.equal((await readBoundedBody(Readable.from([Buffer.from('a'), Buffer.from('bc')]), 3)).toString(), 'abc');
+  assert.equal((await readBoundedBody(Readable.from([]), 0)).length, 0);
+  await assert.rejects(readBoundedBody(Readable.from([Buffer.from('abc')]), 2), /byte budget/);
+  async function* failed() { yield Buffer.from('a'); throw new Error('fixture body failed'); }
+  await assert.rejects(readBoundedBody(Readable.from(failed()), 2), /fixture body failed/);
+});
+
+test('fixture polling preserves its successful value and never calls a check after an expired deadline', async () => {
+  let calls = 0;
+  assert.equal(await waitFor(() => { calls++; return calls === 2 ? 'ready' : false; }, 1000), 'ready');
+  assert.equal(calls, 2);
+  let expiredCalled = false;
+  await assert.rejects(waitFor(() => { expiredCalled = true; return true; }, 0), /fixture condition timed out/);
+  assert.equal(expiredCalled, false);
+});
+
+test('unconfirmed reconciliation retains only missing native rows without duplicating current rows', () => {
+  const { reconcileCatalog } = require('../lib/antigravity-discovery.js');
+  const existing = { schemaVersion: 4, models: [
+    { id: 'claude-gpt-6-astra[1m]', provider: 'codex' },
+    { id: picker('low'), provider: 'antigravity' }, { id: picker('high'), provider: 'antigravity' },
+  ] };
+  const catalog = { models: [{ id: picker('high'), provider: 'antigravity' }], providers: {} };
+  const result = reconcileCatalog(existing, catalog, { authoritative: false, state: 'transport-error' });
+  assert.deepEqual(result.catalog.models.map((row) => row.id), [picker('high'), picker('low')]);
+  assert.equal(result.catalog.providers.antigravity.ready, false);
+  assert.equal(existing.models.length, 3);
+});
+
 test('native exact listed IDs become picker rows; AGY-only discovery is not a Codex fallback', async (t) => {
   const gateway = await fixture(t);
-  const rows = await waitFor(async () => { const rows = await models(gateway.port); return agyIds(rows).length === 3 && rows; });
+  await waitFor(async () => agyIds(await models(gateway.port)).length === 3);
+  const rows = await models(gateway.port);
   assert.deepEqual(agyIds(rows), tiers.map(picker));
   assert.ok(rows.every((row) => !row.id.startsWith('claude-gpt-')));
   const health = JSON.parse((await request(gateway.port, null, {}, '/healthz', 'GET')).body);
   assert.equal(health.catalog, 'proxy');
   assert.ok(gateway.state.queries.includes('/v1/models?include_capabilities=true'));
+});
+
+test('native capability hints without an authoritative model list cannot invent picker rows', async (t) => {
+  const gateway = await fixture(t, { caps: { capabilities: envelope().capabilities } });
+  await waitFor(() => gateway.state.queries.length >= 2);
+  assert.deepEqual(agyIds(await models(gateway.port)), []);
+  assert.ok(gateway.state.queries.every((query) => query === '/v1/models'));
+  assert.equal(gateway.state.attempts.length, 0);
 });
 
 test('capability query is optional for ordinary default discovery, never invented by models.json', async (t) => {

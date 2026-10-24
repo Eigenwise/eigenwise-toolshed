@@ -9,6 +9,7 @@ const home = isolateInProcessGatewayEnvironment(test);
 const gateway = require('../lib/commands.js');
 const { PROXY_BIN, BIN_DIR } = require('../lib/runtime.js');
 const { ONBOARDING_PATH, readOnboarding } = require('../lib/onboarding.js');
+const { intentionallyStopped, recordIntentionalStop, resumeIntentionalStop } = require('../lib/lifecycle-lock.js');
 const { capability } = require('./fixtures/antigravity.js');
 const noop = () => {};
 const candidateReport = () => ({ status: 0, stdout: JSON.stringify({ schema_version: 1, provider: 'antigravity', ...capability({ enabled: false }) }) });
@@ -42,6 +43,7 @@ test('setup extraction and failed stages operate only on owned temporary files',
   } });
   assert.equal(fs.readFileSync(file, 'utf8'), 'fixture-binary');
   assert.throws(() => gateway.extractProxyCandidate(stage(), 'archive', Buffer.alloc(0), { run: () => ({ status: 1, stderr: 'fixture extraction failed' }) }), /extract failed/);
+  assert.throws(() => gateway.extractProxyCandidate(stage(), 'archive', Buffer.alloc(0), { run: () => ({ status: 7 }) }), /extract failed: 7/);
   assert.throws(() => gateway.extractProxyCandidate(stage(), 'archive', Buffer.alloc(0), { run: () => ({ status: 0 }) }), /not found/);
   const staged = await gateway.stageLatestProxy({ download: async () => Buffer.alloc(0), extract: (directory) => {
     const file = path.join(directory, path.basename(PROXY_BIN)); fs.writeFileSync(file, 'fake'); return file;
@@ -103,6 +105,17 @@ test('setup restart orchestration retains handoff, unchanged, failed and still-s
   await assert.rejects(gateway.restartSetupShim(false, { supervisor: async () => null, worker: async () => ({ ok: false, reason: 'fixture' }) }), /worker.*fixture/);
 });
 
+test('pending proxy restart diagnostics preserve unknown versions without inventing native capability', async () => {
+  const lines = [];
+  const candidate = { proxyChanged: true, currentVersion: null, stagedVersion: null };
+  const result = await gateway.restartSetupProxy(candidate, {
+    restart: async ({ previousVersion }) => { assert.equal(previousVersion, null); return false; },
+    report: (line) => lines.push(line),
+  });
+  assert.equal(result, false);
+  assert.match(lines[0], /on disk: unknown.*serving: unknown/);
+});
+
 test('startup after install reports bounded starts without claiming that still-starting is ready', async () => {
   const activation = { handoff: true, supervisorRestart: null };
   assert.equal(await gateway.startAfterSetup(activation, { start: async (options) => { assert.equal(options.preserveRunningSupervisor, true); return { ok: true }; } }), true);
@@ -154,4 +167,29 @@ test('setup cleans only its staged candidate on compatibility refusal and never 
     start: async () => calls.push('start'), finish: async () => calls.push('wire') }), /refused candidate/);
   assert.equal(fs.existsSync(directory), false);
   assert.deepEqual(calls, []);
+});
+
+test('maintenance setup installs its candidate but preserves an intentional stop without starting or wiring', async (t) => {
+  const directory = stage();
+  const calls = [];
+  recordIntentionalStop();
+  t.after(resumeIntentionalStop);
+  await gateway.setup({ selection: { provider: 'antigravity', preserveWiring: true }, requires: async () => true,
+    stage: async () => ({ stage: directory }), activate: async () => { calls.push('install'); return { handoff: false }; },
+    start: async () => { calls.push('start'); return true; }, finish: async () => calls.push('wire') });
+  assert.deepEqual(calls, ['install']);
+  assert.equal(intentionallyStopped(), true);
+  assert.equal(fs.existsSync(directory), false);
+});
+
+test('setup defers wiring until startup is ready and still cleans its installed staging directory', async () => {
+  const directory = stage();
+  const calls = [];
+  assert.equal(intentionallyStopped(), false);
+  await gateway.setup({ selection: { provider: 'antigravity', preserveWiring: false }, requires: async () => true,
+    stage: async () => ({ stage: directory }), activate: async () => { calls.push('install'); return { handoff: false }; },
+    start: async (activation) => { assert.deepEqual(activation, { handoff: false, resumeIntent: true }); calls.push('start'); return false; },
+    finish: async () => calls.push('wire') });
+  assert.deepEqual(calls, ['install', 'start']);
+  assert.equal(fs.existsSync(directory), false);
 });

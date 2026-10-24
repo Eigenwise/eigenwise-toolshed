@@ -147,9 +147,12 @@ const USAGE = `usage: model-gateway.js <command>
                    Antigravity requires compatible native support, explicit enablement and local auth/project configuration.
                    Required native compatibility is checked on the staged candidate before replacement or restart.
   login [--device] run the ChatGPT OAuth flow (--device for headless device-code)
-  auth antigravity login|status [--json]|logout
+  auth antigravity login [--manual]|status [--json]|logout
                    native Antigravity auth only, available while inference is disabled; no device flow.
+                   --manual keeps native terminal input/output for hosted completion and local code pasteback.
                    Status reports local readiness, not Google access; exit 0 can mean unready.
+                   Read configuration_ready; refresh_required alone does not require a new login.
+                   live_verified=false is the local inspector's fixed value, not a login failure.
                    Use a fresh session for Antigravity model, tier, selector spelling or profile changes.
   start | stop     start/stop the proxy + shim (detached, logs in ${LOGS})
   ensure [--quiet] maintain installed wiring and start unless intentionally stopped
@@ -480,11 +483,16 @@ function installSetupCandidate(candidate, selection) {
   else log('model-gateway: proxy unchanged; keeping its authenticated process running.');
 }
 
+function pendingProxyRestartMessage(candidate, previousVersion) {
+  const installedVersion = proxyVersion(candidate.stagedVersion) || 'unknown';
+  return `proxy on disk: ${installedVersion}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``;
+}
+
 async function restartSetupProxy(candidate, { restart = restartProxyForVersionChange, report = log } = {}) {
   if (!candidate.proxyChanged || intentionallyStopped()) return false;
   const previousVersion = proxyVersion(candidate.currentVersion);
   const handoff = await restart({ previousVersion });
-  if (!handoff) report(`proxy on disk: ${proxyVersion(candidate.stagedVersion) || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
+  if (!handoff) report(pendingProxyRestartMessage(candidate, previousVersion));
   return handoff;
 }
 
@@ -2876,22 +2884,13 @@ function ensureMissingBinary(context, readiness) {
   noticeForUser(guidance); context.finish(0);
 }
 
-function ensureStartupFailure(context, result) {
-  if (context.quiet && result.waitCutShort) {
-    if (result.started?.includes('shim')) recordGatewayLifecycle('ensure-hook-wait-cut-short', { component: 'SessionStart', pid: process.pid, outcome: 'supervisor-started' });
-    const label = context.provider === 'antigravity' ? 'Antigravity' : 'Codex';
-    noticeForUser(`model-gateway is still starting; retry the ${label} model in a few seconds`, { toStderr: true });
-    context.finish(0); return;
-  }
-  noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${resolveStableCommandPath()}" doctor\` to see which part is down.`, { toStderr: true });
-  context.finish(1);
-}
-
 async function startForEnsure(context) {
   const initial = await getGatewayReadiness({ provider: context.provider });
   if (!initial.checks.proxyBinary) return ensureMissingBinary(context, initial);
   const result = await ensureWiredGateway(context.wired, context.quiet);
-  if (!result.ok) return ensureStartupFailure(context, result);
+  if (!result.ok) return onboarding.reportStartupFailure(context, result, {
+    notice: noticeForUser, record: recordGatewayLifecycle, command: resolveStableCommandPath,
+  });
   return getGatewayReadiness({ provider: context.provider });
 }
 

@@ -1131,7 +1131,7 @@ function listenOnUnixSocket(server, socketPath, onBindFailure) {
 }
 
 function warnShellOnlyWorker(settingsWiring) {
-  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring) {
+  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring?.file) {
     console.error('model-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through local .claude/settings.local.json or global settings so background sessions stay metered');
   }
 }
@@ -2176,7 +2176,7 @@ function runWorker() {
     const health = { ok: true, version: PLUGIN_VERSION, models: modelCache.data.length, catalog: modelCache.source,
       served: counters, draining, activeRequests, compat: { ...compatState },
       compaction: { streamGuard: COMPACT_STREAM_GUARD, retries: COMPACT_STREAM_RETRIES, maxBufferedBytes: COMPACT_STREAM_MAX_BYTES },
-      usage: { enabled: usageEmitter.enabled, endpoint: usageEmitter.endpoint, maxResponseBytes: usageEmitter.maxResponseBytes, settingsLevelBaseUrl: !!settingsWiring } };
+      usage: { enabled: usageEmitter.enabled, endpoint: usageEmitter.endpoint, maxResponseBytes: usageEmitter.maxResponseBytes, settingsLevelBaseUrl: !!settingsWiring?.file } };
     return { ...health, codexReadiness: healthzCodexReadiness(latestProxyAndAuthCheck(), health) };
   }
 

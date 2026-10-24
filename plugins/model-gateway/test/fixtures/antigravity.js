@@ -56,12 +56,13 @@ function request(port, body, headers = {}, pathname = '/v1/messages', method = '
 }
 async function waitFor(check, timeout = 5000) {
   const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const value = await check();
-    if (value) return value;
-    await pause(20);
+  let value;
+  while (Date.now() < deadline && !value) {
+    value = await check();
+    if (!value) await pause(20);
   }
-  throw new Error('fixture condition timed out');
+  if (!value) throw new Error('fixture condition timed out');
+  return value;
 }
 async function fixture(t, { caps = envelope(), reply = null, setup = null, environment = {} } = {}) {
   const state = { caps, attempts: [], anthropic: [], queries: [], reply };

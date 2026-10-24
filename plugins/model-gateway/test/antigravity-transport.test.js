@@ -16,10 +16,9 @@ const { controlRequestHeaders } = require('../lib/control-auth.js');
 const { createShimRelay } = require('../lib/commands.js');
 const { LIMITS, transformSse, clientLifetime, isGeneration, forwardAntigravity } = require('../lib/antigravity-relay.js');
 const { replaceRequestModel } = require('../lib/antigravity-request.js');
-const { server, request, waitFor, fixture, picker, native, message, sse, stream } = require('./fixtures/antigravity.js');
+const { server, request, waitFor, fixture, picker, native, envelope, message, sse, stream } = require('./fixtures/antigravity.js');
 
-async function transformed(chunks, limits = LIMITS) {
-  const output = [];
+async function transformed(chunks, limits = LIMITS, output = []) {
   for await (const chunk of transformSse(Readable.from(chunks), { requestedModel: picker(), limits })) output.push(chunk);
   return Buffer.concat(output).toString();
 }
@@ -31,16 +30,19 @@ function parsedSseEvent(frame) {
 
 function consumeClientFrames(state, chunk) {
   state.pending += state.decoder.write(chunk);
-  let boundary;
-  while ((boundary = /\r?\n\r?\n/.exec(state.pending))) {
+  const separator = /\r?\n\r?\n/;
+  let boundary = separator.exec(state.pending);
+  let stopped = false;
+  while (boundary) {
     const frame = state.pending.slice(0, boundary.index);
     state.pending = state.pending.slice(boundary.index + boundary[0].length);
-    if (parsedSseEvent(frame)?.type === 'message_stop') return true;
+    stopped = parsedSseEvent(frame)?.type === 'message_stop';
+    boundary = stopped ? null : separator.exec(state.pending);
   }
-  return false;
+  return stopped;
 }
 
-function terminalFinishingClient(port) {
+function terminalFinishingClient(port, { cancelOnData = false } = {}) {
   return new Promise((resolve) => {
     const state = { pending: '', decoder: new StringDecoder('utf8') };
     let settled = false;
@@ -50,6 +52,7 @@ function terminalFinishingClient(port) {
     };
     const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages', headers: { 'content-type': 'application/json' } }, (res) => {
       res.on('data', (chunk) => {
+        if (cancelOnData) { finish(false); req.destroy(); return; }
         if (!consumeClientFrames(state, chunk)) return;
         finish(true); res.destroy();
       });
@@ -61,6 +64,270 @@ function terminalFinishingClient(port) {
     req.end(JSON.stringify({ model: picker(), messages: [], stream: true }));
   });
 }
+
+test('terminal frame parsing preserves partial frames and leaves the post-terminal tail untouched', () => {
+  const state = { pending: '', decoder: new StringDecoder('utf8') };
+  const wire = ': metadata\n\n' + sse({ type: 'ping' }) + sse({ type: 'message_stop' }) + sse({ type: 'ping', tail: true });
+  const boundary = wire.indexOf('message_stop') + 3;
+  assert.equal(consumeClientFrames(state, Buffer.from(wire.slice(0, boundary))), false);
+  assert.equal(consumeClientFrames(state, Buffer.from(wire.slice(boundary))), true);
+  assert.match(state.pending, /"tail":true/);
+  const malformed = { pending: '', decoder: new StringDecoder('utf8') };
+  assert.throws(() => consumeClientFrames(malformed, Buffer.from('data: malformed\n\n')), SyntaxError);
+});
+
+test('a terminal-finishing client accepts a clean native stream only after its real terminal reaches EOF', async (t) => {
+  const gateway = await fixture(t, { reply: (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(stream());
+  } });
+  assert.equal(await terminalFinishingClient(gateway.port), true);
+  assert.equal(gateway.state.attempts.length, 1);
+});
+
+test('mixed LF and CRLF SSE frame boundaries preserve exact native framing', async () => {
+  const input = sse({ type: 'message_start', message: message() })
+    + sse({ type: 'ping' }).replace(/\n/g, '\r\n') + sse({ type: 'message_stop' });
+  assert.equal(await transformed([Buffer.from(input)]), input.replace(`"model":"${native()}"`, `"model":"${picker()}"`));
+});
+
+test('already-cancelled client lifetimes abort immediately and release only their own listeners', () => {
+  for (const initial of [{ aborted: true, destroyed: false }, { aborted: false, destroyed: true }]) {
+    const req = Object.assign(new EventEmitter(), { aborted: initial.aborted });
+    const res = Object.assign(new EventEmitter(), { destroyed: initial.destroyed, writableFinished: false });
+    const lifetime = clientLifetime(req, res, 1000);
+    assert.equal(lifetime.signal.aborted, true);
+    assert.equal(lifetime.cancelled(), true);
+    req.emit('aborted');
+    lifetime.dispose();
+    assert.equal(req.listenerCount('aborted'), 0);
+    assert.equal(res.listenerCount('close'), 0);
+  }
+});
+
+function collectedResponse() {
+  const chunks = [];
+  const response = new Writable({ write(chunk, _encoding, done) { chunks.push(Buffer.from(chunk)); done(); } });
+  response.writeHead = (status, headers) => { response.status = status; response.headers = headers; response.headersSent = true; };
+  return { response, chunks };
+}
+
+function mockedWorkerHttp(finish) {
+  const calls = [];
+  return { calls, request(options, callback) {
+    const request = new EventEmitter();
+    request.end = (body) => { calls.push({ options, body }); queueMicrotask(() => finish(request, callback)); };
+    return request;
+  } };
+}
+
+for (const pathname of ['/v1/messages', '/v1/messages/count_tokens']) {
+  test(`an unavailable worker refuses ${pathname} without treating an undelivered request as worker failure`, async () => {
+    const { relayAntigravityWorker } = require('../lib/antigravity-supervisor.js');
+    const req = Object.assign(new EventEmitter(), { method: 'POST', url: pathname, headers: {}, aborted: false });
+    const { response, chunks } = collectedResponse();
+    let lost = 0;
+    await relayAntigravityWorker(req, response, JSON.stringify({ model: picker() }), {
+      getWorker: () => ({ fixture: true }), getWorkerPort: () => 0,
+      onWorkerRequestLost: () => { lost++; }, limits: { deadlineMs: 1000 },
+    });
+    assert.equal(response.status, 503);
+    assert.match(Buffer.concat(chunks).toString(), /Antigravity worker/);
+    assert.equal(lost, 0);
+  });
+}
+
+test('a reused worker socket records exactly one delivered failure without generation resend', async () => {
+  const { relayAntigravityWorker } = require('../lib/antigravity-supervisor.js');
+  const worker = { fixture: true };
+  const lost = [];
+  const httpClient = mockedWorkerHttp((request) => {
+    request.emit('socket', Object.assign(new EventEmitter(), { connecting: false }));
+    request.emit('error', new Error('fixture worker response lost'));
+  });
+  const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/v1/messages', headers: {}, aborted: false });
+  const { response } = collectedResponse();
+  await relayAntigravityWorker(req, response, JSON.stringify({ model: picker() }), {
+    getWorker: () => worker, getWorkerPort: () => 12345, httpClient,
+    onWorkerRequestLost: (_error, identity) => lost.push(identity), limits: { deadlineMs: 1000 },
+  });
+  assert.deepEqual(lost, [worker]);
+  assert.equal(httpClient.calls.length, 1);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers['x-should-retry'], 'false');
+});
+
+test('a worker response missing status fails closed at 502 while preserving count-token bytes', async () => {
+  const { relayAntigravityWorker } = require('../lib/antigravity-supervisor.js');
+  const upstream = Object.assign(Readable.from([Buffer.from('fixture bytes')]), { headers: {} });
+  const httpClient = mockedWorkerHttp((request, callback) => {
+    const socket = Object.assign(new EventEmitter(), { connecting: true });
+    request.emit('socket', socket); socket.emit('connect'); callback(upstream);
+  });
+  const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/v1/messages/count_tokens', headers: { host: 'untrusted.example' }, aborted: false });
+  const { response, chunks } = collectedResponse();
+  await relayAntigravityWorker(req, response, JSON.stringify({ model: picker() }), {
+    getWorker: () => ({ fixture: true }), getWorkerPort: () => 12345, httpClient, limits: { deadlineMs: 1000 },
+  });
+  assert.equal(response.status, 502);
+  assert.equal(Buffer.concat(chunks).toString(), 'fixture bytes');
+  assert.equal(response.headers['x-should-retry'], undefined);
+  assert.equal(httpClient.calls[0].options.headers.host, '127.0.0.1:12345');
+  assert.equal(httpClient.calls.length, 1);
+});
+
+test('standalone compatibility drain rejects missing control credentials and closes only its owned listeners', async (t) => {
+  const reservation = net.createServer();
+  await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
+  const compatPort = reservation.address().port;
+  await new Promise((resolve) => reservation.close(resolve));
+  assert.equal([18764, 18765, 18766].includes(compatPort), false);
+  const proxy = await server(t, (_req, res) => res.end(JSON.stringify(require('./fixtures/antigravity.js').envelope())));
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_PROXY_PORT: String(proxy.port), CODEX_GATEWAY_COMPAT_PORT: String(compatPort) });
+  require('node:fs').writeFileSync(environment.CODEX_GATEWAY_HOSTS_FILE, '127.0.0.1 api.anthropic.com\n');
+  const gateway = await startGateway(t, 'serve-worker', environment, { isolatedOverrides: { CODEX_GATEWAY_WORKER_PORT: '' } });
+  await waitFor(async () => JSON.parse((await request(gateway.port, null, {}, '/healthz', 'GET')).body).compat.port80Bound);
+  assert.equal((await request(gateway.port, {}, {}, '/drain')).status, 403);
+  assert.equal((await request(gateway.port, null, {}, '/healthz', 'GET')).status, 200);
+  const headers = { ...controlRequestHeaders(path.join(environment.HOME, '.claude', 'model-gateway', 'control-token')),
+    host: `api.anthropic.com:${compatPort}` };
+  const refusedCompat = await request(compatPort, {}, headers, '/drain');
+  assert.equal(refusedCompat.status, 403, 'compatibility listeners never authenticate lifecycle control');
+  const drained = await request(gateway.port, {}, controlRequestHeaders(path.join(environment.HOME, '.claude', 'model-gateway', 'control-token')), '/drain');
+  assert.equal(drained.status, 202);
+  assert.equal(JSON.parse(drained.body).draining, true);
+  await waitFor(() => gateway.child.exitCode === 0);
+});
+
+test('fault-injected parser metadata cannot invent passthrough body bytes', async (t) => {
+  const fs = require('node:fs');
+  const bodies = [];
+  const anthropic = await server(t, (req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => { bodies.push(Buffer.concat(chunks)); res.end(JSON.stringify({ type: 'message', model: 'claude-opus-5-5', content: [] })); });
+  });
+  const proxy = await server(t, (_req, res) => res.end(JSON.stringify(require('./fixtures/antigravity.js').envelope())));
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_PROXY_PORT: String(proxy.port),
+    CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropic.port}` });
+  const preload = path.join(environment.HOME, 'parser-metadata.cjs');
+  const adapter = path.resolve(__dirname, '..', 'lib', 'antigravity-request.js');
+  fs.writeFileSync(preload, `const api=require(${JSON.stringify(adapter)});const previous=api.parsePayload;api.parsePayload=(raw)=>raw===null?{model:'claude-opus-5-5',messages:[]}:previous(raw);\n`);
+  environment.NODE_OPTIONS = [process.env.NODE_OPTIONS, '--require=' + JSON.stringify(preload)].filter(Boolean).join(' ');
+  const gateway = await startGateway(t, 'serve-worker', environment);
+  const response = await request(gateway.port, undefined);
+  assert.equal(response.status, 200);
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].length, 0);
+});
+
+test('message-envelope rewriting rejects provider errors and preserves nested content identity', () => {
+  const { rewriteMessage } = require('../lib/antigravity-relay.js');
+  for (const value of [null, { type: 'error' }, { type: 'message', error: { message: 'fixture error' } }]) {
+    assert.throws(() => rewriteMessage(value, picker()), /invalid message envelope/);
+  }
+  const original = message();
+  const rewritten = rewriteMessage(original, picker());
+  assert.equal(rewritten.model, picker());
+  assert.equal(rewritten.content, original.content);
+  assert.equal(original.model, native());
+});
+
+for (const scenario of [{ headersSent: false, writes: [503], bodies: 1 }, { headersSent: true, writes: [], bodies: 0 }]) {
+  test(`native admission observer failure stays handled with headersSent=${scenario.headersSent}`, async (t) => {
+    const { handleDirect } = require('../lib/antigravity-request.js');
+    const queries = [];
+    const proxy = await server(t, (req, res) => { queries.push(req.url); res.end(JSON.stringify(require('./fixtures/antigravity.js').envelope())); });
+    const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/v1/messages', headers: {}, aborted: false });
+    const res = Object.assign(new EventEmitter(), { headersSent: scenario.headersSent, destroyed: false, writableFinished: false });
+    const writes = [];
+    const bodies = [];
+    res.writeHead = (code) => { writes.push(code); res.headersSent = true; };
+    res.end = (body) => { bodies.push(body); res.writableFinished = true; };
+    const payload = { model: picker(), messages: [] };
+    await handleDirect(req, res, JSON.stringify(payload), payload, { port: proxy.port, routeTelemetry: { setRoute() {} },
+      onAdmitted: () => { throw new Error('fixture observer fault'); } });
+    assert.deepEqual(writes, scenario.writes);
+    assert.equal(bodies.length, scenario.bodies);
+    assert.ok(bodies.every((body) => body.includes('No other provider was used.')));
+    assert.ok(bodies.every((body) => !body.includes('fixture observer fault')));
+    assert.deepEqual(queries, ['/v1/models?include_capabilities=true']);
+    assert.equal(req.listenerCount('aborted'), 0);
+    assert.equal(res.listenerCount('close'), 0);
+  });
+}
+
+test('a client cancelled before admission cannot send generation or emit a refusal to its closed response', async (t) => {
+  const { handleDirect } = require('../lib/antigravity-request.js');
+  let queries = 0;
+  const proxy = await server(t, (_req, res) => { queries++; res.end('{}'); });
+  const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/v1/messages', headers: {}, aborted: true });
+  const res = Object.assign(new EventEmitter(), { destroyed: false, writableFinished: false, headersSent: false });
+  const writes = [];
+  res.writeHead = () => writes.push('headers');
+  res.end = () => writes.push('body');
+  const payload = { model: picker(), messages: [] };
+  await handleDirect(req, res, JSON.stringify(payload), payload, { port: proxy.port, routeTelemetry: { setRoute() {} },
+    onAdmitted: () => writes.push('generation admitted') });
+  assert.deepEqual(writes, []);
+  assert.equal(queries, 0);
+  assert.equal(req.listenerCount('aborted'), 0);
+  assert.equal(res.listenerCount('close'), 0);
+});
+
+test('an invalid native status from a faulty transport cannot become a successful message', async (t) => {
+  const upstream = Object.assign(Readable.from([Buffer.from(JSON.stringify(message()))]), {
+    statusCode: 0, headers: { 'content-type': 'application/json' },
+  });
+  t.mock.method(http, 'request', (_url, _options, callback) => {
+    const outgoing = new EventEmitter();
+    outgoing.end = () => queueMicrotask(() => callback(upstream));
+    return outgoing;
+  });
+  const relay = await server(t, (req, res) => {
+    req.resume();
+    void forwardAntigravity(req, res, { port: 12345, body: Buffer.from(JSON.stringify({ model: native() })),
+      requestedModel: picker(), limits: { deadlineMs: 1000 } });
+  });
+  const response = await fetch(`http://127.0.0.1:${relay.port}/v1/messages`, { method: 'POST', body: '{}' });
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get('x-should-retry'), 'false');
+  assert.match(await response.text(), /No fallback or automatic resend/);
+});
+
+test('all-CRLF SSE streams preserve their original separators and exact model identity', async () => {
+  const input = stream().replace(/\n/g, '\r\n');
+  assert.equal(await transformed([Buffer.from(input)]), input.replace(`"model":"${native()}"`, `"model":"${picker()}"`));
+});
+
+test('terminal parsing performs no extra regex work on a retained tail but probes ordinary exhaustion once', (t) => {
+  const calls = [];
+  const source = /\r?\n\r?\n/.source;
+  const original = RegExp.prototype.exec;
+  t.mock.method(RegExp.prototype, 'exec', function(input) {
+    if (this.source === source) calls.push(input);
+    return original.call(this, input);
+  });
+  const tail = sse({ type: 'ping', tail: true });
+  const wire = sse({ type: 'message_stop' }) + tail;
+  assert.equal(consumeClientFrames({ pending: '', decoder: new StringDecoder('utf8') }, Buffer.from(wire)), true);
+  assert.deepEqual(calls, [wire]);
+  calls.length = 0;
+  const ping = sse({ type: 'ping' });
+  assert.equal(consumeClientFrames({ pending: '', decoder: new StringDecoder('utf8') }, Buffer.from(ping)), false);
+  assert.deepEqual(calls, [ping, '']);
+});
+
+test('a serializer adding a surplus data line is rejected before any malformed SSE frame can escape', async (t) => {
+  const input = Buffer.from(stream());
+  const original = JSON.stringify;
+  t.mock.method(JSON, 'stringify', (value, ...rest) => {
+    const encoded = original(value, ...rest);
+    return value === picker() ? encoded + '\n' : encoded;
+  });
+  assert.equal(JSON.stringify({ fixture: true }), '{"fixture":true}', 'the serializer fault is limited to the model token');
+  await assert.rejects(transformed([input]), /identity rewrite changed SSE data-line structure/);
+});
 
 test('multiline SSE rewriting preserves every data prefix and line ending except the model token', async () => {
   const json = JSON.stringify({ type: 'message_start', message: message() }, null, 2);
@@ -79,21 +346,37 @@ test('a malformed multiline envelope model cannot corrupt SSE data-line structur
   await assert.rejects(transformed([Buffer.from(frame + sse({ type: 'message_stop' }))]), /SSE data-line structure/);
 });
 
-test('a terminal-finishing client never sees message_stop before later-chunk errors or HTTP truncation', async (t) => {
-  for (const failure of ['error', 'truncated-frame', 'aborted-body']) {
+test('a terminal-finishing client never sees message_stop before later-chunk errors, truncation or cancellation', async (t) => {
+  for (const scenario of [
+    { failure: 'error', delay: 40, cancelOnData: false, settle: 0, closed: false },
+    { failure: 'truncated-frame', delay: 40, cancelOnData: false, settle: 0, closed: false },
+    { failure: 'aborted-body', delay: 40, cancelOnData: false, settle: 0, closed: false },
+    { failure: 'client-cancelled', delay: 200, cancelOnData: true, settle: 250, closed: true },
+  ]) {
+    const closed = [];
     const gateway = await fixture(t, { reply: (_req, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write(stream());
       const timer = setTimeout(() => {
+        closed.push(res.destroyed);
         if (res.destroyed) return;
-        if (failure === 'aborted-body') return res.destroy();
-        res.end(failure === 'error' ? sse({ type: 'error', error: { type: 'api_error', message: 'late fixture failure' } }) : 'data: {"partial":');
-      }, 40);
+        if (scenario.failure === 'aborted-body') return res.destroy();
+        res.end(scenario.failure === 'error' ? sse({ type: 'error', error: { type: 'api_error', message: 'late fixture failure' } }) : 'data: {"partial":');
+      }, scenario.delay);
       t.after(() => clearTimeout(timer));
     } });
-    assert.equal(await terminalFinishingClient(gateway.port), false, failure);
+    assert.equal(await terminalFinishingClient(gateway.port, { cancelOnData: scenario.cancelOnData }), false, scenario.failure);
+    await pause(scenario.settle);
+    assert.deepEqual(closed, [scenario.closed]);
     assert.equal(gateway.state.attempts.length, 1);
   }
+});
+
+test('a shared transformed-stream collector observes the same bytes as the completed result', async () => {
+  const emitted = [];
+  const result = await transformed([Buffer.from(stream())], LIMITS, emitted);
+  assert.ok(emitted.length > 0);
+  assert.equal(Buffer.concat(emitted).toString(), result);
 });
 
 test('terminal retention remains byte-bounded and preserves a clean post-terminal ping tail', async () => {
@@ -101,11 +384,8 @@ test('terminal retention remains byte-bounded and preserves a clean post-termina
   const input = stream() + tail;
   assert.equal(await transformed([Buffer.from(stream()), Buffer.from(tail)]), input.replace(`"model":"${native()}"`, `"model":"${picker()}"`));
   const emitted = [];
-  await assert.rejects(async () => {
-    for await (const chunk of transformSse(Readable.from([Buffer.from(stream()), Buffer.from(tail)]), {
-      requestedModel: picker(), limits: { ...LIMITS, streamBytes: Buffer.byteLength(stream()) + 10 },
-    })) emitted.push(chunk);
-  }, /stream.*budget/);
+  await assert.rejects(transformed([Buffer.from(stream()), Buffer.from(tail)],
+    { ...LIMITS, streamBytes: Buffer.byteLength(stream()) + 10 }, emitted), /stream.*budget/);
   assert.doesNotMatch(Buffer.concat(emitted).toString(), /event: message_stop/);
 });
 
@@ -266,11 +546,19 @@ test('supervisor deadline cancels owned work and client cancellation is not work
 test('a worker refuses pipelined generation after authenticated drain without forwarding it', async (t) => {
   let attempts = 0;
   const proxy = await server(t, (req, res) => {
-    if (!req.url.startsWith('/v1/models')) attempts++;
-    req.resume(); res.end('{"data":[]}');
+    res.setHeader('content-type', 'application/json');
+    req.resume();
+    if (req.url.startsWith('/v1/models')) return res.end(JSON.stringify(envelope()));
+    attempts++;
+    res.end(JSON.stringify(message()));
   });
   const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_PROXY_PORT: String(proxy.port) });
   const worker = await startGateway(t, 'serve-worker', environment);
+  const accepted = await request(worker.port, { model: picker(), messages: [] });
+  assert.equal(accepted.status, 200, 'the same generation must be forwardable before drain');
+  assert.equal(JSON.parse(accepted.body).model, picker());
+  assert.deepEqual(JSON.parse(accepted.body).content, message().content);
+  assert.equal(attempts, 1);
   const headers = controlRequestHeaders(path.join(environment.HOME, '.claude', 'model-gateway', 'control-token'));
   const auth = Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join('\r\n');
   const body = JSON.stringify({ model: picker(), messages: [] });
@@ -287,7 +575,7 @@ test('a worker refuses pipelined generation after authenticated drain without fo
   });
   assert.match(response, /HTTP\/1.1 202/);
   assert.match(response, /HTTP\/1.1 503/);
-  assert.equal(attempts, 0);
+  assert.equal(attempts, 1, 'drained pipelined generation must not add another upstream attempt');
 });
 
 test('count_tokens transport failure is not described as an ambiguous paid generation', async (t) => {
@@ -316,7 +604,8 @@ test('the native-hop overall deadline also bounds a stalled nonstream downstream
     await pause(150);
     assert.equal(response.destroyed, true, 'elapsed deadline must cancel a body already queued to a slow client');
   } finally { response.destroy(); await completion; }
-  await waitFor(() => response.closed && nativeSocketClosed);
+  await waitFor(() => response.closed);
+  await waitFor(() => nativeSocketClosed);
   assert.equal(req.listenerCount('aborted'), 0);
   assert.equal(response.listenerCount('close'), 0);
 });

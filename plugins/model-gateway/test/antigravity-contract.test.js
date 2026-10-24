@@ -49,7 +49,10 @@ test('AGY exact picker and proxy identities have isolated unmeasured policies an
   assert.ok(commands.modelWindowPolicyRows().every((row) => row.backend !== 'antigravity'));
   assert.equal(commands.modelWindowPolicyRows(tiers.map(picker)).filter((row) => row.backend === 'antigravity').length, 3);
   assert.notEqual(rows.models[1].slug, rows.models[1].id);
-  assert.ok(rows.models.every((row) => !/bills|272|compact at/i.test(row.contextWindowNote || '')));
+  for (const row of rows.models) {
+    assert.equal(typeof row.contextWindowNote, 'string');
+    assert.doesNotMatch(row.contextWindowNote, /bills|272|compact at/i);
+  }
 });
 
 test('AGY reserves case-insensitive malformed namespaces but accepts only six exact direct IDs', () => {
@@ -65,6 +68,9 @@ test('AGY reserves case-insensitive malformed namespaces but accepts only six ex
     assert.equal(runtime.resolveGatewayModelPolicy(id), null, id);
   }
   for (const id of ['gemini-4-argon-low', 'claude-sonnet-5-5', 'gpt-6-astra', null, 42]) assert.equal(agy.isReservedModel(id), false);
+  assert.equal(runtime.resolveGatewayModelPolicy(42), null);
+  assert.equal(runtime.gatewayClientModelId(picker('unknown')), picker('unknown'));
+  assert.deepEqual(commands.buildCatalog([42, null]).models, []);
 });
 
 test('AGY request admission rejects contexts and unsupported APIs without normalizing selectors', () => {
@@ -127,6 +133,60 @@ test('legacy AGY guard examines only marker-shaped user text, including invalid 
     assert.equal(agy.hasReservedRouteMarker([{ role: 'user', content: `Please discuss ${model}` }]), false);
   }
   assert.equal(agy.hasReservedRouteMarker(null), false);
+});
+
+test('malformed native metadata never gains support or routing authority', () => {
+  const agy = contract();
+  assert.equal(agy.pickerId('unknown'), null);
+  assert.deepEqual(agy.listedNativeModels(null), []);
+  assert.equal(agy.hasReservedRouteMarker([{ role: 'user', content: 42 }]), false);
+  assert.equal(agy.hasReservedRouteMarker([{ role: 'user', content: [{ type: 'text', text: 42 }] }]), false);
+  for (const status of [null, 42, []]) assert.equal(agy.inspectCapabilities(envelope(capability({ status }))).state, 'malformed');
+  const inconsistent = { configuration: 'invalid', auth: 'ready', project: 'configured', configuration_ready: true, live_verified: false };
+  assert.equal(agy.inspectCapabilities(envelope(capability({ status: inconsistent }))).state, 'malformed');
+  assert.equal(agy.inspectCapabilities(envelope(capability({ supported_apis: null }))).state, 'malformed');
+  assert.equal(agy.inspectCliStatus({ schema_version: 1, provider: 'codex', ...capability() }).state, 'malformed');
+});
+
+test('local readiness distinguishes missing project, shim failure and unknown observations without live claims', () => {
+  const agy = contract();
+  const configured = agy.inspectCapabilities(envelope());
+  const missingProject = agy.inspectCapabilities(envelope(capability({ status: {
+    configuration: 'valid', auth: 'ready', project: 'missing', configuration_ready: false, live_verified: false,
+  } })));
+  assert.equal(agy.readiness(missingProject).state, 'project-missing');
+  assert.equal(agy.readiness(configured, { shimReady: false }).state, 'shim-down');
+  assert.equal(agy.readiness({ state: 'confirmed', provider: { status: { configuration: 'invalid' } } }).state, 'configuration-invalid');
+  assert.equal(agy.readiness().state, 'unsupported');
+  assert.equal(agy.readiness({ state: 'future' }).ready, false);
+  assert.match(agy.readiness({ state: 'future' }).message, /unsupported or unconfirmed/);
+});
+
+test('identity tokenization preserves escaped strings, scalar endings and compound model spans', () => {
+  const { jsonTokens, replaceModelIdentity } = require('../lib/json-model-identity.js');
+  const quoted = JSON.stringify('quoted " slash ' + String.fromCharCode(92) + ' and 🛰');
+  assert.deepEqual([...jsonTokens(quoted)].map((token) => token[0]), [quoted]);
+  assert.deepEqual([...jsonTokens('true')].map((token) => token[0]), ['true']);
+  assert.deepEqual([...jsonTokens('true false,12]')].map((token) => token[0]), ['true', 'false', ',', '12', ']']);
+  for (const wire of ['"unfinished', '"unfinished' + String.fromCharCode(92)]) {
+    assert.throws(() => [...jsonTokens(wire)], /string is incomplete/);
+  }
+  const input = '{"model":{"nested":[1,true]},"opaque":{"model":"keep"}}';
+  assert.deepEqual(JSON.parse(replaceModelIdentity(input, picker('low'))), { model: picker('low'), opaque: { model: 'keep' } });
+});
+
+test('compound model spans retain exact closing-token validation under isolated inherited scalar pollution', () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(require.resolve('../lib/json-model-identity.js'), 'utf8');
+  for (const literal of ['true', 'false', 'null']) {
+    const context = vm.createContext({ module: { exports: {} }, Buffer, TextDecoder });
+    vm.runInContext(`Object.prototype[${JSON.stringify(literal)}] = -1;`, context);
+    vm.runInContext(source, context, { filename: path.join(require('node:os').tmpdir(), 'json-prototype-control.cjs') });
+    const input = '{"model":{"nested":' + literal + '},"other":0}';
+    assert.throws(() => context.module.exports.replaceModelIdentity(input, picker('low')), /unambiguous envelope model identity/);
+  }
 });
 
 module.exports = { capability, envelope, tiers, picker, native };

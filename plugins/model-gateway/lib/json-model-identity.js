@@ -6,12 +6,12 @@
 const DEPTH = Object.freeze({ '{': 1, '[': 1, '}': -1, ']': -1 });
 const PUNCTUATION = new Set(['{', '}', '[', ']', ',', ':']);
 function stringEnd(text, start) {
-  for (let index = start + 1; index < text.length; index++) {
-    const code = text.charCodeAt(index);
-    if (code === 92) index++;
-    else if (code === 34) return index + 1;
+  let index = start + 1;
+  while (index < text.length && text.charCodeAt(index) !== 34) {
+    index += text.charCodeAt(index) === 92 ? 2 : 1;
   }
-  throw new Error('Antigravity JSON string is incomplete');
+  if (index >= text.length) throw new Error('Antigravity JSON string is incomplete');
+  return index + 1;
 }
 
 function valueEnd(text, start) {
@@ -59,13 +59,13 @@ function inspectToken(state, token) {
 
 function finishCompoundValue(state, token) {
   if (state.start === null || state.depth !== 1) return;
-  if (['}', ']'].includes(token[0])) recordSpan(state, token.index + 1);
+  recordSpan(state, token.index + 1);
 }
 
 function advance(state, token) {
   inspectToken(state, token);
   state.depth += DEPTH[token[0]] || 0;
-  finishCompoundValue(state, token);
+  if (['}', ']'].includes(token[0])) finishCompoundValue(state, token);
   if (state.depth === 1 && ['{', ','].includes(token[0])) state.expectKey = true;
   state.previous = token[0];
 }

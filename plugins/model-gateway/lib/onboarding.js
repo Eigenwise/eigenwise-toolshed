@@ -11,6 +11,7 @@ const { configRequiresCompatibility } = require('./antigravity-config-intent.js'
 
 const ONBOARDING_PATH = path.join(STATE, 'onboarding.json');
 const PROVIDERS = ['codex', 'antigravity'];
+const AUTH_OPTIONS = Object.freeze({ login: '--manual', status: '--json' });
 const STATUS_OPTIONS = Object.freeze({ encoding: 'utf8', timeout: 5000, maxBuffer: 256 * 1024, windowsHide: true });
 
 function invalidPreference() { return new Error('Invalid or future onboarding.json; preserved without changes. Repair the guidance preference explicitly before setup/ensure.'); }
@@ -59,6 +60,17 @@ function prepareSetup(args, { file = ONBOARDING_PATH } = {}) {
   return { ...state, provider: state.explicit ? state.provider : provider };
 }
 
+function reportStartupFailure(context, result, { notice, record, command }) {
+  if (context.quiet && result.waitCutShort) {
+    if (result.started?.includes('shim')) record('ensure-hook-wait-cut-short', { component: 'SessionStart', pid: process.pid, outcome: 'supervisor-started' });
+    const label = context.provider === 'antigravity' ? 'Antigravity' : 'Codex';
+    notice(`model-gateway is still starting; retry the ${label} model in a few seconds`, { toStderr: true });
+    context.finish(0); return;
+  }
+  notice(`model-gateway could not start: ${result.reason}. Run \`node "${command()}" doctor\` to see which part is down.`, { toStderr: true });
+  context.finish(1);
+}
+
 function parseCliReport(result) {
   if (result.status !== 0) return antigravity.unconfirmed('unsupported');
   try { return antigravity.inspectCliStatus(JSON.parse(result.stdout)); }
@@ -84,14 +96,14 @@ async function installCompatibleCandidate({ required, staged, install, restart, 
 }
 
 function authArgumentCount(action, option) {
-  return action === 'status' && option === '--json' ? 3 : 2;
+  return option !== undefined && option === AUTH_OPTIONS[action] ? 3 : 2;
 }
 
 function parseAuthArguments(args) {
   const [provider, action, option] = args;
-  if (provider !== 'antigravity' || !['login', 'status', 'logout'].includes(action)) throw new Error('Use auth antigravity login|status|logout; device flow is unsupported.');
-  if (args.length !== authArgumentCount(action, option)) throw new Error('Use auth antigravity login|status [--json]|logout; device flow and implicit enablement are unsupported.');
-  return { action, json: option === '--json' };
+  if (provider !== 'antigravity' || !['login', 'status', 'logout'].includes(action)) throw new Error('Use auth antigravity login [--manual]|status [--json]|logout; device flow is unsupported.');
+  if (args.length !== authArgumentCount(action, option)) throw new Error('Use auth antigravity login [--manual]|status [--json]|logout; device flow and implicit enablement are unsupported.');
+  return { action, json: option === '--json', manual: option === '--manual' };
 }
 
 function reportAuthStatus(snapshot, json, print) {
@@ -102,9 +114,11 @@ function reportAuthStatus(snapshot, json, print) {
 }
 
 function runAuth(args, { binary = PROXY_BIN, run = spawnSync, print = console.log } = {}) {
-  const { action, json } = parseAuthArguments(args);
+  const { action, json, manual } = parseAuthArguments(args);
   if (action === 'status') return reportAuthStatus(probeCliStatus(binary, { run }), json, print);
-  const result = run(binary, ['antigravity', 'auth', action], { stdio: 'inherit', windowsHide: true });
+  const nativeArgs = ['antigravity', 'auth', action];
+  if (manual) nativeArgs.push('--manual');
+  const result = run(binary, nativeArgs, { stdio: 'inherit', windowsHide: true });
   if (result.status === 0) print(`Antigravity ${action} completed without changing provider enablement or onboarding. ${antigravity.FRESH_SESSION}`);
   return result.status ?? 1;
 }
@@ -145,5 +159,5 @@ async function compatibilityRequired({ provider, port, environment = process.env
   return snapshot.provider?.enabled === true;
 }
 
-module.exports = { ONBOARDING_PATH, readOnboarding, writeOnboarding, validateSetupArguments, prepareSetup, probeCliStatus, assertCandidateCompatibility,
+module.exports = { ONBOARDING_PATH, readOnboarding, writeOnboarding, validateSetupArguments, prepareSetup, reportStartupFailure, probeCliStatus, assertCandidateCompatibility,
   installCompatibleCandidate, runAuth, selectedReadiness, gatewayReadiness, compatibilityRequired };
