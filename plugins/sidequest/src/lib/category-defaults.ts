@@ -1,4 +1,4 @@
-import { experimentRoundRef } from './experiment-refs';
+const { experimentRoundRef } = require('./experiment-refs');
 
 export function categoryEvidenceFields(category: { writes?: unknown }): { writes?: 'evidence' } {
   return category.writes === 'evidence' ? { writes: 'evidence' } : {};
