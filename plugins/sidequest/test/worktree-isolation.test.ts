@@ -1300,13 +1300,21 @@ test('SQ-55: a crossed claim never moves the checkout binding of a sibling that 
     // crossed binding survives the claim and is now claim-owned.
     assert.equal((await pair.claim(pair.second, PROJECT)).worktreeCorrection, undefined);
     assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree));
-    assert.equal((await pair.claim(pair.first, pair.first.harnessWorktree)).worktreeCorrection, undefined);
+    // GH-648: no swap can settle this crossing, and admitting the claim used to leave a lease every write refused.
+    const denied = runHook(BIND_RUNTIME_IDENTITY, {
+      session_id: pair.sessionId,
+      agent_id: pair.first.agentId,
+      agent_type: pair.first.executor,
+      cwd: pair.first.harnessWorktree,
+      tool_name: 'mcp__plugin_sidequest_board__claim',
+      tool_input: { ref: pair.first.ref, project: PROJECT, by: `sq55-${pair.first.agentId}`, executor: pair.first.executor, tokenFile: pair.first.tokenFile },
+    });
+    assert.equal(denied?.hookSpecificOutput?.permissionDecision, 'deny', 'a claim from a checkout its lease does not record is never admitted');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, new RegExp(`refused claim of ${pair.first.ref}; .*code worktree_lease_crossed`));
     assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree), 'a claimed sibling lost its checkout binding');
     assert.equal(pair.recorded(pair.first.ref), worktrees.canonicalPath(pair.second.harnessWorktree));
     assert.equal(store.getTicket(slug, pair.second.ref).dispatch.worktreeBindingExchange, undefined);
-    const refused = pair.write(pair.first, pair.first.harnessWorktree);
-    assert.equal(refused?.hookSpecificOutput?.permissionDecision, 'deny');
-    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(`${pair.first.ref} has no write lease`));
+    assert.equal(store.getTicket(slug, pair.first.ref).claim?.by ?? null, null, 'the crossed claim was not admitted');
   } finally {
     pair.cleanup();
   }

@@ -178,6 +178,13 @@ export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWor
     + ' The orchestrator then redispatches it onto a checkout of its own and salvages any commit by hash.';
 }
 
+// Refused before the claim exists, so live-claim recovery has nothing to rebind yet: the remedy is the orchestrator's.
+export function crossedClaimLeaseMessage(ref: string, lease: { expected: string; observed: string }): string {
+  return `sidequest: refused claim of ${ref}; this executor runs in worktree ${lease.observed}, but its dispatch lease records worktree ${lease.expected}, and the claim could not prove an exact crossing to swap.`
+    + ' Claiming here would succeed with every later write refused, so the claim is not admitted (code worktree_lease_crossed).'
+    + ` Stop without claiming and write nothing. Tell the orchestrator ${ref}'s worktree binding is crossed, quoting this refusal with both paths, so it can redispatch the ticket onto a checkout of its own.`;
+}
+
 export function routingDisabledMessage(ref: string): string {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }

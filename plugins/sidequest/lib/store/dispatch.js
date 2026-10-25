@@ -3763,6 +3763,15 @@ function createDispatch(dependencies) {
     if (!exchange) return adoptParkedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted);
     return withTicketLocks([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
   }
+  function freshIsolatedCheckout(state) {
+    return state?.sharedTree === false && !state.continuation?.sourceWorktree ? recordedCheckout(state) : null;
+  }
+  function crossedClaimLease(state, observedWorktree) {
+    const expected = freshIsolatedCheckout(state);
+    const observed = observedWorktree ? canonicalPath(String(observedWorktree)) : null;
+    if (!expected || !observed || expected === observed) return null;
+    return { expected, observed };
+  }
   function parkedCheckoutOf(ticket) {
     return dispatchState(ticket)?.crossBoundWorktree?.parkedCheckout || null;
   }
@@ -4329,6 +4338,7 @@ function createDispatch(dependencies) {
     bindDispatchClaimToken,
     exchangeGuessedClaimIdentity,
     exchangeCrossedClaimCheckout,
+    crossedClaimLease,
     settleDeferredStops,
     tokenAdmission,
     bindDispatchAgent,

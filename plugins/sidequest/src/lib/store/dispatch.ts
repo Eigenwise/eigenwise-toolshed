@@ -4777,6 +4777,19 @@ function exchangeCrossedClaimCheckout(slug?: any, ticketId?: any, sessionId?: an
   return withTicketLocks([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
 }
 
+function freshIsolatedCheckout(state?: any) {
+  return state?.sharedTree === false && !state.continuation?.sourceWorktree ? recordedCheckout(state) : null;
+}
+
+// What exchangeCrossedClaimCheckout could not settle is still crossed after it ran, and the harness confines an
+// isolated executor to the checkout it runs in, so binding that claim succeeds with every later write refused (GH-648).
+function crossedClaimLease(state?: any, observedWorktree?: any) {
+  const expected = freshIsolatedCheckout(state);
+  const observed = observedWorktree ? canonicalPath(String(observedWorktree)) : null;
+  if (!expected || !observed || expected === observed) return null;
+  return { expected, observed };
+}
+
 function parkedCheckoutOf(ticket?: any) {
   return dispatchState(ticket)?.crossBoundWorktree?.parkedCheckout || null;
 }
@@ -5491,6 +5504,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     bindDispatchClaimToken,
     exchangeGuessedClaimIdentity,
     exchangeCrossedClaimCheckout,
+    crossedClaimLease,
     settleDeferredStops,
     tokenAdmission,
     bindDispatchAgent,
