@@ -5,7 +5,7 @@ import path from 'node:path';
 import { isInScope, ticketCommitScope, validateCommitRangeScope } from '../commit-scope';
 import type { CompletedVerificationCapture } from '../kernel/verification';
 
-export const WORK_KINDS = ['new-behavior', 'behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only'] as const;
+export const WORK_KINDS = ['new-behavior', 'behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only', 'builds-on'] as const;
 export type WorkKind = typeof WORK_KINDS[number];
 export type SourceOriginInput = Readonly<{ ref: string; preparedAt: string; commit: string; captureId?: string }>;
 export type WorkDeclaration = Readonly<{ kind: WorkKind; sources: readonly SourceOriginInput[] }>;
@@ -229,26 +229,51 @@ function observeSource(root: string, input: SourceOriginInput, lookup: ProducerL
     files: scope.paths.map(file => committedFile(root, input.commit, file)), capture: sourceCapture(producer, generation, input),
     ...(derivedFacts.length ? { derivedFacts } : {}) };
 }
+// A builds-on follow-up carries a pending candidate's whole range into its own submission, so each source has to be
+// that candidate as submitted: a released preparation has no candidate for the follow-up's delivery to supersede.
+function requireBuildsOnSources(kind: WorkKind, sources: readonly SourceOrigin[]): void {
+  if (kind !== 'builds-on') return;
+  requireFact(sources.length > 0, 'builds-on names at least one pending submitted candidate');
+  requireFact(sources.every(source => source.status === 'submitted-unaccepted'), 'builds-on sources must be pending submitted candidates');
+}
 export function prepareWorkProvenance(root: string, declaration: WorkDeclaration | undefined, sessionId: string, lookup: ProducerLookup, integrationCommit = '', consumerRef = ''): WorkProvenance | undefined {
   if (!declaration) return;
+  const sources = declaration.sources.map(input => observeSource(root, input, lookup, integrationCommit, consumerRef));
+  requireBuildsOnSources(declaration.kind, sources);
   return structuredClone({ kind: declaration.kind, authority: 'main-thread-attestation', sessionId,
-    execution: 'UNVERIFIED', quality: 'UNVERIFIED', admission: 'UNVERIFIED',
-    sources: declaration.sources.map(input => observeSource(root, input, lookup, integrationCommit, consumerRef)) });
+    execution: 'UNVERIFIED', quality: 'UNVERIFIED', admission: 'UNVERIFIED', sources });
 }
 function workingFile(root: string, file: FileIdentity): FileIdentity {
   const location = path.join(root, file.path);
   return { path: file.path, sha256: fs.existsSync(location) ? sha256(fs.readFileSync(location)) : null };
 }
-function unchangedSource(root: string, source: SourceOrigin, lookup: ProducerLookup, consumerRef: string): void {
+function unchangedGeneration(root: string, source: SourceOrigin, lookup: ProducerLookup, consumerRef: string): void {
   const derivedBase = source.derivedFacts?.find(fact => fact.fact === 'baseCommit');
   requireFact(JSON.stringify(source) === JSON.stringify(observeSource(root, source.input, lookup, derivedBase?.integrationCommit ?? '', consumerRef, source.inheritedTips ?? [])), 'source generation or capture mutated');
-  requireFact(source.files.every(file => workingFile(root, file).sha256 === file.sha256), 'source/test bytes are incompatible with frozen origin');
+}
+function unchangedFile(root: string, file: FileIdentity): boolean {
+  return workingFile(root, file).sha256 === file.sha256;
+}
+// Only builds-on is write-capable over its sources: a source file the follow-up changed is its own owned work.
+function inheritedSourcePaths(root: string, provenance: WorkProvenance): string[] {
+  const files = provenance.sources.flatMap(source => source.files);
+  if (provenance.kind === 'builds-on') return files.filter(file => unchangedFile(root, file)).map(file => file.path);
+  requireFact(files.every(file => unchangedFile(root, file)), 'source/test bytes are incompatible with frozen origin');
+  return files.map(file => file.path);
 }
 export function ownedWorkPaths(root: string, provenance: WorkProvenance | undefined, paths: readonly string[], lookup: ProducerLookup, consumerRef = ''): string[] {
   if (!provenance) return [...paths];
-  provenance.sources.forEach(source => unchangedSource(root, source, lookup, consumerRef));
-  const inherited = new Set(provenance.sources.flatMap(source => source.files.map(file => file.path)));
+  provenance.sources.forEach(source => unchangedGeneration(root, source, lookup, consumerRef));
+  const inherited = new Set(inheritedSourcePaths(root, provenance));
   const owned = paths.filter(file => !inherited.has(file));
   requireFact(provenance.kind !== 'inherited-read-only' || owned.every(file => isInScope(file, ['.release/unreleased/'])), 'inherited-read-only declaration has new owned work');
   return owned;
+}
+export type BuildsOnCandidate = Readonly<{ ref: string; commit: string; paths: readonly string[] }>;
+function frozenProvenance(value: unknown): value is WorkProvenance {
+  return record(value) && value.kind === 'builds-on' && Array.isArray(value.sources);
+}
+export function buildsOnCandidates(provenance: unknown): BuildsOnCandidate[] {
+  if (!frozenProvenance(provenance)) return [];
+  return provenance.sources.map(source => ({ ref: source.input.ref, commit: source.input.commit, paths: source.files.map(file => file.path) }));
 }

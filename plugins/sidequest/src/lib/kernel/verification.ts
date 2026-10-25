@@ -5,7 +5,7 @@ import type { Diagnostic } from './index.js';
 export const VERIFICATION_KINDS = ['suite', 'command', 'typecheck', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'] as const;
 export type VerificationKind = (typeof VERIFICATION_KINDS)[number];
 
-export const VERIFICATION_STATUSES = ['passed', 'failed_suite', 'toolchain_missing', 'could_not_run', 'timeout', 'manual', 'attestation', 'skipped', 'failed_check', 'deferred'] as const;
+export const VERIFICATION_STATUSES = ['passed', 'failed_suite', 'toolchain_missing', 'could_not_run', 'timeout', 'manual', 'attestation', 'skipped', 'failed_check', 'deferred', 'unverified'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
 export const VERIFICATION_ENVIRONMENTS = ['isolated', 'shared'] as const;
@@ -186,6 +186,12 @@ export function verificationAccepted(result: VerificationResult): boolean {
   if (result.status === 'passed' || result.status === 'manual' || result.status === 'attestation') return true;
   if (result.status !== 'skipped') return false;
   return !('code' in validateVerificationWaiver(result.waiver));
+}
+
+// Deferred and unverified results are admitted at submit and into a wave, never read as accepted: delivery
+// runs the deferred command, and refuses an unverified candidate unless a verification waiver covers it.
+export function verificationAdmitted(result: VerificationResult): boolean {
+  return verificationAccepted(result) || result.status === 'deferred' || result.status === 'unverified';
 }
 
 export function verificationOutcome(result: VerificationResult): string {

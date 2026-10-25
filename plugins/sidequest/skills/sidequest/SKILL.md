@@ -217,8 +217,8 @@ cause with evidence (`file:line`), the fix, verification.
 ## Frozen work provenance
 
 Only the main thread can set MCP `dispatch.workProvenance` before preparation. Its `kind` is
-`new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only`
-or `fixture-only`. Each source names a native producer ref, its exact `preparedAt` (current dispatch
+`new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only`,
+`fixture-only` or `builds-on` (a follow-up carrying pending submitted candidates whole; see `publishing.md`). Each source names a native producer ref, its exact `preparedAt` (current dispatch
 or an archived attempt) and an immutable owned `commit`, optionally a `captureId`. Missing
 `baseCommit`/`sanctionedCommits` derive from its captures; ambiguity, other gaps or a
 submission naming another candidate refuse by name. The board freezes base, scope, byte

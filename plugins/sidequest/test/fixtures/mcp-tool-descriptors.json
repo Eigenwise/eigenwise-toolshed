@@ -1929,7 +1929,8 @@
                 "inherited-read-only",
                 "docs",
                 "type-annotation-only",
-                "fixture-only"
+                "fixture-only",
+                "builds-on"
               ]
             },
             "sources": {
@@ -2490,6 +2491,10 @@
         },
         "integrationVerifyTimeoutMs": {
           "type": "integer"
+        },
+        "integrationTestFileThreshold": {
+          "type": "integer",
+          "minimum": 1
         },
         "worktreeIsolation": {
           "type": "boolean"

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-const { prepareWorkProvenance, ownedWorkPaths } = require('../lib/store/work-provenance.js');
+const { prepareWorkProvenance, ownedWorkPaths, buildsOnCandidates } = require('../lib/store/work-provenance.js');
 
 const ownedFile = 'lib/owned.js';
 
@@ -145,4 +145,39 @@ test('an ambiguous or captureless thin generation is still refused by the fact i
   const capturelessWithBase = thinProducer(fixture.candidate, [], fixture.base);
   assert.throws(() => prepareWorkProvenance(fixture.root, thinDeclaration(fixture.candidate), 'main-session', () => capturelessWithBase, merged),
     { message: `work provenance refused: producer generation ${thinPreparedAt} missing sanctionedCommits; no verification capture in that generation records a git candidate descending from baseCommit ${fixture.base}` });
+});
+
+// GH-636. builds-on names a pending submitted candidate and is the one kind allowed to change its source files.
+function submittedProducer() {
+  const fixture = repository();
+  const candidate = fixture.commitFile(ownedFile, 'owned\n');
+  const producer = { id: 'tk_submitted', ref: 'SQ-7', claim: null, dispatchNonce: null,
+    dispatch: { preparedAt: '2026-10-20T10:00:00.000Z', terminalAt: '2026-10-20T11:00:00.000Z', outcome: 'submitted', commit: candidate,
+      baseCommit: fixture.base, declaredFiles: [ownedFile] },
+    submission: { commit: candidate, base: fixture.base, commits: [candidate], admittedScope: [ownedFile] } };
+  const declaration = { kind: 'builds-on', sources: [{ ref: 'SQ-7', preparedAt: producer.dispatch.preparedAt, commit: candidate }] };
+  return { ...fixture, candidate, producer, declaration, lookup: () => producer };
+}
+
+test('builds-on freezes a submitted candidate, and a source file the follow-up changes becomes owned work', () => {
+  const { root, candidate, declaration, lookup } = submittedProducer();
+  const provenance = prepareWorkProvenance(root, declaration, 'main-session', lookup);
+  assert.equal(provenance.sources[0].status, 'submitted-unaccepted');
+  assert.deepEqual(ownedWorkPaths(root, provenance, [ownedFile, 'lib/follow-up.js'], lookup), ['lib/follow-up.js'], 'an unchanged source file stays inherited');
+  fs.writeFileSync(path.join(root, ownedFile), 'owned, extended by the follow-up\n');
+  let owned: string[] = [];
+  assert.doesNotThrow(() => { owned = ownedWorkPaths(root, provenance, [ownedFile, 'lib/follow-up.js'], lookup); }, 'a changed source file is owned work, not a refusal');
+  assert.deepEqual(owned, [ownedFile, 'lib/follow-up.js']);
+  const readOnly = prepareWorkProvenance(root, { ...declaration, kind: 'inherited-read-only' }, 'main-session', lookup);
+  assert.throws(() => ownedWorkPaths(root, readOnly, [ownedFile], lookup), { message: 'work provenance refused: source/test bytes are incompatible with frozen origin' });
+  assert.deepEqual(buildsOnCandidates(provenance), [{ ref: 'SQ-7', commit: candidate, paths: [ownedFile] }]);
+  assert.deepEqual(buildsOnCandidates(readOnly), [], 'only builds-on declares a candidate to supersede');
+});
+
+test('builds-on refuses a released preparation and an empty source list', () => {
+  const { root, declaration, lookup } = producerAfterTrialMerge(false);
+  assert.throws(() => prepareWorkProvenance(root, { ...declaration, kind: 'builds-on' }, 'main-session', lookup),
+    { message: 'work provenance refused: builds-on sources must be pending submitted candidates' });
+  assert.throws(() => prepareWorkProvenance(root, { kind: 'builds-on', sources: [] }, 'main-session', lookup),
+    { message: 'work provenance refused: builds-on names at least one pending submitted candidate' });
 });

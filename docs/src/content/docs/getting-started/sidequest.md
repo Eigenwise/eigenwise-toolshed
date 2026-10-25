@@ -116,6 +116,11 @@ gate per wave before versioning, including a singleton. A changed tree after reb
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
+Integration only reports a passed check when a command really ran, with its exit code and log. A ticket
+dispatched before it had a check runs the check recorded on it later. A ticket with no check at all is
+refused as unverified ("no project verifier and no pinned verify") until you give it one, or until you
+approve delivering it anyway with a verification waiver that names who decided and why.
+
 A verifier pinned to a shared environment (`verifyEnvironment: shared`) skips executor capture and the
 assembled-wave gate. Its environment lane is integrate's delivery gate in the shared checkout, against
 the merged tree. Claude runs CLI `sidequest integrate <ref> --project <path> --json` through background
@@ -572,6 +577,10 @@ A worked example:
 
 **A multi-commit candidate's release fragment sits in an earlier commit.** Closing it by its tip commit reads the fragment from the whole submitted range, the same range `submit` already accepted, so it no longer refuses `missing_release_fragment`.
 
+**You want changes on a candidate that's already submitted.** The executor that submitted it is finished, so you're the one asking. While no review is bound to the candidate, Claude calls `rework` from the main conversation without a `by`: that records you as the orchestrator requesting changes, with your reason, keeps the old candidate as rejected evidence, and returns the ticket to `todo` for a normal redispatch. Once a review is bound, go through that review's verdict instead.
+
+**A follow-up builds on a candidate that hasn't landed yet.** Ask Claude to dispatch the follow-up with `workProvenance` kind `builds-on` naming the pending candidate. The follow-up's submission then carries that candidate's commits without a `duplicate_submission` refusal, may move the earlier ticket's release fragment into its own, and delivering the follow-up closes the earlier ticket as superseded. No hand rebase, no second fragment.
+
 **A verdict approved a candidate you meant to reject.** A bound review's outcome describes the candidate: `accepted` approves it, `rejected` confirms it must not ship, and `inconclusive` approves nothing. Ask the main Claude thread to correct a mistaken finalized accepted with MCP `verdict.correct`. The review must have a finalized normal decision (including a writable reviewer or explicit external attestation), or a readonly oracle verdict. The source must be terminal, both tickets unclaimed, and the original submission still pending. Delivered or superseded sources refuse correction.
 
 Claude reads the original timestamp from `list({ref: reviewRef}).ticket.oracle.verdict.at` and supplies `outcome: "rejected"`, audit `by`, nonempty correction `text`, optional `why`, and `correct: {expectedOutcome: "accepted", expectedVerdictAt, sourceRef, evidence, commit}`. A non-Git candidate uses `sourceRevision: {source, value}` instead of `commit`; provide exactly one. `constraint` is not accepted for corrections. The timestamp is the original verdict's `at`, never a later comment or correction timestamp.
@@ -621,3 +630,15 @@ submission in the existing composition flow.
 The author pins `verifyKind` and `verify` before dispatch: `suite` or `command` for executable regressions, `typecheck` with a typechecker command for annotation work, or `schema` or `document` for their evidence contracts. Dispatch freezes that oracle. The main thread also freezes `workProvenance.kind`: `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only` or `fixture-only`. Successful completion records `negativeControl: not_required(<reason>)` for the non-behavior kinds. With no frozen kind, changed source under changed tests still requires a control; declare annotation/refactor intent before dispatch instead of asking the executor to infer it.
 
 New behavior requires the existing claim-holder marker: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.
+
+Capture and integration command deadlines both default to 25 minutes. Set board_config
+`integrationVerifyTimeoutMs` to a positive integer in milliseconds, up to 3600000 (60 minutes),
+for both paths and importing-test batches. The board setting `integrationTestFileThreshold`
+(default 40 extra files, positive integer) switches large import selections to the plugin's
+`test:full` script, or `npm test` when unavailable. That gate controls its own concurrency.
+Smaller batches exclude performance and benchmark files. Guidance Markdown selects guidance,
+skill and compatibility tests. Batch receipts record the command shape, deadline and elapsed time.
+Timeout results name the key and effective limit; the owned process tree is
+terminated before the result is reported. Slot waiting and cleanup add to total wall time.
+Capture logs are written directly under the board project
+`verification/<ref>/` directory and stay readable through the returned `logPath`.

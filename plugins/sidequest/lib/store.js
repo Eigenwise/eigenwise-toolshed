@@ -1323,8 +1323,12 @@ function isBehaviorSourcePath(file) {
 function mixedChange(paths) {
   return [paths.some(isTestSidePath), paths.filter((file) => !isTestSidePath(file)).some(isBehaviorSourcePath)].every(Boolean);
 }
-function ownedControlCheck(slug, ticket, delta, ownedPaths) {
+function declaredBehaviorKind(ticket) {
   const kind = ticket.dispatch?.workProvenance?.kind;
+  return kind === "builds-on" ? void 0 : kind;
+}
+function ownedControlCheck(slug, ticket, delta, ownedPaths) {
+  const kind = declaredBehaviorKind(ticket);
   if (["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"].includes(String(kind))) return { ok: true, inheritedTests: [], negativeControl: "not_required(" + kind + ")" };
   const own = negativeControlChanges(slug, ticket, delta, ownedPaths);
   const inheritedTests = own.inheritedTests;
@@ -1630,6 +1634,7 @@ const {
   integrateSubmission,
   integrateSubmissionWave,
   closeSubmissionAsSuperseded,
+  supersedeBuiltOnSources,
   submissionOwnershipFailure,
   submitTicket,
   pinnedVerificationRequirement,
@@ -3346,7 +3351,7 @@ function deliveredReleasePaths(repo, delivery) {
   return [...commitPaths(repo, delivery.commit), ...delivery.integration?.changedPaths || []];
 }
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the file, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the file, then commit it, then submit again. A follow-up dispatched with workProvenance kind builds-on may git mv its source's fragment to this path; delivery records that source superseded. Next time write it BEFORE your first commit so it rides along:
 ---
 ref: ${ref}
 title: <short user-facing title>
@@ -3745,7 +3750,13 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     ),
     ...recorded?.ok ? { recordedDelivery: recorded } : {}
   }));
-  return advisory ? Object.assign(result, { advisory }) : result;
+  const closed = withBuiltOnSupersession(slug, idOrRef, result, purpose, by);
+  return advisory ? Object.assign(closed, { advisory }) : closed;
+}
+function withBuiltOnSupersession(slug, idOrRef, result, purpose, by) {
+  if (!result.ok || purpose === "grooming") return result;
+  const supersededSources = supersedeBuiltOnSources(slug, idOrRef, by);
+  return supersededSources.length ? Object.assign(result, { supersededSources }) : result;
 }
 function closeTicketForGrooming(slug, idOrRef, opts) {
   return completeTicketAsControlPlane(slug, idOrRef, Object.assign({}, opts, { purpose: "grooming" }));
@@ -3949,6 +3960,7 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   submissionProjection
 });
 module.exports = {
+  normalizeIntegrationVerifyTimeoutMs,
   VALID_STATUS,
   VALID_PRIORITY,
   VALID_EFFORTS,

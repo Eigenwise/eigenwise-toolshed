@@ -1,6 +1,7 @@
 "use strict";
 var import_integration_tests = require("../integration-tests.js");
 var import_integration_quality = require("../integration-quality.js");
+var import_work_provenance = require("./work-provenance");
 const { emitExternalRefUpdates } = require("./external-ref-updates.js");
 const { currentBoardPath } = require("./move.js");
 "use strict";
@@ -572,19 +573,44 @@ Expires: ${checkpoint.expiresAt}`;
     const script = path.join(__dirname, "..", "verify-capture.js");
     return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
   }
+  const LEGACY_UNRECORDED_VERIFIER = "legacy project verifier was not recorded";
+  const NO_VERIFIER_REASON = "no project verifier and no pinned verify";
+  function recordedTicketVerifier(ticket) {
+    return String(ticket.executorVerify || ticket.submission?.verify || "").trim();
+  }
+  function ticketVerifierRequirement(ticket, command) {
+    return verificationRequirement({
+      kind: classifyVerificationKind(command, ticket.executorVerifyKind),
+      command,
+      evidence: command,
+      artifact: ticket.executorAttestationArtifact
+    });
+  }
   function pinnedVerificationRequirement(ticket) {
     const pinned = dispatchPinnedRequirement(ticket);
     if (pinned instanceof Object) return pinned;
-    const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || "").trim();
-    if (!legacyCommand) {
-      return verificationRequirement({ kind: "custom", evidence: "legacy project verifier was not recorded" });
-    }
-    return verificationRequirement({
-      kind: classifyVerificationKind(legacyCommand, ticket.executorVerifyKind),
-      command: legacyCommand,
-      evidence: legacyCommand,
-      artifact: ticket.executorAttestationArtifact
-    });
+    const command = recordedTicketVerifier(ticket);
+    return command ? ticketVerifierRequirement(ticket, command) : verificationRequirement({ kind: "custom", evidence: LEGACY_UNRECORDED_VERIFIER });
+  }
+  function deliveryVerificationRequirement(ticket) {
+    const pinned = pinnedVerificationRequirement(ticket);
+    if (!legacyCustomRequirement(pinned)) return pinned;
+    const recorded = ticketVerifierRequirement(ticket, recordedTicketVerifier(ticket));
+    return recorded.command ? recorded : pinned;
+  }
+  function standsForDelivery(submitted) {
+    return submitted instanceof Object && submitted.status !== "unverified" && submitted.evidence !== LEGACY_UNRECORDED_VERIFIER;
+  }
+  function unverifiedDelivery(requirement) {
+    return {
+      kind: requirement.kind,
+      status: "unverified",
+      evidence: NO_VERIFIER_REASON,
+      command: null,
+      logPath: null,
+      exitCode: null,
+      failureIdentities: ["verification:no-verifier"]
+    };
   }
   function replacementVerificationRequirement(value) {
     if (!value || typeof value !== "object") return null;
@@ -719,31 +745,46 @@ ${JSON.stringify(quality.unverified)}`,
   function verifyWithFullSuiteCapture(command, project, verify) {
     return isFullSuiteCommand(command) ? runFullSuiteVerification(command, project, verify) : verify(process.env);
   }
-  function verifyDeliveredSubmission(slug, ticket, opts) {
-    const requirement = opts?.requirement || pinnedVerificationRequirement(ticket);
+  function reusableSubmittedVerification(ticket, requirement) {
     const submitted = ticket.submission?.verificationResult;
-    if (submitted && typeof submitted === "object" && !requirement.command) return submitted;
+    return requirement.command || !standsForDelivery(submitted) ? null : submitted;
+  }
+  function attestationDeliveryVerification(ticket, requirement) {
+    return {
+      kind: "attestation",
+      status: "attestation",
+      artifact: ticket.submission?.sourceRevision?.value || requirement.artifact || null,
+      evidence: String(ticket.submission?.verify || "").trim()
+    };
+  }
+  function manualDeliveryVerification(ticket, requirement) {
+    return { kind: "manual", status: "manual", evidence: String(ticket.submission?.verify || requirement.evidenceContract), command: requirement.command || null };
+  }
+  function missingCommandVerification(requirement) {
+    return {
+      kind: requirement.kind,
+      status: "could_not_run",
+      evidence: "The prepared verification requirement has no executable command.",
+      command: null,
+      failureIdentities: ["could_not_run:missing-command"]
+    };
+  }
+  function evidenceDeliveryVerification(ticket, requirement) {
+    if (requirement.kind === "attestation" || isArtifactSubmission(ticket.submission)) return attestationDeliveryVerification(ticket, requirement);
+    if (requirement.kind === "manual") return manualDeliveryVerification(ticket, requirement);
+    return requirement.command ? null : missingCommandVerification(requirement);
+  }
+  function unexecutedDeliveryVerification(ticket, requirement, opts) {
+    const submitted = reusableSubmittedVerification(ticket, requirement);
+    if (submitted) return submitted;
     if (opts?.skipVerify === true) return skippedVerification(requirement, opts.verificationWaiver);
-    if (requirement.kind === "attestation" || isArtifactSubmission(ticket.submission)) {
-      return {
-        kind: "attestation",
-        status: "attestation",
-        artifact: ticket.submission?.sourceRevision?.value || requirement.artifact || null,
-        evidence: String(ticket.submission?.verify || "").trim()
-      };
-    }
-    if (requirement.kind === "manual") {
-      return { kind: "manual", status: "manual", evidence: String(ticket.submission?.verify || requirement.evidenceContract), command: requirement.command || null };
-    }
-    if (!requirement.command) {
-      return {
-        kind: requirement.kind,
-        status: "could_not_run",
-        evidence: "The prepared verification requirement has no executable command.",
-        command: null,
-        failureIdentities: ["could_not_run:missing-command"]
-      };
-    }
+    if (legacyCustomRequirement(requirement)) return unverifiedDelivery(requirement);
+    return evidenceDeliveryVerification(ticket, requirement);
+  }
+  function verifyDeliveredSubmission(slug, ticket, opts) {
+    const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
+    const unexecuted = unexecutedDeliveryVerification(ticket, requirement, opts);
+    if (unexecuted) return unexecuted;
     const validationError = verifyCommandError(requirement.command);
     if (validationError) {
       return {
@@ -769,7 +810,7 @@ ${JSON.stringify(quality.unverified)}`,
     };
     const participants = opts?.qualityTickets || [ticket];
     const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
-    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
+    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
     const runWithQuality = (environment) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
     return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
   }
@@ -1166,7 +1207,7 @@ ${verify.outputTail}` : null
     return {
       ticket: refs,
       pinnedCommit: String(ticket.submission?.commit || ""),
-      command: pinnedVerificationRequirement(ticket).command || null,
+      command: deliveryVerificationRequirement(ticket).command || null,
       logPath: integrationVerifyLogPath(slug, ticket),
       startedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
@@ -2548,10 +2589,10 @@ ${verify.outputTail}` : null
     return { result, expectedEvidence: null, ...error ? { diagnostic: { code: "invalid_verify", message: error, retryable: true } } : {} };
   }
   function legacyCustomRequirement(requirement) {
-    return requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded";
+    return requirement.kind === "custom" && requirement.evidenceContract === LEGACY_UNRECORDED_VERIFIER;
   }
   function legacyCustomSubmissionVerification(requirement, evidence) {
-    if (!evidence) return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
+    if (!evidence) return { result: unverifiedDelivery(requirement), expectedEvidence: null };
     const error = verifyCommandError(evidence);
     if (error) {
       return {
@@ -3054,8 +3095,36 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: source, supersededBy, comment };
     });
   }
+  function builtOnReplacements(source, followUpRef) {
+    const fragment = commitScope.ticketReleaseFragment(source.ref);
+    const paths = Array.isArray(source.submission?.changedPaths) ? source.submission.changedPaths : [];
+    return paths.map((file) => ({
+      path: file,
+      reviewedBy: followUpRef,
+      reason: file === fragment ? `${followUpRef} moved this release fragment into its own.` : `${followUpRef} delivered this candidate's whole range, and any later change here is its own verified work.`
+    }));
+  }
+  function supersedeBuiltOnSource(slug, followUp, candidate, by) {
+    const source = getTicket(slug, candidate.ref);
+    if (String(source?.submission?.commit || "").toLowerCase() !== candidate.commit) {
+      return { ref: candidate.ref, ok: false, reason: "builds_on_stale", message: `${candidate.ref} no longer holds candidate ${candidate.commit}, so ${followUp.ref}'s delivery does not supersede it.` };
+    }
+    const closed = stillSpawnsInsideItsWrite("closeSubmissionAsSuperseded", () => closeSubmissionAsSuperseded(slug, source.ref, {
+      by,
+      supersededBy: followUp.ref,
+      reason: `${followUp.ref} was dispatched to build on ${source.ref}'s candidate ${candidate.commit} and delivered it inside its own range.`,
+      reviewedReplacements: builtOnReplacements(source, followUp.ref),
+      source: "builds-on-delivery"
+    }));
+    return closed?.ok ? { ref: source.ref, ok: true } : { ref: source.ref, ok: false, reason: closed?.reason, message: closed?.message };
+  }
+  function supersedeBuiltOnSources(slug, followUpRef, by) {
+    const followUp = getTicket(slug, followUpRef);
+    const candidates = (0, import_work_provenance.buildsOnCandidates)(followUp?.submission?.workProvenance ?? followUp?.dispatch?.workProvenance);
+    return candidates.map((candidate) => supersedeBuiltOnSource(slug, followUp, candidate, by));
+  }
   function notOwnerSubmissionMessage(ref, submissionOwner, by, operation) {
-    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}". To request changes as the orchestrator, call MCP rework from the main thread with by omitted; an executor reports the need to the orchestrator instead.`;
     return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
   }
   function submissionOwnershipFailure(ticket, by, opts) {
@@ -3091,6 +3160,18 @@ ${verify.outputTail}` : null
       };
     }
     return null;
+  }
+  function orchestratorReworkFailure(ticket) {
+    if (ticket.status === "done") return { ok: false, reason: "done", ticket };
+    const held = ticket.claim;
+    if (!held?.by) return null;
+    return { ok: false, reason: "not_owner", ticket, claim: held, message: `${ticket.ref} is claimed by "${held.by}"; the orchestrator requests changes only on a parked candidate. Ask the claim holder to release it first.` };
+  }
+  function reworkAuthorityFailure(ticket, by, opts) {
+    return opts.orchestratorSession ? orchestratorReworkFailure(ticket) : submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
+  }
+  function reworkRequester(opts) {
+    return opts.orchestratorSession ? { authority: "orchestrator", sessionId: String(opts.orchestratorSession) } : {};
   }
   function recordSubmissionRejection(slug, idOrRef, opts) {
     opts = opts || {};
@@ -3193,7 +3274,7 @@ ${parts.join("\n\n")}` });
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
-      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
+      const ownershipFailure = reworkAuthorityFailure(ticket, by, opts);
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
       const source = opts.source || "cli";
@@ -3217,6 +3298,7 @@ ${parts.join("\n\n")}` });
         const rejected2 = Object.assign({}, rejectedCandidate, {
           rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
           rejectedBy: by,
+          ...reworkRequester(opts),
           review: review2,
           reason: reason2,
           ...candidate.source === "git" ? { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) } : {},
@@ -3246,6 +3328,7 @@ ${parts.join("\n\n")}` });
       const rejected = Object.assign({}, ticket.submission, {
         rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
         rejectedBy: by,
+        ...reworkRequester(opts),
         review,
         reason,
         ...ticket.submission.sourceRevision ? {} : { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) },
@@ -3359,7 +3442,7 @@ ${parts.join("\n\n")}` });
     return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(", ")}) only need to agree on kind; executable kinds must pin the same command. ${manualCandidateDeliveryGuidance()}`;
   }
   function waveVerificationRequirement(tickets) {
-    const requirements = tickets.map(pinnedVerificationRequirement);
+    const requirements = tickets.map(deliveryVerificationRequirement);
     const first = requirements[0];
     if (!first) return { ok: false, reason: "wave_verification_required", message: "Wave assembly requires a pinned project verification requirement." };
     const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
@@ -3431,6 +3514,7 @@ ${parts.join("\n\n")}` });
     return suppliedWaveVerification(wave.id, requirement.requirement, supplied);
   }
   function suppliedWaveVerification(waveId, requirement, supplied) {
+    if (legacyCustomRequirement(requirement) && !standsForDelivery(supplied)) return { ok: true, verification: unverifiedDelivery(requirement) };
     if (supplied?.kind === requirement.kind) return { ok: true, verification: supplied };
     return {
       ok: false,
@@ -3620,6 +3704,21 @@ ${parts.join("\n\n")}` });
     if (!invalidated.some((entry) => entry.reason === "baseline_moved")) return "";
     return ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}.`;
   }
+  function waveGateFailure(gate, provisioning) {
+    const status = gate.verification.status;
+    if (status === "toolchain_missing") {
+      const provisioningEvidence = provisioning || "The gate did not use an isolated candidate worktree, so worktree provisioning was skipped.";
+      return { reason: "assembled_wave_environment_problem", message: `gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${provisioningEvidence} Provision the missing toolchain and retry; no candidate was rejected.` };
+    }
+    if (status === "unverified") {
+      return { reason: "verification_unverified", message: `gate returned unverified: ${gate.verification.evidence}, so nothing ran. Record a runnable verify on the ticket and integrate again, or pass skipVerify with a verificationWaiver (authority, reason, affectedGate, and scope or expiresAt) to deliver it unverified.` };
+    }
+    return { reason: "assembled_wave_gate_failed", message: `gate returned ${status}. Refresh and reverify its candidates before delivery.` };
+  }
+  function failedWaveGateRefusal(wave, gate, assembly, provisioning) {
+    const failure = waveGateFailure(gate, provisioning);
+    return { ok: false, reason: failure.reason, message: `Wave ${wave.id} ${failure.message}`, wave, assembly, gate };
+  }
   function assembleSubmissionWave(slug, refs, opts) {
     const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
     if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Wave assembly requires one or more submitted participant refs." };
@@ -3717,26 +3816,7 @@ ${parts.join("\n\n")}` });
       }
     });
     if (gate.state === "gate_failed") {
-      const wave = { id: waveId, baseline: opened.baseline, participants: participantRefs };
-      if (gate.verification.status === "toolchain_missing") {
-        const provisioningEvidence = verification.provisioning || "The gate did not use an isolated candidate worktree, so worktree provisioning was skipped.";
-        return {
-          ok: false,
-          reason: "assembled_wave_environment_problem",
-          message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${provisioningEvidence} Provision the missing toolchain and retry; no candidate was rejected.`,
-          wave,
-          assembly: decision.assembly,
-          gate
-        };
-      }
-      return {
-        ok: false,
-        reason: "assembled_wave_gate_failed",
-        message: `Wave ${waveId} gate returned ${gate.verification.status}. Refresh and reverify its candidates before delivery.`,
-        wave,
-        assembly: decision.assembly,
-        gate
-      };
+      return failedWaveGateRefusal({ id: waveId, baseline: opened.baseline, participants: participantRefs }, gate, decision.assembly, verification.provisioning);
     }
     return {
       ok: true,
@@ -3796,6 +3876,6 @@ ${parts.join("\n\n")}` });
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, supersedeBuiltOnSources, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

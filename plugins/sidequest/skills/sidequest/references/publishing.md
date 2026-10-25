@@ -21,7 +21,9 @@ then the board default; a deleted frozen target may use the abandonment path's v
 The publish transaction is lock → delivery → merged-tree gate → central version → review → push →
 reachability → `done`.
 
-At integration, the merged-tree gate also follows static imports from each changed plugin's test directory to the delivery's changed paths, including Sidequest's compiled `lib/` to `src/lib/` identities. The delivery's `verify.integrationTests` records the selected files (including empty selections). Files already covered by the pinned command are excluded from extra runs. Extra files run in one serial test invocation per plugin with at most 600 seconds, using `test:files` where available so typechecking runs once. Above 40 extra files, the gate uses the plugin’s `npm test` script, or one `test:files` invocation over all discovered non-performance files when there is no `test` script. It never invokes `test:full`. Performance and benchmark filenames (including `hooks.perf.test.ts` and `context-budget-benchmark.test.ts`) are excluded from import-walk selection and named in `verify.integrationTests[].excludedFiles`; they remain in CI and `test:full`. The gate log records selection size, batches, exclusions and elapsed time. `verify.importingTestSummary` carries selection size, elapsed time and the exclusion reason; `verify.importingTestResults` lists only failed batches, whose logs identify failed files. A failed batch blocks delivery.
+The merged-tree gate never records `passed` without a command, exit code and log path. When the dispatch pinned no verifier (the legacy `custom` placeholder), the gate runs the ticket's own runnable verify (`executorVerify`, else the submitted `verify`) and records it; genuine `manual:` evidence still stands as `manual`. With no verifier at all, the gate returns `status: "unverified"` with evidence "no project verifier and no pinned verify" and integrate refuses `verification_unverified` before anything merges. Record a runnable verify on the ticket and integrate again, or pass `skipVerify` with a structured `verificationWaiver` (authority, reason, affectedGate, and scope or expiresAt) to deliver it as `skipped` with the waiver recorded.
+
+At integration, the merged-tree gate follows static imports from each changed plugin's test directory, including compiled `lib/` to `src/lib/` identities. Markdown changes under `skills/` or `docs/` also select agent-guidance, skill and compatibility tests; Markdown-only edits do not select store importers. Root `docs/` Markdown selects Sidequest's guidance tests. `verify.integrationTests` records selected files and `excludedFiles`. Files covered by the pinned command need no extra run. Extra files run in one serial `test:files` invocation per plugin (or `node --test` when unavailable). Above the board's `integrationTestFileThreshold` (default 40 extra files, positive integer), the gate runs `npm run test:full` when present, otherwise `npm test`. Full gates own concurrency and exclusions, just as in CI. Selected-file batches exclude performance and benchmark filenames. Every batch honours `integrationVerifyTimeoutMs`, with no separate 600-second cap. The gate log records selections, batch shape, deadline and elapsed milliseconds, including timeout receipts. `verify.importingTestSummary` carries selection size, elapsed time, deadline and the exclusion reason; `verify.importingTestResults` lists failed batches with their command, shape, deadline and elapsed time. A failed batch blocks delivery.
 
 At integration, read the submit report, deliver the range, and run the merged-tree gate once per
 wave. Judge by that oracle and the report, never by reading diffs. When sized risk or a weak oracle
@@ -448,13 +450,25 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For a later gate or push failure, keep the done ticket's failure evidence and either finish the push
   or file the narrowly scoped recovery ticket needed to complete or repair it.
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
-  use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
+  request changes from the main thread with MCP `rework` and `by` omitted (recorded as `authority: "orchestrator"`
+  under your session), or, as the candidate owner, use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
   normal repair claim. Review or reason text over the field caps (1000 and 4000 chars) is stored whole as a
   ticket comment and the field keeps a truncated summary ending in the comment id; it is never refused for
-  length. The MCP `rework` may omit `by` (see invocation-contracts.md). The repair dispatch's briefing carries a "Pending rework" section naming
+  length. Never pass the submitter's label as `by` to get around ownership; omit it instead (see invocation-contracts.md). The repair dispatch's briefing carries a "Pending rework" section naming
   the rejected candidate, reason, and review above the comment thread, so do not restate the rework
   as a comment before dispatching.
+- For a **follow-up that builds on a pending candidate** instead of redoing it, dispatch the follow-up with
+  `workProvenance: { kind: "builds-on", sources: [{ ref, preparedAt, commit }] }` naming the source's current
+  submitted dispatch generation and candidate. Its executor merges `refs/sidequest/<source>` and submits a range
+  that carries the whole source candidate without `duplicate_submission`; the source's changed paths and release
+  fragment are admitted, so the follow-up may `git mv` that fragment into its own. When the follow-up is delivered
+  (`integrate`, or `groomClose` integration/delivery closure), each source still holding that exact candidate is
+  closed as superseded by the follow-up, reported as `supersededSources`; a refusal there (a still-bound review, a
+  resubmitted source) leaves the source pending for `supersede_submission`. Controls follow the undeclared rule:
+  builds-on records lineage, not behavior kind. A source resubmitted after dispatch refuses the follow-up's
+  submit with `builds_on_stale`; re-dispatch it naming the new candidate. Do not integrate the source first and
+  rebase the follow-up by hand.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
   returned an unbound candidate to its producer without a review rejection, and the candidate must
   be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate
@@ -480,3 +494,10 @@ yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's c
 record, recover any durable refs needed for the push, then finish the push or record the failure on the
 ticket. A done ticket alone never
 proves that its commit is reachable from `origin/main`.
+
+Capture and integration command deadlines both default to 25 minutes. Set board_config
+`integrationVerifyTimeoutMs` to a positive integer in milliseconds, up to 3600000 (60 minutes),
+for both paths. Timeout results name the key and effective limit; the owned process tree is
+terminated before the result is reported. Slot waiting and cleanup add to total wall time.
+Capture logs are written directly under the board project
+`verification/<ref>/` directory and stay readable through the returned `logPath`.
