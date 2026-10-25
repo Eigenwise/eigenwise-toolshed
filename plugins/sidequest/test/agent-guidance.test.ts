@@ -25,6 +25,7 @@ test('claimed dispatch guidance names the abandon rule and launching-session rec
   assert.match(orchestration, /one-hour idle rule \(`SIDEQUEST_CLAIM_IDLE_MIN`\) applies only to claims without a dispatch or verification marker/);
   assert.match(orchestration, /launching session can release it with `sidequest release <ref> --by <claim name>`/);
   assert.match(orchestration, /`pulse` and list expose `staleRule` \(`abandon` or `idle`\) alongside `staleAfterMs`/);
+  assert.match(orchestration, /Compact MCP `pulse` keeps both claim fields/);
   assert.doesNotMatch(orchestration, /DID claim[\s\S]{0,100}hour-long idle backstop/);
 });
 

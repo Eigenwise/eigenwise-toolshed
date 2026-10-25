@@ -221,7 +221,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   wait for the 24-hour abandon backstop (`SIDEQUEST_CLAIM_ABANDON_MIN`) after the holder's last board activity,
   unless a durable terminal record proves the executor stopped. The one-hour idle rule (`SIDEQUEST_CLAIM_IDLE_MIN`) applies only to claims without a dispatch or verification marker.
   `pulse` and list expose `staleRule` (`abandon` or `idle`) alongside `staleAfterMs`; the rule names the age
-  threshold, not proof of process death.
+  threshold, not proof of process death. Compact MCP `pulse` keeps both claim fields, so callers can
+  interpret `stale` without a second full read.
   **Known-dead claimed executor, no terminal record.** Once the host confirms the executor died, the
   launching session can release it with `sidequest release <ref> --by <claim name>` (MCP `release` with
   `by` equal to `claim.by`), then dispatch a replacement. Preserve its work. MCP release also requires a
