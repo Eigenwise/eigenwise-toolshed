@@ -702,11 +702,12 @@ test('groomClose delivers a landed candidate despite an overlapping pending sibl
     files: ['feature.txt'],
   });
   submitFixture(slug, participant, fixture);
+  const baseBeforeLanding = head(fixture.repo);
   git(['cherry-pick', fixture.submitted], fixture.repo);
   const landedCommit = head(fixture.repo);
 
   const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-ovl');
-  git(['worktree', 'add', '-b', 'worktree-agent-ovl', siblingWorktree, 'main'], fixture.repo);
+  git(['worktree', 'add', '-b', 'worktree-agent-ovl', siblingWorktree, baseBeforeLanding], fixture.repo);
   const siblingCommit = commitFile(siblingWorktree, 'feature.txt', 'overlapping sibling candidate\n');
   const sibling = store.createTicket(slug, {
     title: 'overlapping pending sibling candidate',
@@ -717,8 +718,9 @@ test('groomClose delivers a landed candidate despite an overlapping pending sibl
   submitFixture(slug, sibling, { ...fixture, executor: siblingWorktree, submitted: siblingCommit });
 
   const assembled = store.assembleSubmissionWave(slug, [participant.ref]);
-  assert.equal(assembled.ok, false);
+  assert.equal(assembled.ok, false, assembled.message);
   assert.equal(assembled.reason, 'candidate_overlap');
+  assert.match(assembled.conflicts[0].evidence, /CONFLICT.*feature.txt/);
 
   const response = await mcp.handleRequest({
     jsonrpc: '2.0',

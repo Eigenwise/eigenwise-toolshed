@@ -3469,12 +3469,24 @@ ${parts.join("\n\n")}` });
     ]);
     return trialWaveMerge(repository, composed, String(participant.submission.commit));
   }
+  function bothCandidatesAreCommits(participant, sibling) {
+    return Boolean(participant.submission?.commit && sibling.submission?.commit);
+  }
+  function guardedCandidateTrial(slug, targetBranch, participant, sibling, surfaces) {
+    try {
+      const repository = String(readMeta(slug).path);
+      const target = integrationGit(repository, ["rev-parse", targetBranch || "HEAD"]);
+      return overlappingCandidateTrial(repository, target, participant, sibling);
+    } catch (error) {
+      return { tree: "", surfaces, evidence: `Trial merge could not run, so the changed-path overlap stands: ${integrationGitError(error)}` };
+    }
+  }
   function trialCandidateConflicts(slug, targetBranch, participant, sibling, surfaces) {
     if (!surfaces.length) return [];
-    const repository = String(readMeta(slug).path);
-    const target = integrationGit(repository, ["rev-parse", targetBranch || "HEAD"]);
-    const trial = overlappingCandidateTrial(repository, target, participant, sibling);
-    return trial.surfaces.length ? [{ participant: participant.ref, sibling: sibling.ref, surfaces: trial.surfaces, evidence: trial.evidence }] : [];
+    const pair = { participant: participant.ref, sibling: sibling.ref, surfaces };
+    if (!bothCandidatesAreCommits(participant, sibling)) return [pair];
+    const trial = guardedCandidateTrial(slug, targetBranch, participant, sibling, surfaces);
+    return trial.surfaces.length ? [{ ...pair, surfaces: trial.surfaces, evidence: trial.evidence }] : [];
   }
   function waveScopeConflicts(slug, tickets, targetBranch) {
     const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
@@ -3493,20 +3505,14 @@ ${parts.join("\n\n")}` });
     return conflicts;
   }
   function waveScopeRefusal(slug, tickets, targetBranch) {
-    try {
-      const scopeConflicts = waveScopeConflicts(slug, tickets, targetBranch);
-      if (scopeConflicts.length) {
-        return {
-          ok: false,
-          reason: "candidate_overlap",
-          conflicts: scopeConflicts,
-          message: `Wave assembly paused because submitted candidates overlap in a trial merge: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Resolve the reported textual conflicts before assembling these candidates. ${manualCandidateDeliveryGuidance()}`
-        };
-      }
-    } catch (error) {
-      return { ok: false, reason: "candidate_overlap_trial_failed", message: integrationGitError(error) };
-    }
-    return null;
+    const scopeConflicts = waveScopeConflicts(slug, tickets, targetBranch);
+    if (!scopeConflicts.length) return null;
+    return {
+      ok: false,
+      reason: "candidate_overlap",
+      conflicts: scopeConflicts,
+      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Each conflict's evidence carries the trial merge's textual conflict, or why the trial could not run; candidates without a Git commit overlap by changed path. Resolve the reported conflicts before assembling these candidates. ${manualCandidateDeliveryGuidance()}`
+    };
   }
   function omittedPendingSubmissionOverlaps(slug, tickets) {
     if (tickets.length !== 1) return [];
@@ -3537,7 +3543,13 @@ ${parts.join("\n\n")}` });
     if (!compatibleWaveVerifiers(requirements, identity)) {
       return { ok: false, reason: "wave_verifier_mismatch", message: waveVerifierMismatchMessage(tickets, requirements) };
     }
-    return { ok: true, requirement: first, requirements };
+    return { ok: true, requirement: first, requirements: distinctWaveVerifiers(requirements) };
+  }
+  function sameWaveVerifier(left, right) {
+    return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment;
+  }
+  function distinctWaveVerifiers(requirements) {
+    return requirements.filter((requirement, index) => requirements.findIndex((other) => sameWaveVerifier(other, requirement)) === index);
   }
   function compatibleWaveVerifiers(requirements, identity) {
     if (requirements.every((requirement) => requirement.command)) return true;

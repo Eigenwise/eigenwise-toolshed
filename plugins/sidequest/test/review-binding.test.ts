@@ -786,6 +786,7 @@ test('public wave assembly keeps overlap protection for an accepted pending cand
 
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'candidate_overlap');
+  assert.match(refused.conflicts[0].evidence, /Trial merge could not run, so the changed-path overlap stands/);
   assert.match(refused.message, new RegExp(`${participant.ref} and ${acceptedSibling.ref}`));
 });
 

@@ -654,6 +654,6 @@ Capture logs are written directly under the board project
 
 ### Candidates sharing a file
 
-Sidequest checks overlapping pending candidates with a checkout-free trial merge against their recorded target. Disjoint edits in the same file can integrate as singletons. Textual conflicts still refuse `candidate_overlap`, with the conflicting files and Git evidence.
+Sidequest checks overlapping pending candidates with a checkout-free trial merge against their recorded target. Disjoint edits in the same file can integrate as singletons. Textual conflicts still refuse `candidate_overlap`, with the conflicting files and Git evidence. If the trial can't run, or a candidate has no Git commit, the shared changed paths still refuse `candidate_overlap`.
 
-An assembled wave can pin different executable verifiers. Each command runs in order on the composed tree, and the receipt records each result. A failing command blocks delivery. Shared-environment requirements stay deferred until delivery.
+An assembled wave can pin different executable verifiers. Each distinct command runs once, in order, on the composed tree, and the receipt records each result. A failing command blocks delivery. Shared-environment requirements stay deferred until delivery.

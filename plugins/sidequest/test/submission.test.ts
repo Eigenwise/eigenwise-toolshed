@@ -5637,7 +5637,7 @@ test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement
     pinVerifiers([['suite', 'node -e "process.exit(0)"'], ['suite', 'node -e "process.exit(0);"'], ['suite', 'node -e "process.exit(0)"']]);
     const suites = store.assembleSubmissionWave(slug, refs);
     assert.strictEqual(suites.ok, true, suites.message);
-    assert.strictEqual(suites.gate.verification.results.length, 3);
+    assert.deepStrictEqual(suites.gate.verification.results.map((result: { command: string }) => result.command), ['node -e "process.exit(0)"', 'node -e "process.exit(0);"'], 'participants pinning the same command share one run');
   } finally {
     for (const ticket of participants) {
       persist(Object.assign(store.getTicket(slug, ticket.ref), { archived: true }));
