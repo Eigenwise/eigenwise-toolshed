@@ -223,6 +223,14 @@ function bindObservedRuntimeIdentity(input, agentId, executor, worktree) {
 }
 
 // src/hooks/bind-runtime-identity.ts
+function reducedSchemaIdentityRefusal(ref, reason) {
+  return `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity (${reason || "unknown reason"}). Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`;
+}
+function claimBindingDenial(ref, binding) {
+  if (binding?.reason === "worktree_lease_crossed") return String(binding.message);
+  if (binding?.ticket?.dispatch?.reducedAgentSchema !== true || binding.ok) return null;
+  return binding.message || reducedSchemaIdentityRefusal(ref, binding.reason);
+}
 function bindClaimRuntimeIdentity(input, agentId, executor) {
   if (stringField(input, "tool_name") !== "mcp__plugin_sidequest_board__claim" || !isRecord(input.tool_input)) return false;
   const toolInput = input.tool_input;
@@ -244,12 +252,8 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
         permissionMode: stringField(input, "permission_mode"),
         sessionId
       });
-      if (binding?.ticket?.dispatch?.reducedAgentSchema === true && !binding.ok) {
-        writeDeny(
-          "PreToolUse",
-          binding.message || `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity (${binding.reason || "unknown reason"}). Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`
-        );
-      }
+      const denial = claimBindingDenial(ref, binding);
+      if (denial) writeDeny("PreToolUse", denial);
     }
   } catch (_) {
   }

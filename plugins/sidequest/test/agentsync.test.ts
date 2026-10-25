@@ -1171,7 +1171,7 @@ test('briefings surface resolved worktree identities for linked and shared dispa
 
   const linkedGitDirectory = path.join(root, '.git', 'worktrees', 'recorded-lease');
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
-    dispatch: { sharedTree: false, worktree: linkedWorktree, worktreeGitDirectory: linkedGitDirectory },
+    dispatch: { sharedTree: false, worktree: linkedWorktree, worktreeGitDirectory: linkedGitDirectory, claimedAt: '2026-10-25T00:00:00.000Z' },
   }), 'linked-token', undefined, root);
   assert.ok(linked.includes('Worktree identity: linked worktree'));
   assert.ok(linked.includes(`Path: ${linkedWorktree}`));
@@ -1179,6 +1179,14 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(!linked.includes(path.join(root, '.git', 'worktrees', 'agent-briefing-worker')));
   assert.match(linked, /harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path/);
   assert.doesNotMatch(linked, /Working directory binding:/);
+
+  // GH-640: before the claim the recorded checkout is a creation-order guess a sibling may hold, so it is never printed.
+  const unsettled = agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: false, worktree: linkedWorktree, worktreeGitDirectory: linkedGitDirectory },
+  }), 'unsettled-token', undefined, root);
+  assert.ok(!unsettled.includes(linkedWorktree), 'an unclaimed isolated briefing prints no provisional path');
+  assert.match(unsettled, /Path: the `worktree` your claim result names \(this binding settles at claim/);
+  assert.match(unsettled, /Expected worktree root: the `worktree` your claim result names/);
 
   const shared = agentsync.renderTicketBriefing(Object.assign({}, base, {
     dispatch: { sharedTree: true },
@@ -1222,7 +1230,7 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
   assert.doesNotMatch(sharedCommand, /--base64/);
 
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
-    dispatch: { sharedTree: false, worktree: linkedWorktree },
+    dispatch: { sharedTree: false, worktree: linkedWorktree, claimedAt: '2026-10-25T00:00:00.000Z' },
   }), 'linked-token', undefined, root);
   const linkedCommand = commandLine(linked);
   const canonicalWorktree = worktreeLease.canonicalPath(linkedWorktree);
@@ -1231,6 +1239,12 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
   // Without a bound worktree the command is byte-identical to today's: the only
   // difference is the appended --worktree flag.
   assert.equal(linkedCommand.replace(` --worktree ${JSON.stringify(canonicalWorktree)}`, ''), sharedCommand);
+
+  const unsettledCommand = commandLine(agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: false, worktree: linkedWorktree },
+  }), 'unsettled-token', undefined, root));
+  assert.ok(unsettledCommand.includes('--worktree "<worktree from your claim result>"'), 'an unsettled binding names where the root comes from');
+  assert.ok(!unsettledCommand.includes(canonicalWorktree));
 
   const noDispatch = agentsync.renderTicketBriefing(Object.assign({}, base), 'no-dispatch-token', undefined, root);
   assert.equal(commandLine(noDispatch), sharedCommand);

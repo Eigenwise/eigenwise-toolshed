@@ -249,6 +249,15 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   session and the checkout. It refuses `stale_attempt` when a retired attempt still holds the checkout rather than
   handing a late hook some other live attempt, and refuses `missing_attempt` rather than letting a generation-less
   second caller acquire the live generation of a checkout that is still being created.
+  **Nothing in a WorktreeCreate payload names the Agent call or the ticket** (Claude Code 2.1.310 sends session id,
+  cwd, prompt id and the `agent-<id>` name it generates inside the call), so same-message siblings are attributed in
+  creation order and the claim settles the guess. So an unclaimed isolated briefing prints no worktree path (Path,
+  Expected worktree root and verify-capture `--worktree` name the claim result instead), and every isolated claim
+  result carries the settled `worktree` (GH-640). A claim from a linked checkout the lease does not record, which no
+  swap can settle, is denied by the claim hook with `worktree_lease_crossed` naming both paths and is never admitted
+  (GH-648); the executor stops without writing and reports it, and the orchestrator redispatches. The hook also follows the session id to one board, so `dispatch`
+  refuses an isolated dispatch while this session holds a PREPARED or launched isolated dispatch on another board,
+  from either side (GH-665): prepare and spawn one board's batch, let it claim or finish, then the other's.
   **A WorktreeCreate that fails before its checkout exists** (lease refusal, an occupied destination, a failed
   `git worktree add`) records the attempt `failed` with `worktree_create_failed` and the hook error, and clears its
   binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`. While another

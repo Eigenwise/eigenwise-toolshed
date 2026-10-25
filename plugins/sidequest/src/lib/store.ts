@@ -53,7 +53,7 @@ const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, gatewayCatalogRefreshFailure, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
-const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require('./refusal-guidance.js');
+const { crossedClaimLeaseMessage, negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
@@ -635,6 +635,7 @@ const {
   bindDispatchClaimToken,
   exchangeGuessedClaimIdentity,
   exchangeCrossedClaimCheckout,
+  crossedClaimLease,
   settleDeferredStops,
   tokenAdmission,
   bindDispatchAgent,
@@ -2475,6 +2476,17 @@ function reducedPermissionModeSupported(mode: unknown): boolean {
   return mode === 'auto' || mode === 'bypassPermissions';
 }
 
+function preparingSessionClaims(state?: any, claimingSessionId?: any) {
+  const sessionId = String(claimingSessionId || '').trim();
+  return Boolean(sessionId) && String(state.sessionId || '').trim() === sessionId;
+}
+
+function claimRuntimeRefusal(ticket?: any, state?: any, opts?: any) {
+  if (!preparingSessionClaims(state, opts?.sessionId)) return { ok: false, reason: 'session_mismatch', ticket };
+  const lease = crossedClaimLease(state, opts?.observedWorktree);
+  return lease ? { ok: false, reason: 'worktree_lease_crossed', ticket, ...lease, message: crossedClaimLeaseMessage(ticket.ref, lease) } : null;
+}
+
 function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
   const agentId = String(opts?.agentId || '').trim();
   const observedPermissionMode = String(opts?.permissionMode || '').trim();
@@ -2509,10 +2521,8 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     // belongs to the session that prepared the reservation (hook stdin cannot
     // name an agent_name; Claude Code's hook schema carries agent_id and
     // agent_type only), the same match dispatchCanBindRuntimeIdentity requires.
-    const sessionId = String(opts?.sessionId || '').trim();
-    if (!sessionId || String(state.sessionId || '').trim() !== sessionId) {
-      return { ok: false, reason: 'session_mismatch', ticket };
-    }
+    const runtimeRefusal = claimRuntimeRefusal(ticket, state, opts);
+    if (runtimeRefusal) return runtimeRefusal;
     const boundAgentId = String(state.agentId || '').trim();
     if (boundAgentId && boundAgentId !== agentId) {
       return { ok: false, reason: 'runtime_identity_mismatch', ticket };

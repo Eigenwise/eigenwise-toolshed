@@ -27,7 +27,7 @@ const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, gatewayCatalogRefreshFailure, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
-const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require("./refusal-guidance.js");
+const { crossedClaimLeaseMessage, negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
@@ -723,6 +723,7 @@ const {
   bindDispatchClaimToken,
   exchangeGuessedClaimIdentity,
   exchangeCrossedClaimCheckout,
+  crossedClaimLease,
   settleDeferredStops,
   tokenAdmission,
   bindDispatchAgent,
@@ -2227,6 +2228,15 @@ function claimAdmission(slug, idOrRef, opts) {
 function reducedPermissionModeSupported(mode) {
   return mode === "auto" || mode === "bypassPermissions";
 }
+function preparingSessionClaims(state, claimingSessionId) {
+  const sessionId = String(claimingSessionId || "").trim();
+  return Boolean(sessionId) && String(state.sessionId || "").trim() === sessionId;
+}
+function claimRuntimeRefusal(ticket, state, opts) {
+  if (!preparingSessionClaims(state, opts?.sessionId)) return { ok: false, reason: "session_mismatch", ticket };
+  const lease = crossedClaimLease(state, opts?.observedWorktree);
+  return lease ? { ok: false, reason: "worktree_lease_crossed", ticket, ...lease, message: crossedClaimLeaseMessage(ticket.ref, lease) } : null;
+}
 function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
   const agentId = String(opts?.agentId || "").trim();
   const observedPermissionMode = String(opts?.permissionMode || "").trim();
@@ -2252,10 +2262,8 @@ function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
     if (!state || state.terminalAt || !["prepared", "launched", "claimed"].includes(state.outcome)) {
       return { ok: false, reason: "dispatch_unavailable", ticket };
     }
-    const sessionId = String(opts?.sessionId || "").trim();
-    if (!sessionId || String(state.sessionId || "").trim() !== sessionId) {
-      return { ok: false, reason: "session_mismatch", ticket };
-    }
+    const runtimeRefusal = claimRuntimeRefusal(ticket, state, opts);
+    if (runtimeRefusal) return runtimeRefusal;
     const boundAgentId = String(state.agentId || "").trim();
     if (boundAgentId && boundAgentId !== agentId) {
       return { ok: false, reason: "runtime_identity_mismatch", ticket };
