@@ -3406,6 +3406,43 @@ ${parts.join("\n\n")}` });
     const siblingChanges = scopedPaths(sibling?.submission?.changedPaths);
     return scopedPaths(participant?.submission?.changedPaths).filter((surface) => isInScope(surface, siblingChanges));
   }
+  function trialWaveMerge(repository, left, right) {
+    const result = spawnSync("git", ["merge-tree", "--write-tree", "--name-only", left, right], {
+      cwd: repository,
+      encoding: "utf8",
+      timeout: 3e4,
+      windowsHide: true
+    });
+    if (result.error) throw result.error;
+    if (result.status === 0) return { tree: String(result.stdout).trim(), surfaces: [], evidence: "" };
+    if (result.status !== 1) throw new Error(String(result.stderr));
+    const output = String(result.stdout).trim();
+    return { tree: "", surfaces: (output.split(/\r?\n\r?\n/)[0] || "").split(/\r?\n/).slice(1), evidence: output };
+  }
+  function overlappingCandidateTrial(repository, target, participant, sibling) {
+    const siblingCommit = String(sibling.submission.commit);
+    const appliedSibling = trialWaveMerge(repository, target, siblingCommit);
+    if (appliedSibling.surfaces.length) return appliedSibling;
+    const composed = integrationGit(repository, [
+      ...COMPOSED_WAVE_MERGE_CONFIG,
+      "commit-tree",
+      appliedSibling.tree,
+      "-p",
+      target,
+      "-p",
+      siblingCommit,
+      "-m",
+      "Sidequest overlap trial"
+    ]);
+    return trialWaveMerge(repository, composed, String(participant.submission.commit));
+  }
+  function trialCandidateConflicts(slug, targetBranch, participant, sibling, surfaces) {
+    if (!surfaces.length) return [];
+    const repository = String(readMeta(slug).path);
+    const target = integrationGit(repository, ["rev-parse", targetBranch || "HEAD"]);
+    const trial = overlappingCandidateTrial(repository, target, participant, sibling);
+    return trial.surfaces.length ? [{ participant: participant.ref, sibling: sibling.ref, surfaces: trial.surfaces, evidence: trial.evidence }] : [];
+  }
   function waveScopeConflicts(slug, tickets, targetBranch) {
     const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
     const boardTickets = listTickets(slug);
@@ -3417,10 +3454,26 @@ ${parts.join("\n\n")}` });
         if (!submissionWasRecordedAfter(sibling, participant)) continue;
         if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
         const surfaces = collidingChangedPaths(participant, sibling);
-        if (surfaces.length) conflicts.push({ participant: participant.ref, sibling: sibling.ref, surfaces });
+        conflicts.push(...trialCandidateConflicts(slug, targetBranch, participant, sibling, surfaces));
       }
     }
     return conflicts;
+  }
+  function waveScopeRefusal(slug, tickets, targetBranch) {
+    try {
+      const scopeConflicts = waveScopeConflicts(slug, tickets, targetBranch);
+      if (scopeConflicts.length) {
+        return {
+          ok: false,
+          reason: "candidate_overlap",
+          conflicts: scopeConflicts,
+          message: `Wave assembly paused because submitted candidates overlap in a trial merge: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Resolve the reported textual conflicts before assembling these candidates. ${manualCandidateDeliveryGuidance()}`
+        };
+      }
+    } catch (error) {
+      return { ok: false, reason: "candidate_overlap_trial_failed", message: integrationGitError(error) };
+    }
+    return null;
   }
   function omittedPendingSubmissionOverlaps(slug, tickets) {
     if (tickets.length !== 1) return [];
@@ -3439,7 +3492,7 @@ ${parts.join("\n\n")}` });
   function waveVerifierMismatchMessage(tickets, requirements) {
     const pinnedKinds = tickets.map((ticket, index) => `${ticket.ref} ${requirements[index].kind}`).join(", ");
     const difference = new Set(requirements.map((requirement) => requirement.kind)).size > 1 ? `pin different verifier kinds (${pinnedKinds})` : `all pin kind ${requirements[0].kind} but with different commands or evidence (${pinnedKinds})`;
-    return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(", ")}) only need to agree on kind; executable kinds must pin the same command. ${manualCandidateDeliveryGuidance()}`;
+    return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(", ")}) only need to agree on kind; executable requirements run each pinned command on the composed tree. ${manualCandidateDeliveryGuidance()}`;
   }
   function waveVerificationRequirement(tickets) {
     const requirements = tickets.map(deliveryVerificationRequirement);
@@ -3448,10 +3501,14 @@ ${parts.join("\n\n")}` });
     const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
     if (sameKind && NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.includes(first.kind)) return { ok: true, requirement: first };
     const identity = waveVerifierIdentity(first);
-    if (requirements.some((requirement) => waveVerifierIdentity(requirement) !== identity)) {
+    if (!compatibleWaveVerifiers(requirements, identity)) {
       return { ok: false, reason: "wave_verifier_mismatch", message: waveVerifierMismatchMessage(tickets, requirements) };
     }
-    return { ok: true, requirement: first };
+    return { ok: true, requirement: first, requirements };
+  }
+  function compatibleWaveVerifiers(requirements, identity) {
+    if (requirements.every((requirement) => requirement.command)) return true;
+    return requirements.every((requirement) => waveVerifierIdentity(requirement) === identity);
   }
   function provisionWaveGateWorktree(slug, candidateWorktree) {
     if (!candidateWorktree) {
@@ -3503,15 +3560,21 @@ ${parts.join("\n\n")}` });
     const requirement = waveVerificationRequirement(tickets);
     if (!requirement.ok) return requirement;
     if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
-    if (requirement.requirement.environment === "shared") {
+    if (waveNeedsSharedEnvironment(requirement.requirement, requirement.requirements)) {
       return {
         ok: true,
         provisioning: "The gate deferred to the environment lane: the pinned command runs in the shared checkout at delivery, so nothing ran and worktree provisioning was skipped.",
-        verification: deferredVerification(requirement.requirement)
+        verification: deferredWaveVerification(requirement.requirement, requirement.requirements)
       };
     }
-    if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement);
+    if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement, requirement.requirements);
     return suppliedWaveVerification(wave.id, requirement.requirement, supplied);
+  }
+  function waveNeedsSharedEnvironment(requirement, requirements = [requirement]) {
+    return requirements.some((entry) => entry.environment === "shared");
+  }
+  function deferredWaveVerification(requirement, requirements = [requirement]) {
+    return { ...deferredVerification(requirement), results: requirements.map(deferredVerification) };
   }
   function suppliedWaveVerification(waveId, requirement, supplied) {
     if (legacyCustomRequirement(requirement) && !standsForDelivery(supplied)) return { ok: true, verification: unverifiedDelivery(requirement) };
@@ -3522,7 +3585,7 @@ ${parts.join("\n\n")}` });
       message: `Wave ${waveId} requires recorded ${requirement.kind} gate evidence from the project-defined verifier before delivery.`
     };
   }
-  function commandWaveVerification(slug, tickets, wave, requirement) {
+  function commandWaveVerification(slug, tickets, wave, requirement, requirements = [requirement]) {
     const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement) : null;
     if (reused) {
       return {
@@ -3534,7 +3597,7 @@ ${parts.join("\n\n")}` });
     const checkout = waveGateCheckout(slug, tickets, wave);
     if (!checkout.ok) return checkout;
     try {
-      return verifyWaveGateCheckout(slug, wave.id, requirement, checkout);
+      return verifyWaveGateCheckout(slug, wave.id, requirements, checkout);
     } finally {
       checkout.remove();
     }
@@ -3573,7 +3636,7 @@ ${parts.join("\n\n")}` });
     fs.rmSync(checkout, { recursive: true, force: true });
     integrationGit(repository, ["worktree", "prune"]);
   }
-  function verifyWaveGateCheckout(slug, waveId, requirement, checkout) {
+  function verifyWaveGateCheckout(slug, waveId, requirements, checkout) {
     const provisioning = provisionWaveGateWorktree(slug, checkout.isolatedWorktree);
     if (!provisioning.ok) {
       return {
@@ -3582,14 +3645,25 @@ ${parts.join("\n\n")}` });
         message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`
       };
     }
-    (0, import_integration_tests.reportIntegrationProgress)("wave gate", requirement.command);
-    const verification = runProcessVerification(requirement, {
-      cwd: checkout.cwd,
-      timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
-      logPath: integrationVerifyLogPath(slug, { ref: waveId }),
-      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+    return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
+  }
+  function verifyWaveCommands(slug, waveId, requirements, checkout) {
+    const results = requirements.map((requirement, index) => {
+      (0, import_integration_tests.reportIntegrationProgress)("wave gate", requirement.command);
+      const verification = runProcessVerification(requirement, {
+        cwd: checkout.cwd,
+        timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
+        logPath: integrationVerifyLogPath(slug, { ref: waveId + "-" + index }),
+        outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+      });
+      return checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification;
     });
-    return { ok: true, provisioning: provisioning.evidence, verification: checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification };
+    const result = results.find((verification) => !verificationAccepted(verification)) || results[0];
+    return {
+      ...result,
+      results,
+      evidence: results.map((verification) => verification.command + ": " + verification.status + ". " + verification.evidence).join("\n")
+    };
   }
   function singletonWaveParticipant(wave, ref) {
     const participants = Array.isArray(wave.participants) ? wave.participants : [];
@@ -3758,15 +3832,8 @@ ${parts.join("\n\n")}` });
       return { ok: false, reason: "wave_baseline_required", message: "Every submitted candidate must retain its dispatch baseline, changed surfaces, and verifier evidence before wave assembly." };
     }
     const waveCandidates = candidates.filter((candidate) => candidate !== null);
-    const scopeConflicts = waveScopeConflicts(slug, tickets, target?.branch);
-    if (scopeConflicts.length) {
-      return {
-        ok: false,
-        reason: "candidate_overlap",
-        conflicts: scopeConflicts,
-        message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton. ${manualCandidateDeliveryGuidance()}`
-      };
-    }
+    const scopeRefusal = waveScopeRefusal(slug, tickets, target?.branch);
+    if (scopeRefusal) return scopeRefusal;
     const firstCandidate = waveCandidates[0];
     if (!firstCandidate) return { ok: false, reason: "wave_baseline_required", message: "Wave assembly requires a candidate baseline." };
     const omittedPendingOverlaps = omittedPendingSubmissionOverlaps(slug, tickets);

@@ -1382,7 +1382,7 @@ function gateProbe(verification: any) {
   return JSON.parse(line.slice('SQ_GATE_PROBE '.length));
 }
 
-function twoCandidateWave(label: string, verify: string) {
+function twoCandidateWave(label: string, verify: string, secondVerify = verify) {
   const fixture = makeRepo(label);
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
   git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
@@ -1395,7 +1395,7 @@ function twoCandidateWave(label: string, verify: string) {
     files: [file],
   }));
   submitFixture(slug, first, fixture, verify);
-  submitFixture(slug, second, { executor: secondWorktree, submitted: secondCommit }, verify);
+  submitFixture(slug, second, { executor: secondWorktree, submitted: secondCommit }, secondVerify);
   return { fixture, slug, secondWorktree, refs: [first.ref, second.ref] };
 }
 
@@ -1422,6 +1422,21 @@ test('GH-273: a multi-ticket gate runs the pinned command in the composed wave t
   assert.equal(head(fixture.repo), projectHead, 'the gate never moves the project checkout');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
 });
+
+for (const secondPasses of [true, false]) {
+  test('SQ-3911: different pinned commands both inspect the composed tree, second passes=' + secondPasses, () => {
+    const firstCommand = gateProbeVerify("fs.existsSync('feature.txt')&&fs.existsSync('second.txt')");
+    const secondCommand = gateProbeVerify("fs.existsSync('feature.txt')&&fs.existsSync('second.txt')&&" + secondPasses);
+    const { slug, refs } = twoCandidateWave('different-verifiers', firstCommand, secondCommand);
+    const assembled = store.assembleSubmissionWave(slug, refs);
+    assert.equal(assembled.ok, secondPasses, JSON.stringify(assembled));
+    assert.ok(assembled.gate, 'executable verifier differences must reach composed-tree gate');
+    const verification = assembled.gate.verification;
+    assert.deepEqual(verification.results.map((result: { command: string }) => result.command), [firstCommand, secondCommand]);
+    assert.deepEqual(verification.results.map((result: { status: string }) => result.status), ['passed', secondPasses ? 'passed' : 'failed_suite']);
+    assert.equal(gateProbe(verification.results[0]).tree, gateProbe(verification.results[1]).tree);
+  });
+}
 
 test('GH-246: a multi-ticket gate fails when the composed candidates fail even though the baseline passes', () => {
   const { slug, refs } = twoCandidateWave('wave-gate-baseline-passes', gateProbeVerify("!fs.existsSync('second.txt')"));

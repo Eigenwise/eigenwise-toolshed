@@ -644,3 +644,9 @@ Timeout results name the key and effective limit; the owned process tree is
 terminated before the result is reported. Slot waiting and cleanup add to total wall time.
 Capture logs are written directly under the board project
 `verification/<ref>/` directory and stay readable through the returned `logPath`.
+
+### Candidates sharing a file
+
+Sidequest checks overlapping pending candidates with a checkout-free trial merge against their recorded target. Disjoint edits in the same file can integrate as singletons. Textual conflicts still refuse `candidate_overlap`, with the conflicting files and Git evidence.
+
+An assembled wave can pin different executable verifiers. Each command runs in order on the composed tree, and the receipt records each result. A failing command blocks delivery. Shared-environment requirements stay deferred until delivery.

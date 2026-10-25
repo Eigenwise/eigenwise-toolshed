@@ -49,6 +49,7 @@ export type VerificationResult = Readonly<{
   waiver?: VerificationWaiver;
   diagnostics?: readonly Diagnostic[];
   verifiedTree?: string;
+  results?: readonly VerificationResult[];
 }>;
 
 export type CompletedVerificationCapture = Readonly<{
