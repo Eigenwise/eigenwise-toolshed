@@ -18,6 +18,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var review_binding_exports = {};
 __export(review_binding_exports, {
+  MAIN_ATTESTATION_BIND_SOURCE: () => MAIN_ATTESTATION_BIND_SOURCE,
   completedReviewAttempt: () => completedReviewAttempt,
   effectiveOracleVerdictOutcome: () => effectiveOracleVerdictOutcome,
   isReviewCommit: () => isReviewCommit,
@@ -31,7 +32,9 @@ __export(review_binding_exports, {
   reviewRelationRef: () => reviewRelationRef,
   reviewVerdictHistory: () => reviewVerdictHistory,
   sameReviewCandidate: () => sameReviewCandidate,
-  submittedCandidateAttempt: () => submittedCandidateAttempt
+  submittedCandidateAttempt: () => submittedCandidateAttempt,
+  submittedSourceGenerationCurrent: () => submittedSourceGenerationCurrent,
+  submittedSourceIdentity: () => submittedSourceIdentity
 });
 module.exports = __toCommonJS(review_binding_exports);
 const REVIEW_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -103,15 +106,34 @@ function boundThroughClaimToken(attempt) {
   if (attempt && "bindSource" in attempt) return String(attempt.bindSource || "").trim() === "claim_token";
   return Boolean(String(attempt?.boundAt || "").trim());
 }
-function identifiedAttempt(attempt, claimTokenStandsAsIdentity) {
+const MAIN_ATTESTATION_BIND_SOURCE = "main_attestation";
+function mainAttestedSessionId(attempt) {
+  if (String(attempt?.bindSource || "").trim() !== MAIN_ATTESTATION_BIND_SOURCE) return "";
+  return String(attempt?.sessionId || "").trim();
+}
+function mainAttestedIdentity(attempt) {
+  const sessionId = mainAttestedSessionId(attempt);
+  if (!sessionId) return null;
+  return Object.freeze({
+    agentId: "",
+    agentName: "",
+    tokenPrefix: "",
+    sessionId,
+    identity: `main:${sessionId}`,
+    terminalAt: String(attempt.terminalAt),
+    outcome: String(attempt.outcome || "")
+  });
+}
+function identifiedAttempt(attempt, submittingSide) {
   const agentId = String(attempt?.agentId || "").trim();
   const agentName = String(attempt?.agentName || "").trim();
   const tokenPrefix = String(attempt?.tokenPrefix || "").trim();
-  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
+  if (!agentId && !(submittingSide && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
   return Object.freeze({
     agentId,
     agentName,
     tokenPrefix,
+    sessionId: "",
     identity: agentId ? `agent:${agentId}` : `claim:${tokenPrefix}/${agentName}`,
     terminalAt: String(attempt.terminalAt),
     outcome: String(attempt.outcome || "")
@@ -123,7 +145,31 @@ function sameRuntimeIdentity(source, reviewer) {
 function submittedCandidateAttempt(sourceTicket) {
   const commit = String(sourceTicket?.submission?.commit || "").trim().toLowerCase();
   if (!commit) return null;
+  if (!sourceTicket.dispatch) return directSubmissionAttempt(sourceTicket.submission, commit);
   return latestAttempt(terminalAttempts(sourceTicket).filter((attempt) => String(attempt.outcome) === "submitted" && String(attempt.commit || "").trim().toLowerCase() === commit));
+}
+function directSubmissionAttempt(submission, commit) {
+  const attestation = submission?.mainAttestation;
+  const sessionId = String(attestation?.sessionId || "").trim();
+  if (attestation?.authority !== "main-attestation" || !sessionId) return null;
+  return Object.freeze({
+    outcome: "submitted",
+    commit,
+    bindSource: MAIN_ATTESTATION_BIND_SOURCE,
+    sessionId,
+    terminalAt: String(submission.at || "")
+  });
+}
+function submittingIdentity(attempt) {
+  return mainAttestedIdentity(attempt) || identifiedAttempt(attempt, true);
+}
+function submittedSourceIdentity(sourceTicket) {
+  return submittingIdentity(submittedCandidateAttempt(sourceTicket));
+}
+function submittedSourceGenerationCurrent(sourceTicket, source) {
+  if (!source) return false;
+  if (!sourceTicket?.dispatch) return String(sourceTicket?.submission?.at || "") === source.terminalAt;
+  return sourceTicket.dispatch.outcome === "submitted" && sourceTicket.dispatch.terminalAt === source.terminalAt;
 }
 function completedReviewAttempt(reviewTicket) {
   const acceptedOracleCompletion = reviewTicket?.completion?.purpose === "oracle-review-verdict";
@@ -134,7 +180,7 @@ function reviewProvenance(sourceTicket, reviewTicket) {
   if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: "source_attempt_missing" });
   const reviewerAttempt = completedReviewAttempt(reviewTicket);
   if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: "review_attempt_missing" });
-  const source = identifiedAttempt(sourceAttempt, true);
+  const source = submittingIdentity(sourceAttempt);
   const reviewer = identifiedAttempt(reviewerAttempt, false);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: "agent_identity_missing" });
   if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
@@ -195,6 +241,7 @@ function reviewLockMessage(operation, ticket, relation) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  MAIN_ATTESTATION_BIND_SOURCE,
   completedReviewAttempt,
   effectiveOracleVerdictOutcome,
   isReviewCommit,
@@ -208,5 +255,7 @@ function reviewLockMessage(operation, ticket, relation) {
   reviewRelationRef,
   reviewVerdictHistory,
   sameReviewCandidate,
-  submittedCandidateAttempt
+  submittedCandidateAttempt,
+  submittedSourceGenerationCurrent,
+  submittedSourceIdentity
 });

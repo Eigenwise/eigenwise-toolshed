@@ -258,6 +258,11 @@ function completedBoundReview(ticket: AttestedReviewTicket, relation: ReviewRela
   return [!relation.conflict, review.status === 'done' || mainAttestedReviewOutcome(ticket, review) === 'accepted'].every(Boolean);
 }
 
+// dispatch, rework, and reclaim all refuse a submitted candidate under review, so only a fresh ticket recovers it.
+const UNIDENTIFIED_SOURCE_ROUTES = 'This bound candidate cannot be redispatched, reworked, or reclaimed.'
+  + ' Recover with a fresh ticket carrying the same change: dispatch it, or direct-claim it from the main thread, so its submission records an identity,'
+  + ' bind a new review to that candidate, and once it integrates retire this one with supersede_submission';
+
 function terminalReviewFailure(ticket: any, relation: any) {
   const reviewTicket = relation.reviewTicket;
   if (!completedBoundReview(ticket, relation)) {
@@ -271,7 +276,8 @@ function terminalReviewFailure(ticket: any, relation: any) {
   if (mainAttestedReviewOutcome(ticket, reviewTicket) === 'accepted') return null;
   const provenance = reviewProvenance(ticket, reviewTicket);
   if (provenance.reason === 'source_attempt_missing') {
-    return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`;
+    return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`
+      + ` and no main-attestation record from a main-thread direct claim. ${UNIDENTIFIED_SOURCE_ROUTES}`;
   }
   if (provenance.reason === 'review_attempt_missing') {
     return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
@@ -279,9 +285,9 @@ function terminalReviewFailure(ticket: any, relation: any) {
   if (provenance.reason === 'agent_identity_missing') {
     return [
       !provenance.source && `${ticket.ref} recorded no runtime binding on the terminal attempt that submitted the candidate:`
-        + ' no hook-bound agent id, and no recorded bind time carrying the token prefix and agent name to stand in for one.'
-        + ' An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it:'
-        + ' re-dispatch the ticket so the replacement attempt binds, then review the resubmitted candidate',
+        + ' no hook-bound agent id, no recorded bind time carrying the token prefix and agent name to stand in for one, and no main-attestation session from a main-thread direct claim.'
+        + ' An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it.'
+        + ` ${UNIDENTIFIED_SOURCE_ROUTES}`,
       !provenance.reviewer && `${reviewRelationRef(relation)} recorded no hook-bound agent id on its terminal review attempt:`
         + ' a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, so they cannot establish a reviewer independent of the submitter',
     ].filter(Boolean).join('; ');
@@ -721,6 +727,14 @@ function directlyClaimed(ticket: any) {
 function dispatchPinnedRequirement(ticket: any) {
   if (directlyClaimed(ticket)) return null;
   return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+}
+
+// GH-654. A dispatched ticket's direct claim stamps its attestation on the dispatch record, which the terminal
+// attempt snapshots. A never-dispatched one appends no attempt, so the claim's session rides on the submission.
+function directClaimAttestation(ticket: any) {
+  const sessionId = String(ticket.claim?.runtime?.sessionId || '').trim();
+  if (dispatchState(ticket) || !directlyClaimed(ticket) || !sessionId) return {};
+  return { mainAttestation: { authority: 'main-attestation', sessionId, by: ticket.claim.by, claimedAt: ticket.claim.at } };
 }
 
 // Same form as the briefing's capture line (agentsync capturedVerifyCommand), which a direct claim never gets.
@@ -3427,6 +3441,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       ...(rejectedSubmission ? { supersedesRejectedSubmission: rejectedSubmission.commit } : {}),
       ...(inheritedPaths.length ? { inheritedPaths } : {}),
       ...(unsubmittedWorkingPaths.length ? { unsubmittedWorkingPaths } : {}),
+      ...directClaimAttestation(t),
       integratedAt: null,
     }, range || {});
     if (rejectedSubmission) {

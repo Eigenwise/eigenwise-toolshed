@@ -49,7 +49,7 @@ peeking or self-review.
 
 ## Candidate diff review
 
-Use this only for a submitted candidate that needs independent scrutiny. Create a readonly `review-audit` ticket with an immutable `reviewTarget`: the submitted ticket ref and its exact submitted commit (or source revision for a non-Git artifact). Never bind a working tree, a live claim, or a retargeted candidate. The isolated reviewer reports evidence and closes through the bound-review flow.
+Use this only for a submitted candidate that needs independent scrutiny. Create a readonly `review-audit` ticket with an immutable `reviewTarget`: the submitted ticket ref and its exact submitted commit (or source revision for a non-Git artifact). Never bind a working tree, a live claim, or a retargeted candidate. Binding refuses a candidate whose submitting attempt recorded no runtime identity (no hook-bound agent id, claim-token bind, or main-attestation session), because no review of it could finalize; rework and dispatch the source so it resubmits, then bind. The isolated reviewer reports evidence and closes through the bound-review flow.
 
 At final review, match earlier inspected hashes to the immutable candidate before reusing those notes.
 Reuse byte-identical inspected material; check the settled delta, unresolved findings and authentic
