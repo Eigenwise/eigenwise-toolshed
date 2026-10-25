@@ -366,14 +366,42 @@ test('a cross-project dispatch is refused while another board holds this session
     assert.throws(
       () => store.prepareDispatch(otherSlug, ticket.ref, { sessionId, runtimeCwd: PROJECT }),
       (error: Error) => {
-        assert.match(error.message, /already owns launched isolated dispatches on another board/);
+        assert.match(error.message, /already owns prepared or launched isolated dispatches on another board/);
         assert.ok(error.message.includes(PROJECT), 'the refusal names the competing board');
+        assert.ok(error.message.includes(hubTicket.ref), 'the refusal names the competing ticket');
         assert.doesNotMatch(error.message, /from a session rooted in/);
         return true;
       },
     );
   } finally {
     assert.equal(store.releaseTicket(slug, hubTicket.ref, 'ambiguous-hub-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  }
+});
+
+// GH-665: a batch prepared on two boards before any executor started spawned in one message, and a board-B
+// claim ended up in a worktree cut from board A's repository. Merely prepared siblings already make the hook
+// guess, and the ticket on the session's own repository is refused too, not only the foreign one.
+test('a batch prepared on two boards is refused from either side before any launch', () => {
+  const other = initRepo('sq-isolation-prepared-batch-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-prepared-${Date.now()}`;
+  const fixture = (projectSlug: string, title: string) => store.createTicket(projectSlug, { title, category: 'codebase-exploration', files: ['README.md'] });
+  const foreign = fixture(otherSlug, 'prepared foreign batch fixture');
+  const home = fixture(slug, 'prepared home batch fixture');
+  const foreignPrepared = store.prepareDispatch(otherSlug, foreign.ref, { sessionId, runtimeCwd: PROJECT });
+  try {
+    assert.equal(foreignPrepared.ticket.dispatch.outcome, 'prepared');
+    assert.throws(
+      () => store.prepareDispatch(slug, home.ref, { sessionId, runtimeCwd: PROJECT }),
+      (error: Error) => {
+        assert.match(error.message, /already owns prepared or launched isolated dispatches on another board/);
+        assert.ok(error.message.includes(foreign.ref), 'the refusal names the prepared sibling on the other board');
+        assert.doesNotMatch(error.message, /sharedTree:true stays available/, 'same-repository side gets no shared-tree redirect advice');
+        return true;
+      },
+    );
+  } finally {
+    assert.equal(store.releaseTicket(otherSlug, foreign.ref, 'prepared-batch-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
   }
 });
 

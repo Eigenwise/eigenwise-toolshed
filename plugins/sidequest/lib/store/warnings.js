@@ -952,12 +952,19 @@ ${String(ticket?.description || "")}`;
     warnings.push(...preparedDispatchWarnings(dispatchState(ticket), projectPath));
     return warnings.map((warning) => `Dispatch warning: ${warning}`);
   }
+  function cwdIsOwnIsolatedWorktree(cwd, dispatch) {
+    const ownWorktree = String(dispatch.worktree || "").trim();
+    if (!ownWorktree || dispatch.sharedTree === true) return false;
+    const relative = path.relative(canonicalPath(ownWorktree), canonicalPath(cwd));
+    return !relative.startsWith("..") && !path.isAbsolute(relative);
+  }
   function preparedDispatchWarnings(dispatch, projectPath) {
     if (!dispatch) return [];
+    const cwd = process.cwd();
     return [
       dispatch.fallbackReason ? `Route fallback: ${dispatch.fallbackReason}` : null,
       worktreeSetupIncompleteWarning(dispatch),
-      staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true)
+      cwdIsOwnIsolatedWorktree(cwd, dispatch) ? null : staleWorktreeCwdWarning(cwd, projectPath, dispatch.sharedTree === true)
     ].filter((warning) => Boolean(warning));
   }
   function worktreeVisibilityPaths(ticket, projectPath) {

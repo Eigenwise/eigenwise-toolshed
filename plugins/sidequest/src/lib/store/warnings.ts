@@ -1049,12 +1049,22 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   return warnings.map((warning) => `Dispatch warning: ${warning}`);
 }
 
+// The briefing renders from the executor's own cwd, which is a linked worktree by design for an isolated dispatch,
+// so the leftover-worktree warning fired on every healthy isolated briefing (GH-640).
+function cwdIsOwnIsolatedWorktree(cwd: string, dispatch: any): boolean {
+  const ownWorktree = String(dispatch.worktree || '').trim();
+  if (!ownWorktree || dispatch.sharedTree === true) return false;
+  const relative = path.relative(canonicalPath(ownWorktree), canonicalPath(cwd));
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 function preparedDispatchWarnings(dispatch?: any, projectPath?: any): string[] {
   if (!dispatch) return [];
+  const cwd = process.cwd();
   return [
     dispatch.fallbackReason ? `Route fallback: ${dispatch.fallbackReason}` : null,
     worktreeSetupIncompleteWarning(dispatch),
-    staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true),
+    cwdIsOwnIsolatedWorktree(cwd, dispatch) ? null : staleWorktreeCwdWarning(cwd, projectPath, dispatch.sharedTree === true),
   ].filter((warning): warning is string => Boolean(warning));
 }
 
