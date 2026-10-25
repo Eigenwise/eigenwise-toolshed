@@ -341,7 +341,7 @@ function openDb(homeRoot) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
-  `));
+  `), SQLITE_BUSY_TIMEOUT_MS, otherWriterCommittedSince(database));
   const stampedSchemaVersion = () => {
     const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
     return Number(row && JSON.parse(row.value));
@@ -352,7 +352,8 @@ function openDb(homeRoot) {
     retryWhenSqliteBusy(
       "preparing a schema migration",
       () => prepareCached(database, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run(),
-      SQLITE_MIGRATION_BUSY_TIMEOUT_MS
+      SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+      otherWriterCommittedSince(database)
     );
     schemaVersion = stampedSchemaVersion();
   }

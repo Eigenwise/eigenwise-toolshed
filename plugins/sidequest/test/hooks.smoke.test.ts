@@ -37,7 +37,9 @@ test('configured hooks all execute successfully once in the default suite', () =
       env: environment,
       input: '{}',
       encoding: 'utf8',
-      timeout: 10_000,
+      // Not the 10s hook budget: a starved CI runner stretched session-start past it with no lock contention
+      // on this fresh home (SQ-3849), and this test asserts that every hook succeeds, not how fast.
+      timeout: 60_000,
       windowsHide: true,
     });
     assert.equal(result.status, 0, `${hookScript}: ${result.error?.message ?? result.stderr}`);
