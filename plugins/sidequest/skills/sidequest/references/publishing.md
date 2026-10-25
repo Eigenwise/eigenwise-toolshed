@@ -451,7 +451,7 @@ is recorded against the already-done ticket; it must not be described as remotel
   or file the narrowly scoped recovery ticket needed to complete or repair it.
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   request changes from the main thread with MCP `rework` and `by` omitted (recorded as `authority: "orchestrator"`
-  under your session), or have the owner run `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
+  under your session), or, as the candidate owner, use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
   normal repair claim. Review or reason text over the field caps (1000 and 4000 chars) is stored whole as a
   ticket comment and the field keeps a truncated summary ending in the comment id; it is never refused for
