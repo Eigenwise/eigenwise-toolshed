@@ -35,7 +35,7 @@ for (const [scenario, oldCallback, expected, exitCode] of [
   ['unchanged', callback('existing', 8), [], 0],
   ['modified', callback('existing', 8, '0'), [[8, 'legacy-unchanged', 'call-site']], 0],
   ['raised', callback('existing', 9), [[9, 'modified-raised', 'call-site']], 1],
-  ['genuinely new', callback('existing', 8) + callback('fresh', 8), [[8, 'new', undefined]], 1],
+  ['genuinely new', callback('existing', 8) + callback('fresh', 8), [[8, 'new', null]], 1],
 ]) {
   test(`anonymous callback ${scenario} keeps its baseline after two test insertions`, async (context) => {
     const { root, coverageDirectory } = await fixture(context);
@@ -48,7 +48,7 @@ for (const [scenario, oldCallback, expected, exitCode] of [
     const crap = JSON.parse(execution.stdout);
     const measured = await measureFiles(['subject.mjs'], { projectRoot: root, base: 'HEAD', coverageDirectory });
     const rows = (report) => report.changedMetrics.map((metric) => [metric.complexity, metric.classification, metric.matchedBy]);
-    assert.deepEqual(rows(crap), [[3, 'new', undefined], [3, 'new', undefined], ...expected]);
+    assert.deepEqual(rows(crap), [[3, 'new', null], [3, 'new', null], ...expected]);
     assert.deepEqual(rows(measured), rows(crap));
     assert.equal(measured.failures.length, exitCode);
   });

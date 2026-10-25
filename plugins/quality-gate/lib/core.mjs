@@ -30,10 +30,10 @@ export async function createAnalyzer(projectRoot) {
   }
 
   function anonymousCallSite(node, name) {
-    if (name !== '<anonymous>') return undefined;
+    if (name !== '<anonymous>') return null;
     let parent = node.parent;
     while (ast.isParenthesizedExpression(parent)) parent = parent.parent;
-    if (!ast.isCallExpression(parent)) return undefined;
+    if (!ast.isCallExpression(parent)) return null;
     const title = parent.arguments.find((argument) => argument.kind === ast.SyntaxKind.StringLiteral);
     return JSON.stringify([parent.expression.getText(), title?.text]);
   }
@@ -514,7 +514,7 @@ function sameAnonymousCallSite(head, base) {
 }
 
 function baselineMatchRule(metric, partner) {
-  if (!partner) return undefined;
+  if (!partner) return null;
   if (metric.fingerprint === partner.fingerprint) return 'text';
   return sameAnonymousCallSite(metric, partner) ? 'call-site' : 'position';
 }
