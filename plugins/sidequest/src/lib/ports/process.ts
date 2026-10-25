@@ -422,6 +422,7 @@ type OwnerRecord = Readonly<{ nonce?: unknown; record?: unknown; value?: unknown
 type VerifierReport = Readonly<{
   done: boolean;
   timedOut: boolean;
+  phaseError: string | null;
   cleanupError: string | null;
   exitCode: number | null;
   jobClosedProcessIds: OwnedPhaseResult['jobClosedProcessIds'];
@@ -467,12 +468,13 @@ function ownedTreeLaunch(shell: ShellCommand, run: VerifierRun, channel: OwnerCh
   return Object.freeze({ ...shell, executable: process.execPath, arguments: Object.freeze([OWNED_PROCESS_TREE_SCRIPT, JSON.stringify(spec)]) });
 }
 
+// The owner starts in the board's own directory and hands run.cwd only to the shell, so a shell that
+// cannot start there is reported by the owner instead of keeping the owner from starting (SQ-3939).
 function spawnVerifier(shell: ShellCommand, run: VerifierRun): SpawnOutcome {
   const launch = ownedTreeLaunch(shell, run, run.ownerChannel);
   const log = fs.openSync(run.logPath, 'w');
   try {
     return spawnSync(launch.executable, launch.arguments, {
-      cwd: run.cwd,
       env: run.environment,
       windowsHide: true,
       timeout: run.timeoutMilliseconds + OWNED_TREE_SETTLE_MARGIN_MILLISECONDS,
@@ -519,10 +521,12 @@ function reportedJobAccount(records: Map<unknown, unknown>): OwnedPhaseResult['j
 function verifierReport(run: VerifierRun): VerifierReport {
   const records = ownerRecords(run.ownerChannel);
   const cleanupError = records.get('cleanup-error');
+  const phaseError = records.get('error');
   const exitCode = records.get('exit');
   return Object.freeze({
     done: records.has('done'),
     timedOut: records.has('timeout'),
+    phaseError: typeof phaseError === 'string' ? phaseError : null,
     cleanupError: typeof cleanupError === 'string' ? cleanupError : null,
     exitCode: Number.isInteger(exitCode) ? Number(exitCode) : null,
     jobClosedProcessIds: reportedJobAccount(records),
@@ -541,7 +545,14 @@ function timeoutResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutc
 }
 
 function unreportedOwnerResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string): VerificationResult {
-  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification owner ended without reporting. Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+  const ownerSpawnError = outcome.error ? ` ${outcome.error.message}` : '';
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, `The verification owner ended without reporting.${ownerSpawnError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, undefined, shell.label);
+}
+
+function shellNeverStartedResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, report: VerifierReport): VerificationResult {
+  const treeEvidence = report.cleanupError === null ? '' : ` Its process tree did not end either: ${report.cleanupError}`;
+  const reason = `${shellExitReason(shell, outcome.status ?? 2)} ${report.phaseError}${treeEvidence}`;
+  return failedResult(run.requirement, 'could_not_run', run.command, run.logPath, reason, outcome.status ?? 2, tail, undefined, shell.label);
 }
 
 // A suite failure outranks the cleanup error, which joins its evidence; only a clean exit is masked by it.
@@ -558,6 +569,7 @@ function cleanupErrorResult(run: VerifierRun, shell: ShellCommand, outcome: Spaw
 function abnormalVerifierResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, report: VerifierReport): VerificationResult | null {
   if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail, report);
   if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
+  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
   return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
 }
 
