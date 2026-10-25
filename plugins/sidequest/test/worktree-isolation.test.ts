@@ -405,6 +405,32 @@ test('a batch prepared on two boards is refused from either side before any laun
   }
 });
 
+// SQ-3936: a prepared dispatch nobody spawns would otherwise block every other board until the TTL sweep. The
+// refusal has to name the call that ends it, and that call has to actually clear the way.
+test('the cross-board refusal names the retireOnly call that clears an unspawned prepared sibling', () => {
+  const other = initRepo('sq-isolation-unspawned-prepared-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-unspawned-${Date.now()}`;
+  const fixture = (projectSlug: string, title: string) => store.createTicket(projectSlug, { title, category: 'codebase-exploration', files: ['README.md'] });
+  const unspawned = fixture(otherSlug, 'unspawned prepared fixture');
+  const home = fixture(slug, 'home dispatch after retirement fixture');
+  store.prepareDispatch(otherSlug, unspawned.ref, { sessionId, runtimeCwd: PROJECT });
+  assert.throws(
+    () => store.prepareDispatch(slug, home.ref, { sessionId, runtimeCwd: PROJECT }),
+    (error: Error) => {
+      assert.ok(error.message.includes(`dispatch({ ref: "${unspawned.ref}", project: "`), error.message);
+      assert.match(error.message, /retireOnly: true/);
+      assert.match(error.message, /\d+ hour prepared-dispatch TTL/);
+      return true;
+    },
+  );
+  const retired = store.prepareDispatch(otherSlug, unspawned.ref, { sessionId, recoveryEvidence: 'the orchestrator chose not to spawn it', retireOnly: true });
+  assert.equal(retired.retired, true);
+  const prepared = store.prepareDispatch(slug, home.ref, { sessionId, runtimeCwd: PROJECT });
+  assert.equal(prepared.ticket.dispatch.outcome, 'prepared');
+  assert.equal(store.releaseTicket(slug, home.ref, 'unspawned-prepared-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 test('a same-project session mismatch names the predicate without shared-tree advice', () => {
   const name = `session-mismatch-${Date.now()}`;
   const recordedSessionId = `recorded-session-${Date.now()}-${'r'.repeat(40)}`;

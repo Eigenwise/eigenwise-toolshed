@@ -269,6 +269,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   (GH-648); the executor stops without writing and reports it, and the orchestrator redispatches. The hook also follows the session id to one board, so `dispatch`
   refuses an isolated dispatch while this session holds a PREPARED or launched isolated dispatch on another board,
   from either side (GH-665): prepare and spawn one board's batch, let it claim or finish, then the other's.
+  A prepared dispatch you will not spawn keeps counting until the prepared-dispatch TTL sweep expires it (6h); the
+  refusal names the `dispatch` call with `recoveryEvidence` and `retireOnly: true` that retires it at once (SQ-3936).
   **A WorktreeCreate that fails before its checkout exists** (lease refusal, an occupied destination, a failed
   `git worktree add`) records the attempt `failed` with `worktree_create_failed` and the hook error, and clears its
   binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`. While another
