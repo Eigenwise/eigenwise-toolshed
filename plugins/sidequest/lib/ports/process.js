@@ -320,7 +320,6 @@ function spawnVerifier(shell, run) {
   const log = fs.openSync(run.logPath, "w");
   try {
     return spawnSync(launch.executable, launch.arguments, {
-      cwd: run.cwd,
       env: run.environment,
       windowsHide: true,
       timeout: run.timeoutMilliseconds + OWNED_TREE_SETTLE_MARGIN_MILLISECONDS,
@@ -359,10 +358,12 @@ function reportedJobAccount(records) {
 function verifierReport(run) {
   const records = ownerRecords(run.ownerChannel);
   const cleanupError = records.get("cleanup-error");
+  const phaseError = records.get("error");
   const exitCode = records.get("exit");
   return Object.freeze({
     done: records.has("done"),
     timedOut: records.has("timeout"),
+    phaseError: typeof phaseError === "string" ? phaseError : null,
     cleanupError: typeof cleanupError === "string" ? cleanupError : null,
     exitCode: Number.isInteger(exitCode) ? Number(exitCode) : null,
     jobClosedProcessIds: reportedJobAccount(records)
@@ -375,7 +376,13 @@ function timeoutResult(run, shell, outcome, tail, report) {
   return failedResult(run.requirement, "timeout", run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms. ${timeoutTreeEvidence(report)} Output log: ${run.logPath}`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
 }
 function unreportedOwnerResult(run, shell, outcome, tail) {
-  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification owner ended without reporting. Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+  const ownerSpawnError = outcome.error ? ` ${outcome.error.message}` : "";
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification owner ended without reporting.${ownerSpawnError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+}
+function shellNeverStartedResult(run, shell, outcome, tail, report) {
+  const treeEvidence = report.cleanupError === null ? "" : ` Its process tree did not end either: ${report.cleanupError}`;
+  const reason = `${shellExitReason(shell, outcome.status ?? 2)} ${report.phaseError}${treeEvidence}`;
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, reason, outcome.status ?? 2, tail, void 0, shell.label);
 }
 function cleanupErrorResult(run, shell, outcome, tail, exitCode, cleanupError) {
   if (exitCode === null || exitCode === 0) {
@@ -384,10 +391,14 @@ function cleanupErrorResult(run, shell, outcome, tail, exitCode, cleanupError) {
   const verdict = exitCodeVerdict(run, shell, exitCode, tail);
   return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
 }
+function ownerReportedFailureResult(run, shell, outcome, tail, report) {
+  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
+  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+}
 function abnormalVerifierResult(run, shell, outcome, tail, report) {
   if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail, report);
   if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
-  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+  return ownerReportedFailureResult(run, shell, outcome, tail, report);
 }
 function exitCodeResult(run, shell, outcome, tail, exitCode) {
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);

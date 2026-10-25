@@ -13,7 +13,7 @@ const { execFileSync } = require('node:child_process');
 
 const { runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const { runProcessVerification, runOwnedProcessVerification } = require('../lib/ports/process.js');
-const { classifyProcessState, compileJobOwner, withJobEvidence } = require('../scripts/owned-process-tree.js');
+const { classifyProcessState, compileJobOwner, runOwnedVerifyPhase, withJobEvidence } = require('../scripts/owned-process-tree.js');
 const store = require('../lib/store.js');
 
 const windowsOnly = process.platform === 'win32' ? {} : { skip: 'Windows Job Objects' };
@@ -420,6 +420,28 @@ test('a failed capture names what the Windows job ended and the broker boundary 
     `Verification timed out after 1234ms. The Windows job owner ended every descendant that inherited the job (processes 41); cleanup refused: Job members 41 were still alive after the job owner closed its job. ${BROKER_BOUNDARY}`,
     'Verification timed out after 1234ms. The owned process tree was ended; none survived.',
   ]);
+});
+
+// SQ-3939: a shell that never started has no exit and no job, so its spawn error is the whole report.
+test('the owner reports a shell that could not start as an error record, with no exit and no unknown survivors', { timeout: 60_000 }, async () => {
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-3939-never-started-'));
+  const reportPath = path.join(evidence, 'owner.jsonl');
+  try {
+    const exitCode = await runOwnedVerifyPhase({
+      command: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      cwd: path.join(evidence, 'missing-directory'),
+      timeoutMilliseconds: FIXTURE_DEADLINE_MILLISECONDS,
+      reportPath,
+      nonce: 'sq-3939',
+    });
+    const records = fs.readFileSync(reportPath, 'utf8').trim().split('\n').map((line: string) => JSON.parse(line));
+    assert.equal(exitCode, 2);
+    assert.deepEqual(records.map((entry: { record: string }) => entry.record), ['error', 'done']);
+    assert.match(records[0].value, /ENOENT/);
+  } finally {
+    fs.rmSync(evidence, { recursive: true, force: true });
+  }
 });
 
 test('a clean cache compiles the owner with the csc.exe that ships with Windows and publishes only the finished build', windowsOnly, () => {
