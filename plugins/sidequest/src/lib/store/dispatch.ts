@@ -387,19 +387,33 @@ function runtimeOutsideProjectRepository(projectPath?: any, runtimeCwd?: any) {
 // Prepared siblings count, not only launched ones: a batch prepared on two boards before any executor started is
 // spawned in one message, and the hook then cut a board-B worktree from board A's repository (GH-665). Either side
 // refuses, because a ticket on the session's own repository is exactly what makes the other board ambiguous.
+// Nothing on the board tells a prepared dispatch about to be spawned from one nobody will spawn (both are seconds
+// old in the GH-665 shape), so a prepared sibling keeps counting until it claims, ends, or the prepared-dispatch TTL
+// sweep expires it. The refusal names the retireOnly call that ends it now, which this session may make at once
+// because it prepared the attempt (SQ-3936).
 function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
   if (!runtimeCwd) return null;
   const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug, ['prepared', 'launched']);
   return competing.length ? crossBoardDispatchRefusal(ticket, projectPath, runtimeCwd, competing) : null;
 }
 
-function crossBoardDispatchRefusal(ticket: any, projectPath: any, runtimeCwd: any, competing: readonly { path: string; ref: string }[]) {
+type SessionBoardDispatch = { path: string; ref: string; state: any };
+
+function crossBoardDispatchRefusal(ticket: any, projectPath: any, runtimeCwd: any, competing: readonly SessionBoardDispatch[]) {
   const repositoryMismatch = runtimeOutsideProjectRepository(projectPath, runtimeCwd)
     ? `its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and ` : '';
   const boards = competing.map((entry) => `${entry.path} (${entry.ref})`).join(', ');
   const sharedTreeAdvice = repositoryMismatch
     ? ` sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.` : '';
-  return `prepare dispatch: refused ${ticket.ref}; ${repositoryMismatch}this session already owns prepared or launched isolated dispatches on another board (${boards}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those have claimed or are terminal, leaving ${projectPath} as this session's only board with unclaimed isolated dispatches.${sharedTreeAdvice}`;
+  return `prepare dispatch: refused ${ticket.ref}; ${repositoryMismatch}this session already owns prepared or launched isolated dispatches on another board (${boards}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal or have claimed, leaving ${projectPath} as this session's only board with unclaimed isolated dispatches.${unspawnedPreparedRemedy(competing)}${sharedTreeAdvice}`;
+}
+
+function unspawnedPreparedRemedy(competing: readonly SessionBoardDispatch[]) {
+  const prepared = competing.filter((entry) => entry.state?.outcome === 'prepared');
+  if (!prepared.length) return '';
+  const calls = prepared.map((entry) => `dispatch({ ref: "${entry.ref}", project: ${JSON.stringify(entry.path)}, recoveryEvidence: "<why it will not be spawned>", retireOnly: true })`).join(', ');
+  const ttlHours = Math.round(preparedDispatchTtlMs() / 3600000);
+  return ` A prepared dispatch nobody will spawn keeps counting until the ${ttlHours} hour prepared-dispatch TTL expires it; retire it now from this session with ${calls}.`;
 }
 
 function dispatchPreparationAttribution(opts?: any) {
