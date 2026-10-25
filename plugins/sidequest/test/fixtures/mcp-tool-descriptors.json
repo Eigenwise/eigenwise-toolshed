@@ -2492,6 +2492,10 @@
         "integrationVerifyTimeoutMs": {
           "type": "integer"
         },
+        "integrationTestFileThreshold": {
+          "type": "integer",
+          "minimum": 1
+        },
         "worktreeIsolation": {
           "type": "boolean"
         },

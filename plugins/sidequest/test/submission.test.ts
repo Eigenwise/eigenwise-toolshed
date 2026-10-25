@@ -6931,6 +6931,7 @@ test('a builds-on follow-up submits its source range, integrates, and supersedes
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, source.ref)), true, 'the source stays pending until the follow-up is delivered');
 
     git(['checkout', '-f', branch]);
+    recordPassingVerifier(followUp.ref);
     const delivered = store.integrateSubmission(slug, followUp.ref, { target: store.integrationTarget(slug), mode: 'merge', by: 'orchestrator' });
     assert.strictEqual(delivered.ok, true, delivered.message);
     const closed = store.completeTicketAsControlPlane(slug, followUp.ref, { by: 'orchestrator', reason: `Delivered ${followUpCommit}.`, purpose: 'integration' });

@@ -44,7 +44,7 @@ test('not-owner guidance separates a live claim from a parked submission', () =>
   const parkedSubmission = claimRefusalMessage('not_owner', 'SQ-42', { submission: { by: 'terminal-producer' } });
   assert.match(parkedSubmission, /parked submission/i);
   assert.match(parkedSubmission, /producer is terminal/i);
-  assert.match(parkedSubmission, /publish it, use `sidequest rework SQ-42`/i);
+  assert.match(parkedSubmission, /publish it, request changes on an unbound candidate with MCP rework from the main thread/i);
   assert.match(parkedSubmission, /do not ask it to release or resume/i);
   assert.doesNotMatch(parkedSubmission, /Ask the candidate owner/i);
   assert.doesNotMatch(parkedSubmission, /sidequest release SQ-42/i);
