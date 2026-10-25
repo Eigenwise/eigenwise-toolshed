@@ -8,6 +8,36 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs } = require('../lib/experiment-refs');
+
+test('experiment round pins coexist with candidates and migrate legacy pins without losing commits', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-round-refs-'));
+  const git = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: repository, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  git(['init']);
+  git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-m', 'base']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const roundPin = experimentRoundRef('SQ-1', 1);
+  git(['update-ref', roundPin, commit]);
+  assert.doesNotThrow(() => git(['update-ref', 'refs/sidequest/SQ-1', commit]));
+  assert.equal(resolveExperimentRoundRef(repository, 'SQ-1', 1), roundPin);
+  assert.equal(git(['rev-parse', 'refs/sidequest/SQ-1']), commit);
+  git(['update-ref', 'refs/sidequest/SQ-2/r1', commit]);
+  assert.equal(resolveExperimentRoundRef(repository, 'SQ-2', 1), 'refs/sidequest/SQ-2/r1');
+  migrateExperimentRoundRefs(repository, 'SQ-2');
+  assert.equal(resolveExperimentRoundRef(repository, 'SQ-2', 1), experimentRoundRef('SQ-2', 1));
+  assert.equal(git(['rev-parse', experimentRoundRef('SQ-2', 1)]), commit);
+  assert.equal(git(['for-each-ref', '--format=%(refname)', 'refs/sidequest/SQ-2/']), '');
+  assert.doesNotThrow(() => git(['update-ref', 'refs/sidequest/SQ-2', commit]));
+  migrateExperimentRoundRefs(repository, 'SQ-2');
+  git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-m', 'next']);
+  const next = git(['rev-parse', 'HEAD']);
+  git(['update-ref', 'refs/sidequest/SQ-3/r1', commit]);
+  git(['update-ref', experimentRoundRef('SQ-3', 1), next]);
+  assert.throws(() => migrateExperimentRoundRefs(repository, 'SQ-3'), /already pins a different commit/);
+  assert.equal(git(['rev-parse', 'refs/sidequest/SQ-3/r1']), commit);
+  assert.equal(git(['rev-parse', experimentRoundRef('SQ-3', 1)]), next);
+});
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-experiment-log-'));
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-experiment-project-'));
