@@ -1616,7 +1616,7 @@ test('SQ-3425: CLI integrate on the environment lane ends the verifier tree at t
   assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false, 'the lock was released');
 });
 
-test('SQ-3425: a default-board delivery runs its verifier outside the owned tree', () => {
+test('SQ-3927: a default-board delivery runs its verifier under the owned tree too', () => {
   const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-default-'));
   const envFile = forwardSlashes(path.join(evidenceDirectory, 'owned-phase.env'));
   const { slug, ticket, runCli } = deliveryTicket('environment-lane-default', {
@@ -1626,7 +1626,7 @@ test('SQ-3425: a default-board delivery runs its verifier outside the owned tree
 
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
-  assert.equal(fs.readFileSync(envFile, 'utf8'), '');
+  assert.equal(fs.readFileSync(envFile, 'utf8'), '1');
 });
 
 test('SQ-3425: a verifier whose log cannot be opened reports could_not_run with the spawn failure', () => {

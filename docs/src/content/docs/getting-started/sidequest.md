@@ -646,8 +646,9 @@ for both paths and importing-test batches. The board setting `integrationTestFil
 `test:full` script, or `npm test` when unavailable. That gate controls its own concurrency.
 Smaller batches exclude performance and benchmark files. Guidance Markdown selects guidance,
 skill and compatibility tests. Batch receipts record the command shape, deadline and elapsed time.
-Timeout results name the key and effective limit; the owned process tree is
-terminated before the result is reported. Slot waiting and cleanup add to total wall time.
+Timeout results name the key and effective limit. Every gate, on any board, runs under the owned
+process tree, which ends before the result is reported; on Windows the result names the job members
+the deadline ended, or the ones that survived. Slot waiting and cleanup add to total wall time.
 Capture logs are written directly under the board project
 `verification/<ref>/` directory and stay readable through the returned `logPath`.
 

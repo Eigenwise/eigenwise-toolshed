@@ -171,16 +171,24 @@ test('a timed-out verify ends cmd, its node child and a detached grandchild, and
   }
 });
 
-test('control: the synchronous pre-job runner leaves the detached grandchild of a timed-out verify alive', { ...windowsOnly, timeout: 120_000 }, async () => {
-  const fixture = nestedVerifyFixture('sq-3434-control-');
+// SQ-3927: this runner once left the whole tree alive past its deadline; merged-tree gates use it.
+test('the synchronous gate runner ends a timed-out verify\'s detached grandchild and names every pid it ended', { ...windowsOnly, timeout: 120_000 }, async () => {
+  const fixture = nestedVerifyFixture('sq-3927-sync-');
   try {
     const result = runProcessVerification(
       { kind: 'command', command: fixture.command, evidenceContract: 'command output' },
       { cwd: fixture.repository, timeoutMilliseconds: FIXTURE_DEADLINE_MILLISECONDS },
     );
     const grandchild = await fixture.grandchild();
+    const sleeperPid = await fixture.sleeperPid();
     assert.equal(result.status, 'timeout');
-    assert.equal(classifyProcessState(grandchild.pid), 'live', 'the pre-job runner unexpectedly ended the detached grandchild');
+    assert.equal(result.exitCode, 124, 'the owned tree, not the spawnSync backstop, enforced the deadline');
+    assert.equal(classifyProcessState(grandchild.pid), 'gone', 'the detached grandchild outlived the reported timeout');
+    assert.equal(classifyProcessState(sleeperPid), 'gone', 'the node sleeper outlived the reported timeout');
+    assert.match(result.evidence, new RegExp(`^Verification timed out after ${FIXTURE_DEADLINE_MILLISECONDS}ms\\. ${WINDOWS_JOB_ENDED_EVIDENCE} Output log: `));
+    for (const processId of [sleeperPid, grandchild.pid]) {
+      assert.ok(result.evidence.includes(String(processId)), `the timeout evidence omits job member ${processId}: ${result.evidence}`);
+    }
     fs.rmSync(result.logPath, { force: true });
   } finally {
     await fixture.cleanup();
