@@ -32,8 +32,10 @@ this file only covers what the schema has no way to say.
 - **`by` on control-plane calls**: `rework`, `supersede_submission`, and `groomClose` default an omitted `by`
   to the main session id. A subagent calling `rework` without `by` gets the owner label its own dispatch recorded,
   or a refusal naming the labels in conflict; a subagent calling `supersede_submission` or `groomClose` without
-  `by` is refused, so pass your own claim id. `rework` still requires the candidate owner, so the default only
-  passes when that is you; otherwise pass `by` as the submitter. Every other tool, `claim`, `done`, `release`,
+  `by` is refused, so pass your own claim id. A main-thread `rework` without `by` is the orchestrator requesting
+  changes: it needs no candidate ownership, refuses while a live claim holds the ticket, and records
+  `authority: "orchestrator"` with the session id on the rejected candidate. An explicit `by` is still judged as
+  the candidate owner. Every other tool, `claim`, `done`, `release`,
   `submit`, `commit`, `checkpoint`, `scopeRequest`, `integrate`, and `next`, still needs an explicit `by`.
 - **`rework` text over its cap**: `review` (1000 chars) and `reason` (4000 chars) are never refused for
   length. The full text is stored as a ticket comment attributed to `by`, and the field keeps a truncated

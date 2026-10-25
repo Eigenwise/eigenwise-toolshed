@@ -450,13 +450,25 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For a later gate or push failure, keep the done ticket's failure evidence and either finish the push
   or file the narrowly scoped recovery ticket needed to complete or repair it.
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
-  use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
+  request changes from the main thread with MCP `rework` and `by` omitted (recorded as `authority: "orchestrator"`
+  under your session), or, as the candidate owner, use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
   normal repair claim. Review or reason text over the field caps (1000 and 4000 chars) is stored whole as a
   ticket comment and the field keeps a truncated summary ending in the comment id; it is never refused for
-  length. The MCP `rework` may omit `by` (see invocation-contracts.md). The repair dispatch's briefing carries a "Pending rework" section naming
+  length. Never pass the submitter's label as `by` to get around ownership; omit it instead (see invocation-contracts.md). The repair dispatch's briefing carries a "Pending rework" section naming
   the rejected candidate, reason, and review above the comment thread, so do not restate the rework
   as a comment before dispatching.
+- For a **follow-up that builds on a pending candidate** instead of redoing it, dispatch the follow-up with
+  `workProvenance: { kind: "builds-on", sources: [{ ref, preparedAt, commit }] }` naming the source's current
+  submitted dispatch generation and candidate. Its executor merges `refs/sidequest/<source>` and submits a range
+  that carries the whole source candidate without `duplicate_submission`; the source's changed paths and release
+  fragment are admitted, so the follow-up may `git mv` that fragment into its own. When the follow-up is delivered
+  (`integrate`, or `groomClose` integration/delivery closure), each source still holding that exact candidate is
+  closed as superseded by the follow-up, reported as `supersededSources`; a refusal there (a still-bound review, a
+  resubmitted source) leaves the source pending for `supersede_submission`. Controls follow the undeclared rule:
+  builds-on records lineage, not behavior kind. A source resubmitted after dispatch refuses the follow-up's
+  submit with `builds_on_stale`; re-dispatch it naming the new candidate. Do not integrate the source first and
+  rebase the follow-up by hand.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
   returned an unbound candidate to its producer without a review rejection, and the candidate must
   be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate

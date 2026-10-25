@@ -423,7 +423,7 @@ not override outcome. Ordinary verdict cannot reverse a finalized `accepted`; an
 `verdict.correct` appends the correction while preserving the original verdict. Do not guess.
 The source stays pending until a fresh repair is dispatched, reviewed, and integrated, then
 `supersede_submission` closes the oracle-rejected source against that repair. `rework` still bounces an
-UNBOUND candidate back to `todo` for its owner.
+UNBOUND candidate back to `todo`: its owner by `by`, or the orchestrator from the main thread with `by` omitted.
 
 ## Natural orchestrator checkpoints
 

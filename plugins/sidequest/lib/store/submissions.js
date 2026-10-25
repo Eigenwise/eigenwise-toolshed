@@ -1,6 +1,7 @@
 "use strict";
 var import_integration_tests = require("../integration-tests.js");
 var import_integration_quality = require("../integration-quality.js");
+var import_work_provenance = require("./work-provenance");
 const { emitExternalRefUpdates } = require("./external-ref-updates.js");
 const { currentBoardPath } = require("./move.js");
 "use strict";
@@ -3094,8 +3095,36 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: source, supersededBy, comment };
     });
   }
+  function builtOnReplacements(source, followUpRef) {
+    const fragment = commitScope.ticketReleaseFragment(source.ref);
+    const paths = Array.isArray(source.submission?.changedPaths) ? source.submission.changedPaths : [];
+    return paths.map((file) => ({
+      path: file,
+      reviewedBy: followUpRef,
+      reason: file === fragment ? `${followUpRef} moved this release fragment into its own.` : `${followUpRef} delivered this candidate's whole range, and any later change here is its own verified work.`
+    }));
+  }
+  function supersedeBuiltOnSource(slug, followUp, candidate, by) {
+    const source = getTicket(slug, candidate.ref);
+    if (String(source?.submission?.commit || "").toLowerCase() !== candidate.commit) {
+      return { ref: candidate.ref, ok: false, reason: "builds_on_stale", message: `${candidate.ref} no longer holds candidate ${candidate.commit}, so ${followUp.ref}'s delivery does not supersede it.` };
+    }
+    const closed = stillSpawnsInsideItsWrite("closeSubmissionAsSuperseded", () => closeSubmissionAsSuperseded(slug, source.ref, {
+      by,
+      supersededBy: followUp.ref,
+      reason: `${followUp.ref} was dispatched to build on ${source.ref}'s candidate ${candidate.commit} and delivered it inside its own range.`,
+      reviewedReplacements: builtOnReplacements(source, followUp.ref),
+      source: "builds-on-delivery"
+    }));
+    return closed?.ok ? { ref: source.ref, ok: true } : { ref: source.ref, ok: false, reason: closed?.reason, message: closed?.message };
+  }
+  function supersedeBuiltOnSources(slug, followUpRef, by) {
+    const followUp = getTicket(slug, followUpRef);
+    const candidates = (0, import_work_provenance.buildsOnCandidates)(followUp?.submission?.workProvenance ?? followUp?.dispatch?.workProvenance);
+    return candidates.map((candidate) => supersedeBuiltOnSource(slug, followUp, candidate, by));
+  }
   function notOwnerSubmissionMessage(ref, submissionOwner, by, operation) {
-    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}". To request changes as the orchestrator, call MCP rework from the main thread with by omitted; an executor reports the need to the orchestrator instead.`;
     return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
   }
   function submissionOwnershipFailure(ticket, by, opts) {
@@ -3131,6 +3160,18 @@ ${verify.outputTail}` : null
       };
     }
     return null;
+  }
+  function orchestratorReworkFailure(ticket) {
+    if (ticket.status === "done") return { ok: false, reason: "done", ticket };
+    const held = ticket.claim;
+    if (!held?.by) return null;
+    return { ok: false, reason: "not_owner", ticket, claim: held, message: `${ticket.ref} is claimed by "${held.by}"; the orchestrator requests changes only on a parked candidate. Ask the claim holder to release it first.` };
+  }
+  function reworkAuthorityFailure(ticket, by, opts) {
+    return opts.orchestratorSession ? orchestratorReworkFailure(ticket) : submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
+  }
+  function reworkRequester(opts) {
+    return opts.orchestratorSession ? { authority: "orchestrator", sessionId: String(opts.orchestratorSession) } : {};
   }
   function recordSubmissionRejection(slug, idOrRef, opts) {
     opts = opts || {};
@@ -3233,7 +3274,7 @@ ${parts.join("\n\n")}` });
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
-      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
+      const ownershipFailure = reworkAuthorityFailure(ticket, by, opts);
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
       const source = opts.source || "cli";
@@ -3257,6 +3298,7 @@ ${parts.join("\n\n")}` });
         const rejected2 = Object.assign({}, rejectedCandidate, {
           rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
           rejectedBy: by,
+          ...reworkRequester(opts),
           review: review2,
           reason: reason2,
           ...candidate.source === "git" ? { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) } : {},
@@ -3286,6 +3328,7 @@ ${parts.join("\n\n")}` });
       const rejected = Object.assign({}, ticket.submission, {
         rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
         rejectedBy: by,
+        ...reworkRequester(opts),
         review,
         reason,
         ...ticket.submission.sourceRevision ? {} : { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) },
@@ -3833,6 +3876,6 @@ ${parts.join("\n\n")}` });
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, supersedeBuiltOnSources, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };
