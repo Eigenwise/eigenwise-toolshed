@@ -571,7 +571,7 @@ test('a claim from a checkout its lease does not record is refused, never admitt
   assert.equal(refused.reason, 'worktree_lease_crossed');
   assert.equal(refused.expected, canonical(owner.worktree));
   assert.equal(refused.observed, canonical(stray));
-  assert.match(refused.message, new RegExp(`runs in worktree ${escaped(canonical(stray))}, but its dispatch lease records worktree ${escaped(canonical(owner.worktree))}`));
+  assert.match(refused.message, new RegExp(`Observed ${escaped(canonical(stray))}; recorded ${escaped(canonical(owner.worktree))}`));
   assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId ?? null, null, 'no runtime identity binds to a crossed lease');
   assert.equal(boundWorktree(owner.ref), canonical(owner.worktree), 'the lease is left for the orchestrator to settle');
 

@@ -1236,7 +1236,10 @@ test('SQ-3425: the owned verify entry forwards output and passes the verifier ex
   const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(unspawned.status, 2, unspawned.stderr);
   assert.match(unspawned.stderr, MISSING_VERIFIER_MESSAGE);
-  assert.deepEqual(unspawned.records, [['done']], 'a phase that never ran reports no exit');
+  assert.equal(unspawned.records.length, 2, 'a phase that never ran reports the spawn error, then done');
+  assert.equal(unspawned.records[0][0], 'error');
+  assert.match(String(unspawned.records[0][1]), /ENOENT|cannot find the file/, 'the error record carries the spawn failure');
+  assert.deepEqual(unspawned.records[1], ['done'], 'a phase that never ran reports no exit');
 });
 
 // A detached descendant leaves libuv's job, so before the job owner (SQ-3456) it outlived a Windows deadline

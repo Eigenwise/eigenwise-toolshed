@@ -180,9 +180,11 @@ export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWor
 
 // Refused before the claim exists, so live-claim recovery has nothing to rebind yet: the remedy is the orchestrator's.
 export function crossedClaimLeaseMessage(ref: string, lease: { expected: string; observed: string }): string {
-  return `sidequest: refused claim of ${ref}; this executor runs in worktree ${lease.observed}, but its dispatch lease records worktree ${lease.expected}, and the claim could not prove an exact crossing to swap.`
-    + ' Claiming here would succeed with every later write refused, so the claim is not admitted (code worktree_lease_crossed).'
-    + ` Stop without claiming and write nothing. Tell the orchestrator ${ref}'s worktree binding is crossed, quoting this refusal with both paths, so it can redispatch the ticket onto a checkout of its own.`;
+  // The code and the instruction come first: the PreToolUse budget (768 bytes) cuts the tail, and two Windows
+  // temp-directory paths alone can fill it.
+  return `sidequest: refused claim of ${ref}; code worktree_lease_crossed: this executor's checkout is not the worktree its dispatch lease records, and the claim could not prove an exact crossing to swap, so claiming here would succeed with every later write refused.`
+    + ` Stop without claiming and write nothing. Tell the orchestrator ${ref}'s worktree binding is crossed, quoting this refusal, so it can redispatch the ticket onto a checkout of its own.`
+    + ` Observed ${lease.observed}; recorded ${lease.expected}.`;
 }
 
 export function routingDisabledMessage(ref: string): string {
