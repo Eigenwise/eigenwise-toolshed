@@ -265,7 +265,8 @@ All endpoints are same-origin. JSON routes return `{ error }` on failure. Ticket
 | GET | `/api/routing-fallback` | Global fallback and model catalog. |
 | PUT, POST | `/api/routing-fallback` | Set a global fallback from `{ fallback }` or the route object itself. |
 | GET | `/api/routing-models?project=slug` | Models, efforts, discovered routes, categories, fallback, and category-draft availability. |
-| GET | `/api/tickets?project=slug|all&archived=1` | Active tickets by default or archived tickets when requested, with pending reminders attached. |
+| GET | `/api/tickets?project=slug|all&archived=1&status=todo,doing` | List rows only, never whole tickets. `project` defaults to `all`, which also returns list rows only (paged per board with a yield between pages so `/api/health` keeps answering); an unknown slug returns 404. Active tickets by default, archived with `archived=1`; `status` takes a comma-separated filter. Response: `{ project, archived, tickets }`. Each row carries `project`, `projectName`, `category` (`{ id, name }` or null), `summary` (first 280 characters of the description), `commentCount`, and the fields `id`, `ref`, `title`, `status`, `priority`, `labels`, `order`, `createdAt`, `updatedAt`, `archived`, `archivedAt`, `storyId`, `categoryId`, `assets`, `files`, `assignee`, `model`, `effort`, `complexity`, `source`, `lastEventType`, `lastEventSource`, `reminder` (pending reminder) and `claim` when set. Dispatch, submission, comments and the full description are not in a row. |
+| GET | `/api/tickets/:id?project=slug` | The whole ticket as `{ ticket }`, with `project`, pending reminder and claim attached. The ticket dialog reads this when it opens; the board list does not. 404 when the ticket is missing. |
 | POST | `/api/tickets` | Create a ticket, including base64 images and routing classification fields. |
 | PATCH, PUT | `/api/tickets/:id?project=slug` | Update ticket fields, add `imagesData`, or remove assets. Server forces source `dashboard`. |
 | DELETE | `/api/tickets/:id?project=slug` | Delete a ticket. |
@@ -283,6 +284,8 @@ All endpoints are same-origin. JSON routes return `{ error }` on failure. Ticket
 | GET | `/api/notify-prefs` | Server-side event-kind preferences. |
 | PUT, POST | `/api/notify-prefs` | Replace server-side event-kind preferences. |
 | GET | `/api/asset/:slug/:id/:filename` | Read a ticket asset with a content type and no-store caching. |
+
+A server started by an upgrade handoff gets `--handoff-pid <old pid>` and waits (up to 10 seconds) for that pid to exit before binding the port. After the wait it is an ordinary server: it stays up and answers requests, and does not exit. Only the old listener closes.
 
 Unknown routes return JSON 404. API matching must happen before static asset handling in the rewritten server.
 
