@@ -699,6 +699,12 @@ async function cmdAssembleWave(opts: any, positional: any) {
   console.log(`  gate: ${result.gate?.state || 'not recorded'}${result.gate?.verification?.command ? ` (${result.gate.verification.command})` : ''}`);
 }
 
+function printIntegrationAttempts(attempts: { outcome?: string; reason?: string; deliveryHead?: string; completedAt?: string; rollback?: unknown }[] = []): void {
+  for (const [index, attempt] of attempts.entries()) {
+    console.log('previous delivery attempt ' + (index + 1) + ': ' + JSON.stringify(attempt));
+  }
+}
+
 async function cmdIntegrate(opts: any, positional: any) {
   const refs = positional.map((value: any) => String(value || '').trim()).filter(Boolean);
   const idOrRef = refs[0];
@@ -855,6 +861,7 @@ async function cmdIntegrate(opts: any, positional: any) {
       ? `working tree changed: ${(integration.dirtyFiles || []).join(', ') || '(no files)'}`
       : `HEAD ${String(integration.resultingHead).slice(0, 12)}`;
   const destination = integration.mode === 'source-revision' ? 'the project source' : integration.targetBranch;
+  printIntegrationAttempts(integration.attempts);
   console.log(`✓ ${refs.join(', ')} delivered by ${integration.mode} onto ${destination} (${result}) — ${meta.name}`);
 }
 

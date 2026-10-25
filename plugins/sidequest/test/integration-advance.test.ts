@@ -809,8 +809,10 @@ for (const mode of ['merge', 'replay', 'apply']) {
 
 test('post-merge verification rolls back a rebuilt committed output to its recorded pre-merge head', () => {
   const fixture = makeRepo('post-merge-rebuilt-output');
+  const failureMarker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-retry-failure-')), 'fail');
+  fs.writeFileSync(failureMarker, 'fail first delivery');
   fixture.submitted = commitFile(fixture.executor, 'generated-output.js', 'candidate generated output\n');
-  const verify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); fs.writeFileSync('generated-output.js',branch==='main'?'rebuilt generated output\\n':'candidate generated output\\n'); if(branch==='main') process.exit(7)");
+  const verify = nodeVerify(`const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); const fail=branch==='main'&&fs.existsSync('${failureMarker.replaceAll(String.fromCharCode(92), '/')}'); fs.writeFileSync('generated-output.js',fail?'rebuilt generated output\\n':'candidate generated output\\n'); if(fail) process.exit(7)`);
   const { slug } = store.ensureProject(fixture.repo);
   const ticket = store.createTicket(slug, {
     title: 'rollback rebuilt generated output',
@@ -834,6 +836,23 @@ test('post-merge verification rolls back a rebuilt committed output to its recor
   assert.equal(integration.reason, 'verification_failed_suite_post_merge');
   assert.equal(integration.rollback.strategy, 'hard-reset-delivery-head');
   assert.match(integration.message, /rolled back delivery/);
+
+  fs.unlinkSync(failureMarker);
+  const retried = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+  assert.equal(retried.ok, true, retried.message);
+  const delivered = retried.integration;
+  assert.equal(delivered.outcome, 'delivered');
+  for (const field of ['reason', 'deliveryHead', 'rollback', 'completedAt', 'message', 'before']) {
+    assert.equal(Object.hasOwn(delivered, field), false, field);
+  }
+  assert.deepEqual(delivered.attempts, [integration]);
+  assert.equal(delivered.resultingHead, head(fixture.repo));
+  assert.ok(delivered.deliveredAt);
+  assert.deepEqual(store.pulsePayload(slug, ticket.ref).submission.integration.attempts, [integration]);
+  const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+  const pulse = runCli(['pulse', ticket.ref, '--project', fixture.repo]);
+  assert.equal(pulse.status, 0, pulse.stderr);
+  assert.deepEqual(JSON.parse(pulse.stdout).submission.integration.attempts, [integration]);
 });
 
 test('post-merge verification refuses a hard reset after an extra main commit', () => {
