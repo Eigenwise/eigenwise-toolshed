@@ -266,6 +266,13 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     }
     return timeoutMs;
   }
+  function normalizeIntegrationTestFileThreshold(value = 40) {
+    const threshold = Number(value);
+    if (!Number.isSafeInteger(threshold) || threshold < 1) {
+      throw new Error("integrationTestFileThreshold must be a positive integer.");
+    }
+    return threshold;
+  }
   function hasOriginRemote(absPath) {
     try {
       execFileSync("git", ["remote", "get-url", "origin"], { cwd: absPath, encoding: "utf8", windowsHide: true, stdio: "pipe" });
@@ -359,6 +366,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
       delivery: normalizeDeliveryMode(meta.delivery),
       integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
+      integrationTestFileThreshold: normalizeIntegrationTestFileThreshold(meta.integrationTestFileThreshold),
       worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
       verifyEnvironment: normalizeVerifyEnvironment(meta.verifyEnvironment),
       worktreeBase: normalizeWorktreeBase(meta.worktreeBase),
@@ -407,6 +415,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     integrationBranch: normalizeIntegrationBranch,
     delivery: normalizeDeliveryMode,
     integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs,
+    integrationTestFileThreshold: normalizeIntegrationTestFileThreshold,
     worktreeIsolation: normalizeWorktreeIsolation,
     verifyEnvironment: normalizeVerifyEnvironment,
     worktreeBase: normalizeWorktreeBase,
