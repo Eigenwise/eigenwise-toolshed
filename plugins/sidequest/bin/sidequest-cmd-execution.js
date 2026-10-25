@@ -13,7 +13,7 @@ const worktrees = require("../lib/worktrees");
 const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
-const { collectGitSubmissionFacts, rejectedRelatedReleaseFragments } = require("../lib/mcp-lifecycle");
+const { collectGitSubmissionFacts, inheritedReleaseFragments, inheritedSubmissionPaths } = require("../lib/mcp-lifecycle");
 const { sourceRevisionBaseline } = require("../lib/source-revision-capability");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
 const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment } = require("./sidequest-cmd-shared");
@@ -356,9 +356,9 @@ async function cmdCommit(opts, positional) {
   }
   const scope = [.../* @__PURE__ */ new Set([
     ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
-    ...rejectedRelatedReleaseFragments(slug, ticket)
+    ...inheritedSubmissionPaths(slug, ticket)
   ])];
-  const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref, rejectedRelatedReleaseFragments(slug, ticket));
+  const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref, inheritedReleaseFragments(slug, ticket));
   if (foreignFragments.length) {
     fail(commitScope.foreignReleaseFragmentRefusalMessage("commit", ticket.ref, foreignFragments));
   }

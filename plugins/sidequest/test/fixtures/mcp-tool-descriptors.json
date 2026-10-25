@@ -1929,7 +1929,8 @@
                 "inherited-read-only",
                 "docs",
                 "type-annotation-only",
-                "fixture-only"
+                "fixture-only",
+                "builds-on"
               ]
             },
             "sources": {

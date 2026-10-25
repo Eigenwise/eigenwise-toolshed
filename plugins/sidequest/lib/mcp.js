@@ -242,14 +242,15 @@ function assertMutationFreshness(projectArg) {
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
 const CONTROL_PLANE_DEFAULT_BY = /* @__PURE__ */ new Set(["groomClose", "rework", "supersede_submission"]);
-function controlPlaneByArgs(tool, args) {
-  if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || "").trim()) return args;
-  const sessionId = runtimeSessionId();
-  return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
+function controlPlaneSession(tool, args) {
+  if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || "").trim()) return null;
+  return runtimeSessionId() || null;
 }
-async function runTool(tool, rawArgs, context) {
+async function runTool(tool, rawArgs, callContext) {
   const validated = validateToolArguments(tool, rawArgs);
-  const args = controlPlaneByArgs(tool, validated.args);
+  const sessionId = controlPlaneSession(tool, validated.args);
+  const args = sessionId ? Object.assign({}, validated.args, { by: sessionId }) : validated.args;
+  const context = sessionId ? { ...callContext, controlPlaneSession: sessionId } : callContext;
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args, context);
