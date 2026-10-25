@@ -1,5 +1,6 @@
 "use strict";
 const { referenceHeader } = require("./external-refs");
+const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs } = require("./experiment-refs");
 "use strict";
 const fs = require("fs");
 const os = require("os");
@@ -331,9 +332,9 @@ function planDocumentPacket(ticket, slug) {
   const planPath = path.resolve(plan.path);
   return `Plan document: \`${planPath}\` (revision ${plan.revision}, ${plan.by}, ${plan.at}). Read it with \`Read\` and offset/limit on demand; it is never inlined here.`;
 }
-function experimentCheckoutTarget(ticket) {
+function experimentCheckoutTarget(ticket, project) {
   const round = Number(ticket?.dispatch?.launchSeq);
-  return Number.isInteger(round) && round > 1 ? `refs/sidequest/${ticket.ref}/r${round - 1} (continue from the prior round)` : "base (fresh direction)";
+  return Number.isInteger(round) && round > 1 ? `${resolveExperimentRoundRef(project, ticket.ref, round - 1)} (continue from the prior round)` : "base (fresh direction)";
 }
 function experimentLogPacket(ticket, slug) {
   if (!ticket || !slug) return null;
@@ -342,9 +343,11 @@ function experimentLogPacket(ticket, slug) {
   const storedPath = String(experiment.path || "").trim();
   if (!storedPath) return null;
   const logPath = path.resolve(storedPath);
+  const project = store.readMeta(slug).path;
+  migrateExperimentRoundRefs(project, ticket.ref);
   return [
     "Read the full log at " + logPath + " before the first edit.",
-    "Round checkout target: " + experimentCheckoutTarget(ticket) + ".",
+    "Round checkout target: " + experimentCheckoutTarget(ticket, project) + ".",
     String(experiment.packet || "")
   ].join("\n\n");
 }
@@ -467,6 +470,7 @@ function ownPinnedCandidate(project, ref) {
   }
 }
 function candidateRestorePacket(ticket, slug, project) {
+  migrateExperimentRoundRefs(project, ticket.ref);
   if (ticket.dispatch?.continuation) return "";
   const related = (ticket.links || []).filter((link) => link.type === "related").map((link) => store.getTicket(slug, link.ref)?.submission?.commit).filter(Boolean);
   const candidates = [...new Set([...related, ownPinnedCandidate(project, ticket.ref)].filter(Boolean))];
@@ -911,7 +915,7 @@ ${ticket.description || "(No additional description was recorded.)"}`,
 Category: ${category.id || ticket.categoryId || "(Unclassified)"}
 Configured route: ${category.route?.model || "(No configured route)"} / ${category.route?.effort || "(No configured effort)"}
 Dispatch route: ${ticket.model || category.route?.model || "(No route)"} / ${ticket.effort || category.route?.effort || "(No effort)"}
-${category.contract || "(No category-specific executor instructions were recorded.)"}`,
+${(category.contract || "(No category-specific executor instructions were recorded.)").replaceAll("refs/sidequest/<ref>/r<N>", experimentRoundRef("<ref>", "<N>"))}`,
     ...uncertainty ? [uncertainty] : [],
     EXECUTOR_CONTRADICTION_RULE,
     ...findingCheckpoints ? [`Durable finding checkpoints:
