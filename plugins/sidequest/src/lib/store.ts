@@ -49,7 +49,7 @@ const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
 const { branchOwningWorktree, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require('./worktrees.js');
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
-const { reviewLockMessage } = require('./kernel/review-binding.js');
+const { reviewLockMessage, MAIN_ATTESTATION_BIND_SOURCE } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, gatewayCatalogRefreshFailure, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
@@ -2712,6 +2712,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
       state.claimedAt = now;
       state.outcome = 'claimed';
+      adoptDirectClaimRuntime(state, opts);
     }
     const previousStatus = t.status;
     const preClaimAttempt = activeAttempt;
@@ -2745,6 +2746,14 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
   });
   return lockedClaimOutcome(slug, found.id, by, result, opts.force);
+}
+
+// The runtime fields still name the earlier attempt's executor, and the attempt a
+// direct claim submits snapshots them as its own provenance (GH-654).
+function adoptDirectClaimRuntime(state: { agentId?: string | null; bindSource?: string | null }, opts: { direct?: boolean; sessionId?: string }): void {
+  if (!opts.direct) return;
+  state.agentId = null;
+  state.bindSource = opts.sessionId ? MAIN_ATTESTATION_BIND_SOURCE : null;
 }
 
 function heldByAnotherLiveClaimant(ticket: { claim?: { by?: string } | null } | null, by: string): boolean {

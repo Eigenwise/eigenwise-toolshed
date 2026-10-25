@@ -188,13 +188,13 @@ export function manualCandidateDeliveryGuidance(): string {
 
 export function candidateReviewRequiredGuidance(): string {
   return 'A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it.'
-    + ' The two sides are held to different proof. The submitting side may identify itself by the attempt\'s hook-bound agent id, or by the token prefix and agent name recorded against a proven claim-token binding; an attempt older than bind-source recording proves that binding through its recorded bind time instead.'
+    + ' The two sides are held to different proof. The submitting side may identify itself by the attempt\'s hook-bound agent id, by the token prefix and agent name recorded against a proven claim-token binding, or by the main-attestation session a main-thread direct claim records; an attempt older than bind-source recording proves that binding through its recorded bind time instead.'
     + ' The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those.'
     + ' Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing.'
     + ' If the review never ran to a terminal done attempt, dispatch it and let it close normally.'
     + ' If it reviewed a different candidate, that candidate needs its own bound review.'
     + ' If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally.'
-    + ' If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers it: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate.'
+    + ' If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers this candidate: dispatch, rework, and reclaim all refuse it while it is under review, so carry the same change on a fresh ticket, review that candidate, and retire this one with supersede_submission once the fresh one integrates.'
     + ' Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.';
 }
 

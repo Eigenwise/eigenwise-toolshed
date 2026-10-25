@@ -1,7 +1,7 @@
 'use strict';
 
 const { externalReference, originRepository } = require('../external-refs');
-const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef } = require('../kernel/review-binding');
+const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, submittedCandidateAttempt, submittedSourceIdentity } = require('../kernel/review-binding');
 
 function createTickets(dependencies: any) {
   const {
@@ -64,6 +64,19 @@ function storyLogRevision(slug?: any, storyId?: any) {
   return Number(story?.logRevision) || 0;
 }
 
+// GH-654. Binding locks the candidate against rework, dispatch, and reclaim, so a source no finalization can ever
+// accept must be refused here, while the unbound candidate can still be reworked, not after a review spent its budget.
+function refuseUnidentifiedSource(sourceTicket: any, candidate: string): void {
+  if (!submittedCandidateAttempt(sourceTicket) || submittedSourceIdentity(sourceTicket)) return;
+  throw new Error(unidentifiedSourceBindRefusal(sourceTicket.ref, candidate));
+}
+
+function unidentifiedSourceBindRefusal(sourceRef: string, candidate: string): string {
+  return `reviewTarget ${sourceRef} candidate ${candidate} cannot take a bound review: the terminal attempt that submitted it recorded no runtime identity`
+    + ' (no hook-bound agent id, no claim-token bind, no main-attestation session from a main-thread direct claim), so no review of it could ever finalize.'
+    + ` Nothing was bound. The candidate is still unbound, so rework ${sourceRef}, dispatch it so the replacement attempt binds and resubmits, then bind the review to that new candidate.`;
+}
+
 function normalizedReviewTarget(slug: any, reviewTicket: any, requested: any) {
   if (!requested || typeof requested !== 'object') {
     throw new Error('reviewTarget requires ref plus the exact submitted candidate');
@@ -91,6 +104,7 @@ function normalizedReviewTarget(slug: any, reviewTicket: any, requested: any) {
   if (!sameReviewCandidate(candidate, hasCommit ? { source: 'git', value: requestedCommit } : requestedRevision)) {
     throw new Error(`reviewTarget ${sourceTicket.ref} candidate does not match its submitted ${candidate.source}:${candidate.value}`);
   }
+  refuseUnidentifiedSource(sourceTicket, candidate.value);
   const relation = submissionReviewRelation(slug, sourceTicket);
   if (relation && (relation.conflict || !reviewTicket?.id || relation.reviewTicket?.id !== reviewTicket.id)) {
     throw new Error(`reviewTarget ${sourceTicket.ref} candidate is already bound to ${reviewRelationRef(relation)}`);

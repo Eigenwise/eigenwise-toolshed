@@ -23,7 +23,7 @@ const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
 const { branchOwningWorktree, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, unclaimedDispatchWorktreeReclaim, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
-const { reviewLockMessage } = require("./kernel/review-binding.js");
+const { reviewLockMessage, MAIN_ATTESTATION_BIND_SOURCE } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, gatewayCatalogRefreshFailure, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
@@ -2437,6 +2437,7 @@ function claimTicket(slug, idOrRef, by, opts) {
       state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
       state.claimedAt = now;
       state.outcome = "claimed";
+      adoptDirectClaimRuntime(state, opts);
     }
     const previousStatus = t.status;
     const preClaimAttempt = activeAttempt;
@@ -2464,6 +2465,11 @@ function claimTicket(slug, idOrRef, by, opts) {
     return { ok: true, ticket: t, ...compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {} };
   });
   return lockedClaimOutcome(slug, found.id, by, result, opts.force);
+}
+function adoptDirectClaimRuntime(state, opts) {
+  if (!opts.direct) return;
+  state.agentId = null;
+  state.bindSource = opts.sessionId ? MAIN_ATTESTATION_BIND_SOURCE : null;
 }
 function heldByAnotherLiveClaimant(ticket, by) {
   const claimant = ticket?.claim?.by;
