@@ -908,11 +908,17 @@ function exitedPhaseExitCode(result, report) {
   return 2;
 }
 
+// A timeout names what the deadline ended and what it could not; only a Windows job keeps a member
+// account, a POSIX group has none to report.
+function reportTimedOutTree(result, timeoutMilliseconds, report) {
+  if (result.jobClosedProcessIds !== undefined) report('closed', result.jobClosedProcessIds);
+  if (result.cleanupError !== null) report('cleanup-error', result.cleanupError);
+  report('timeout', timeoutMilliseconds);
+  return ownedVerifyTimeoutExitCode;
+}
+
 function ownedVerifyExitCode(result, timeoutMilliseconds, report) {
-  if (result.timedOut) {
-    report('timeout', timeoutMilliseconds);
-    return ownedVerifyTimeoutExitCode;
-  }
+  if (result.timedOut) return reportTimedOutTree(result, timeoutMilliseconds, report);
   if (result.error) {
     process.stderr.write(`${result.error.message}\n`);
     return 2;
@@ -924,8 +930,9 @@ function ownedVerifyExitCode(result, timeoutMilliseconds, report) {
  * Runs one verifier shell as an owned phase for a synchronous caller: the deadline ends the
  * whole tree (process group on POSIX, the job owner's job on Windows) and the output is forwarded
  * to stdout/stderr. How the phase ended goes only to spec.reportPath, one JSON record per line
- * carrying spec.nonce: the verifier's exit, a timeout (exit 124), a cleanupError (the exit is then
- * no proof that its tree ended), and done last. The verifier never sees the path or the nonce, so
+ * carrying spec.nonce: the verifier's exit, a cleanupError (the exit is then no proof that its tree
+ * ended), a timeout (exit 124) preceded by the Windows job's closed member account and any
+ * survivors' cleanupError, and done last. The verifier never sees the path or the nonce, so
  * nothing it prints is a record, and an owner that dies before done has reported nothing.
  */
 async function runOwnedVerifyPhase(spec) {
