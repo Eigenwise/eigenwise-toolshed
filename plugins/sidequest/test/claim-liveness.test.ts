@@ -1690,7 +1690,9 @@ test('GH-228: list and pulse report the same stale flag and the threshold it was
     source: 'cli',
   });
   assert.strictEqual(store.claimTicket(slug, verifying.ref, 'verifier', { direct: true, reason: 'A hand claim needs no executor association.' }).ok, true);
-  store.addComment(slug, verifying.ref, '[sidequest:verify-start] node --test', 'verifier');
+  assert.strictEqual(store.addComment(slug, verifying.ref, {
+    by: 'verifier', body: '[sidequest:verify-start] node --test', kind: 'comment', source: 'mcp',
+  }).ok, true);
   backdateClaim(verifying.ref, 2 * HOUR);
 
   const rows = store.listPayload(slug, { brief: true, status: 'doing', all: true }).tickets;
