@@ -165,6 +165,29 @@ test('published-branch pushes and manual tags need the current session publish l
   }
 })
 
+test('missing publication directories are refused before git starts, while status stays allowed', async ($, on) => {
+  const runs = await world(on, { cwd: PROJECT, repos: [projectRepo] })
+  for (const suffix of ['push -u origin feature', 'tag v1.0.0']) {
+    const reason = Reflect.get(await bash($, `git -C C:/missing ${suffix}`), 'deny')
+    expect(reason).toContain('directory C:\\missing does not exist (yet)')
+    expect(reason).toContain(`run the ${suffix.split(' ')[0]} as a separate command after the directory exists`)
+    expect(reason).not.toContain('posix_spawn')
+  }
+  expect(await bash($, 'git -C C:/missing status')).toMatchObject({ text: 'ran' })
+  expect(runs).toEqual([])
+})
+
+test('directory-creating chains get an explicit split-command publication refusal', async ($, on) => {
+  const runs = await world(on, { cwd: PROJECT, repos: [projectRepo] })
+  for (const creation of ['git worktree add -b feature C:/missing origin/main', 'git clone https://example.invalid/repo.git C:/missing', 'mkdir C:/missing']) {
+    const reason = Reflect.get(await bash($, `${creation} && git -C C:/missing push -u origin feature`), 'deny')
+    expect(reason).toContain('directory C:\\missing does not exist (yet)')
+    expect(reason).toContain('run the push as a separate command after the directory exists')
+    expect(reason).not.toContain('posix_spawn')
+  }
+  expect(runs).toEqual([])
+})
+
 test('the publish lock admits its own session and repo, and a Git Bash /c/ path resolves to the locked repo', async ($, on) => {
   const other: Repo = { root: 'C:\\other', commonDir: 'C:\\other\\.git' }
   await world(on, {
