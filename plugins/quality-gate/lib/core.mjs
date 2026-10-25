@@ -28,6 +28,15 @@ export async function createAnalyzer(projectRoot) {
   function functionKind(node) {
     return ast.SyntaxKind[node.kind];
   }
+
+  function anonymousCallSite(node, name) {
+    if (name !== '<anonymous>') return null;
+    let parent = node.parent;
+    while (ast.isParenthesizedExpression(parent)) parent = parent.parent;
+    if (!ast.isCallExpression(parent)) return null;
+    const title = parent.arguments.find((argument) => argument.kind === ast.SyntaxKind.StringLiteral);
+    return JSON.stringify([parent.expression.getText(), title?.text]);
+  }
   
   const DECISION_KINDS = new Set([
     ast.SyntaxKind.IfStatement,
@@ -149,7 +158,7 @@ export async function createAnalyzer(projectRoot) {
         const start = node.getStart();
         const end = node.end;
         const lines = executableLines(node, sourceFile, text);
-        functions.push({ identity, parent: parentId, name, start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), conditions: conditionalDescriptors(ast, node, forEachOwnNode), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex'), ownedLines: lines, executableLines: lines });
+        functions.push({ identity, parent: parentId, name, callSite: anonymousCallSite(node, name), start, runtimeStart: runtimeStart(node, text), bodyStart: node.body.getStart(), conditions: conditionalDescriptors(ast, node, forEachOwnNode), boundaries: runtimeBoundaries(node), end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, complexity: cyclomaticComplexity(node), fingerprint: crypto.createHash('sha256').update(ownText(node, text)).digest('hex'), ownedLines: lines, executableLines: lines });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }
@@ -500,15 +509,24 @@ function pairInOrder(heads, bases, pairs, accepts) {
   }
 }
 
-// An identity ends in a per-parent ordinal, so an inserted or deleted sibling shifts every later one.
-// Siblings whose own text appears exactly once on each side anchor the pairing; the rest pair in order
-// within the gap between the same two anchors, equal text first, then equal name, so an edited body
-// keeps its partner and a helper inserted above it does not take that partner and read as legacy.
+function sameAnonymousCallSite(head, base) {
+  return Boolean(head.callSite) && head.callSite === base.callSite;
+}
+
+function baselineMatchRule(metric, partner) {
+  if (!partner) return null;
+  if (metric.fingerprint === partner.fingerprint) return 'text';
+  return sameAnonymousCallSite(metric, partner) ? 'call-site' : 'position';
+}
+
+// An identity's sibling ordinal shifts after insertions. Text and anonymous call sites anchor partners
+// before positional fallback, so an inserted test cannot take an edited test's baseline body.
 function pairSiblings(baseSiblings, headSiblings) {
   const baseByFingerprint = Map.groupBy(baseSiblings, (sibling) => sibling.fingerprint);
   const headByFingerprint = Map.groupBy(headSiblings, (sibling) => sibling.fingerprint);
   const isUnique = (groups, sibling) => groups.get(sibling.fingerprint)?.length === 1;
   const pairs = new Map(headSiblings.filter((head) => isUnique(headByFingerprint, head) && isUnique(baseByFingerprint, head)).map((head) => [head, baseByFingerprint.get(head.fingerprint)[0]]));
+  pairInOrder(headSiblings, baseSiblings, pairs, sameAnonymousCallSite);
   const baseGaps = siblingsBetweenAnchors(baseSiblings, new Set(pairs.values()));
   for (const [segment, headEntries] of siblingsBetweenAnchors(headSiblings, new Set(pairs.keys()))) {
     const heads = headEntries.map((entry) => entry.sibling);
@@ -560,7 +578,7 @@ function changedFunctions(fileMetrics, baseline, relativePath, removedMetrics) {
   removedMetrics.push(...baseline.filter((metric) => !retained.has(metric)).map((metric) => ({ ...metric, relativePath })));
   return fileMetrics
     .filter((metric) => partners.get(metric.identity)?.fingerprint !== metric.fingerprint)
-    .map((metric) => ({ ...metric, classification: classifyChange(metric, partners.get(metric.identity)) }));
+    .map((metric) => ({ ...metric, classification: classifyChange(metric, partners.get(metric.identity)), matchedBy: baselineMatchRule(metric, partners.get(metric.identity)) }));
 }
 
 export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline, removedMetrics = []) {

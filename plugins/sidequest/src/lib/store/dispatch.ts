@@ -384,11 +384,36 @@ function runtimeOutsideProjectRepository(projectPath?: any, runtimeCwd?: any) {
   return Boolean(project) && project !== repositoryIdentity(runtimeCwd);
 }
 
+// Prepared siblings count, not only launched ones: a batch prepared on two boards before any executor started is
+// spawned in one message, and the hook then cut a board-B worktree from board A's repository (GH-665). Either side
+// refuses, because a ticket on the session's own repository is exactly what makes the other board ambiguous.
+// Nothing on the board tells a prepared dispatch about to be spawned from one nobody will spawn (both are seconds
+// old in the GH-665 shape), so a prepared sibling keeps counting until it claims, ends, or the prepared-dispatch TTL
+// sweep expires it. The refusal names the retireOnly call that ends it now, which this session may make at once
+// because it prepared the attempt (SQ-3936).
 function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
-  if (!runtimeOutsideProjectRepository(projectPath, runtimeCwd)) return null;
-  const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug);
-  if (!competing.length) return null;
-  return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry: any) => entry.path).join(', ')}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;
+  if (!runtimeCwd) return null;
+  const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug, ['prepared', 'launched']);
+  return competing.length ? crossBoardDispatchRefusal(ticket, projectPath, runtimeCwd, competing) : null;
+}
+
+type SessionBoardDispatch = { path: string; ref: string; state: any };
+
+function crossBoardDispatchRefusal(ticket: any, projectPath: any, runtimeCwd: any, competing: readonly SessionBoardDispatch[]) {
+  const repositoryMismatch = runtimeOutsideProjectRepository(projectPath, runtimeCwd)
+    ? `its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and ` : '';
+  const boards = competing.map((entry) => `${entry.path} (${entry.ref})`).join(', ');
+  const sharedTreeAdvice = repositoryMismatch
+    ? ` sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.` : '';
+  return `prepare dispatch: refused ${ticket.ref}; ${repositoryMismatch}this session already owns prepared or launched isolated dispatches on another board (${boards}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal or have claimed, leaving ${projectPath} as this session's only board with unclaimed isolated dispatches.${unspawnedPreparedRemedy(competing)}${sharedTreeAdvice}`;
+}
+
+function unspawnedPreparedRemedy(competing: readonly SessionBoardDispatch[]) {
+  const prepared = competing.filter((entry) => entry.state?.outcome === 'prepared');
+  if (!prepared.length) return '';
+  const calls = prepared.map((entry) => `dispatch({ ref: "${entry.ref}", project: ${JSON.stringify(entry.path)}, recoveryEvidence: "<why it will not be spawned>", retireOnly: true })`).join(', ');
+  const ttlHours = Math.round(preparedDispatchTtlMs() / 3600000);
+  return ` A prepared dispatch nobody will spawn keeps counting until the ${ttlHours} hour prepared-dispatch TTL expires it; retire it now from this session with ${calls}.`;
 }
 
 function dispatchPreparationAttribution(opts?: any) {
@@ -3333,15 +3358,15 @@ function bindingFailurePredicate(state?: any, sessionId?: string, worktree?: str
 // One entry per board this session still owns a launched isolated dispatch on.
 // WorktreeCreate learns only the spawning checkout's cwd, so the session id is the
 // only thing that can point it at a sibling project's board (SQ-2884).
-function launchedIsolatedSessionProjects(sessionId?: string, skipSlug?: any) {
-  const owned: { slug: string; path: string; state: any }[] = [];
+function launchedIsolatedSessionProjects(sessionId?: string, skipSlug?: any, outcomes: readonly string[] = ['launched']) {
+  const owned: { slug: string; path: string; ref: string; state: any }[] = [];
   if (!sessionId) return owned;
   for (const project of listProjects({ all: true })) {
     if (!project?.slug || !project.path || project.slug === skipSlug) continue;
     for (const candidate of listTickets(project.slug)) {
       const state = dispatchState(candidate);
-      if (state?.sessionId === sessionId && state.sharedTree === false && state.outcome === 'launched' && !state.terminalAt) {
-        owned.push({ slug: project.slug, path: String(project.path), state });
+      if (state?.sessionId === sessionId && state.sharedTree === false && outcomes.includes(state.outcome) && !state.terminalAt) {
+        owned.push({ slug: project.slug, path: String(project.path), ref: String(candidate.ref), state });
         break;
       }
     }
@@ -4766,6 +4791,19 @@ function exchangeCrossedClaimCheckout(slug?: any, ticketId?: any, sessionId?: an
   return withTicketLocks([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
 }
 
+function freshIsolatedCheckout(state?: any) {
+  return state?.sharedTree === false && !state.continuation?.sourceWorktree ? recordedCheckout(state) : null;
+}
+
+// What exchangeCrossedClaimCheckout could not settle is still crossed after it ran, and the harness confines an
+// isolated executor to the checkout it runs in, so binding that claim succeeds with every later write refused (GH-648).
+function crossedClaimLease(state?: any, observedWorktree?: any) {
+  const expected = freshIsolatedCheckout(state);
+  const observed = observedWorktree ? canonicalPath(String(observedWorktree)) : null;
+  if (!expected || !observed || expected === observed) return null;
+  return { expected, observed };
+}
+
 function parkedCheckoutOf(ticket?: any) {
   return dispatchState(ticket)?.crossBoundWorktree?.parkedCheckout || null;
 }
@@ -5480,6 +5518,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     bindDispatchClaimToken,
     exchangeGuessedClaimIdentity,
     exchangeCrossedClaimCheckout,
+    crossedClaimLease,
     settleDeferredStops,
     tokenAdmission,
     bindDispatchAgent,

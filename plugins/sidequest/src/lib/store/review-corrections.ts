@@ -1,5 +1,5 @@
 import type { ReviewCandidate, OracleVerdictOutcome, ReviewMirror } from '../kernel/review-binding';
-import { mainAttestedReviewOutcome, sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory, reviewProvenance } from '../kernel/review-binding';
+import { mainAttestedReviewOutcome, sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory, reviewProvenance, submittedSourceGenerationCurrent } from '../kernel/review-binding';
 
 export type ReviewVerdictCorrection = Readonly<{
   from: 'accepted'; to: 'rejected'; verdictAt: string; sourceTicketId: string; sourceRef: string;
@@ -174,7 +174,7 @@ export function independentReviewRefusal(source: CorrectionTicket, review: Corre
   if (mainAttestedReviewOutcome(source, review)) return;
   const provenance = reviewProvenance(source, review);
   if (provenance.reason !== 'ok') return refuse(provenance.reason, 'Finalization requires distinct immutable submitted-source and completed-review runtime provenance.');
-  const current = [source.dispatch?.outcome === 'submitted', source.dispatch?.terminalAt === provenance.source?.terminalAt,
+  const current = [submittedSourceGenerationCurrent(source, provenance.source),
     review.dispatch?.terminalAt === provenance.reviewer?.terminalAt];
   if (current.includes(false)) return refuse('stale_provenance', 'Finalization requires the current original submitted-source and completed-review generations.');
 }

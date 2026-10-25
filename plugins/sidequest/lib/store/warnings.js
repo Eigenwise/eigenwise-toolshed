@@ -104,11 +104,12 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
     const observedArtifact = String(artifact || "").trim();
     if (!observedArtifact) return ["verifyKind: attestation requires attestationArtifact: name the URL, file, frame, or returned count that was observed."];
     if (!evidence) return [];
-    const expected = `attestation: ${observedArtifact} | `;
+    const expectedArtifact = `attestation: ${observedArtifact}`;
+    const expected = `${expectedArtifact} | `;
     const receivedArtifact = evidence.split("|", 1)[0]?.trim() || "";
     const evidenceParts = evidence.slice(expected.length).split("|").map((part) => part.trim());
     if (!evidence.startsWith(expected) || evidenceParts.length !== 2 || evidenceParts.some((part) => !part)) {
-      return [`verify must use ${ATTESTATION_FORMAT}; its first segment must equal attestationArtifact verbatim. Expected prefix: \`${expected}\`. Received first segment: \`${receivedArtifact}\`.`];
+      return [`verify must use ${ATTESTATION_FORMAT}; its first segment must equal attestationArtifact verbatim. Expected first segment: \`${expectedArtifact}\`. Received first segment: \`${receivedArtifact}\`.`];
     }
     return [];
   }
@@ -952,12 +953,19 @@ ${String(ticket?.description || "")}`;
     warnings.push(...preparedDispatchWarnings(dispatchState(ticket), projectPath));
     return warnings.map((warning) => `Dispatch warning: ${warning}`);
   }
+  function cwdIsOwnIsolatedWorktree(cwd, dispatch) {
+    const ownWorktree = String(dispatch.worktree || "").trim();
+    if (!ownWorktree || dispatch.sharedTree === true) return false;
+    const relative = path.relative(canonicalPath(ownWorktree), canonicalPath(cwd));
+    return !relative.startsWith("..") && !path.isAbsolute(relative);
+  }
   function preparedDispatchWarnings(dispatch, projectPath) {
     if (!dispatch) return [];
+    const cwd = process.cwd();
     return [
       dispatch.fallbackReason ? `Route fallback: ${dispatch.fallbackReason}` : null,
       worktreeSetupIncompleteWarning(dispatch),
-      staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true)
+      cwdIsOwnIsolatedWorktree(cwd, dispatch) ? null : staleWorktreeCwdWarning(cwd, projectPath, dispatch.sharedTree === true)
     ].filter((warning) => Boolean(warning));
   }
   function worktreeVisibilityPaths(ticket, projectPath) {

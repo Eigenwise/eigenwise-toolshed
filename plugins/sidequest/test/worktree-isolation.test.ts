@@ -366,8 +366,9 @@ test('a cross-project dispatch is refused while another board holds this session
     assert.throws(
       () => store.prepareDispatch(otherSlug, ticket.ref, { sessionId, runtimeCwd: PROJECT }),
       (error: Error) => {
-        assert.match(error.message, /already owns launched isolated dispatches on another board/);
+        assert.match(error.message, /already owns prepared or launched isolated dispatches on another board/);
         assert.ok(error.message.includes(PROJECT), 'the refusal names the competing board');
+        assert.ok(error.message.includes(hubTicket.ref), 'the refusal names the competing ticket');
         assert.doesNotMatch(error.message, /from a session rooted in/);
         return true;
       },
@@ -375,6 +376,59 @@ test('a cross-project dispatch is refused while another board holds this session
   } finally {
     assert.equal(store.releaseTicket(slug, hubTicket.ref, 'ambiguous-hub-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
   }
+});
+
+// GH-665: a batch prepared on two boards before any executor started spawned in one message, and a board-B
+// claim ended up in a worktree cut from board A's repository. Merely prepared siblings already make the hook
+// guess, and the ticket on the session's own repository is refused too, not only the foreign one.
+test('a batch prepared on two boards is refused from either side before any launch', () => {
+  const other = initRepo('sq-isolation-prepared-batch-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-prepared-${Date.now()}`;
+  const fixture = (projectSlug: string, title: string) => store.createTicket(projectSlug, { title, category: 'codebase-exploration', files: ['README.md'] });
+  const foreign = fixture(otherSlug, 'prepared foreign batch fixture');
+  const home = fixture(slug, 'prepared home batch fixture');
+  const foreignPrepared = store.prepareDispatch(otherSlug, foreign.ref, { sessionId, runtimeCwd: PROJECT });
+  try {
+    assert.equal(foreignPrepared.ticket.dispatch.outcome, 'prepared');
+    assert.throws(
+      () => store.prepareDispatch(slug, home.ref, { sessionId, runtimeCwd: PROJECT }),
+      (error: Error) => {
+        assert.match(error.message, /already owns prepared or launched isolated dispatches on another board/);
+        assert.ok(error.message.includes(foreign.ref), 'the refusal names the prepared sibling on the other board');
+        assert.doesNotMatch(error.message, /sharedTree:true stays available/, 'same-repository side gets no shared-tree redirect advice');
+        return true;
+      },
+    );
+  } finally {
+    assert.equal(store.releaseTicket(otherSlug, foreign.ref, 'prepared-batch-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  }
+});
+
+// SQ-3936: a prepared dispatch nobody spawns would otherwise block every other board until the TTL sweep. The
+// refusal has to name the call that ends it, and that call has to actually clear the way.
+test('the cross-board refusal names the retireOnly call that clears an unspawned prepared sibling', () => {
+  const other = initRepo('sq-isolation-unspawned-prepared-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-unspawned-${Date.now()}`;
+  const fixture = (projectSlug: string, title: string) => store.createTicket(projectSlug, { title, category: 'codebase-exploration', files: ['README.md'] });
+  const unspawned = fixture(otherSlug, 'unspawned prepared fixture');
+  const home = fixture(slug, 'home dispatch after retirement fixture');
+  store.prepareDispatch(otherSlug, unspawned.ref, { sessionId, runtimeCwd: PROJECT });
+  assert.throws(
+    () => store.prepareDispatch(slug, home.ref, { sessionId, runtimeCwd: PROJECT }),
+    (error: Error) => {
+      assert.ok(error.message.includes(`dispatch({ ref: "${unspawned.ref}", project: "`), error.message);
+      assert.match(error.message, /retireOnly: true/);
+      assert.match(error.message, /\d+ hour prepared-dispatch TTL/);
+      return true;
+    },
+  );
+  const retired = store.prepareDispatch(otherSlug, unspawned.ref, { sessionId, recoveryEvidence: 'the orchestrator chose not to spawn it', retireOnly: true });
+  assert.equal(retired.retired, true);
+  const prepared = store.prepareDispatch(slug, home.ref, { sessionId, runtimeCwd: PROJECT });
+  assert.equal(prepared.ticket.dispatch.outcome, 'prepared');
+  assert.equal(store.releaseTicket(slug, home.ref, 'unspawned-prepared-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('a same-project session mismatch names the predicate without shared-tree advice', () => {
@@ -1272,13 +1326,21 @@ test('SQ-55: a crossed claim never moves the checkout binding of a sibling that 
     // crossed binding survives the claim and is now claim-owned.
     assert.equal((await pair.claim(pair.second, PROJECT)).worktreeCorrection, undefined);
     assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree));
-    assert.equal((await pair.claim(pair.first, pair.first.harnessWorktree)).worktreeCorrection, undefined);
+    // GH-648: no swap can settle this crossing, and admitting the claim used to leave a lease every write refused.
+    const denied = runHook(BIND_RUNTIME_IDENTITY, {
+      session_id: pair.sessionId,
+      agent_id: pair.first.agentId,
+      agent_type: pair.first.executor,
+      cwd: pair.first.harnessWorktree,
+      tool_name: 'mcp__plugin_sidequest_board__claim',
+      tool_input: { ref: pair.first.ref, project: PROJECT, by: `sq55-${pair.first.agentId}`, executor: pair.first.executor, tokenFile: pair.first.tokenFile },
+    });
+    assert.equal(denied?.hookSpecificOutput?.permissionDecision, 'deny', 'a claim from a checkout its lease does not record is never admitted');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, new RegExp(`refused claim of ${pair.first.ref}; .*code worktree_lease_crossed`));
     assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree), 'a claimed sibling lost its checkout binding');
     assert.equal(pair.recorded(pair.first.ref), worktrees.canonicalPath(pair.second.harnessWorktree));
     assert.equal(store.getTicket(slug, pair.second.ref).dispatch.worktreeBindingExchange, undefined);
-    const refused = pair.write(pair.first, pair.first.harnessWorktree);
-    assert.equal(refused?.hookSpecificOutput?.permissionDecision, 'deny');
-    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(`${pair.first.ref} has no write lease`));
+    assert.equal(store.getTicket(slug, pair.first.ref).claim?.by ?? null, null, 'the crossed claim was not admitted');
   } finally {
     pair.cleanup();
   }

@@ -347,3 +347,48 @@ test('replacement evidence rejects empty review details and unintegrated repairs
   assert.equal(unintegratedResult.ok, false);
   assert.equal(unintegratedResult.reason, 'repair_not_integrated');
 });
+
+
+test('byte-identical inherited paths supersede without replacement evidence', async () => {
+  const { repository, slug, source, repair } = fixture('identical-inherited');
+  const deliveredHead = commit(repository, 'feature.txt', 'original delivery\n');
+  const storedRepair = store.getTicket(slug, repair.ref);
+  storedRepair.submission.integration.resultingHead = deliveredHead;
+  storedRepair.submission.integration.deliveredFiles = [];
+  persist(slug, storedRepair);
+
+  const result = await supersede({
+    project: repository, ref: source.ref, by: 'orchestrator', supersededBy: repair.ref,
+    reason: 'The delivered head carries the source content unchanged.',
+  });
+
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.supersededBy.identicalPaths, ['feature.txt']);
+  assert.deepEqual(result.supersededBy.reviewedReplacements, []);
+  assert.equal(store.getTicket(slug, source.ref).status, 'done');
+});
+
+test('missing lineage refusal distinguishes identical and changed omitted paths', async () => {
+  const { repository, slug, source, repair } = fixture('mixed-omissions');
+  const candidate = commit(repository, 'inherited.txt', 'inherited content\n');
+  const storedSource = store.getTicket(slug, source.ref);
+  storedSource.submission.commit = candidate;
+  storedSource.submission.changedPaths.push('inherited.txt');
+  persist(slug, storedSource);
+  const deliveredHead = commit(repository, 'feature.txt', 'different delivered content\n');
+  const storedRepair = store.getTicket(slug, repair.ref);
+  storedRepair.submission.integration.resultingHead = deliveredHead;
+  storedRepair.submission.integration.deliveredFiles = [];
+  persist(slug, storedRepair);
+
+  const result = await supersede({
+    project: repository, ref: source.ref, by: 'orchestrator', supersededBy: repair.ref,
+    reason: 'Inspect omitted inherited and replaced content.',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lineage_paths_missing');
+  assert.match(result.message, /omits submitted paths: feature.txt, inherited.txt/);
+  assert.match(result.message, /remaining omitted paths: feature.txt/);
+  assert.ok(result.message.includes('Byte-identical omitted paths need no replacement evidence: ["inherited.txt"]'));
+});

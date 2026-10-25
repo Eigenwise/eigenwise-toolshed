@@ -548,3 +548,52 @@ test('a failed WorktreeCreate still bound to a claimed sibling checkout never re
   assertCheckoutIntact(sibling!.worktree, 'redispatch');
   assert.equal(store.getTicket(slug, sibling!.ref).claim.by, 'crossing-failed-create-sibling', 'the live claim is untouched');
 });
+
+// GH-648: the claim returned success with the lease still naming another checkout, and only the first write noticed.
+// A linked checkout no record names leaves the exchange nothing to swap with, which is the crossing it cannot settle.
+test('a claim from a checkout its lease does not record is refused, never admitted crossed', () => {
+  const sessionId = 'crossing-unproven-claim';
+  const owner = reserve(sessionId, 'unproven');
+  create(sessionId, owner.worktree);
+  assert.equal(boundWorktree(owner.ref), canonical(owner.worktree));
+  const stray = worktrees.agentWorktreePath(PROJECT, 'agentstraycheckout');
+  fs.mkdirSync(path.dirname(stray), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', stray], { cwd: PROJECT, windowsHide: true });
+
+  const refused = store.bindClaimRuntimeIdentity(slug, owner.ref, {
+    agentId: owner.agentId,
+    sessionId,
+    executor: owner.executor,
+    token: owner.token,
+    observedWorktree: stray,
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'worktree_lease_crossed');
+  assert.equal(refused.expected, canonical(owner.worktree));
+  assert.equal(refused.observed, canonical(stray));
+  assert.match(refused.message, new RegExp(`Observed ${escaped(canonical(stray))}; recorded ${escaped(canonical(owner.worktree))}`));
+  assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId ?? null, null, 'no runtime identity binds to a crossed lease');
+  assert.equal(boundWorktree(owner.ref), canonical(owner.worktree), 'the lease is left for the orchestrator to settle');
+
+  const hookOutput = execFileSync(process.execPath, [path.join(PLUGIN_ROOT, 'hooks', 'bind-runtime-identity.js')], {
+    input: JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      session_id: sessionId,
+      agent_id: owner.agentId,
+      agent_type: owner.executor,
+      cwd: stray,
+      tool_name: 'mcp__plugin_sidequest_board__claim',
+      tool_input: { ref: owner.ref, project: PROJECT, by: 'crossing-unproven-holder', executor: owner.executor, token: owner.token },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME },
+    windowsHide: true,
+  });
+  const denial = JSON.parse(hookOutput).hookSpecificOutput;
+  assert.equal(denial.permissionDecision, 'deny', 'the claim hook denies the call instead of letting the claim succeed');
+  assert.match(denial.permissionDecisionReason, /worktree_lease_crossed/);
+  assert.match(denial.permissionDecisionReason, /Stop without claiming and write nothing/);
+
+  claimAsRuntime(owner, sessionId, 'crossing-unproven-holder');
+  assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId, owner.agentId, 'from its own checkout the same claim binds');
+});

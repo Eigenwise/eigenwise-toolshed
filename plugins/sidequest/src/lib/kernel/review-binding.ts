@@ -109,6 +109,7 @@ export type ReviewProvenanceAttempt = Readonly<{
   agentId: string;
   agentName: string;
   tokenPrefix: string;
+  sessionId: string;
   identity: string;
   terminalAt: string;
   outcome: string;
@@ -152,6 +153,32 @@ function boundThroughClaimToken(attempt?: any): boolean {
   return Boolean(String(attempt?.boundAt || '').trim());
 }
 
+export const MAIN_ATTESTATION_BIND_SOURCE = 'main_attestation';
+
+// GH-654. The main thread's hook input carries no agent_id, so a main-thread
+// direct claim can never bind a runtime the way an executor does. What it does
+// carry is the host session the MCP server runs under, the same identity
+// verdict.finalize records. A reviewer must be hook-bound, which the main thread
+// never is, so this identity only ever stands on the submitting side.
+function mainAttestedSessionId(attempt?: any): string {
+  if (String(attempt?.bindSource || '').trim() !== MAIN_ATTESTATION_BIND_SOURCE) return '';
+  return String(attempt?.sessionId || '').trim();
+}
+
+function mainAttestedIdentity(attempt: any): ReviewProvenanceAttempt | null {
+  const sessionId = mainAttestedSessionId(attempt);
+  if (!sessionId) return null;
+  return Object.freeze({
+    agentId: '',
+    agentName: '',
+    tokenPrefix: '',
+    sessionId,
+    identity: `main:${sessionId}`,
+    terminalAt: String(attempt.terminalAt),
+    outcome: String(attempt.outcome || ''),
+  });
+}
+
 // Asymmetric on purpose. A dispatch token plus the name its own launch stamped
 // authenticate a DISPATCH; only the hook-bound agentId authenticates a RUNTIME
 // (store.ts claimRuntimeIdentity). So one parent runtime can hold two distinct
@@ -161,15 +188,16 @@ function boundThroughClaimToken(attempt?: any): boolean {
 // never records deadlocked every continuation-submitted candidate (SQ-2763).
 // A reviewer that never bound a runtime has proven nothing about being a
 // different one, so it stays unidentified.
-function identifiedAttempt(attempt?: any, claimTokenStandsAsIdentity?: boolean): ReviewProvenanceAttempt | null {
+function identifiedAttempt(attempt?: any, submittingSide?: boolean): ReviewProvenanceAttempt | null {
   const agentId = String(attempt?.agentId || '').trim();
   const agentName = String(attempt?.agentName || '').trim();
   const tokenPrefix = String(attempt?.tokenPrefix || '').trim();
-  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
+  if (!agentId && !(submittingSide && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
   return Object.freeze({
     agentId,
     agentName,
     tokenPrefix,
+    sessionId: '',
     identity: agentId ? `agent:${agentId}` : `claim:${tokenPrefix}/${agentName}`,
     terminalAt: String(attempt.terminalAt),
     outcome: String(attempt.outcome || ''),
@@ -192,8 +220,44 @@ function sameRuntimeIdentity(source: ReviewProvenanceAttempt, reviewer: ReviewPr
 export function submittedCandidateAttempt(sourceTicket?: any): any {
   const commit = String(sourceTicket?.submission?.commit || '').trim().toLowerCase();
   if (!commit) return null;
+  if (!sourceTicket.dispatch) return directSubmissionAttempt(sourceTicket.submission, commit);
   return latestAttempt(terminalAttempts(sourceTicket).filter((attempt: any) => String(attempt.outcome) === 'submitted'
     && String(attempt.commit || '').trim().toLowerCase() === commit));
+}
+
+// A ticket that was never dispatched appends no attempt snapshots, so its direct
+// claim's attestation rides on the submission. That record is as fixed as the
+// candidate: once a review binds, every path that would replace or clear the
+// submission refuses.
+function directSubmissionAttempt(submission: any, commit: string): any {
+  const attestation = submission?.mainAttestation;
+  const sessionId = String(attestation?.sessionId || '').trim();
+  if (attestation?.authority !== 'main-attestation' || !sessionId) return null;
+  return Object.freeze({
+    outcome: 'submitted',
+    commit,
+    bindSource: MAIN_ATTESTATION_BIND_SOURCE,
+    sessionId,
+    terminalAt: String(submission.at || ''),
+  });
+}
+
+// A main-attestation attempt names the main thread, never the earlier executor
+// whose runtime fields its dispatch record may still carry.
+function submittingIdentity(attempt: any): ReviewProvenanceAttempt | null {
+  return mainAttestedIdentity(attempt) || identifiedAttempt(attempt, true);
+}
+
+export function submittedSourceIdentity(sourceTicket?: any): ReviewProvenanceAttempt | null {
+  return submittingIdentity(submittedCandidateAttempt(sourceTicket));
+}
+
+// The submitting generation still governs the ticket: a dispatched ticket's live
+// record still names that terminal attempt, an undispatched one's submission does.
+export function submittedSourceGenerationCurrent(sourceTicket: any, source: ReviewProvenanceAttempt | null): boolean {
+  if (!source) return false;
+  if (!sourceTicket?.dispatch) return String(sourceTicket?.submission?.at || '') === source.terminalAt;
+  return sourceTicket.dispatch.outcome === 'submitted' && sourceTicket.dispatch.terminalAt === source.terminalAt;
 }
 
 export function completedReviewAttempt(reviewTicket?: any): any {
@@ -207,7 +271,7 @@ export function reviewProvenance(sourceTicket?: any, reviewTicket?: any): Review
   if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: 'source_attempt_missing' as ReviewProvenanceReason });
   const reviewerAttempt = completedReviewAttempt(reviewTicket);
   if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: 'review_attempt_missing' as ReviewProvenanceReason });
-  const source = identifiedAttempt(sourceAttempt, true);
+  const source = submittingIdentity(sourceAttempt);
   const reviewer = identifiedAttempt(reviewerAttempt, false);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: 'agent_identity_missing' as ReviewProvenanceReason });
   if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: 'shared_agent_identity' as ReviewProvenanceReason });

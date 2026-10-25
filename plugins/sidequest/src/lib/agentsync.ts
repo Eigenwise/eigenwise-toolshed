@@ -802,14 +802,23 @@ function findingCheckpointPacket(ticket?: any) {
 // unchanged worktree when its agent stops, so an executor that pauses for a
 // scope request before its first edit comes back in the shared checkout with no
 // warning (SQ-825, 2026-07-24).
+// Before the claim, an isolated dispatch's recorded checkout is the guess WorktreeCreate made in creation order, and
+// siblings spawned in one message can each hold the other's (GH-640). A continuation's retained tree or a claim settles it.
+function settledIsolatedWorktree(dispatch?: any): string {
+  return String(dispatch.continuation?.sourceWorktree || (dispatch.claimedAt ? dispatch.worktree : '') || '').trim();
+}
+
+const UNSETTLED_WORKTREE_ROOT = 'the `worktree` your claim result names (this binding settles at claim, so no path is printed before it)';
+const UNSETTLED_WORKTREE_IDENTITY = `Worktree identity: linked worktree
+Path: ${UNSETTLED_WORKTREE_ROOT}. Siblings spawned together can be recorded against each other's checkouts until they claim, so use the claim result's path for every absolute path, commit, submit and verify-capture call.`;
+
 function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || '').trim();
   if (!dispatch || !root || dispatch.sharedTree == null) return null;
   const sharedTree = dispatch.sharedTree === true;
-  const continuationWorktree = dispatch.continuation?.sourceWorktree;
-  const worktree = sharedTree ? root : String(continuationWorktree || dispatch.worktree || '').trim();
-  if (!worktree) return null;
+  const worktree = sharedTree ? root : settledIsolatedWorktree(dispatch);
+  if (!worktree) return UNSETTLED_WORKTREE_IDENTITY;
   const gitDir = sharedTree
     ? path.join(root, '.git')
     : String(dispatch.worktreeGitDirectory || '').trim() || '(recorded Git directory unavailable)';
@@ -830,11 +839,11 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
 // capture recorded against the wrong revision. Shared-tree and working-tree-
 // delivery dispatches never bind a worktree, so they get no flag and keep
 // today's briefing command byte-for-byte.
-function dispatchBoundWorktree(ticket?: any): string | null {
+function verifyCaptureWorktree(ticket?: any): string | null {
   const dispatch = ticket?.dispatch;
   if (!dispatch || dispatch.sharedTree !== false) return null;
-  const worktree = String(dispatch.worktree || '').trim();
-  return worktree ? canonicalPath(worktree) : null;
+  const worktree = settledIsolatedWorktree(dispatch);
+  return worktree ? canonicalPath(worktree) : '<worktree from your claim result>';
 }
 
 function ticketReadOnlyScratchSpace(ticket?: any) {
@@ -846,8 +855,7 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
   if (!ticket || !ticket.dispatch || ticket.dispatch.sharedTree !== false) return null;
   const root = String(projectPath || '').trim() || '<board project path>';
   const dispatch = ticket.dispatch;
-  const continuationWorktree = String(dispatch.continuation?.sourceWorktree || '').trim();
-  const expected = continuationWorktree || String(dispatch.worktree || '').trim() || '(immutable worktree binding unavailable; writes will be refused)';
+  const expected = settledIsolatedWorktree(dispatch) || UNSETTLED_WORKTREE_ROOT;
   if (dispatch.continuation?.mode === 'live_claim_resume') {
     return [[
       'Live-claim worktree contract: continue in the rebound linked worktree. The prepared spawn intentionally carries no isolation field, so the harness does not create another worktree.',
@@ -859,7 +867,7 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     'The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.',
     `Expected worktree root: ${expected}`,
-    'If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other\'s checkouts until they claim.',
+    'The claim result\'s `worktree` is the settled root and replaces any path above; a `worktreeCorrection` alongside it explains a crossing the claim swapped. A claim from a checkout the board cannot match is refused with `worktree_lease_crossed`: stop without writing and report it.',
     'Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.',
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
     `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Follow the refusal's remedy and ask the orchestrator to rebind this live claim to that checkout (\`dispatch\` with \`claimHolder\`, \`worktree\` and \`recoveryEvidence\`). When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, the board swaps the two records onto their own checkouts at once. Otherwise it allows the rebind only once the checkout's HEAD is this claim's own commit: commit your work with git in the checkout you run in, pin that hash at \`refs/sidequest/${ticket.ref}\`, and comment it as the crossing evidence before asking for the rebind. If you have no exact crossing to swap and no commit to pin, or the rebind is refused, release this ticket with kind \`technical_blocker\` and status \`todo\`, quoting the refusal as its command and output evidence, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`,
@@ -1072,7 +1080,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     requirement.environment === 'shared'
       ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log."
       : verifierCommand
-      ? 'Run it through ' + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
+      ? 'Run it through ' + capturedVerifyCommand(verifierCommand, ticket?.ref, project, verifyCaptureWorktree(ticket)) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
       : 'Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.',
     evidenceGuidance,
     `Lifecycle reference: ${TEMPLATE_PATH} (Execution survival, board transport, and upstream-defect reporting). Follow the lifecycle rules already loaded in your executor definition.`,
@@ -1184,6 +1192,7 @@ function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, unc
     '## This ticket',
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || '(Untitled ticket)'}`,
+    `External deliverable: ${ticket.externalDeliverable === true}`,
     ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || '(No additional description was recorded.)'}`,

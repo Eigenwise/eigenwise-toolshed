@@ -307,7 +307,8 @@ ${evidence.outputTail}`;
   }
   function claimStaleness(ticket, now) {
     const dispatched = Boolean(dispatchState(ticket) || claimVerification(ticket));
-    return { stale: claimReclaimable(ticket, now), staleAfterMs: dispatched ? claimAbandonMs() : claimIdleMs() };
+    const backstop = dispatched ? { staleAfterMs: claimAbandonMs(), staleRule: "abandon" } : { staleAfterMs: claimIdleMs(), staleRule: "idle" };
+    return { stale: claimReclaimable(ticket, now), ...backstop };
   }
   function autoReleasedClaimMessage(ref, release) {
     const when = release && release.at ? ` at ${release.at}` : "";

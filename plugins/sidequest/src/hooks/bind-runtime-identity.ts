@@ -15,8 +15,27 @@ import {
 // independent candidate-review gate. Every executor reaches the board to claim
 // and again to close, so a board call is the lifecycle event a read-only run
 // necessarily makes while the binding can still be repaired. Nothing here can
-// deny or rewrite the call: it only re-offers the checkout the harness put this
-// agent in, and the store decides whether that is the exact reserved target.
+// rewrite the call: it only re-offers the checkout the harness put this agent
+// in, and the store decides whether that is the exact reserved target. A claim
+// is denied only when the store says admitting it would strand the executor.
+type ClaimRuntimeBinding = {
+  ok?: boolean;
+  reason?: string;
+  message?: string;
+  ticket?: { dispatch?: { reducedAgentSchema?: boolean } };
+};
+
+function reducedSchemaIdentityRefusal(ref: string, reason?: string): string {
+  return `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity (${reason || 'unknown reason'}). Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`;
+}
+
+// A crossed lease is denied for every dispatch: admitting the claim leaves an executor whose every write is refused (GH-648).
+function claimBindingDenial(ref: string, binding?: ClaimRuntimeBinding): string | null {
+  if (binding?.reason === 'worktree_lease_crossed') return String(binding.message);
+  if (binding?.ticket?.dispatch?.reducedAgentSchema !== true || binding.ok) return null;
+  return binding.message || reducedSchemaIdentityRefusal(ref, binding.reason);
+}
+
 function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: string): boolean {
   if (stringField(input, 'tool_name') !== 'mcp__plugin_sidequest_board__claim' || !isRecord(input.tool_input)) return false;
   const toolInput = input.tool_input;
@@ -27,12 +46,7 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
     const store = require(runtimeModule('store')) as {
       findProject: (project: string) => { ok?: boolean; slug?: string };
       sessionProjectRoot: () => string;
-      bindClaimRuntimeIdentity: (slug: string, ref: string, options: unknown) => {
-        ok?: boolean;
-        reason?: string;
-        message?: string;
-        ticket?: { dispatch?: { reducedAgentSchema?: boolean } };
-      };
+      bindClaimRuntimeIdentity: (slug: string, ref: string, options: unknown) => ClaimRuntimeBinding;
     };
     // `project` is optional on claim. The MCP claim handler resolves an omitted
     // project through store.sessionProjectRoot, so the bind must use the same
@@ -52,12 +66,8 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
         permissionMode: stringField(input, 'permission_mode'),
         sessionId,
       });
-      if (binding?.ticket?.dispatch?.reducedAgentSchema === true && !binding.ok) {
-        writeDeny(
-          'PreToolUse',
-          binding.message || `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity (${binding.reason || 'unknown reason'}). Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`,
-        );
-      }
+      const denial = claimBindingDenial(ref, binding);
+      if (denial) writeDeny('PreToolUse', denial);
     }
   } catch (_) {
   }

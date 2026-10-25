@@ -299,11 +299,10 @@ function verifierRun(requirement, command, options) {
     outputTailBytes: options.outputTailBytes || DEFAULT_OUTPUT_TAIL_BYTES,
     cwd: options.cwd,
     environment: verifierEnvironment(options.environment || process.env),
-    ownerChannel: ownerChannel(requirement)
+    ownerChannel: ownerChannel()
   });
 }
-function ownerChannel(requirement) {
-  if (requirement.environment !== "shared") return null;
+function ownerChannel() {
   return Object.freeze({ reportPath: path.join(os.tmpdir(), `sidequest-verify-owner-${process.pid}-${randomUUID()}.jsonl`), nonce: randomUUID() });
 }
 function spawnFailureResult(run, shell, error) {
@@ -317,15 +316,13 @@ function ownedTreeLaunch(shell, run, channel) {
   return Object.freeze({ ...shell, executable: process.execPath, arguments: Object.freeze([OWNED_PROCESS_TREE_SCRIPT, JSON.stringify(spec)]) });
 }
 function spawnVerifier(shell, run) {
-  const launch = run.ownerChannel ? ownedTreeLaunch(shell, run, run.ownerChannel) : shell;
-  const timeout = run.ownerChannel ? run.timeoutMilliseconds + OWNED_TREE_SETTLE_MARGIN_MILLISECONDS : run.timeoutMilliseconds;
+  const launch = ownedTreeLaunch(shell, run, run.ownerChannel);
   const log = fs.openSync(run.logPath, "w");
   try {
     return spawnSync(launch.executable, launch.arguments, {
-      cwd: run.cwd,
       env: run.environment,
       windowsHide: true,
-      timeout,
+      timeout: run.timeoutMilliseconds + OWNED_TREE_SETTLE_MARGIN_MILLISECONDS,
       stdio: ["ignore", log, log]
     });
   } finally {
@@ -337,7 +334,7 @@ function spawnVerifierAndReport(shell, run) {
     const outcome = spawnVerifier(shell, run);
     return { outcome, report: verifierReport(run) };
   } finally {
-    if (run.ownerChannel) fs.rmSync(run.ownerChannel.reportPath, { force: true });
+    fs.rmSync(run.ownerChannel.reportPath, { force: true });
   }
 }
 function authenticOwnerRecord(line, nonce) {
@@ -353,23 +350,39 @@ function ownerRecords(channel) {
   const records = text.split("\n").map((line) => authenticOwnerRecord(line, channel.nonce)).filter((record) => record !== null);
   return new Map(records.map((record) => [record.record, record.value]));
 }
+function reportedJobAccount(records) {
+  if (!records.has("closed")) return void 0;
+  const closed = records.get("closed");
+  return Array.isArray(closed) && closed.every(Number.isInteger) ? closed : null;
+}
 function verifierReport(run) {
-  if (!run.ownerChannel) return Object.freeze({ done: true, timedOut: false, cleanupError: null, exitCode: markerExitCode(run.logPath) });
   const records = ownerRecords(run.ownerChannel);
   const cleanupError = records.get("cleanup-error");
+  const phaseError = records.get("error");
   const exitCode = records.get("exit");
   return Object.freeze({
     done: records.has("done"),
     timedOut: records.has("timeout"),
+    phaseError: typeof phaseError === "string" ? phaseError : null,
     cleanupError: typeof cleanupError === "string" ? cleanupError : null,
-    exitCode: Number.isInteger(exitCode) ? Number(exitCode) : null
+    exitCode: Number.isInteger(exitCode) ? Number(exitCode) : null,
+    jobClosedProcessIds: reportedJobAccount(records)
   });
 }
-function timeoutResult(run, shell, outcome, tail) {
-  return failedResult(run.requirement, "timeout", run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms; partial output captured.`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
+function timeoutTreeEvidence(report) {
+  return report.timedOut ? ownedTreeCleanupEvidence(report) : "The verification owner was stopped before it reported its tree; survivor state unknown.";
+}
+function timeoutResult(run, shell, outcome, tail, report) {
+  return failedResult(run.requirement, "timeout", run.command, run.logPath, `Verification timed out after ${run.timeoutMilliseconds}ms. ${timeoutTreeEvidence(report)} Output log: ${run.logPath}`, outcome.status ?? 2, tail, run.timeoutMilliseconds, shell.label);
 }
 function unreportedOwnerResult(run, shell, outcome, tail) {
-  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification owner ended without reporting. Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+  const ownerSpawnError = outcome.error ? ` ${outcome.error.message}` : "";
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, `The verification owner ended without reporting.${ownerSpawnError} Output log: ${run.logPath}`, outcome.status ?? 2, tail, void 0, shell.label);
+}
+function shellNeverStartedResult(run, shell, outcome, tail, report) {
+  const treeEvidence = report.cleanupError === null ? "" : ` Its process tree did not end either: ${report.cleanupError}`;
+  const reason = `${shellExitReason(shell, outcome.status ?? 2)} ${report.phaseError}${treeEvidence}`;
+  return failedResult(run.requirement, "could_not_run", run.command, run.logPath, reason, outcome.status ?? 2, tail, void 0, shell.label);
 }
 function cleanupErrorResult(run, shell, outcome, tail, exitCode, cleanupError) {
   if (exitCode === null || exitCode === 0) {
@@ -378,10 +391,14 @@ function cleanupErrorResult(run, shell, outcome, tail, exitCode, cleanupError) {
   const verdict = exitCodeVerdict(run, shell, exitCode, tail);
   return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
 }
-function abnormalVerifierResult(run, shell, outcome, tail, report) {
-  if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail);
-  if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
+function ownerReportedFailureResult(run, shell, outcome, tail, report) {
+  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
   return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+}
+function abnormalVerifierResult(run, shell, outcome, tail, report) {
+  if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail, report);
+  if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
+  return ownerReportedFailureResult(run, shell, outcome, tail, report);
 }
 function exitCodeResult(run, shell, outcome, tail, exitCode) {
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);

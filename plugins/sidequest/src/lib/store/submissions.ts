@@ -17,7 +17,7 @@ const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyD
 const worktrees = require('../worktrees.js');
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require('./composition-admission.js');
 const { stillSpawnsInsideItsWrite } = require('../db');
-import type { VerificationResult } from '../kernel/verification.js';
+import type { VerificationRequirement, VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
 import { beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
@@ -258,6 +258,11 @@ function completedBoundReview(ticket: AttestedReviewTicket, relation: ReviewRela
   return [!relation.conflict, review.status === 'done' || mainAttestedReviewOutcome(ticket, review) === 'accepted'].every(Boolean);
 }
 
+// dispatch, rework, and reclaim all refuse a submitted candidate under review, so only a fresh ticket recovers it.
+const UNIDENTIFIED_SOURCE_ROUTES = 'This bound candidate cannot be redispatched, reworked, or reclaimed.'
+  + ' Recover with a fresh ticket carrying the same change: dispatch it, or direct-claim it from the main thread, so its submission records an identity,'
+  + ' bind a new review to that candidate, and once it integrates retire this one with supersede_submission';
+
 function terminalReviewFailure(ticket: any, relation: any) {
   const reviewTicket = relation.reviewTicket;
   if (!completedBoundReview(ticket, relation)) {
@@ -271,7 +276,8 @@ function terminalReviewFailure(ticket: any, relation: any) {
   if (mainAttestedReviewOutcome(ticket, reviewTicket) === 'accepted') return null;
   const provenance = reviewProvenance(ticket, reviewTicket);
   if (provenance.reason === 'source_attempt_missing') {
-    return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`;
+    return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`
+      + ` and no main-attestation record from a main-thread direct claim. ${UNIDENTIFIED_SOURCE_ROUTES}`;
   }
   if (provenance.reason === 'review_attempt_missing') {
     return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
@@ -279,9 +285,9 @@ function terminalReviewFailure(ticket: any, relation: any) {
   if (provenance.reason === 'agent_identity_missing') {
     return [
       !provenance.source && `${ticket.ref} recorded no runtime binding on the terminal attempt that submitted the candidate:`
-        + ' no hook-bound agent id, and no recorded bind time carrying the token prefix and agent name to stand in for one.'
-        + ' An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it:'
-        + ' re-dispatch the ticket so the replacement attempt binds, then review the resubmitted candidate',
+        + ' no hook-bound agent id, no recorded bind time carrying the token prefix and agent name to stand in for one, and no main-attestation session from a main-thread direct claim.'
+        + ' An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it.'
+        + ` ${UNIDENTIFIED_SOURCE_ROUTES}`,
       !provenance.reviewer && `${reviewRelationRef(relation)} recorded no hook-bound agent id on its terminal review attempt:`
         + ' a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, so they cannot establish a reviewer independent of the submitter',
     ].filter(Boolean).join('; ');
@@ -723,6 +729,14 @@ function dispatchPinnedRequirement(ticket: any) {
   return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
 }
 
+// GH-654. A dispatched ticket's direct claim stamps its attestation on the dispatch record, which the terminal
+// attempt snapshots. A never-dispatched one appends no attempt, so the claim's session rides on the submission.
+function directClaimAttestation(ticket: any) {
+  const sessionId = String(ticket.claim?.runtime?.sessionId || '').trim();
+  if (dispatchState(ticket) || !directlyClaimed(ticket) || !sessionId) return {};
+  return { mainAttestation: { authority: 'main-attestation', sessionId, by: ticket.claim.by, claimedAt: ticket.claim.at } };
+}
+
 // Same form as the briefing's capture line (agentsync capturedVerifyCommand), which a direct claim never gets.
 function directClaimCaptureInvocation(slug: any, ticket: any) {
   if (!directlyClaimed(ticket)) return '';
@@ -883,6 +897,7 @@ function skippedVerification(requirement: any, waiver: any) {
 interface QualityTicket {
   id: string;
   ref: string;
+  files?: string[];
   submission: { base?: string; commit?: string; changedPaths?: string[] };
 }
 
@@ -898,23 +913,47 @@ function qualityInput(slug: string, ticket: QualityTicket, project: string, time
   };
 }
 
+function qualityDebtFiles(ticket: QualityTicket, quality: IntegrationQuality): string[] {
+  const unverifiedFiles = new Set(quality.unverified.map((row) => row.relativePath));
+  return (ticket.submission.changedPaths || []).filter((file) => {
+    if (file.startsWith('.release/unreleased/')) return false;
+    if (file.startsWith('docs/') && !isInScope(file, ticket.files || [])) return false;
+    return unverifiedFiles.has(file);
+  });
+}
+
+function noteQualityDebt(quality: IntegrationQuality, reason: string): void {
+  quality.debtTicketNote = 'debt ticket not filed: ' + reason;
+  try {
+    if (quality.receipt) fs.writeFileSync(quality.receipt, JSON.stringify(quality, null, 2) + '\n');
+  } catch (error) {
+    quality.debtTicketNote += '; receipt update failed: ' + integrationGitError(error);
+  }
+}
+
 function recordQualityDebt(slug: string, ticket: QualityTicket, quality: IntegrationQuality) {
   if (!quality.unverified.length || quality.captureGap) return;
+  const files = qualityDebtFiles(ticket, quality);
+  if (!files.length) return noteQualityDebt(quality, 'no candidate source/test paths have unverified rows');
   const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
-  transaction(() => {
-    if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
-    dependencies.createTicket(slug, {
-      title,
-      description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
-      category: 'coding.normal',
-      complexity: 2,
-      complexityWhy: 'Capture missing native quality evidence for an existing candidate',
-      files: ticket.submission.changedPaths || [],
-      executorVerifyKind: 'manual',
-      executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
-      source: 'integration-quality',
+  try {
+    transaction(() => {
+      if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
+      dependencies.createTicket(slug, {
+        title,
+        description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
+        category: 'coding.normal',
+        complexity: 2,
+        complexityWhy: 'Capture missing native quality evidence for an existing candidate',
+        files,
+        executorVerifyKind: 'manual',
+        executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
+        source: 'integration-quality',
+      });
     });
-  });
+  } catch (error) {
+    noteQualityDebt(quality, integrationGitError(error));
+  }
 }
 
 function verifyCandidateQuality(slug: string, tickets: QualityTicket[], project: string, timeoutMilliseconds: number, verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv) {
@@ -2356,8 +2395,8 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       : workingTreeDelivery
         ? workingTreeDeliveryPaths(repo)
         : interaction.interaction
-          ? Array.from(new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths]))
-          : deliveredCommitPaths(repo, deliveryCommit);
+          ? Array.from(new Set([...changedIntegrationPaths(repo, ticket.submission), ...interaction.interaction.paths]))
+          : changedIntegrationPaths(repo, ticket.submission);
     const deliveryIdentity = {
       kind: interaction.interaction ? 'reviewed-merged-tree-interaction' : workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
       pinnedRef: submissionGitRef(ticket),
@@ -3402,6 +3441,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       ...(rejectedSubmission ? { supersedesRejectedSubmission: rejectedSubmission.commit } : {}),
       ...(inheritedPaths.length ? { inheritedPaths } : {}),
       ...(unsubmittedWorkingPaths.length ? { unsubmittedWorkingPaths } : {}),
+      ...directClaimAttestation(t),
       integratedAt: null,
     }, range || {});
     if (rejectedSubmission) {
@@ -3627,16 +3667,6 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       : [];
     const delivered = new Set(deliveredFiles);
     const missingPaths = changedPaths.filter((file) => !delivered.has(file));
-    const unreviewedMissingPaths = missingPaths.filter((file) => !replacements.has(file));
-    if (unreviewedMissingPaths.length) {
-      return {
-        ok: false,
-        reason: 'lineage_paths_missing',
-        ticket: source,
-        missingPaths: unreviewedMissingPaths,
-        message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths without reviewed retirement evidence: ${unreviewedMissingPaths.join(', ')}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentionally retired path, or integrate a repair that delivers the full path lineage.${contentCommitOwed}`,
-      };
-    }
     let divergentPaths: string[];
     try {
       divergentPaths = pathsWithDifferentContent(repo, source.submission.commit, contentCommit, changedPaths);
@@ -3646,6 +3676,19 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
         reason: 'lineage_unavailable',
         ticket: source,
         message: `${source.ref} supersession refused while comparing delivered content: ${integrationGitError(error)}`,
+      };
+    }
+    const divergent = new Set(divergentPaths);
+    const identicalPaths = missingPaths.filter((file) => !divergent.has(file));
+    const unreviewedMissingPaths = missingPaths.filter((file) => divergent.has(file) && !replacements.has(file));
+    if (unreviewedMissingPaths.length) {
+      return {
+        ok: false,
+        reason: 'lineage_paths_missing',
+        ticket: source,
+        missingPaths: unreviewedMissingPaths,
+        identicalPaths,
+        message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths: ${missingPaths.join(', ')}. Byte-identical omitted paths need no replacement evidence: ${JSON.stringify(identicalPaths)}. Supply reviewedReplacements entries with path, reviewedBy, and reason for the remaining omitted paths: ${unreviewedMissingPaths.join(', ')}.${contentCommitOwed}`,
       };
     }
     const unreviewed = divergentPaths.filter((file) => !replacements.has(file));
@@ -3659,7 +3702,7 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       };
     }
     const now = new Date().toISOString();
-    const reviewedReplacementPaths = new Set(missingPaths.concat(divergentPaths));
+    const reviewedReplacementPaths = new Set(divergentPaths);
     const reviewedReplacements = changedPaths
       .filter((file) => reviewedReplacementPaths.has(file))
       .map((file) => replacements.get(file)!);
@@ -3670,6 +3713,7 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       deliveredAt: repaired.integration.deliveredAt || repaired.repair.submission?.integratedAt,
       closedAt: now,
       changedPaths,
+      identicalPaths,
       reviewedReplacements,
       reason,
     };
@@ -4063,6 +4107,49 @@ function collidingChangedPaths(participant: any, sibling: any) {
   return scopedPaths(participant?.submission?.changedPaths).filter((surface: string) => isInScope(surface, siblingChanges));
 }
 
+function trialWaveMerge(repository: string, left: string, right: string) {
+  const result = spawnSync('git', ['merge-tree', '--write-tree', '--name-only', left, right], {
+    cwd: repository, encoding: 'utf8', timeout: 30_000, windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return { tree: String(result.stdout).trim(), surfaces: [], evidence: '' };
+  if (result.status !== 1) throw new Error(String(result.stderr));
+  const output = String(result.stdout).trim();
+  return { tree: '', surfaces: (output.split(/\r?\n\r?\n/)[0] || '').split(/\r?\n/).slice(1), evidence: output };
+}
+
+function overlappingCandidateTrial(repository: string, target: string, participant: WaveTicket, sibling: WaveTicket) {
+  const siblingCommit = String(sibling.submission.commit);
+  const appliedSibling = trialWaveMerge(repository, target, siblingCommit);
+  if (appliedSibling.surfaces.length) return appliedSibling;
+  const composed = integrationGit(repository, [...COMPOSED_WAVE_MERGE_CONFIG, 'commit-tree', appliedSibling.tree,
+    '-p', target, '-p', siblingCommit, '-m', 'Sidequest overlap trial']);
+  return trialWaveMerge(repository, composed, String(participant.submission.commit));
+}
+
+function bothCandidatesAreCommits(participant: WaveTicket, sibling: WaveTicket) {
+  return Boolean(participant.submission?.commit && sibling.submission?.commit);
+}
+
+// A trial that cannot run proves nothing either way, so the changed-path overlap keeps refusing.
+function guardedCandidateTrial(slug: string, targetBranch: string | undefined, participant: WaveTicket, sibling: WaveTicket, surfaces: string[]) {
+  try {
+    const repository = String(readMeta(slug).path);
+    const target = integrationGit(repository, ['rev-parse', targetBranch || 'HEAD']);
+    return overlappingCandidateTrial(repository, target, participant, sibling);
+  } catch (error) {
+    return { tree: '', surfaces, evidence: `Trial merge could not run, so the changed-path overlap stands: ${integrationGitError(error)}` };
+  }
+}
+
+function trialCandidateConflicts(slug: string, targetBranch: string | undefined, participant: WaveTicket, sibling: WaveTicket, surfaces: string[]) {
+  if (!surfaces.length) return [];
+  const pair = { participant: participant.ref, sibling: sibling.ref, surfaces };
+  if (!bothCandidatesAreCommits(participant, sibling)) return [pair];
+  const trial = guardedCandidateTrial(slug, targetBranch, participant, sibling, surfaces);
+  return trial.surfaces.length ? [{ ...pair, surfaces: trial.surfaces, evidence: trial.evidence }] : [];
+}
+
 function waveScopeConflicts(slug: any, tickets: any[], targetBranch?: string) {
   const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
   const boardTickets: Array<WaveTicket & { archived?: boolean; status?: string }> = listTickets(slug);
@@ -4076,10 +4163,21 @@ function waveScopeConflicts(slug: any, tickets: any[], targetBranch?: string) {
       if (!submissionWasRecordedAfter(sibling, participant)) continue;
       if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
       const surfaces = collidingChangedPaths(participant, sibling);
-      if (surfaces.length) conflicts.push({ participant: participant.ref, sibling: sibling.ref, surfaces });
+      conflicts.push(...trialCandidateConflicts(slug, targetBranch, participant, sibling, surfaces));
     }
   }
   return conflicts;
+}
+
+function waveScopeRefusal(slug: string, tickets: WaveTicket[], targetBranch: string | undefined) {
+  const scopeConflicts = waveScopeConflicts(slug, tickets, targetBranch);
+  if (!scopeConflicts.length) return null;
+  return {
+    ok: false,
+    reason: 'candidate_overlap',
+    conflicts: scopeConflicts,
+    message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Each conflict's evidence carries the trial merge's textual conflict, or why the trial could not run; candidates without a Git commit overlap by changed path. Resolve the reported conflicts before assembling these candidates. ${manualCandidateDeliveryGuidance()}`,
+  };
 }
 
 function omittedPendingSubmissionOverlaps(slug: any, tickets: any[]) {
@@ -4110,7 +4208,7 @@ function waveVerifierMismatchMessage(tickets: any[], requirements: any[]) {
   const difference = new Set(requirements.map((requirement) => requirement.kind)).size > 1
     ? `pin different verifier kinds (${pinnedKinds})`
     : `all pin kind ${requirements[0].kind} but with different commands or evidence (${pinnedKinds})`;
-  return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(', ')}) only need to agree on kind; executable kinds must pin the same command. ${manualCandidateDeliveryGuidance()}`;
+  return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(', ')}) only need to agree on kind; executable requirements run each pinned command on the composed tree. ${manualCandidateDeliveryGuidance()}`;
 }
 
 function waveVerificationRequirement(tickets: any[]) {
@@ -4120,10 +4218,24 @@ function waveVerificationRequirement(tickets: any[]) {
   const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
   if (sameKind && NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.includes(first.kind)) return { ok: true, requirement: first };
   const identity = waveVerifierIdentity(first);
-  if (requirements.some((requirement) => waveVerifierIdentity(requirement) !== identity)) {
+  if (!compatibleWaveVerifiers(requirements, identity)) {
     return { ok: false, reason: 'wave_verifier_mismatch', message: waveVerifierMismatchMessage(tickets, requirements) };
   }
-  return { ok: true, requirement: first };
+  return { ok: true, requirement: first, requirements: distinctWaveVerifiers(requirements) };
+}
+
+function sameWaveVerifier(left: VerificationRequirement, right: VerificationRequirement) {
+  return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment;
+}
+
+// Participants that pin the same verifier share one run on the composed tree (SQ-2463).
+function distinctWaveVerifiers(requirements: VerificationRequirement[]) {
+  return requirements.filter((requirement, index) => requirements.findIndex((other) => sameWaveVerifier(other, requirement)) === index);
+}
+
+function compatibleWaveVerifiers(requirements: VerificationRequirement[], identity: string) {
+  if (requirements.every((requirement) => requirement.command)) return true;
+  return requirements.every((requirement) => waveVerifierIdentity(requirement) === identity);
 }
 
 function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
@@ -4194,15 +4306,23 @@ function authoritativeWaveVerification(slug: any, tickets: any[], wave: any, sup
   const requirement = waveVerificationRequirement(tickets);
   if (!requirement.ok) return requirement;
   if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
-  if (requirement.requirement.environment === 'shared') {
+  if (waveNeedsSharedEnvironment(requirement.requirement, requirement.requirements)) {
     return {
       ok: true,
       provisioning: 'The gate deferred to the environment lane: the pinned command runs in the shared checkout at delivery, so nothing ran and worktree provisioning was skipped.',
-      verification: deferredVerification(requirement.requirement),
+      verification: deferredWaveVerification(requirement.requirement, requirement.requirements),
     };
   }
-  if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement);
+  if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement, requirement.requirements);
   return suppliedWaveVerification(wave.id, requirement.requirement, supplied);
+}
+
+function waveNeedsSharedEnvironment(requirement: VerificationRequirement, requirements: VerificationRequirement[] = [requirement]) {
+  return requirements.some((entry) => entry.environment === 'shared');
+}
+
+function deferredWaveVerification(requirement: VerificationRequirement, requirements: VerificationRequirement[] = [requirement]) {
+  return { ...deferredVerification(requirement), results: requirements.map(deferredVerification) };
 }
 
 function suppliedWaveVerification(waveId: string, requirement: any, supplied: any) {
@@ -4215,7 +4335,7 @@ function suppliedWaveVerification(waveId: string, requirement: any, supplied: an
   };
 }
 
-function commandWaveVerification(slug: any, tickets: any[], wave: any, requirement: any) {
+function commandWaveVerification(slug: any, tickets: any[], wave: any, requirement: any, requirements: VerificationRequirement[] = [requirement]) {
   const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement) : null;
   if (reused) {
     return {
@@ -4227,7 +4347,7 @@ function commandWaveVerification(slug: any, tickets: any[], wave: any, requireme
   const checkout = waveGateCheckout(slug, tickets, wave);
   if (!checkout.ok) return checkout;
   try {
-    return verifyWaveGateCheckout(slug, wave.id, requirement, checkout);
+    return verifyWaveGateCheckout(slug, wave.id, requirements, checkout);
   } finally {
     checkout.remove();
   }
@@ -4273,7 +4393,7 @@ function removeComposedWaveCheckout(slug: any, repository: string, checkout: str
   integrationGit(repository, ['worktree', 'prune']);
 }
 
-function verifyWaveGateCheckout(slug: any, waveId: string, requirement: any, checkout: any) {
+function verifyWaveGateCheckout(slug: any, waveId: string, requirements: VerificationRequirement[], checkout: any) {
   const provisioning = provisionWaveGateWorktree(slug, checkout.isolatedWorktree);
   if (!provisioning.ok) {
     return {
@@ -4282,16 +4402,24 @@ function verifyWaveGateCheckout(slug: any, waveId: string, requirement: any, che
       message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`,
     };
   }
-  reportIntegrationProgress('wave gate', requirement.command);
-  const verification = runProcessVerification(requirement, {
-    cwd: checkout.cwd,
-    timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
-    logPath: integrationVerifyLogPath(slug, { ref: waveId }),
-    outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
-  });
-  return { ok: true, provisioning: provisioning.evidence, verification: checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification };
+  return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
 }
 
+function verifyWaveCommands(slug: string, waveId: string, requirements: VerificationRequirement[], checkout: { cwd: string; tree: string | null }) {
+  const results = requirements.map((requirement, index): VerificationResult => {
+    reportIntegrationProgress('wave gate', requirement.command);
+    const verification = runProcessVerification(requirement, {
+      cwd: checkout.cwd,
+      timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
+      logPath: integrationVerifyLogPath(slug, { ref: waveId + '-' + index }),
+      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+    });
+    return checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification;
+  });
+  const result = results.find((verification) => !verificationAccepted(verification)) || results[0];
+  return { ...result, results,
+    evidence: results.map((verification) => verification.command + ': ' + verification.status + '. ' + verification.evidence).join('\n') };
+}
 
 function singletonWaveParticipant(wave: DeliverableWave, ref: string) {
   const participants = Array.isArray(wave.participants) ? wave.participants : [];
@@ -4478,15 +4606,8 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
     return { ok: false, reason: 'wave_baseline_required', message: 'Every submitted candidate must retain its dispatch baseline, changed surfaces, and verifier evidence before wave assembly.' };
   }
   const waveCandidates = candidates.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
-  const scopeConflicts = waveScopeConflicts(slug, tickets, target?.branch);
-  if (scopeConflicts.length) {
-    return {
-      ok: false,
-      reason: 'candidate_overlap',
-      conflicts: scopeConflicts,
-      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton. ${manualCandidateDeliveryGuidance()}`,
-    };
-  }
+  const scopeRefusal = waveScopeRefusal(slug, tickets, target?.branch);
+  if (scopeRefusal) return scopeRefusal;
   const firstCandidate = waveCandidates[0];
   if (!firstCandidate) return { ok: false, reason: 'wave_baseline_required', message: 'Wave assembly requires a candidate baseline.' };
   const omittedPendingOverlaps = omittedPendingSubmissionOverlaps(slug, tickets);

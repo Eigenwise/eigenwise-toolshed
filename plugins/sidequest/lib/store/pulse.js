@@ -260,6 +260,7 @@ function createPulse(dependencies) {
       ref: ticket.ref,
       title: ticket.title,
       refs: referenceKeys(ticket.externalRefs),
+      externalDeliverable: ticket.externalDeliverable === true,
       liveness: liveness.state,
       livenessEvidence: liveness.evidence,
       reclaimable: claim?.reclaimable || null,

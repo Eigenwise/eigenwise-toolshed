@@ -53,6 +53,22 @@ const { runCapturedVerification, runVerifyCapture, recordCapture } = require('..
 const worktrees = require('../lib/worktrees.js');
 const publish = require('../lib/publish.js');
 const { createCheckoutInstanceMarker, sameCanonicalPath } = require('../lib/kernel/worktree.js');
+// Every test here prepares isolated dispatches under the one process session on its own board and never spawns
+// them, and the cross-board guard counts an unspawned prepared dispatch until it ends (GH-665, SQ-3936). Retire
+// them with the call that refusal names, so one test's board cannot refuse the next test's dispatch.
+function unspawnedIsolatedDispatchOfThisSession(ticket: any) {
+  const dispatch = ticket.dispatch || {};
+  return dispatch.sessionId === MCP_SESSION_ID && dispatch.sharedTree === false && dispatch.outcome === 'prepared' && !dispatch.terminalAt;
+}
+
+test.afterEach(() => {
+  for (const project of store.listProjects({ all: true })) {
+    for (const ticket of store.listTickets(project.slug).filter(unspawnedIsolatedDispatchOfThisSession)) {
+      store.prepareDispatch(project.slug, ticket.ref, { sessionId: MCP_SESSION_ID, recoveryEvidence: 'the mcp test that prepared this dispatch never spawns it', retireOnly: true });
+    }
+  }
+});
+
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 
@@ -1604,6 +1620,11 @@ test('board worktree isolation defaults on and permits explicit isolation when d
   const explicitlyIsolated = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, sharedTree: false, full: true });
   assert.equal(explicitlyIsolated.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, false);
+  // None of these is spawned, and an unspawned prepared isolated dispatch refuses this session's next board (GH-665).
+  for (const unspawned of [isolatedTicket, scopeLessTicket, readonlyTicket]) {
+    const retired = await callTool('dispatch', { project: isolatedProject, ref: unspawned.ref, recoveryEvidence: 'this fixture never spawns it', retireOnly: true });
+    assert.equal(retired.retired, true);
+  }
 
   const sharedRoot = committedRepo('sq-mcp-worktree-isolation-off-');
   const sharedProject = store.ensureProject(sharedRoot, 'SQ shared isolation').slug;
@@ -3397,7 +3418,7 @@ test('MCP repair submission transfers a related rejected candidate fragment to i
   const sourceTicket = store.getTicket(project, source.ref);
   const terminalAt = new Date().toISOString();
   sourceTicket.status = 'doing';
-  sourceTicket.dispatch = { terminalAt, outcome: 'submitted', attempts: [{ outcome: 'submitted', commit: sourceCommit, terminalAt }] };
+  sourceTicket.dispatch = { terminalAt, outcome: 'submitted', agentId: 'rejected-candidate-agent', attempts: [{ outcome: 'submitted', commit: sourceCommit, agentId: 'rejected-candidate-agent', terminalAt }] };
   sourceTicket.submission = {
     by: 'rejected-candidate-worker', at: terminalAt, commit: sourceCommit,
     verify: 'manual: rejected fixture', changedPaths: ['plugins/fixture-plugin/index.js', sourceFragment], integratedAt: null,
@@ -3574,7 +3595,7 @@ test('MCP rejects incompatible attestation fields on add and update', async () =
         attestationArtifact: artifact,
         verify: 'attestation: Sidequest overview dashboard | provisioned a full render | dashboard data rendered',
       },
-      expected: /Expected prefix: `attestation: grafana:\/\/caller-controlled-artifact \| `\. Received first segment: `attestation: Sidequest overview dashboard`\./,
+      expected: /Expected first segment: `attestation: grafana:\/\/caller-controlled-artifact`\. Received first segment: `attestation: Sidequest overview dashboard`\./,
     },
     {
       fields: { attestationArtifact: artifact },

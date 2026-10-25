@@ -379,7 +379,10 @@ function createClaims(dependencies: any) {
   // claimIdleMs alone read as healthy long past that threshold (GH-228). List and pulse both carry this.
   function claimStaleness(ticket?: any, now?: any) {
     const dispatched = Boolean(dispatchState(ticket) || claimVerification(ticket));
-    return { stale: claimReclaimable(ticket, now), staleAfterMs: dispatched ? claimAbandonMs() : claimIdleMs() };
+    const backstop = dispatched
+      ? { staleAfterMs: claimAbandonMs(), staleRule: 'abandon' }
+      : { staleAfterMs: claimIdleMs(), staleRule: 'idle' };
+    return { stale: claimReclaimable(ticket, now), ...backstop };
   }
 
   function autoReleasedClaimMessage(ref?: any, release?: any) {

@@ -277,10 +277,22 @@ function createDispatch(dependencies) {
     return Boolean(project) && project !== repositoryIdentity(runtimeCwd);
   }
   function isolatedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd, slug, sessionId) {
-    if (!runtimeOutsideProjectRepository(projectPath, runtimeCwd)) return null;
-    const competing = launchedIsolatedSessionProjects(String(sessionId || "").trim(), slug);
-    if (!competing.length) return null;
-    return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry) => entry.path).join(", ")}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;
+    if (!runtimeCwd) return null;
+    const competing = launchedIsolatedSessionProjects(String(sessionId || "").trim(), slug, ["prepared", "launched"]);
+    return competing.length ? crossBoardDispatchRefusal(ticket, projectPath, runtimeCwd, competing) : null;
+  }
+  function crossBoardDispatchRefusal(ticket, projectPath, runtimeCwd, competing) {
+    const repositoryMismatch = runtimeOutsideProjectRepository(projectPath, runtimeCwd) ? `its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and ` : "";
+    const boards = competing.map((entry) => `${entry.path} (${entry.ref})`).join(", ");
+    const sharedTreeAdvice = repositoryMismatch ? ` sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.` : "";
+    return `prepare dispatch: refused ${ticket.ref}; ${repositoryMismatch}this session already owns prepared or launched isolated dispatches on another board (${boards}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal or have claimed, leaving ${projectPath} as this session's only board with unclaimed isolated dispatches.${unspawnedPreparedRemedy(competing)}${sharedTreeAdvice}`;
+  }
+  function unspawnedPreparedRemedy(competing) {
+    const prepared = competing.filter((entry) => entry.state?.outcome === "prepared");
+    if (!prepared.length) return "";
+    const calls = prepared.map((entry) => `dispatch({ ref: "${entry.ref}", project: ${JSON.stringify(entry.path)}, recoveryEvidence: "<why it will not be spawned>", retireOnly: true })`).join(", ");
+    const ttlHours = Math.round(preparedDispatchTtlMs() / 36e5);
+    return ` A prepared dispatch nobody will spawn keeps counting until the ${ttlHours} hour prepared-dispatch TTL expires it; retire it now from this session with ${calls}.`;
   }
   function dispatchPreparationAttribution(opts) {
     return {
@@ -2664,15 +2676,15 @@ function createDispatch(dependencies) {
     if (!state.worktree || canonicalPath(state.worktree) !== worktree) return "canonical_worktree";
     return "dispatch_binding_unavailable";
   }
-  function launchedIsolatedSessionProjects(sessionId, skipSlug) {
+  function launchedIsolatedSessionProjects(sessionId, skipSlug, outcomes = ["launched"]) {
     const owned = [];
     if (!sessionId) return owned;
     for (const project of listProjects({ all: true })) {
       if (!project?.slug || !project.path || project.slug === skipSlug) continue;
       for (const candidate of listTickets(project.slug)) {
         const state = dispatchState(candidate);
-        if (state?.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt) {
-          owned.push({ slug: project.slug, path: String(project.path), state });
+        if (state?.sessionId === sessionId && state.sharedTree === false && outcomes.includes(state.outcome) && !state.terminalAt) {
+          owned.push({ slug: project.slug, path: String(project.path), ref: String(candidate.ref), state });
           break;
         }
       }
@@ -3758,6 +3770,15 @@ function createDispatch(dependencies) {
     if (!exchange) return adoptParkedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted);
     return withTicketLocks([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
   }
+  function freshIsolatedCheckout(state) {
+    return state?.sharedTree === false && !state.continuation?.sourceWorktree ? recordedCheckout(state) : null;
+  }
+  function crossedClaimLease(state, observedWorktree) {
+    const expected = freshIsolatedCheckout(state);
+    const observed = observedWorktree ? canonicalPath(String(observedWorktree)) : null;
+    if (!expected || !observed || expected === observed) return null;
+    return { expected, observed };
+  }
   function parkedCheckoutOf(ticket) {
     return dispatchState(ticket)?.crossBoundWorktree?.parkedCheckout || null;
   }
@@ -4324,6 +4345,7 @@ function createDispatch(dependencies) {
     bindDispatchClaimToken,
     exchangeGuessedClaimIdentity,
     exchangeCrossedClaimCheckout,
+    crossedClaimLease,
     settleDeferredStops,
     tokenAdmission,
     bindDispatchAgent,

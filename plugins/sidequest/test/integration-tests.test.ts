@@ -183,6 +183,49 @@ test('fallback timeout receipt names the full gate deadline and elapsed time', (
   assert.ok(receipt.durationMilliseconds >= 500);
 });
 
+function processAlive(processId: number): boolean {
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (error: unknown) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
+}
+
+// SQ-3927: a bare spawnSync deadline killed only the shell, so npm and the test runner under it kept
+// running for hours after the gate reported timeout.
+test('a timed-out import gate ends the test tree under npm before it reports', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-orphans-'));
+  const processIdsFile = path.join(project, 'plugins/example/pids.txt');
+  const recordedProcessIds = () => (fs.existsSync(processIdsFile) ? fs.readFileSync(processIdsFile, 'utf8').trim().split('\n').map((line) => line.split(' ')) : []);
+  context.after(() => {
+    for (const [, processId] of recordedProcessIds()) {
+      try { process.kill(Number(processId)); } catch { /* already ended */ }
+    }
+    return fs.promises.rm(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  });
+  const recordAndSleep = (role: string) => `require('node:fs').appendFileSync('pids.txt', '${role} ' + process.pid + '\\n'); setTimeout(() => {}, 120000);`;
+  writeFixture(project, {
+    'plugins/example/package.json': JSON.stringify({ scripts: { 'test:full': 'node child.cjs' } }),
+    'plugins/example/child.cjs': `require('node:child_process').spawn(process.execPath, ['grandchild.cjs'], { stdio: 'ignore' }); ${recordAndSleep('child')}`,
+    'plugins/example/grandchild.cjs': recordAndSleep('grandchild'),
+    'plugins/example/lib/store.js': 'module.exports = true;',
+    'plugins/example/test/first.test.js': "require('../lib/store.js');",
+    'plugins/example/test/second.test.js': "require('../lib/store.js');",
+  });
+  const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath: path.join(project, 'gate.log') };
+
+  const result = runImportingIntegrationTests(project, ['plugins/example/lib/store.js'], pinned, 5_000, { ...process.env }, 1);
+
+  assert.equal(result.status, 'timeout');
+  const recorded = recordedProcessIds();
+  assert.deepEqual(recorded.map(([role]) => role).sort(), ['child', 'grandchild'], 'both test processes started before the deadline');
+  assert.deepEqual(recorded.filter(([, processId]) => processAlive(Number(processId))), [], 'no test process outlives the reported timeout');
+  if (process.platform === 'win32') {
+    for (const [, processId] of recorded) assert.match(result.evidence, new RegExp(`processes [\\d, ]*\\b${processId}\\b`), 'the timeout names every pid the job ended');
+  }
+});
+
 
 test('import-walk file threshold is a validated board setting', (context) => {
   const store = require('../lib/store.js');
