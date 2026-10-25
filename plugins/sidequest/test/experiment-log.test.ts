@@ -14,7 +14,7 @@ const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRef
 test('experiment round pins coexist with candidates and migrate legacy pins without losing commits', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-round-refs-'));
   const git = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: repository, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-  git(['init']);
+  git(['init', '-b', 'main']);
   git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-m', 'base']);
   const commit = git(['rev-parse', 'HEAD']);
   const roundPin = experimentRoundRef('SQ-1', 1);
