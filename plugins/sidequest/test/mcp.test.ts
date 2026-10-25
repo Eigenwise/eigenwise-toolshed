@@ -3574,7 +3574,7 @@ test('MCP rejects incompatible attestation fields on add and update', async () =
         attestationArtifact: artifact,
         verify: 'attestation: Sidequest overview dashboard | provisioned a full render | dashboard data rendered',
       },
-      expected: /Expected prefix: `attestation: grafana:\/\/caller-controlled-artifact \| `\. Received first segment: `attestation: Sidequest overview dashboard`\./,
+      expected: /Expected first segment: `attestation: grafana:\/\/caller-controlled-artifact`\. Received first segment: `attestation: Sidequest overview dashboard`\./,
     },
     {
       fields: { attestationArtifact: artifact },

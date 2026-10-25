@@ -1184,6 +1184,7 @@ function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, unc
     '## This ticket',
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || '(Untitled ticket)'}`,
+    `External deliverable: ${ticket.externalDeliverable === true}`,
     ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || '(No additional description was recorded.)'}`,

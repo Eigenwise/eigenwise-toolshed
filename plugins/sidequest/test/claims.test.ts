@@ -194,3 +194,58 @@ test('unborn repository supports a working-tree claim with a staged foreign base
   }
   assertForeignStageUnchanged(project, foreignPath, foreignIndexIdentity);
 });
+
+for (const externalDeliverable of [true, false]) {
+  test('GH-662 gitignored notes attestation preserves clean done with externalDeliverable=' + externalDeliverable, async () => {
+    const { project, slug } = createProject();
+    writeProjectFile(project, '.gitignore', 'notes/\n');
+    git(project, ['add', '.gitignore']);
+    git(project, ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'ignore notes']);
+    const mcp = require('../lib/mcp.js');
+    const added = await mcp.TOOLS.find((tool: { name: string }) => tool.name === 'add').handler({
+      project: slug,
+      title: 'External notes draft',
+      category: 'repository-write',
+      files: ['notes/raw/draft.txt'],
+      externalDeliverable,
+      verifyKind: 'attestation',
+      attestationArtifact: 'notes/raw/draft.txt',
+    });
+    assert.strictEqual(added.ok, true);
+    const created = store.getTicket(slug, added.ref);
+    assert.strictEqual(created.externalDeliverable, externalDeliverable, 'add persists the explicit declaration');
+    assert.strictEqual(store.pulsePayload(slug, created.ref).externalDeliverable, externalDeliverable, 'pulse exposes the declaration');
+    const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+    assert.match(agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug), new RegExp('External deliverable: ' + externalDeliverable));
+    const by = 'external-notes-worker';
+    assert.strictEqual(store.claimTicket(slug, created.ref, by, {
+      token: prepared.token, executor: prepared.ticket.dispatchExecutor, source: 'mcp',
+    }).ok, true);
+    writeProjectFile(project, 'notes/raw/draft.txt', 'Draft evidence\n');
+    assert.strictEqual(git(project, ['status', '--porcelain']), '', 'ignored-only output leaves Git clean');
+    const verify = 'attestation: notes/raw/draft.txt | read the written draft | draft contains the requested notes';
+    const closeout = store.externalDeliverableCloseout(slug, store.getTicket(slug, created.ref), verify);
+    assert.strictEqual(closeout.ok, externalDeliverable, 'external-deliverable fallback requires the flag');
+    if (externalDeliverable) {
+      assert.strictEqual(closeout.verification.status, 'attestation');
+      assert.strictEqual(closeout.verification.evidence, verify);
+    } else {
+      assert.strictEqual(closeout.reason, 'external_deliverable_not_declared');
+      assert.match(closeout.message, /explicitly sets externalDeliverable:true/);
+    }
+    const completed = await mcp.TOOLS.find((tool: { name: string }) => tool.name === 'done').handler({
+      project: slug, ref: created.ref, by, model: 'sonnet', effort: 'medium',
+      body: 'Wrote and read the external notes draft.',
+      verify,
+    });
+    assert.strictEqual(completed.ok, true, JSON.stringify(completed));
+    assert.strictEqual(store.getTicket(slug, created.ref).status, 'done');
+    assert.strictEqual(store.getTicket(slug, created.ref).completion.externalDeliverable, undefined, 'clean no-op closeout keeps its existing provenance');
+  });
+}
+
+test('attestation refusal compares expected and received first segments in the same form', () => {
+  const errors = store.attestationErrors('attestation: notes/raw/wrong.txt | read draft | draft checked', 'notes/raw/draft.txt');
+  assert.match(errors[0], /Expected first segment: \x60attestation: notes\/raw\/draft.txt\x60/);
+  assert.match(errors[0], /Received first segment: \x60attestation: notes\/raw\/wrong.txt\x60/);
+});
