@@ -51,6 +51,17 @@ function waitForExit(child) {
   });
 }
 
+function childExitedWithin(child, timeout) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeout);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
 function waitForReady(child) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('foreign gateway fixture did not become ready')), 5000);
@@ -1436,10 +1447,9 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
   await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
   fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
-  // The older supervisor's own exit can lag ensure's exit on a slow runner; give it
-  // a bounded window before asserting it is gone rather than checking instantly.
-  await waitForProcessesToExit([olderShim.pid], 5000);
-  assert.equal(processIsRunning(olderShim.pid), false, 'ensure stopped the previous sibling supervisor');
+  // olderShim is this test's own child, so its exit event is the proof. Its numeric pid is not:
+  // once it exits, Windows can hand that pid to a replacement process.
+  assert.equal(await childExitedWithin(olderShim, 5000), true, 'ensure stopped the previous sibling supervisor');
   assert.equal(processIsRunning(replacementWorkerPid), true, 'ensure launched the replacement worker');
   assert.equal(processIsRunning(replacementProxyPid), true, 'ensure launched the replacement proxy');
 
