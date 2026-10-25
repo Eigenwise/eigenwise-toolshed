@@ -305,6 +305,14 @@ function normalizeIntegrationVerifyTimeoutMs(value?: any) {
   return timeoutMs;
 }
 
+function normalizeIntegrationTestFileThreshold(value: unknown = 40): number {
+  const threshold = Number(value);
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new Error('integrationTestFileThreshold must be a positive integer.');
+  }
+  return threshold;
+}
+
 function hasOriginRemote(absPath?: any) {
   try {
     execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: absPath, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
@@ -410,6 +418,7 @@ function boardConfig(slug?: any) {
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     delivery: normalizeDeliveryMode(meta.delivery),
     integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
+    integrationTestFileThreshold: normalizeIntegrationTestFileThreshold(meta.integrationTestFileThreshold),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
     verifyEnvironment: normalizeVerifyEnvironment(meta.verifyEnvironment),
     worktreeBase: normalizeWorktreeBase(meta.worktreeBase),
@@ -461,6 +470,7 @@ const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any, repository?: string
   integrationBranch: normalizeIntegrationBranch,
   delivery: normalizeDeliveryMode,
   integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs,
+  integrationTestFileThreshold: normalizeIntegrationTestFileThreshold,
   worktreeIsolation: normalizeWorktreeIsolation,
   verifyEnvironment: normalizeVerifyEnvironment,
   worktreeBase: normalizeWorktreeBase,

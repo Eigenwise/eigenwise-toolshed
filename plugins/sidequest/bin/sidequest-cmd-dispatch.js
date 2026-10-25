@@ -233,6 +233,7 @@ const BOARD_CONFIG_OPTION_PATCH_KEYS = {
   "integration-branch": "integrationBranch",
   delivery: "delivery",
   "integration-verify-timeout-ms": "integrationVerifyTimeoutMs",
+  "integration-test-file-threshold": "integrationTestFileThreshold",
   "worktree-isolation": "worktreeIsolation",
   "verify-environment": "verifyEnvironment",
   "worktree-base": "worktreeBase",
@@ -287,6 +288,7 @@ function printBoardConfig(payload) {
   console.log(`integration branch: ${payload.integrationBranch}`);
   console.log(`delivery: ${payload.delivery}`);
   console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
+  console.log(`integration test file threshold: ${payload.integrationTestFileThreshold}`);
   console.log(`worktree isolation: ${enabledOrDisabled(payload.worktreeIsolation)}`);
   console.log(`verify environment: ${payload.verifyEnvironment}`);
   console.log(`worktree base: ${payload.worktreeBase}`);

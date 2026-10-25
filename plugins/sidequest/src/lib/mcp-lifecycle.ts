@@ -65,10 +65,11 @@ const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdi
 const { correctReviewVerdict, finalizeReviewVerdict } = require('./mcp-review-correction.js');
 const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
 import { compositionIncludesSource, compositionSubmissionScope } from './store/composition-admission';
+import { buildsOnCandidates } from './store/work-provenance';
 import type { CompositionDispatch, CompositionTicket } from './store/composition-admission';
 const { fork } = require('node:child_process') as typeof import('node:child_process');
 
-type ToolCallContext = { progress: (message: string) => void; isolateLongRunningWork: boolean };
+type ToolCallContext = { progress: (message: string) => void; isolateLongRunningWork: boolean; controlPlaneSession?: string };
 
 type ToolDefinition = {
   name: string;
@@ -278,10 +279,49 @@ function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
   });
 }
 
+function declaredBuildsOn(ticket: any) {
+  return buildsOnCandidates(ticket?.dispatch?.workProvenance ?? ticket?.submission?.workProvenance);
+}
+
+// A follow-up dispatched with workProvenance kind builds-on may move each source's release fragment into its own,
+// which is how one change ships under one fragment once the follow-up supersedes the source (GH-636, SQ-3893).
+function inheritedReleaseFragments(slug: string, ticket: any): string[] {
+  const buildsOn = declaredBuildsOn(ticket).map(candidate => commitScope.ticketReleaseFragment(candidate.ref));
+  return [...new Set([...rejectedRelatedReleaseFragments(slug, ticket), ...buildsOn.filter((fragment): fragment is string => Boolean(fragment))])];
+}
+
+// The builds-on range carries each source's whole submitted range, so the paths those commits changed are admitted
+// beside the follow-up's own scope.
+function inheritedSubmissionPaths(slug: string, ticket: any): string[] {
+  return [...new Set([...inheritedReleaseFragments(slug, ticket), ...declaredBuildsOn(ticket).flatMap(candidate => candidate.paths)])];
+}
+
+type SubmittedRepairSource = RepairSource & { submission: RepairSubmission };
+
+function otherSubmittedSource(slug: string, ticket: RepairTicket, ref: string): SubmittedRepairSource | null {
+  const source: RepairSource | null = store.getTicket(slug, ref);
+  return source?.submission && source.id !== ticket.id ? { ...source, submission: source.submission } : null;
+}
+
+function buildsOnSourceRefusal(source: SubmittedRepairSource, commit: string): RepairAdmissionRefusal | undefined {
+  const refusal = inheritedSourceRefusal(source, source.submission);
+  if (refusal) return refusal;
+  if (String(source.submission.commit).toLowerCase() !== commit.toLowerCase()) return { ok: false, reason: 'builds_on_stale' };
+}
+
+function buildsOnAdmission(slug: string, ticket: RepairTicket, entryRef: string, rangeCommits: readonly string[]) {
+  const declared = declaredBuildsOn(ticket).find(candidate => candidate.ref.toUpperCase() === String(entryRef).toUpperCase());
+  if (!declared) return null;
+  const source = otherSubmittedSource(slug, ticket, entryRef);
+  if (!source) return { ok: false as const, reason: 'source_unavailable' };
+  return buildsOnSourceRefusal(source, declared.commit)
+    || inheritedRangeAdmission(source, source.submission, { source: 'git', value: declared.commit }, null, rangeCommits);
+}
+
 function relatedSubmissionAdmission(slug: string, ticket: CompositionTicket, entryRef: string, rangeCommits: readonly string[]) {
   const source: CompositionTicket | null = store.getTicket(slug, entryRef);
   if (source && compositionIncludesSource(ticket, source, rangeCommits)) return { ok: true as const };
-  return inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
+  return buildsOnAdmission(slug, ticket, entryRef, rangeCommits) || inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
 }
 
 function ticketCommitScope(slug: string, ticket: CompositionTicket): string[] {
@@ -289,7 +329,7 @@ function ticketCommitScope(slug: string, ticket: CompositionTicket): string[] {
   if (compositionScope) return [...compositionScope];
   return [...new Set([
     ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
-    ...rejectedRelatedReleaseFragments(slug, ticket),
+    ...inheritedSubmissionPaths(slug, ticket),
   ])];
 }
 
@@ -592,6 +632,11 @@ function duplicateSubmission(ticket: SubmittingTicket, range: SubmissionRange | 
   return sharedTreeSubmission(ticket) ? sharedTreeBoundaryDuplicate(range, approvedBoundaries) : refusedOverlapEntry(refusedOverlap);
 }
 
+function overlapGuidance(ticket: SubmittingTicket, overlappingRef: string, reason?: string): string {
+  const declared = declaredBuildsOn(ticket).some(candidate => candidate.ref.toUpperCase() === overlappingRef.toUpperCase());
+  return inheritedRejectedDuplicateGuidance(reason, declared);
+}
+
 function duplicateSubmissionFacts(ticket: SubmittingTicket, duplicate: ApprovedBoundary | SubmittedEntry | null, refusedOverlap: SubmissionOverlap | null) {
   if (!duplicate) return { identity: null };
   return {
@@ -600,7 +645,7 @@ function duplicateSubmissionFacts(ticket: SubmittingTicket, duplicate: ApprovedB
       code: 'duplicate_submission',
       message: sharedTreeSubmission(ticket)
         ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.`
-        : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${inheritedRejectedDuplicateGuidance(refusedOverlap?.admission?.reason)}`,
+        : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${overlapGuidance(ticket, duplicate.ref, refusedOverlap?.admission?.reason)}`,
       retryable: false,
     },
   };
@@ -610,7 +655,7 @@ function duplicateSubmissionFacts(ticket: SubmittingTicket, duplicate: ApprovedB
 // inherits has to be admitted here too, or integrate refuses what submit accepted (GH-277). A consumed
 // composition admits its pinned source scopes here without widening the executor's write scope.
 function admittedSubmissionScope(slug: string, ticket: SubmittingTicket): readonly string[] {
-  return compositionSubmissionScope(ticket) ?? [...new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])];
+  return compositionSubmissionScope(ticket) ?? [...new Set([...store.executionScope(slug, ticket), ...inheritedSubmissionPaths(slug, ticket)])];
 }
 
 function submissionBaseline(range: SubmissionRange | null, surfaces: SubmissionSurfaces) {
@@ -1129,7 +1174,7 @@ const tools: ToolDefinition[] = [
       const foreignFragments = commitScope.foreignReleaseFragmentPaths(
         root,
         ticket.ref,
-        rejectedRelatedReleaseFragments(slug, ticket),
+        inheritedReleaseFragments(slug, ticket),
       );
       if (foreignFragments.length) {
         return mutationAck(slug, {
@@ -1165,20 +1210,20 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'rework',
-    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record review evidence on the review ticket. A completed normal review uses main-thread verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.',
+    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. The submitted candidate owner can reject it, and the orchestrator can request changes by calling it from the main thread with by omitted: that records authority orchestrator under its session id. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record review evidence on the review ticket. A completed normal review uses main-thread verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        by: { type: 'string', description: 'The candidate owner. Omitted, the main thread defaults to its session id and a subagent to the owner label its own dispatch recorded (refused when none or ambiguous). The owner check still judges the default.' },
+        by: { type: 'string', description: 'The candidate owner. Omitted, the main thread requests changes as the orchestrator under its session id, and a subagent defaults to the owner label its own dispatch recorded (refused when none or ambiguous), which the owner check still judges.' },
         review: { type: 'string' },
         reviewRef: { type: 'string', description: 'Accepted for compatibility and ignored; it grants no authority over a bound candidate.' },
         reason: { type: 'string' },
       },
       required: ['ref', 'review', 'reason'],
     },
-    handler(args) {
+    handler(args, context) {
       const { slug } = resolveLifecycleProject(args.project, args, 'rework');
       const by = requireBy(args, 'rework');
       return mutationAck(slug, store.reworkSubmission(slug, args.ref, {
@@ -1186,6 +1231,7 @@ const tools: ToolDefinition[] = [
         review: args.review,
         reason: args.reason,
         source: 'mcp',
+        orchestratorSession: context?.controlPlaneSession,
       }));
     },
   },
@@ -1572,4 +1618,4 @@ if (!integrateTool) throw new Error('mcp-lifecycle: the integrate tool is missin
 const integrateInProcess = refusingTheEnvironmentLane(integrateTool.handler);
 integrateTool.handler = (args, context) => (context?.isolateLongRunningWork ? integrateInChildProcess(args, context) : integrateInProcess(args));
 
-module.exports = { tools, integrateInProcess, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };
+module.exports = { tools, integrateInProcess, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, inheritedReleaseFragments, inheritedSubmissionPaths };

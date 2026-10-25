@@ -1,6 +1,6 @@
 'use strict';
 
-const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'investigationDataRoots', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationQuality', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
+const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'investigationDataRoots', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationQuality', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'integrationTestFileThreshold', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
 // These settings read null as "leave it alone"; the others hand null to their normalizer (worktreeSetup: null clears the command).
 const BOARD_CONFIG_NULL_LEAVES_ALONE = new Set(['alwaysInScope', 'integrationMode', 'integrationQuality', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'verifyEnvironment']);
 
@@ -440,6 +440,7 @@ const tools: ToolDefinition[] = [
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
+        integrationTestFileThreshold: { type: 'integer', minimum: 1, description: 'Above this many extra importing test files, run test:full when available, otherwise npm test. Default 40; full gates own concurrency and exclusions.' },
         worktreeIsolation: { type: 'boolean', description: 'Default isolation (true). false defaults to shared; explicit dispatch sharedTree:false still requires isolation.' },
         verifyEnvironment: { type: 'string', enum: ['isolated', 'shared'], description: 'shared: the pinned verifier runs in the shared checkout at integrate; executors do not run it. Pinned per dispatch (default isolated).' },
         worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Isolated-worktree base.' },

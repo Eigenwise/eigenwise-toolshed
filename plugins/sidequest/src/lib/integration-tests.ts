@@ -94,12 +94,13 @@ function addDependents(file: string, dependents: Map<string, string[]>, affected
 function pluginSelection(project: string, pluginName: string, changedPaths: string[]): IntegrationTestSelection {
   const plugin = path.join(project, 'plugins', pluginName);
   const tests = directoryFiles(path.join(plugin, 'test')).filter(importingTest);
+  const guidance = changedPaths.some(guidancePath) ? tests.filter((file) => /(?:^|[/\\])(?:agent-guidance|skill|compatibility)\.test\.[jt]s$/.test(file)) : [];
   const graph = importedGraph(tests, plugin);
   const changed = new Set(changedPaths.map((file) => sourceIdentity(path.resolve(project, file), plugin)));
   const affected = dependentModules(graph, changed);
   return {
     plugin: `plugins/${pluginName}`,
-    files: tests.filter((file) => affected.has(moduleIdentity(file))).map((file) => path.relative(plugin, file).replaceAll('\\', '/')).sort(),
+    files: tests.filter((file) => affected.has(moduleIdentity(file)) || guidance.includes(file)).map((file) => path.relative(plugin, file).replaceAll('\\', '/')).sort(),
   };
 }
 
@@ -108,6 +109,7 @@ export interface IntegrationTestBatch {
   files: string[];
   command: string;
   timeoutMilliseconds: number;
+  shape: 'selected-files' | 'test:full' | 'npm-test';
 }
 
 function quoteArgument(value: string): string {
@@ -141,28 +143,30 @@ function pluginTestFiles(project: string, plugin: string): string[] {
 }
 
 function testBatchCommand(scripts: Record<string, string>, files: string[], normalSuite: boolean): string {
-  if (normalSuite && scripts.test) return 'npm test';
+  if (normalSuite) return scripts['test:full'] ? 'npm run test:full' : 'npm test';
   const runner = scripts['test:files'] ? 'npm run test:files --' : 'node --test';
   return runner + ' --test-concurrency=1 ' + files.map((file) => quoteArgument(file.replaceAll('[', '[[]'))).join(' ');
 }
 
-function pluginTestBatch(project: string, selection: IntegrationTestSelection, patterns: string[], timeoutMilliseconds: number): IntegrationTestBatch[] {
+function pluginTestBatch(project: string, selection: IntegrationTestSelection, patterns: string[], timeoutMilliseconds: number, fileThreshold: number): IntegrationTestBatch[] {
   const files = selection.files.filter((file) => !performanceTest(file) && !pinnedTestFile(selection, file, patterns));
   if (!files.length) return [];
-  const normalSuite = files.length > 40;
+  const normalSuite = files.length > fileThreshold;
   const batchFiles = normalSuite ? pluginTestFiles(project, selection.plugin).filter((file) => !performanceTest(file)) : files;
+  const scripts = testScripts(project, selection.plugin);
   return [{
     plugin: selection.plugin,
     files: batchFiles,
-    command: testBatchCommand(testScripts(project, selection.plugin), batchFiles, normalSuite),
-    timeoutMilliseconds: Math.min(timeoutMilliseconds, 600_000),
+    command: testBatchCommand(scripts, batchFiles, normalSuite),
+    timeoutMilliseconds,
+    shape: normalSuite ? (scripts['test:full'] ? 'test:full' : 'npm-test') : 'selected-files',
   }];
 }
 
-export function integrationTestBatches(project: string, selections: IntegrationTestSelection[], pinnedCommand: string, timeoutMilliseconds: number): IntegrationTestBatch[] {
+export function integrationTestBatches(project: string, selections: IntegrationTestSelection[], pinnedCommand: string, timeoutMilliseconds: number, fileThreshold = 40): IntegrationTestBatch[] {
   if (/\btest:full\b/.test(pinnedCommand)) return [];
   const patterns = pinnedTestPatterns(pinnedCommand);
-  return selections.flatMap((selection) => pluginTestBatch(project, selection, patterns, timeoutMilliseconds));
+  return selections.flatMap((selection) => pluginTestBatch(project, selection, patterns, timeoutMilliseconds, fileThreshold));
 }
 
 function selectionWithExclusions(project: string, selection: IntegrationTestSelection): IntegrationTestSelection {
@@ -175,29 +179,37 @@ function executeImportBatches(project: string, batches: IntegrationTestBatch[], 
   const failures: VerificationResult[] = [];
   for (const [index, batch] of batches.entries()) {
     reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.files.join(', ')}`, { index: index + 1, count: batches.length });
+    const started = Date.now();
     const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
       cwd: path.join(project, batch.plugin),
       timeoutMilliseconds: batch.timeoutMilliseconds,
       logPath: pinned.logPath + '.import-' + index + '.log',
       environment,
     });
-    if (result.status !== 'passed') { failures.push(result); break; }
+    const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
+    if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk batch: ' + JSON.stringify(receipt) + '\n');
+    if (result.status !== 'passed') { failures.push(receipt); break; }
   }
   return failures;
 }
 
-export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; exclusionReason: string } } {
+export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string } } {
   const started = Date.now();
   const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
-  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds);
+  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds, fileThreshold);
   const failures = executeImportBatches(project, batches, pinned, environment);
-  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, exclusionReason: 'Wall-clock performance and benchmark tests remain in CI and test:full.' };
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: 'Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.' };
   if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches }) + '\n');
   return { ...(failures[0] ?? pinned), integrationTests: selections, importingTestResults: failures, importingTestSummary };
 }
 
+function guidancePath(file: string): boolean {
+  return /^(?:docs\/|plugins\/[^/]+\/(?:skills|docs)\/).*\.md$/.test(file.replaceAll('\\', '/'));
+}
+
 export function selectIntegrationTests(project: string, changedPaths: string[]): IntegrationTestSelection[] {
   const pluginNames = changedPaths.map((file) => /^plugins\/([^/]+)\//.exec(file.replaceAll('\\', '/'))?.[1]).filter((name): name is string => name !== undefined);
+  if (changedPaths.some((file) => /^docs\/.*\.md$/.test(file))) pluginNames.push('sidequest');
   return Array.from(new Set(pluginNames), (plugin) => pluginSelection(project, plugin, changedPaths));
 }
 

@@ -191,6 +191,7 @@ async function publicationLabel($: EngineInterface, shell: Shell, invocation: Gi
 async function publicationDenial($: EngineInterface, shell: Shell): Promise<string | null> {
   for (const invocation of gitInvocations(shell.command).filter(publicationVerb)) {
     const repo = await repoAt($, shell, invocation.index, invocation.dashC)
+    if (!(await $.fs.exists(repo.root))) return `sidequest: directory ${repo.root} does not exist (yet). This blocks the entire shell invocation, including earlier directory-creating segments. Next step: run the ${invocation.subcommand} as a separate command after the directory exists.`
     const label = await publicationLabel($, shell, invocation, repo.root)
     if (label && !(await publishLockHeld($, shell, repo))) return publicationRefusal(label, repo.root)
   }
