@@ -87,6 +87,35 @@ test('SQ-3423: a deferred verification status is a known status that is never ac
   assert.equal(verification.verificationFailureDiagnostic(deferred).code, 'verification_deferred');
 });
 
+test('GH-643: an unverified result is admitted for delivery to decide, never accepted', () => {
+  assert.ok(verification.VERIFICATION_STATUSES.includes('unverified'));
+  const unverified = { kind: 'custom', status: 'unverified', evidence: 'no project verifier and no pinned verify', command: null };
+  assert.equal(verification.verificationAccepted(unverified), false);
+  assert.equal(verification.verificationAdmitted(unverified), true);
+  assert.equal(verification.verificationOutcome(unverified), 'verification_unverified');
+  assert.equal(verification.verificationAdmitted({ kind: 'command', status: 'failed_suite', evidence: 'exit 1' }), false);
+});
+
+function sourceFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry: any) => {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(target);
+    return /\.(?:ts|js)$/.test(entry.name) ? [target] : [];
+  });
+}
+
+test('GH-643: the legacy placeholder is never written as passed evidence in source or build output', () => {
+  const placeholder = 'legacy project verifier was not recorded';
+  const roots = ['src', 'lib'].map((root) => path.join(__dirname, '..', root));
+  const offending = roots.flatMap(sourceFiles).flatMap((file) => fs.readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .map((line: string, index: number) => ({ file, line: index + 1, text: line }))
+    .filter((entry: any) => entry.text.includes(placeholder) && /passed/.test(entry.text)));
+  assert.deepStrictEqual(offending, []);
+  const submissions = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'store', 'submissions.ts'), 'utf8');
+  assert.doesNotMatch(submissions, /status: 'passed', evidence: requirement\.evidenceContract/);
+});
+
 test('verification failures retain domain-specific actionable identities', () => {
   for (const kind of ['document', 'link', 'schema', 'review']) {
     const failure = verification.verificationFailureDiagnostic({

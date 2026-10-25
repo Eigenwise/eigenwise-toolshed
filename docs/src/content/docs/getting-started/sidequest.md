@@ -116,6 +116,11 @@ gate per wave before versioning, including a singleton. A changed tree after reb
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
+Integration only reports a passed check when a command really ran, with its exit code and log. A ticket
+dispatched before it had a check runs the check recorded on it later. A ticket with no check at all is
+refused as unverified ("no project verifier and no pinned verify") until you give it one, or until you
+approve delivering it anyway with a verification waiver that names who decided and why.
+
 A verifier pinned to a shared environment (`verifyEnvironment: shared`) skips executor capture and the
 assembled-wave gate. Its environment lane is integrate's delivery gate in the shared checkout, against
 the merged tree. Claude runs CLI `sidequest integrate <ref> --project <path> --json` through background

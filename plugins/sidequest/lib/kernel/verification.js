@@ -28,6 +28,7 @@ __export(verification_exports, {
   validateVerificationWaiver: () => validateVerificationWaiver,
   validationDiagnostic: () => validationDiagnostic,
   verificationAccepted: () => verificationAccepted,
+  verificationAdmitted: () => verificationAdmitted,
   verificationFailureDiagnostic: () => verificationFailureDiagnostic,
   verificationOutcome: () => verificationOutcome,
   verificationRequirement: () => verificationRequirement,
@@ -36,7 +37,7 @@ __export(verification_exports, {
 });
 module.exports = __toCommonJS(verification_exports);
 const VERIFICATION_KINDS = ["suite", "command", "typecheck", "document", "link", "schema", "manual", "attestation", "review", "custom"];
-const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check", "deferred"];
+const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check", "deferred", "unverified"];
 const VERIFICATION_ENVIRONMENTS = ["isolated", "shared"];
 function nonEmpty(value) {
   return String(value || "").trim();
@@ -119,6 +120,9 @@ function verificationAccepted(result) {
   if (result.status !== "skipped") return false;
   return !("code" in validateVerificationWaiver(result.waiver));
 }
+function verificationAdmitted(result) {
+  return verificationAccepted(result) || result.status === "deferred" || result.status === "unverified";
+}
 function verificationOutcome(result) {
   return verificationAccepted(result) ? "verified" : `verification_${String(result.status).replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
 }
@@ -192,6 +196,7 @@ function captureVerificationResult(requirement, capture) {
   validateVerificationWaiver,
   validationDiagnostic,
   verificationAccepted,
+  verificationAdmitted,
   verificationFailureDiagnostic,
   verificationOutcome,
   verificationRequirement,

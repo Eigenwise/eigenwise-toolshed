@@ -77,7 +77,11 @@ function advance(fixture: any, overrides: any = {}) {
   }, overrides));
 }
 
-function submitFixture(slug: string, ticket: any, fixture: any, verify: string | null = null) {
+// GH-643: a delivery with no verifier at all is refused, so fixtures that only exercise delivery mechanics
+// submit a verify that the merged-tree gate really runs.
+const PASSING_VERIFY = nodeVerify('process.exit(0)');
+
+function submitFixture(slug: string, ticket: any, fixture: any, verify: string | null = PASSING_VERIFY) {
   const gitRef = `refs/sidequest/${ticket.ref}`;
   git(['update-ref', gitRef, fixture.submitted], fixture.executor);
   const target = store.integrationTarget(slug);
@@ -376,7 +380,7 @@ function deliveryTicket(label: string, opts: any = {}) {
     files: opts.files || ['feature.txt'],
     ...(opts.verifyKind ? { executorVerifyKind: opts.verifyKind, executorVerify: opts.verify } : {}),
   });
-  submitFixture(slug, ticket, fixture, opts.verify || null);
+  submitFixture(slug, ticket, fixture, opts.verify || PASSING_VERIFY);
   const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
   return { fixture, slug, ticket, runCli: runner.runCli };
 }
@@ -416,6 +420,7 @@ function assembledTwoCandidateWave(label: string) {
     gitRef: secondRef,
     range: secondRange,
     worktree: secondWorktree,
+    verify: PASSING_VERIFY,
   }).ok, true);
 
   const wave = store.assembleSubmissionWave(slug, [first.ref, second.ref], {
@@ -451,6 +456,9 @@ test('one passing wave delivers its exact Git participant set before recording d
   }
 });
 
+// A document gate takes supplied evidence and composes nothing, so these conflicting candidates still assemble.
+const CONFLICT_FIXTURE_EVIDENCE = 'conflict fixture reviewed by hand';
+
 test('an assembled wave preserves candidates, refuses unrelated grooming delivery, and refuses singleton integration', () => {
   const fixture = makeRepo('refused-wave-keeps-candidates');
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-conflict');
@@ -462,14 +470,18 @@ test('an assembled wave preserves candidates, refuses unrelated grooming deliver
     category: 'codebase-exploration',
     description: 'Keep its submitted candidate after a refused wave.',
     files: ['feature.txt'],
+    executorVerifyKind: 'document',
+    executorVerify: CONFLICT_FIXTURE_EVIDENCE,
   });
   const second = store.createTicket(slug, {
     title: 'second conflicting wave candidate',
     category: 'codebase-exploration',
     description: 'Conflicts with the first candidate only at wave assembly.',
     files: ['feature.txt'],
+    executorVerifyKind: 'document',
+    executorVerify: CONFLICT_FIXTURE_EVIDENCE,
   });
-  submitFixture(slug, first, fixture);
+  submitFixture(slug, first, fixture, CONFLICT_FIXTURE_EVIDENCE);
   const secondRef = `refs/sidequest/${second.ref}`;
   git(['update-ref', secondRef, secondCommit], secondWorktree);
   const target = store.integrationTarget(slug);
@@ -486,6 +498,7 @@ test('an assembled wave preserves candidates, refuses unrelated grooming deliver
     gitRef: secondRef,
     range: secondRange,
     worktree: secondWorktree,
+    verify: CONFLICT_FIXTURE_EVIDENCE,
   }).ok, true);
 
   const assembled = store.assembleSubmissionWave(slug, [first.ref, second.ref], {
@@ -1240,6 +1253,17 @@ function makeGreenfieldRepo(label: string, locked = true) {
   return { repo, executor, submitted, target: { mode: 'local', branch: 'main', upstream: 'main' } };
 }
 
+function assertRefusedUnverified(result: any, slug: string, ticket: any) {
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.reason, 'verification_unverified');
+  assert.match(payload.message, /no project verifier and no pinned verify/);
+  assert.equal(payload.gate.verification.status, 'unverified');
+  assert.equal(payload.gate.verification.command, null);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
+}
+
 test('integration does not derive a suite for an unprepared greenfield submission', () => {
   const fixture = makeGreenfieldRepo('locked-dependencies');
   const { slug } = store.ensureProject(fixture.repo);
@@ -1249,16 +1273,13 @@ test('integration does not derive a suite for an unprepared greenfield submissio
     description: 'A new locked package requires its dependencies during integration.',
     files: ['plugins/greenfield'],
   });
-  submitFixture(slug, ticket, fixture);
+  submitFixture(slug, ticket, fixture, null);
   const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
 
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.verify.status, 'passed');
-  assert.equal(payload.verify.kind, 'custom');
+  assertRefusedUnverified(result, slug, ticket);
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
 });
 
@@ -1271,15 +1292,12 @@ test('integration does not derive an unlocked greenfield suite after submission'
     description: 'A package without a lockfile cannot use mutable dependency resolution.',
     files: ['plugins/greenfield'],
   });
-  submitFixture(slug, ticket, fixture);
+  submitFixture(slug, ticket, fixture, null);
   const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
 
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.verify.status, 'passed');
-  assert.equal(payload.verify.kind, 'custom');
+  assertRefusedUnverified(result, slug, ticket);
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
 });
 
@@ -2072,4 +2090,83 @@ test('SQ-3884: a board server killed mid-gate leaves its delivery process to fin
   assert.match(finished.integration.logPath, /\.log$/);
   assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+});
+
+function pinLegacyPlaceholder(slug: string, ref: string, executorVerify?: string) {
+  const ticket = store.getTicket(slug, ref);
+  const requirement = { kind: 'custom', evidenceContract: 'legacy project verifier was not recorded' };
+  const lifecycleAttempt = { ...(ticket.lifecycleAttempt || {}), execution: 'dispatched', verificationRequirement: requirement };
+  ticket.lifecycleAttempt = lifecycleAttempt;
+  ticket.dispatch = { ...(ticket.dispatch || {}), verificationRequirement: requirement, lifecycleAttempt, terminalAt: new Date().toISOString() };
+  if (executorVerify) ticket.executorVerify = executorVerify;
+  persistTicket(slug, ticket);
+}
+
+function legacyDeliveryTicket(label: string, executorVerify?: string) {
+  const fixture = makeRepo(label);
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: `legacy delivery ${label}`,
+    category: 'codebase-exploration',
+    description: 'A board with no project verifier delivers a ticket whose dispatch pinned the legacy placeholder.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture, null);
+  assert.equal(store.getTicket(slug, ticket.ref).submission.verificationResult.status, 'unverified');
+  pinLegacyPlaceholder(slug, ticket.ref, executorVerify);
+  const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+  return { fixture, slug, ticket, runCli: runner.runCli };
+}
+
+test('GH-643: with no project verifier, integrate runs the ticket executorVerify and records its command, exit code and log', () => {
+  const executorVerify = nodeVerify("require('node:fs').accessSync('feature.txt')");
+  const { fixture, slug, ticket, runCli } = legacyDeliveryTicket('gh643-ticket-verify', executorVerify);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verify.status, 'passed');
+  assert.equal(payload.verify.command, executorVerify);
+  assert.equal(payload.verify.exitCode, 0);
+  assert.ok(fs.existsSync(payload.verify.logPath), payload.verify.logPath);
+  assert.doesNotMatch(JSON.stringify(payload.verify), /legacy project verifier was not recorded/);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'done');
+  assert.equal(stored.submission.integration.verify.command, executorVerify);
+  assert.ok(stored.completion.reason.includes(`Verify passed: ${executorVerify}`), stored.completion.reason);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+});
+
+test('GH-643: with no verifier at all, integrate refuses unverified and delivers only under a recorded waiver', () => {
+  const { fixture, slug, ticket, runCli } = legacyDeliveryTicket('gh643-no-verifier');
+  const before = head(fixture.repo, 'refs/heads/main');
+
+  const refused = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assertRefusedUnverified(refused, slug, ticket);
+  assert.equal(head(fixture.repo, 'refs/heads/main'), before);
+  assert.doesNotMatch(refused.stdout, /legacy project verifier was not recorded/);
+
+  const waived = runCli([
+    'integrate', ticket.ref,
+    '--by', 'orchestrator',
+    '--skip-verify',
+    '--waiver-authority', 'release-manager',
+    '--waiver-reason', 'board has no verifier yet',
+    '--waiver-gate', 'merged-tree-gate',
+    '--waiver-scope', ticket.ref,
+    '--json',
+  ]);
+
+  assert.equal(waived.status, 0, waived.stderr + waived.stdout);
+  const payload = JSON.parse(waived.stdout);
+  assert.equal(payload.verify.status, 'skipped');
+  assert.equal(payload.verify.waiver.authority, 'release-manager');
+  assert.equal(payload.verify.waiver.reason, 'board has no verifier yet');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'done');
+  assert.equal(stored.submission.integration.verify.waiver.affectedGate, 'merged-tree-gate');
+  assert.match(stored.completion.reason, /Verification waived by release-manager: board has no verifier yet/);
+  assert.notEqual(head(fixture.repo, 'refs/heads/main'), before);
 });

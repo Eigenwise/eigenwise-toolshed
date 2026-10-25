@@ -46,9 +46,6 @@ function baselineBoundToCandidate(facts) {
   if (!facts.sourceBaseline) return true;
   return sameSourceRevision(facts.baseline.candidate, facts.candidate) && sameBaseline(facts.baseline.dispatchBaseline, facts.sourceBaseline);
 }
-function verificationAdmitted(result) {
-  return (0, import_verification.verificationAccepted)(result) || result.status === "deferred";
-}
 function candidateOwner(authority) {
   return authority.claimOwner || (authority.allowSubmittedOwner ? authority.submittedOwner : null);
 }
@@ -78,7 +75,7 @@ function baselineFailure(facts) {
   return null;
 }
 function verificationFailure(ticket, verification) {
-  if (!verificationAdmitted(verification.result)) {
+  if (!(0, import_verification.verificationAdmitted)(verification.result)) {
     return supplied(verification.diagnostic, { code: "invalid_verify", message: `submit: refused ${ticket.ref}; verification evidence is unavailable.`, retryable: true });
   }
   if (verification.expectedEvidence && verification.result.evidence !== verification.expectedEvidence) {
