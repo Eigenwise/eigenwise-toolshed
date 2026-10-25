@@ -71,7 +71,7 @@ test('experiment category preserves its human-verdict and round protocol gate', 
   assert.match(experiment.contract, /Read the experiment log fully before the first edit/);
   assert.match(experiment.contract, /one hypothesis per round/i);
   assert.match(experiment.contract, /sidequest\/experiment\/<ref>/);
-  assert.match(experiment.contract, /refs\/sidequest\/<ref>\/r<N>/);
+  assert.match(experiment.contract, /refs\/sidequest-rounds\/<ref>\/r<N>/);
   assert.match(experiment.contract, /blind ranked comparison/);
   assert.match(experiment.contract, /Never paraphrase the user's verdict/);
   assert.match(experiment.contract, /release and the oracle ask/);

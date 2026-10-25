@@ -1,4 +1,5 @@
 const { referenceHeader } = require('./external-refs');
+const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs } = require('./experiment-refs');
 'use strict';
 
 import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
@@ -493,10 +494,10 @@ function planDocumentPacket(ticket?: any, slug?: any) {
   return `Plan document: \`${planPath}\` (revision ${plan.revision}, ${plan.by}, ${plan.at}). Read it with \`Read\` and offset/limit on demand; it is never inlined here.`;
 }
 
-function experimentCheckoutTarget(ticket?: any) {
+function experimentCheckoutTarget(ticket: { ref: string; dispatch?: { launchSeq?: number } }, project: string) {
   const round = Number(ticket?.dispatch?.launchSeq);
   return Number.isInteger(round) && round > 1
-    ? `refs/sidequest/${ticket.ref}/r${round - 1} (continue from the prior round)`
+    ? `${resolveExperimentRoundRef(project, ticket.ref, round - 1)} (continue from the prior round)`
     : 'base (fresh direction)';
 }
 
@@ -507,9 +508,11 @@ function experimentLogPacket(ticket?: any, slug?: any) {
   const storedPath = String(experiment.path || '').trim();
   if (!storedPath) return null;
   const logPath = path.resolve(storedPath);
+  const project = store.readMeta(slug).path;
+  migrateExperimentRoundRefs(project, ticket.ref);
   return [
     'Read the full log at ' + logPath + ' before the first edit.',
-    'Round checkout target: ' + experimentCheckoutTarget(ticket) + '.',
+    'Round checkout target: ' + experimentCheckoutTarget(ticket, project) + '.',
     String(experiment.packet || ''),
   ].join('\n\n');
 }
@@ -658,6 +661,7 @@ function ownPinnedCandidate(project: string, ref: string): string | null {
 }
 
 function candidateRestorePacket(ticket: RestoreTicket, slug: string, project: string): string {
+  migrateExperimentRoundRefs(project, ticket.ref);
   if (ticket.dispatch?.continuation) return '';
   const related = (ticket.links || []).filter((link) => link.type === 'related')
     .map((link) => store.getTicket(slug, link.ref)?.submission?.commit).filter(Boolean);
@@ -1201,7 +1205,7 @@ ${ticket.description || '(No additional description was recorded.)'}`,
 Category: ${category.id || ticket.categoryId || '(Unclassified)'}
 Configured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}
 Dispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}
-${category.contract || '(No category-specific executor instructions were recorded.)'}`,
+${(category.contract || '(No category-specific executor instructions were recorded.)').replaceAll('refs/sidequest/<ref>/r<N>', experimentRoundRef('<ref>', '<N>'))}`,
     ...(uncertainty ? [uncertainty] : []),
     EXECUTOR_CONTRADICTION_RULE,
     ...(findingCheckpoints ? [`Durable finding checkpoints:\n${findingCheckpoints}`] : []),

@@ -1,3 +1,5 @@
+const { experimentRoundRef } = require('./experiment-refs');
+
 export function categoryEvidenceFields(category: { writes?: unknown }): { writes?: 'evidence' } {
   return category.writes === 'evidence' ? { writes: 'evidence' } : {};
 }
@@ -46,7 +48,7 @@ export const DEFAULT_CATEGORIES = [
     description: 'Use ONLY when the verdict is a human\'s judgement and no offline metric has been shown to reproduce it. Comparing candidates against an irreducibly subjective oracle requires high-capability judgement. If a test can decide, it is coding or debugging.',
     route: { model: 'opus', effort: 'high' },
     fallback: null,
-    contract: 'Read the experiment log fully before the first edit. Run one hypothesis per round. Always commit the candidate to sidequest/experiment/<ref> and pin refs/sidequest/<ref>/r<N>, even when it loses. Write the oracle ask as a blind ranked comparison. Never paraphrase the user\'s verdict. Hand off with release and the oracle ask.',
+    contract: `Read the experiment log fully before the first edit. Run one hypothesis per round. Always commit the candidate to sidequest/experiment/<ref> and pin ${experimentRoundRef('<ref>', '<N>')}, even when it loses. Write the oracle ask as a blind ranked comparison. Never paraphrase the user's verdict. Hand off with release and the oracle ask.`,
     artifactRoots: [],
     readonly: false,
     enabled: true,
