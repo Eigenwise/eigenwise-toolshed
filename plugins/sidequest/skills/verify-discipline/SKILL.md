@@ -129,3 +129,10 @@ it with the pinned verifier on the merged tree. Drifted sources refuse completio
 The author pins `verifyKind` and `verify` before dispatch: `suite` or `command` for executable regressions, `typecheck` with a typechecker command for annotation work, or `schema` or `document` for their evidence contracts. Dispatch freezes that oracle. The main thread also freezes `workProvenance.kind`: `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only` or `fixture-only`. Successful completion records `negativeControl: not_required(<reason>)` for the non-behavior kinds. With no frozen kind, changed source under changed tests still requires a control; declare annotation/refactor intent before dispatch instead of asking the executor to infer it.
 
 New behavior requires the existing claim-holder marker: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.
+
+Capture and integration command deadlines both default to 25 minutes. Set board_config
+`integrationVerifyTimeoutMs` to a positive integer in milliseconds, up to 3600000 (60 minutes),
+for both paths. Timeout results name the key and effective limit; the owned process tree is
+terminated before the result is reported. Slot waiting and cleanup add to total wall time.
+Capture logs are written directly under the board project
+`verification/<ref>/` directory and stay readable through the returned `logPath`.

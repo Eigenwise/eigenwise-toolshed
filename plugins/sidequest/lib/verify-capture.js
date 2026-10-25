@@ -15,10 +15,27 @@ const captureSlotContentionErrorCodes = /* @__PURE__ */ new Set(["EEXIST", "EPER
 function captureRequirement(command) {
   return Object.freeze({ kind: "command", command, evidenceContract: "command output" });
 }
-async function runVerifyCapture(command, cwd = process.cwd(), timeoutMilliseconds, environment) {
+function captureLogPath(target = null) {
+  const store = require("./store.js");
+  const project = target ? captureProject(target) : null;
+  const directory = project ? path.join(store.projectDir(project.slug), "verification", target.ticket) : path.join(store.homeRoot(), "verification", "unbound");
+  fs.mkdirSync(directory, { recursive: true });
+  return path.join(directory, "capture-" + process.pid + "-" + randomUUID() + ".log");
+}
+async function runConfiguredCapture(command, cwd, target, environment) {
+  const store = require("./store.js");
+  const project = target ? captureProject(target) : null;
+  const timeoutMilliseconds = project ? store.boardConfig(project.slug).integrationVerifyTimeoutMs : store.normalizeIntegrationVerifyTimeoutMs();
+  const capture = await runVerifyCapture(command, cwd, timeoutMilliseconds, environment, captureLogPath(target));
+  if (capture.status !== "timeout") return capture;
+  const reason = "integrationVerifyTimeoutMs=" + timeoutMilliseconds + "ms. " + capture.reason;
+  return Object.freeze({ ...capture, evidence: reason, reason });
+}
+async function runVerifyCapture(command, cwd = process.cwd(), timeoutMilliseconds = require("./store.js").normalizeIntegrationVerifyTimeoutMs(), environment, logPath = captureLogPath()) {
   const result = await runOwnedProcessVerification(captureRequirement(command), {
     cwd,
-    ...timeoutMilliseconds === void 0 ? {} : { timeoutMilliseconds },
+    logPath,
+    timeoutMilliseconds,
     ...environment === void 0 ? {} : { environment }
   });
   return Object.freeze({
@@ -330,10 +347,10 @@ function runFullSuiteVerification(command, project, verify, fileSystem = fs) {
     queuePosition: slot.queuePosition
   });
 }
-async function runFullSuiteCapture(command, project, cwd, fileSystem = fs) {
+async function runFullSuiteCapture(command, target, cwd, fileSystem = fs) {
   let slot;
   try {
-    slot = await acquireCaptureSlot(project, captureSlotTimeoutMilliseconds, fileSystem);
+    slot = await acquireCaptureSlot(target.project, captureSlotTimeoutMilliseconds, fileSystem);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return captureSlotCouldNotRun(command, Object.freeze({
@@ -347,7 +364,7 @@ async function runFullSuiteCapture(command, project, cwd, fileSystem = fs) {
   let capture;
   let releaseFailure = null;
   try {
-    capture = await runVerifyCapture(command, cwd, void 0, {
+    capture = await runConfiguredCapture(command, cwd, target, {
       ...process.env,
       SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: String(slot.queuePosition - 1)
     });
@@ -482,7 +499,7 @@ Verification capture for ${target.ticket} ran with uncommitted changes in ${capt
     });
   }
   const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
-  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, commandCwd, fileSystem) : await runVerifyCapture(command, commandCwd);
+  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target, commandCwd, fileSystem) : await runConfiguredCapture(command, commandCwd, target);
   const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }

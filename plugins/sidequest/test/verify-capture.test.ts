@@ -244,7 +244,7 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
       spawnedCaptures.push(scopedCapture);
       const scoped = await scopedCapture;
       assert.equal(scoped.status, 0, scoped.output);
-      assert.doesNotMatch(scoped.output, /capture-slot|waiting for/);
+      assert.doesNotMatch(scoped.output, /^capture-slot |^waiting for/m);
       assert.equal(readRecordedCaptures(project, scopedTicket.ref)[0].queuePosition, undefined);
       assert.equal(fs.existsSync(path.join(captureSlotDirectory(project), 'active')), true, 'the full-suite owner still holds the slot');
     }
@@ -1185,3 +1185,36 @@ test('SQ-3424: the wrapper refuses an environment-bound verifier and tells the e
     fixture.cleanup();
   }
 });
+
+for (const fullSuite of [false, true]) {
+  test('board capture deadline and durable logs cover ' + (fullSuite ? 'full suites' : 'commands'), async () => {
+    const project = initGitRepo('sq3900-deadline-');
+    fs.writeFileSync(path.join(project, 'wait.cjs'), "console.log('configured-deadline-started'); setTimeout(() => {}, 3500);\n");
+    fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node wait.cjs' } }));
+    execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'deadline fixture'], { cwd: project, windowsHide: true });
+    const { slug } = store.ensureProject(project);
+    const command = fullSuite ? 'npm run test:full' : 'node wait.cjs';
+    const ticket = store.createTicket(slug, { title: 'configured capture deadline' });
+    store.updateTicket(slug, ticket.ref, { executorVerify: command });
+    const target = { project, ticket: ticket.ref };
+    const temporaryLogsBefore = fs.readdirSync(os.tmpdir()).filter((name: string) => name.startsWith('sidequest-verify-' + process.pid + '-') && name.endsWith('.log'));
+    try {
+      assert.equal(store.boardConfig(slug).integrationVerifyTimeoutMs, 25 * 60 * 1000);
+      store.setBoardConfig(slug, { integrationVerifyTimeoutMs: 2000 });
+      const short = (await runCapturedVerification(command, target, project)).capture;
+      assert.equal(short.status, 'timeout');
+      assert.match(short.reason, /integrationVerifyTimeoutMs=2000ms/);
+      assert.ok(fs.existsSync(short.logPath), 'timed-out result log remains readable');
+      store.setBoardConfig(slug, { integrationVerifyTimeoutMs: 15000 });
+      const longer = (await runCapturedVerification(command, target, project)).capture;
+      assert.equal(longer.status, 'passed', longer.reason);
+      assert.match(fs.readFileSync(longer.logPath, 'utf8'), /configured-deadline-started/);
+      assert.equal(path.dirname(longer.logPath), path.join(store.projectDir(slug), 'verification', ticket.ref));
+      assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((name: string) => name.startsWith('sidequest-verify-' + process.pid + '-') && name.endsWith('.log')), temporaryLogsBefore);
+      assert.equal(store.getTicket(slug, ticket.ref).verificationCaptures.at(-1).logPath, longer.logPath);
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+}

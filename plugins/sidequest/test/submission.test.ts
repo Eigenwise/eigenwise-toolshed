@@ -63,6 +63,7 @@ function pin(ticket?: any, commit?: any) {
 // from the caller, so a fixture delivering onto the scratch branch it checked out
 // has to say so on the board for the length of the call.
 function integrateOnCurrentTestBranch(ref?: any, opts?: any) {
+  recordPassingVerifier(ref);
   const originalConfig = store.boardConfig(slug);
   store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
   try {
@@ -105,6 +106,15 @@ function persist(ticket?: any) {
     claim_by: ticket.claim ? ticket.claim.by : null,
     data: ticket,
   });
+}
+
+// GH-643: delivery refuses a ticket with no verifier at all, so a fixture that exercises delivery mechanics
+// records a verify the merged-tree gate really runs.
+const PASSING_VERIFY = `"${process.execPath}" -e "process.exit(0)"`;
+function recordPassingVerifier(ref: string) {
+  const ticket = store.getTicket(slug, ref);
+  if (String(ticket.executorVerify || ticket.submission?.verify || '').trim()) return;
+  persist({ ...ticket, executorVerify: PASSING_VERIFY });
 }
 
 function addTicket(title?: any, extra?: any) {
@@ -2324,6 +2334,7 @@ function sq3144SubmittedOnRecordedBranch(label: string) {
   pin(t, commit);
   const submitted = runCli(['submit', t.ref, '--by', `${label}-worker`, '--commit', commit]);
   assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  recordPassingVerifier(t.ref);
   return { t, recorded, commit, stamp };
 }
 
@@ -2434,6 +2445,7 @@ function gh340SubmittedCandidate(label: string, files: string[], writeCandidate:
   pin(t, commit);
   const submitted = runCli(['submit', t.ref, '--by', `${label}-worker`, '--commit', commit]);
   assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  recordPassingVerifier(t.ref);
   git(['checkout', '-f', target]);
   return { t, target, commit };
 }
@@ -3494,6 +3506,8 @@ test('SQ-2399: shared-tree siblings select submitted boundaries while isolated c
 
   const integrationTarget = Object.assign({}, store.integrationTarget(slug), { branch: 'main' });
   git(['checkout', '-f', '-B', 'main', dispatchBase]);
+  recordPassingVerifier(first.ref);
+  recordPassingVerifier(second.ref);
   const firstDelivery = store.integrateSubmission(slug, first.ref, { target: integrationTarget, mode: 'replay' });
   assert.strictEqual(firstDelivery.ok, true, firstDelivery.message);
   const beforeSecondDelivery = git(['rev-parse', 'HEAD']);
@@ -3571,6 +3585,7 @@ test('SQ-2399: shared-tree siblings select submitted boundaries while isolated c
   git(['commit', '-m', 'integrated sibling']);
   const integratedSiblingCommit = git(['rev-parse', 'HEAD']);
   assert.strictEqual((await submitTicket(integratedSibling, 'integrated-sibling-worker', integratedSiblingCommit)).ok, true);
+  recordPassingVerifier(integratedSibling.ref);
   git(['checkout', '-f', '-B', 'main', dispatchBase]);
   const siblingDelivery = store.integrateSubmission(slug, integratedSibling.ref, { target: integrationTarget, mode: 'replay' });
   assert.strictEqual(siblingDelivery.ok, true, siblingDelivery.message);
@@ -6774,6 +6789,7 @@ async function deliverInheritedRepair(fixture: any, mode: 'merge' | 'replay' | '
     ? await sq2972SubmitWithPinnedCommand(fixture, pinnedCommand)
     : await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
   assert.strictEqual(submitted.ok, true, submitted.message);
+  recordPassingVerifier(fixture.repair.ref);
   git(['checkout', '-f', fixture.branch]);
   const delivered = store.integrateSubmission(slug, fixture.repair.ref, { target: store.integrationTarget(slug), mode, by: 'orchestrator' });
   return { source, review, delivered };
@@ -7093,6 +7109,7 @@ test('GH-220: a hand-resolved conflict merge records through groomClose manual w
   const candidate = git(['rev-parse', 'HEAD']);
   pin(t, candidate);
   assert.strictEqual(runCli(['submit', t.ref, '--by', 'gh220-worker', '--commit', candidate]).status, 0);
+  recordPassingVerifier(t.ref);
 
   const targetBranch = `gh220-target-${++branchSeq}`;
   git(['checkout', '-f', '-B', targetBranch, 'origin/main']);

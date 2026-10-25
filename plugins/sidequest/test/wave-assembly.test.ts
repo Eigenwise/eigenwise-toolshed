@@ -40,11 +40,15 @@ function branchOverlapProject(): { repository: string; slug: string } {
   return { repository, slug };
 }
 
+// GH-643: a ticket with no verifier at all fails the gate, so these candidates carry document evidence the gate accepts as supplied.
+const OVERLAP_FIXTURE_EVIDENCE = 'overlap fixture reviewed by hand';
+
 function submitBranchOverlapCandidate(repository: string, slug: string, branch: string, label: string): string {
   git(repository, ['checkout', branch]);
   const ticket = store.createTicket(slug, {
     title: `overlapping ${label} candidate`, category: 'codebase-exploration',
     description: 'Exercise recorded branch isolation for overlapping candidates.', files: ['shared.txt'],
+    executorVerifyKind: 'document', executorVerify: OVERLAP_FIXTURE_EVIDENCE,
   });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, integrationMode: 'local', integrationBranch: branch });
   assert.equal(prepared.ticket.dispatch.integrationTarget.branch, branch);
@@ -60,7 +64,7 @@ function submitBranchOverlapCandidate(repository: string, slug: string, branch: 
   git(repository, ['update-ref', gitRef, commit]);
   const range = commitScope.submissionRange(repository, { commit, gitRef, upstream: branch, integrationBranch: branch });
   assert.equal(range.ok, true, JSON.stringify(range));
-  const submitted = store.submitTicket(slug, ticket.ref, label, { commit, gitRef, range, worktree: repository });
+  const submitted = store.submitTicket(slug, ticket.ref, label, { commit, gitRef, range, worktree: repository, verify: OVERLAP_FIXTURE_EVIDENCE });
   assert.equal(submitted.ok, true, JSON.stringify(submitted));
   return ticket.ref;
 }
