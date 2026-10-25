@@ -1890,7 +1890,7 @@ ${verify.outputTail}` : null
         }
         return integrationFailure(slug, ticket, { reason: failureReason, verify, message: failureMessage });
       }
-      const deliveredFiles = revisionProof ? revisionProof.deliveredFiles : workingTreeDelivery ? workingTreeDeliveryPaths(repo) : interaction.interaction ? Array.from(/* @__PURE__ */ new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths])) : deliveredCommitPaths(repo, deliveryCommit);
+      const deliveredFiles = revisionProof ? revisionProof.deliveredFiles : workingTreeDelivery ? workingTreeDeliveryPaths(repo) : interaction.interaction ? Array.from(/* @__PURE__ */ new Set([...changedIntegrationPaths(repo, ticket.submission), ...interaction.interaction.paths])) : changedIntegrationPaths(repo, ticket.submission);
       const deliveryIdentity = {
         kind: interaction.interaction ? "reviewed-merged-tree-interaction" : workingTreeDelivery ? "pinned-working-tree" : "reachable-commit",
         pinnedRef: submissionGitRef(ticket),
@@ -3016,16 +3016,6 @@ ${verify.outputTail}` : null
       const deliveredFiles = Array.isArray(repaired.integration.deliveredFiles) ? repaired.integration.deliveredFiles.map((entry) => String(entry).trim().replace(/\\/g, "/")).filter(Boolean) : [];
       const delivered = new Set(deliveredFiles);
       const missingPaths = changedPaths.filter((file) => !delivered.has(file));
-      const unreviewedMissingPaths = missingPaths.filter((file) => !replacements.has(file));
-      if (unreviewedMissingPaths.length) {
-        return {
-          ok: false,
-          reason: "lineage_paths_missing",
-          ticket: source,
-          missingPaths: unreviewedMissingPaths,
-          message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths without reviewed retirement evidence: ${unreviewedMissingPaths.join(", ")}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentionally retired path, or integrate a repair that delivers the full path lineage.${contentCommitOwed}`
-        };
-      }
       let divergentPaths;
       try {
         divergentPaths = pathsWithDifferentContent(repo, source.submission.commit, contentCommit, changedPaths);
@@ -3035,6 +3025,19 @@ ${verify.outputTail}` : null
           reason: "lineage_unavailable",
           ticket: source,
           message: `${source.ref} supersession refused while comparing delivered content: ${integrationGitError(error)}`
+        };
+      }
+      const divergent = new Set(divergentPaths);
+      const identicalPaths = missingPaths.filter((file) => !divergent.has(file));
+      const unreviewedMissingPaths = missingPaths.filter((file) => divergent.has(file) && !replacements.has(file));
+      if (unreviewedMissingPaths.length) {
+        return {
+          ok: false,
+          reason: "lineage_paths_missing",
+          ticket: source,
+          missingPaths: unreviewedMissingPaths,
+          identicalPaths,
+          message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths: ${missingPaths.join(", ")}. Byte-identical omitted paths need no replacement evidence: ${JSON.stringify(identicalPaths)}. Supply reviewedReplacements entries with path, reviewedBy, and reason for the remaining omitted paths: ${unreviewedMissingPaths.join(", ")}.${contentCommitOwed}`
         };
       }
       const unreviewed = divergentPaths.filter((file) => !replacements.has(file));
@@ -3048,7 +3051,7 @@ ${verify.outputTail}` : null
         };
       }
       const now = (/* @__PURE__ */ new Date()).toISOString();
-      const reviewedReplacementPaths = new Set(missingPaths.concat(divergentPaths));
+      const reviewedReplacementPaths = new Set(divergentPaths);
       const reviewedReplacements = changedPaths.filter((file) => reviewedReplacementPaths.has(file)).map((file) => replacements.get(file));
       const supersededBy = {
         ref: repaired.repair.ref,
@@ -3057,6 +3060,7 @@ ${verify.outputTail}` : null
         deliveredAt: repaired.integration.deliveredAt || repaired.repair.submission?.integratedAt,
         closedAt: now,
         changedPaths,
+        identicalPaths,
         reviewedReplacements,
         reason
       };

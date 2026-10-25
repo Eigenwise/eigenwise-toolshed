@@ -101,3 +101,39 @@ test('outside dirt cannot replace an empty own deliverable', () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'working_tree_delivery_empty');
 });
+
+
+test('manual delivery records both commits of a reachable submitted range', () => {
+  const { slug, git, write } = fixture();
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: 'main' });
+  const base = git(['rev-parse', 'HEAD']).toString().trim();
+  write('first.md', 'First commit');
+  git(['add', 'first.md']);
+  git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'first']);
+  const first = git(['rev-parse', 'HEAD']).toString().trim();
+  write('second.md', 'Second commit');
+  git(['add', 'second.md']);
+  git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'second']);
+  const candidate = git(['rev-parse', 'HEAD']).toString().trim();
+  const ticket = store.createTicket(slug, { title: 'Two-commit manual delivery', files: ['first.md', 'second.md'] });
+  const gitRef = 'refs/sidequest/' + ticket.ref;
+  git(['update-ref', gitRef, candidate]);
+  ticket.status = 'doing';
+  ticket.submission = {
+    commit: candidate, base, gitRef, commits: [first, candidate],
+    upstream: 'main', upstreamCommit: base, integrationMode: 'local', integrationBranch: 'main',
+    admittedScope: ['first.md', 'second.md'], changedPaths: ['first.md', 'second.md'],
+    verify: 'node -e "process.exit(0)"', integratedAt: null,
+  };
+  const database = require('../lib/db.js');
+  database.putRow(database.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: 0, ord: ticket.order, claim_by: null, data: ticket,
+  });
+  const result = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    by: 'integrator', purpose: 'delivery', deliveryCommit: candidate,
+    reason: 'Both submitted commits reached main.',
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(store.getTicket(slug, ticket.ref).submission.integration.deliveredFiles, ['first.md', 'second.md']);
+});

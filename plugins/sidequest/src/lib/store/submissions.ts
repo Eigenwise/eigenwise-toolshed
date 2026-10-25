@@ -2356,8 +2356,8 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       : workingTreeDelivery
         ? workingTreeDeliveryPaths(repo)
         : interaction.interaction
-          ? Array.from(new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths]))
-          : deliveredCommitPaths(repo, deliveryCommit);
+          ? Array.from(new Set([...changedIntegrationPaths(repo, ticket.submission), ...interaction.interaction.paths]))
+          : changedIntegrationPaths(repo, ticket.submission);
     const deliveryIdentity = {
       kind: interaction.interaction ? 'reviewed-merged-tree-interaction' : workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
       pinnedRef: submissionGitRef(ticket),
@@ -3627,16 +3627,6 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       : [];
     const delivered = new Set(deliveredFiles);
     const missingPaths = changedPaths.filter((file) => !delivered.has(file));
-    const unreviewedMissingPaths = missingPaths.filter((file) => !replacements.has(file));
-    if (unreviewedMissingPaths.length) {
-      return {
-        ok: false,
-        reason: 'lineage_paths_missing',
-        ticket: source,
-        missingPaths: unreviewedMissingPaths,
-        message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths without reviewed retirement evidence: ${unreviewedMissingPaths.join(', ')}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentionally retired path, or integrate a repair that delivers the full path lineage.${contentCommitOwed}`,
-      };
-    }
     let divergentPaths: string[];
     try {
       divergentPaths = pathsWithDifferentContent(repo, source.submission.commit, contentCommit, changedPaths);
@@ -3646,6 +3636,19 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
         reason: 'lineage_unavailable',
         ticket: source,
         message: `${source.ref} supersession refused while comparing delivered content: ${integrationGitError(error)}`,
+      };
+    }
+    const divergent = new Set(divergentPaths);
+    const identicalPaths = missingPaths.filter((file) => !divergent.has(file));
+    const unreviewedMissingPaths = missingPaths.filter((file) => divergent.has(file) && !replacements.has(file));
+    if (unreviewedMissingPaths.length) {
+      return {
+        ok: false,
+        reason: 'lineage_paths_missing',
+        ticket: source,
+        missingPaths: unreviewedMissingPaths,
+        identicalPaths,
+        message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths: ${missingPaths.join(', ')}. Byte-identical omitted paths need no replacement evidence: ${JSON.stringify(identicalPaths)}. Supply reviewedReplacements entries with path, reviewedBy, and reason for the remaining omitted paths: ${unreviewedMissingPaths.join(', ')}.${contentCommitOwed}`,
       };
     }
     const unreviewed = divergentPaths.filter((file) => !replacements.has(file));
@@ -3659,7 +3662,7 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       };
     }
     const now = new Date().toISOString();
-    const reviewedReplacementPaths = new Set(missingPaths.concat(divergentPaths));
+    const reviewedReplacementPaths = new Set(divergentPaths);
     const reviewedReplacements = changedPaths
       .filter((file) => reviewedReplacementPaths.has(file))
       .map((file) => replacements.get(file)!);
@@ -3670,6 +3673,7 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       deliveredAt: repaired.integration.deliveredAt || repaired.repair.submission?.integratedAt,
       closedAt: now,
       changedPaths,
+      identicalPaths,
       reviewedReplacements,
       reason,
     };
