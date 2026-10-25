@@ -66,6 +66,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state,
 } = require('./mcp-shared');
+import { integrationProgressPath, readIntegrationProgress } from './integration-tests.js';
 
 type ToolDefinition = {
   name: string;
@@ -211,7 +212,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'pulse',
-    description: 'Compact liveness read: status, claim, latest comment, dispatch state, invalidated wave state, git activity.',
+    description: 'Compact liveness read: status, claim, latest comment, dispatch state, invalidated wave state, git activity, integration gate state.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -226,7 +227,8 @@ const tools: ToolDefinition[] = [
       const pulse = store.pulsePayload(slug, args.ref);
       if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
       const payload = args.full ? withoutCategories(pulse) : compactPulse(pulse);
-      return Object.assign({ project: slug }, payload);
+      const integration = readIntegrationProgress(integrationProgressPath(store.projectDir(slug), pulse.ref));
+      return Object.assign({ project: slug }, payload, integration ? { integration } : {});
     },
   },
   {

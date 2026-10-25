@@ -6,6 +6,7 @@ import { runProcessVerification } from './ports/process.js';
 export interface IntegrationTestSelection {
   plugin: string;
   files: string[];
+  excludedFiles?: string[];
 }
 
 const MODULE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
@@ -104,7 +105,7 @@ function pluginSelection(project: string, pluginName: string, changedPaths: stri
 
 export interface IntegrationTestBatch {
   plugin: string;
-  file: string;
+  files: string[];
   command: string;
   timeoutMilliseconds: number;
 }
@@ -124,43 +125,215 @@ function pinnedTestFile(selection: IntegrationTestSelection, file: string, patte
   return patterns.some((pattern) => (localPathsApply && path.matchesGlob(file, pattern)) || path.matchesGlob(`${selection.plugin}/${file}`, pattern));
 }
 
-function testFileCommand(project: string, plugin: string, file: string): string {
+function performanceTest(file: string): boolean {
+  return /(?:^|[./_-])(?:perf|benchmark)(?:[./_-]|$)/i.test(file);
+}
+
+function testScripts(project: string, plugin: string): Record<string, string> {
   const manifestPath = path.join(project, plugin, 'package.json');
-  const manifest = (fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : {}) as { scripts?: Record<string, string> };
-  const runner = manifest.scripts?.['test:files'] ? 'npm run test:files --' : 'node --test';
-  return `${runner} --test-concurrency=1 ${quoteArgument(file.replaceAll('[', '[[]'))}`;
+  if (!fs.existsSync(manifestPath)) return {};
+  return JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts ?? {};
+}
+
+function pluginTestFiles(project: string, plugin: string): string[] {
+  const root = path.join(project, plugin);
+  return directoryFiles(path.join(root, 'test')).filter(importingTest).map((file) => path.relative(root, file).replaceAll('\\', '/')).sort();
+}
+
+function testBatchCommand(scripts: Record<string, string>, files: string[], normalSuite: boolean): string {
+  if (normalSuite && scripts.test) return 'npm test';
+  const runner = scripts['test:files'] ? 'npm run test:files --' : 'node --test';
+  return runner + ' --test-concurrency=1 ' + files.map((file) => quoteArgument(file.replaceAll('[', '[[]'))).join(' ');
+}
+
+function pluginTestBatch(project: string, selection: IntegrationTestSelection, patterns: string[], timeoutMilliseconds: number): IntegrationTestBatch[] {
+  const files = selection.files.filter((file) => !performanceTest(file) && !pinnedTestFile(selection, file, patterns));
+  if (!files.length) return [];
+  const normalSuite = files.length > 40;
+  const batchFiles = normalSuite ? pluginTestFiles(project, selection.plugin).filter((file) => !performanceTest(file)) : files;
+  return [{
+    plugin: selection.plugin,
+    files: batchFiles,
+    command: testBatchCommand(testScripts(project, selection.plugin), batchFiles, normalSuite),
+    timeoutMilliseconds: Math.min(timeoutMilliseconds, 600_000),
+  }];
 }
 
 export function integrationTestBatches(project: string, selections: IntegrationTestSelection[], pinnedCommand: string, timeoutMilliseconds: number): IntegrationTestBatch[] {
   if (/\btest:full\b/.test(pinnedCommand)) return [];
   const patterns = pinnedTestPatterns(pinnedCommand);
-  return selections.flatMap((selection) => selection.files.filter((file) => !pinnedTestFile(selection, file, patterns)).map((file) => ({
-    plugin: selection.plugin,
-    file,
-    command: testFileCommand(project, selection.plugin, file),
-    timeoutMilliseconds: Math.min(timeoutMilliseconds, 600_000),
-  })));
+  return selections.flatMap((selection) => pluginTestBatch(project, selection, patterns, timeoutMilliseconds));
 }
 
-export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[] } {
-  const selections = selectIntegrationTests(project, changedPaths);
-  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds);
-  const results: VerificationResult[] = [];
-  for (const batch of batches) {
-    if (pinned.status !== 'passed') break;
-    const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing test file passes on the merged tree' }, {
+function selectionWithExclusions(project: string, selection: IntegrationTestSelection): IntegrationTestSelection {
+  const excludedFiles = pluginTestFiles(project, selection.plugin).filter(performanceTest);
+  return { ...selection, excludedFiles };
+}
+
+function executeImportBatches(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult[] {
+  if (pinned.status !== 'passed') return [];
+  const failures: VerificationResult[] = [];
+  for (const [index, batch] of batches.entries()) {
+    reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.files.join(', ')}`, { index: index + 1, count: batches.length });
+    const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
       cwd: path.join(project, batch.plugin),
       timeoutMilliseconds: batch.timeoutMilliseconds,
-      logPath: `${pinned.logPath}.import-${results.length}.log`,
+      logPath: pinned.logPath + '.import-' + index + '.log',
       environment,
     });
-    results.push(result);
-    if (result.status !== 'passed') return { ...result, integrationTests: selections, importingTestResults: results };
+    if (result.status !== 'passed') { failures.push(result); break; }
   }
-  return { ...pinned, integrationTests: selections, importingTestResults: results };
+  return failures;
+}
+
+export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; exclusionReason: string } } {
+  const started = Date.now();
+  const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
+  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds);
+  const failures = executeImportBatches(project, batches, pinned, environment);
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, exclusionReason: 'Wall-clock performance and benchmark tests remain in CI and test:full.' };
+  if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches }) + '\n');
+  return { ...(failures[0] ?? pinned), integrationTests: selections, importingTestResults: failures, importingTestSummary };
 }
 
 export function selectIntegrationTests(project: string, changedPaths: string[]): IntegrationTestSelection[] {
   const pluginNames = changedPaths.map((file) => /^plugins\/([^/]+)\//.exec(file.replaceAll('\\', '/'))?.[1]).filter((name): name is string => name !== undefined);
   return Array.from(new Set(pluginNames), (plugin) => pluginSelection(project, plugin, changedPaths));
+}
+
+// A delivery records where its merged-tree gate is in a per-ticket file, so pulse can answer "is it
+// still running, which file, and how did it end" from any process, including after the MCP client that
+// started it gave up waiting (SQ-3884).
+export type IntegrationProgressState = 'running' | 'delivered' | 'rolled_back' | 'rollback_failed' | 'refused';
+
+export interface IntegrationProgress {
+  state: IntegrationProgressState;
+  refs: string;
+  logPath: string | null;
+  phase: string;
+  currentFile: string | null;
+  fileIndex: number | null;
+  fileCount: number | null;
+  startedAt: string;
+  updatedAt: string;
+  pid: number;
+  reason?: string;
+}
+
+export interface DeliveryOutcome {
+  ok?: boolean;
+  reason?: unknown;
+}
+
+type IntegrationProgressListener = (progress: IntegrationProgress) => void;
+
+const progressListeners = new Set<IntegrationProgressListener>();
+let activeProgress: { files: string[]; record: IntegrationProgress } | null = null;
+
+export function integrationProgressPath(boardDirectory: string, ref: string): string {
+  return path.join(boardDirectory, 'integrations', `${ref.replace(/[^a-zA-Z0-9._-]/g, '_')}.json`);
+}
+
+export function onIntegrationProgress(listener: IntegrationProgressListener): () => void {
+  progressListeners.add(listener);
+  return () => { progressListeners.delete(listener); };
+}
+
+// Progress is advisory: a full disk or a reader holding the file open must never fail the delivery.
+function writeProgressFile(file: string, record: IntegrationProgress): void {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(record));
+    fs.renameSync(temporary, file);
+  } catch {
+    try { fs.writeFileSync(file, JSON.stringify(record)); } catch { /* advisory */ }
+  }
+}
+
+function publishProgress(): void {
+  if (!activeProgress) return;
+  const { files, record } = activeProgress;
+  for (const file of files) writeProgressFile(file, record);
+  for (const listener of progressListeners) {
+    try { listener(record); } catch { /* a listener never fails the delivery */ }
+  }
+}
+
+export function beginIntegrationProgress(files: string[], refs: string, logPath: string | null): void {
+  const now = new Date().toISOString();
+  activeProgress = {
+    files,
+    record: { state: 'running', refs, logPath, phase: 'merging', currentFile: null, fileIndex: null, fileCount: null, startedAt: now, updatedAt: now, pid: process.pid },
+  };
+  publishProgress();
+}
+
+export function reportIntegrationProgress(phase: string, currentFile: string | null = null, position: { index: number; count: number } | null = null): void {
+  if (!activeProgress) return;
+  activeProgress.record = {
+    ...activeProgress.record,
+    phase,
+    currentFile,
+    fileIndex: position ? position.index : null,
+    fileCount: position ? position.count : null,
+    updatedAt: new Date().toISOString(),
+  };
+  publishProgress();
+}
+
+export function integrationProgressSummary(progress: IntegrationProgress): string {
+  const file = progress.currentFile ? ` ${progress.currentFile}` : '';
+  const position = progress.fileIndex ? ` (${progress.fileIndex}/${progress.fileCount})` : '';
+  return `integrate ${progress.refs}: ${progress.phase}${file}${position}`;
+}
+
+export function deliveryOutcomeState(outcome: DeliveryOutcome): IntegrationProgressState {
+  if (outcome.ok) return 'delivered';
+  const reason = String(outcome.reason || '');
+  if (reason.endsWith('rollback_failed')) return 'rollback_failed';
+  return /_(?:post_merge|wave_delivery)$/.test(reason) ? 'rolled_back' : 'refused';
+}
+
+export function finishIntegrationProgress(outcome: DeliveryOutcome): void {
+  if (!activeProgress) return;
+  const state = deliveryOutcomeState(outcome);
+  activeProgress.record = {
+    ...activeProgress.record,
+    state,
+    phase: 'finished',
+    currentFile: null,
+    fileIndex: null,
+    fileCount: null,
+    updatedAt: new Date().toISOString(),
+    ...(state === 'delivered' ? {} : { reason: String(outcome.reason || 'unknown') }),
+  };
+  publishProgress();
+  activeProgress = null;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
+}
+
+function isIntegrationProgress(value: unknown): value is IntegrationProgress {
+  return typeof value === 'object' && value !== null && 'state' in value && 'refs' in value && 'pid' in value;
+}
+
+// A running record whose writer is gone was cut short (the process was killed mid-gate); saying so
+// beats showing it as running forever.
+export function readIntegrationProgress(file: string): (IntegrationProgress & { writerAlive?: boolean }) | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isIntegrationProgress(parsed)) return null;
+  return parsed.state === 'running' ? { ...parsed, writerAlive: processAlive(Number(parsed.pid)) } : parsed;
 }

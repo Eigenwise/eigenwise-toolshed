@@ -21,7 +21,7 @@ then the board default; a deleted frozen target may use the abandonment path's v
 The publish transaction is lock → delivery → merged-tree gate → central version → review → push →
 reachability → `done`.
 
-At integration, the merged-tree gate also follows static imports from each changed plugin's test directory to the delivery's changed paths, including Sidequest's compiled `lib/` to `src/lib/` identities. The delivery's `verify.integrationTests` records the selected files (including empty selections). Files already covered by the pinned command are excluded from extra runs. Each extra file runs serially with at most 600 seconds, using `test:files` where available, never `test:full`; a failing extra run blocks delivery. `verify.importingTestResults` records those runs.
+At integration, the merged-tree gate also follows static imports from each changed plugin's test directory to the delivery's changed paths, including Sidequest's compiled `lib/` to `src/lib/` identities. The delivery's `verify.integrationTests` records the selected files (including empty selections). Files already covered by the pinned command are excluded from extra runs. Extra files run in one serial test invocation per plugin with at most 600 seconds, using `test:files` where available so typechecking runs once. Above 40 extra files, the gate uses the plugin’s `npm test` script, or one `test:files` invocation over all discovered non-performance files when there is no `test` script. It never invokes `test:full`. Performance and benchmark filenames (including `hooks.perf.test.ts` and `context-budget-benchmark.test.ts`) are excluded from import-walk selection and named in `verify.integrationTests[].excludedFiles`; they remain in CI and `test:full`. The gate log records selection size, batches, exclusions and elapsed time. `verify.importingTestSummary` carries selection size, elapsed time and the exclusion reason; `verify.importingTestResults` lists only failed batches, whose logs identify failed files. A failed batch blocks delivery.
 
 At integration, read the submit report, deliver the range, and run the merged-tree gate once per
 wave. Judge by that oracle and the report, never by reading diffs. When sized risk or a weak oracle
@@ -50,8 +50,15 @@ merge commit as an automatic refusal.
 
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
-Use the project's configured quality gate, if any. Hold integration for missing quality measurement
-only when a gate is configured. Without one, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. User rules injected by
+Use the project's configured quality gate, if any. Hold integration for missing quality measurement only when a gate is configured. Board setting `integrationQuality` accepts
+`enforce` (default), `report`, or `off`; CLI: `board-config --integration-quality enforce|report|off`.
+`enforce` refuses measured failures. `report` records the same receipt without refusing delivery for
+quality failures. `off` skips measurement and capture, but still runs the pinned verifier.
+Coverage gaps stay UNVERIFIED. When every row has the same missing-coverage-record reason, the receipt
+records that whole-run capture gap without creating debt tickets. Partial gaps still create debt.
+Vitest-run projects get no measurement until quality-gate supports Vitest workers.
+Raw coverage captures are removed after measurement by default; receipts remain. The internal
+`keepCapture` debugging option retains a capture when explicitly requested. Without one, run the repository's documented quality command (for Toolshed, `npm run quality:crap` in the plugin, which calls the Quality Gate) on the touched bodies. If it cannot produce a measurement, report "complexity/coverage UNVERIFIED: <exact reason from the tool>" and continue. Never recommend Quartermaster setup. User rules injected by
 the host still apply; gate absence alone never holds, parks or marks work UNVERIFIED.
 
 ## When to run it (event-driven, never polled)
@@ -244,6 +251,20 @@ head. A sibling candidate submitted while that suite ran recorded the rolled-bac
 upstream, so the same rollback rewrites that record back to the pre-merge head. The next `integrate` of
 the sibling, or a retry of the failed candidate, then runs normally. When the rollback itself is refused
 because the target moved past the delivery, nothing is rewritten; follow the refusal's manual recovery.
+
+### Watching a long gate
+
+MCP `integrate` delivers in a separate process, so the board keeps answering `pulse`, `comment`, `claim`
+and `dispatch` for every ticket while the merged-tree gate runs. It has its own mutation queue; the
+delivery lock and the publish lock still serialize deliveries. A client that sends a `progressToken` gets
+`notifications/progress` at every gate phase and file and at least every 30 s, so its idle timeout does not
+fire while the gate is alive. If the client still gives up, or the board server goes away, the delivery
+process finishes and records the outcome itself. `pulse <ref>` then carries an `integration` block:
+`state` (`running`, `delivered`, `rolled_back`, `rollback_failed` or `refused`), `phase` (`merging`,
+`wave gate`, `pinned verifier`, `importing tests`, `finished`), `currentFile` with `fileIndex`/`fileCount`
+during the import walk, `logPath`, `startedAt`/`updatedAt`, and `reason` for a failure. A `running` block
+with `writerAlive: false` means the delivery process died mid-gate: inspect the target and its log before
+retrying. Read the outcome there instead of waiting on node processes.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 

@@ -332,6 +332,13 @@ function provisionGateDependency(repository, checkout, dependency) {
   else if (!existed) createDirectoryLink(source, target);
   return existed ? 0 : 1;
 }
+function releaseGateDependencyLinks(checkout, dependencies) {
+  for (const dependency of dependencies) {
+    if (dependency.mode !== "link") continue;
+    const link = path.resolve(checkout, dependency.path);
+    if (nativeFs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) nativeFs.unlinkSync(link);
+  }
+}
 function runWorktreeSetup(setup, worktree, timeoutMs) {
   return new Promise((resolve) => {
     const child = spawn(setup, {
@@ -397,43 +404,25 @@ function scopedPluginDirectories(files) {
     return plugin ? [`plugins/${plugin[1]}`] : [];
   }))];
 }
-function linkedPluginDependencies(repository, directory, plugin) {
-  const modules = path.join(directory, "node_modules");
-  if (!nativeFs.existsSync(modules) || !nativeFs.lstatSync(modules).isSymbolicLink()) return false;
-  const source = path.join(repository, plugin);
-  const sameLock = nativeFs.readFileSync(path.join(source, "package-lock.json")).equals(nativeFs.readFileSync(path.join(directory, "package-lock.json")));
-  if (!sameLock || canonicalPath(modules) !== canonicalPath(path.join(source, "node_modules"))) throw new Error(`unverified locked dependency link: ${plugin}`);
-  return true;
-}
-function linkScopedPluginDependencies(repository, worktree, plugin) {
-  const source = path.join(repository, plugin, "node_modules");
-  if (!nativeFs.existsSync(source)) return null;
-  const sourceLock = path.join(repository, plugin, "package-lock.json");
-  if (!nativeFs.existsSync(sourceLock)) return null;
-  if (!nativeFs.readFileSync(sourceLock).equals(nativeFs.readFileSync(path.join(worktree, plugin, "package-lock.json")))) return null;
-  return provisionDependencyPath(repository, worktree, { path: `${plugin}/node_modules`, mode: "link" });
-}
-function scopedPluginProvisioning(repository, worktree, plugin, onDependencyLink) {
+function scopedPluginInstallEvidence(worktree, plugin) {
   const directory = path.join(worktree, plugin);
   if (!nativeFs.existsSync(path.join(directory, "package-lock.json"))) return [];
-  if (linkedPluginDependencies(repository, directory, plugin)) return [`${plugin}: retained dependency link with matching lockfile`];
-  const link = linkScopedPluginDependencies(repository, worktree, plugin);
-  if (!link) return [`${plugin}: install deferred (npm ci --prefix ${plugin} --ignore-scripts --no-audit --no-fund)`];
-  onDependencyLink?.(link);
-  return [`${plugin}: linked locked dependencies with matching lockfile`];
+  if (nativeFs.existsSync(path.join(directory, "node_modules"))) return [`${plugin}: dependencies present after provisioning`];
+  return [`${plugin}: install deferred (npm ci --prefix ${plugin} --ignore-scripts --no-audit --no-fund)`];
+}
+function provisionConfiguredDependencies(repository, worktree, dependencies, onDependencyLink) {
+  for (const dependency of dependencies) {
+    const createdLink = provisionDependencyPath(repository, worktree, dependency);
+    if (createdLink) onDependencyLink?.(createdLink);
+  }
 }
 async function provisionWorktree(repository, worktree, config, options = {}) {
-  for (const dependency of config.worktreeDependencyPaths || []) {
-    const createdLink = provisionDependencyPath(repository, worktree, dependency);
-    if (createdLink) options.onDependencyLink?.(createdLink);
-  }
+  provisionConfiguredDependencies(repository, worktree, config.worktreeDependencyPaths || [], options.onDependencyLink);
   const { declaredFiles = [], evidence = [], setupTimeoutMs = 12e4 } = options;
-  for (const plugin of scopedPluginDirectories(declaredFiles)) {
-    evidence.push(...scopedPluginProvisioning(repository, worktree, plugin, options.onDependencyLink));
-  }
   const setup = String(config.worktreeSetup || "").trim();
-  if (!setup) return null;
-  return runWorktreeSetup(setup, worktree, setupTimeoutMs);
+  const failure = setup ? await runWorktreeSetup(setup, worktree, setupTimeoutMs) : null;
+  evidence.push(...scopedPluginDirectories(declaredFiles).flatMap((plugin) => scopedPluginInstallEvidence(worktree, plugin)));
+  return failure;
 }
 function gitBashPath(value) {
   const drive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
@@ -1932,6 +1921,12 @@ async function parkedGitDirectory(destination) {
     return null;
   }
 }
+async function registeredCheckoutCommonDirectory(worktree) {
+  const identity = await git(worktree, ["rev-parse", "--show-toplevel", "--git-common-dir"]);
+  if (!identity.ok) return "";
+  const [topLevel, commonDirectory = ""] = identity.stdout.split(/\r?\n/);
+  return canonicalPath(topLevel) === canonicalPath(worktree) ? canonicalPath(path.resolve(worktree, commonDirectory)) : "";
+}
 async function repositoryCommonDirectory(repo) {
   const common = await git(repo, ["rev-parse", "--git-common-dir"]);
   return common.ok ? canonicalPath(path.resolve(repo, common.stdout)) : "";
@@ -2155,9 +2150,16 @@ async function sweep(repo, tickets, options = {}) {
   if (!listed.ok) throw new Error(listed.stderr || "could not list git worktrees");
   const worktreeList = parseWorktreeList(listed.stdout);
   const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
-  const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => quarantineRetryDue(entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
+  const candidates = worktreeList.filter((entry) => canonicalPath(entry.worktree) !== canonicalPath(repo) && path.basename(entry.worktree).startsWith("agent-")).filter((entry) => !pathIsInside(canonicalPath(quarantineRoot(options)), canonicalPath(entry.worktree))).filter((entry) => quarantineRetryDue(entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
+  const commonDirectory = await repositoryCommonDirectory(repo);
+  const candidateRepositories = await mapWithConcurrency(
+    candidates,
+    SWEEP_CLASSIFICATION_CONCURRENCY,
+    (entry) => registeredCheckoutCommonDirectory(entry.worktree)
+  );
+  const ownedCandidates = candidates.filter((entry, index) => commonDirectory !== "" && candidateRepositories[index] === commonDirectory);
   const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
-  const allCandidates = [...candidates, ...orphanCandidates];
+  const allCandidates = [...ownedCandidates, ...orphanCandidates];
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
   const agedCandidates = await sweepCandidateOrder(allCandidates, tickets);
   const boundedCandidates = agedCandidates.slice(0, maxCandidates).map((candidate) => candidate.entry);
@@ -2393,4 +2395,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { branchOwningWorktree, WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };
+module.exports = { branchOwningWorktree, WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, releaseGateDependencyLinks, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, unclaimedDispatchWorktreeReclaim, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, classifySweepCandidate, lateContentInMovedWorktree };

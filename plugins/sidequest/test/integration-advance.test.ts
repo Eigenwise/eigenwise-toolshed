@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-home-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -809,8 +809,10 @@ for (const mode of ['merge', 'replay', 'apply']) {
 
 test('post-merge verification rolls back a rebuilt committed output to its recorded pre-merge head', () => {
   const fixture = makeRepo('post-merge-rebuilt-output');
+  const failureMarker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-retry-failure-')), 'fail');
+  fs.writeFileSync(failureMarker, 'fail first delivery');
   fixture.submitted = commitFile(fixture.executor, 'generated-output.js', 'candidate generated output\n');
-  const verify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); fs.writeFileSync('generated-output.js',branch==='main'?'rebuilt generated output\\n':'candidate generated output\\n'); if(branch==='main') process.exit(7)");
+  const verify = nodeVerify(`const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); const fail=branch==='main'&&fs.existsSync('${failureMarker.replaceAll(String.fromCharCode(92), '/')}'); fs.writeFileSync('generated-output.js',fail?'rebuilt generated output\\n':'candidate generated output\\n'); if(fail) process.exit(7)`);
   const { slug } = store.ensureProject(fixture.repo);
   const ticket = store.createTicket(slug, {
     title: 'rollback rebuilt generated output',
@@ -834,6 +836,23 @@ test('post-merge verification rolls back a rebuilt committed output to its recor
   assert.equal(integration.reason, 'verification_failed_suite_post_merge');
   assert.equal(integration.rollback.strategy, 'hard-reset-delivery-head');
   assert.match(integration.message, /rolled back delivery/);
+
+  fs.unlinkSync(failureMarker);
+  const retried = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+  assert.equal(retried.ok, true, retried.message);
+  const delivered = retried.integration;
+  assert.equal(delivered.outcome, 'delivered');
+  for (const field of ['reason', 'deliveryHead', 'rollback', 'completedAt', 'message', 'before']) {
+    assert.equal(Object.hasOwn(delivered, field), false, field);
+  }
+  assert.deepEqual(delivered.attempts, [integration]);
+  assert.equal(delivered.resultingHead, head(fixture.repo));
+  assert.ok(delivered.deliveredAt);
+  assert.deepEqual(store.pulsePayload(slug, ticket.ref).submission.integration.attempts, [integration]);
+  const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+  const pulse = runCli(['pulse', ticket.ref, '--project', fixture.repo]);
+  assert.equal(pulse.status, 0, pulse.stderr);
+  assert.deepEqual(JSON.parse(pulse.stdout).submission.integration.attempts, [integration]);
 });
 
 test('post-merge verification refuses a hard reset after an extra main commit', () => {
@@ -1287,7 +1306,7 @@ test('GH-399: rollback preserves captures, re-gates an independent sibling and n
   const verifier = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-sibling-verify-')), 'verify.js');
   fs.writeFileSync(verifier, `
 process.env.SIDEQUEST_HOME = ${JSON.stringify(SIDEQUEST_HOME)};
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 if (execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim() !== 'main') process.exit(0);
 const store = require(${JSON.stringify(path.join(libDirectory, 'store.js'))});
 const commitScope = require(${JSON.stringify(path.join(libDirectory, 'commit-scope.js'))});
@@ -1963,4 +1982,94 @@ test('SQ-3426: a default-board post-merge failure keeps its submission parked wi
   assert.equal(parked.submission.commit, fixture.submitted);
   assert.equal(parked.rejectedSubmissions, undefined);
   assert.deepEqual(parked.comments, [], 'no evidence comment on a default board');
+});
+
+function toolCall(id: number, name: string, args: Record<string, unknown>, meta?: Record<string, unknown>) {
+  return { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args, ...(meta ? { _meta: meta } : {}) } };
+}
+
+function toolPayload(response: any) {
+  assert.ok(!response.result.isError, response.result.content[0].text);
+  return JSON.parse(response.result.content[0].text);
+}
+
+async function eventually<Value>(read: () => Promise<Value>, reached: (value: Value) => boolean, deadlineMs = 60_000): Promise<Value> {
+  const deadline = Date.now() + deadlineMs;
+  let value = await read();
+  while (!reached(value) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    value = await read();
+  }
+  return value;
+}
+
+test('SQ-3884: an isolated MCP integrate keeps the board answering through a slow gate, streams progress and records its outcome for pulse', { timeout: 120_000 }, async () => {
+  const { fixture, slug, ticket } = deliveryTicket('sq3884-slow-gate', { verify: nodeVerify('setTimeout(() => {}, 2500)') });
+  const unrelated = store.createTicket(slug, { title: 'unrelated work', category: 'codebase-exploration', description: 'A ticket the board keeps serving while another one integrates.' });
+  const notifications: any[] = [];
+  const connection = { notify: (message: any) => notifications.push(message), isolateLongRunningWork: true };
+  let integrateAnswered = false;
+  const delivering = mcp.handleRequest(toolCall(1, 'integrate', { project: fixture.repo, ref: ticket.ref, by: 'orchestrator' }, { progressToken: 'sq-3884' }), connection)
+    .finally(() => { integrateAnswered = true; });
+  const pulse = async () => toolPayload(await mcp.handleRequest(toolCall(2, 'pulse', { project: fixture.repo, ref: ticket.ref }), connection));
+
+  const running = await eventually(pulse, (payload) => /verifier|gate/.test(String(payload.integration?.phase)));
+  assert.equal(integrateAnswered, false, 'pulse answered while the gate was still running');
+  assert.equal(running.integration.state, 'running');
+  assert.equal(running.integration.refs, ticket.ref);
+  assert.notEqual(running.integration.pid, process.pid, 'the gate runs in its own delivery process');
+  assert.equal(running.integration.writerAlive, true);
+  assert.match(running.integration.currentFile, /setTimeout/);
+  const commented = toolPayload(await mcp.handleRequest(toolCall(3, 'comment', { project: fixture.repo, ref: ticket.ref, by: 'orchestrator', body: 'watching the gate' }), connection));
+  const claimed = toolPayload(await mcp.handleRequest(toolCall(4, 'claim', { project: fixture.repo, ref: unrelated.ref, by: 'unrelated-worker', direct: true, reason: 'An unrelated claim must not wait for the integration gate.' }), connection));
+  assert.equal(integrateAnswered, false, 'comment and claim were answered without queueing behind the gate');
+  assert.notEqual(commented.ok, false, JSON.stringify(commented));
+  assert.ok(store.getTicket(slug, ticket.ref).comments.some((comment: any) => comment.body === 'watching the gate'));
+  assert.equal(claimed.ok, true, JSON.stringify(claimed));
+
+  const delivered = toolPayload(await delivering);
+  assert.equal(delivered.ok, true, JSON.stringify(delivered));
+  const progress = notifications.filter((message) => message.method === 'notifications/progress');
+  assert.ok(progress.length >= 2, JSON.stringify(notifications));
+  assert.ok(progress.every((message) => message.params.progressToken === 'sq-3884'));
+  assert.ok(progress.every((message, index) => index === 0 || message.params.progress > progress[index - 1].params.progress));
+  assert.ok(progress.some((message) => /pinned verifier|wave gate/.test(message.params.message)), JSON.stringify(progress));
+  const finished = await pulse();
+  assert.equal(finished.integration.state, 'delivered');
+  assert.equal(finished.integration.logPath, running.integration.logPath);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+});
+
+test('SQ-3884: a board server killed mid-gate leaves its delivery process to finish and record the outcome pulse reads', { timeout: 120_000 }, async () => {
+  const { fixture, slug, ticket } = deliveryTicket('sq3884-server-gone', { verify: nodeVerify('setTimeout(() => {}, 2500)') });
+  const server = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest-mcp.js')], {
+    cwd: fixture.repo,
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo },
+    stdio: ['pipe', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  const lines: any[] = [];
+  let buffered = '';
+  server.stdout.setEncoding('utf8');
+  server.stdout.on('data', (chunk: string) => {
+    buffered += chunk;
+    const complete = buffered.split('\n');
+    buffered = complete.pop() || '';
+    for (const line of complete) if (line.trim()) lines.push(JSON.parse(line));
+  });
+  const send = (message: object) => server.stdin.write(JSON.stringify(message) + '\n');
+  send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  send(toolCall(2, 'integrate', { project: fixture.repo, ref: ticket.ref, by: 'orchestrator' }, { progressToken: 7 }));
+  const gateProgress = await eventually(async () => lines.filter((line) => line.method === 'notifications/progress'), (progress) => progress.some((line) => /verifier|gate/.test(line.params.message)));
+  assert.ok(gateProgress.some((line) => line.params.progressToken === 7 && /verifier|gate/.test(line.params.message)), JSON.stringify(lines));
+  assert.equal(lines.some((line) => line.id === 2), false, 'integrate is still delivering when the server goes away');
+  server.kill();
+
+  const pulse = async () => toolPayload(await mcp.handleRequest(toolCall(3, 'pulse', { project: fixture.repo, ref: ticket.ref })));
+  const finished = await eventually(pulse, (payload) => payload.integration?.state !== 'running' && payload.status === 'done');
+  assert.equal(finished.integration.state, 'delivered', JSON.stringify(finished.integration));
+  assert.match(finished.integration.logPath, /\.log$/);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
 });

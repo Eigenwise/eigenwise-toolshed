@@ -3587,3 +3587,85 @@ test('GH-162: dispatch refuses a worktree argument outside live-claim recovery i
   assert.equal(store.getTicket(project, workingTree.ref).dispatch, undefined, 'the refusal prepares nothing');
   assert.ok(store.prepareDispatch(project, plain.ref, { sessionId: 'gh-162-plain', worktree: '  ' }).token, 'a blank worktree is no override');
 });
+
+// SQ-3881: provisioning linked a sidequest-scoped worktree's node_modules to the registered checkout's, then the
+// board's worktree setup ran `npm ci`, which empties node_modules through the link and wiped the main install on
+// every dispatch. The fixture plugin installs offline from a vendored `file:` dependency, so `npm ci` runs for real.
+function lockedPluginCheckout(prefix: string, pluginName: string) {
+  const repository = initRepo(prefix);
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  const plugin = `plugins/${pluginName}`;
+  const pluginRoot = path.join(repository, plugin);
+  const dependency = path.join(pluginRoot, 'vendor', 'locked-fixture');
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(path.join(dependency, 'package.json'), JSON.stringify({ name: 'locked-fixture', version: '1.0.0', main: 'index.js' }));
+  fs.writeFileSync(path.join(dependency, 'index.js'), 'module.exports = 3881;');
+  const dependencies = { 'locked-fixture': 'file:vendor/locked-fixture' };
+  fs.writeFileSync(path.join(pluginRoot, 'package.json'), JSON.stringify({ name: pluginName, version: '1.0.0', dependencies }));
+  fs.writeFileSync(path.join(pluginRoot, 'package-lock.json'), JSON.stringify({
+    name: pluginName,
+    version: '1.0.0',
+    lockfileVersion: 3,
+    packages: {
+      '': { name: pluginName, version: '1.0.0', dependencies },
+      'node_modules/locked-fixture': { resolved: 'vendor/locked-fixture', link: true },
+      'vendor/locked-fixture': { name: 'locked-fixture', version: '1.0.0' },
+    },
+  }));
+  fs.writeFileSync(path.join(repository, '.gitignore'), 'node_modules/\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'locked plugin']);
+  const install = `npm ci --ignore-scripts --no-audit --no-fund --prefer-offline`;
+  execFileSync(install, { cwd: pluginRoot, windowsHide: true, stdio: 'pipe', shell: true });
+  const registeredModules = path.join(pluginRoot, 'node_modules');
+  for (let index = 0; index < 4; index += 1) fs.writeFileSync(path.join(registeredModules, `registered-${index}.txt`), 'main checkout install');
+  const worktree = path.join(fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}wt-`))), 'checkout');
+  git(['worktree', 'add', '-b', `sq-3881-${pluginName}-${Date.now()}`, worktree]);
+  const registeredEntries = () => fs.readdirSync(registeredModules).sort();
+  return { repository, git, plugin, registeredModules, registeredEntries, worktree, install };
+}
+
+test('a scoped plugin worktree gets a real install and setup npm ci leaves the registered checkout install intact', async () => {
+  const fixture = lockedPluginCheckout('sq-3881-setup-', 'sidequest');
+  const before = fixture.registeredEntries();
+  assert.ok(before.length >= 5, 'the registered checkout starts with an installed node_modules');
+  const evidence: string[] = [];
+  const failure = await worktrees.provisionWorktree(fixture.repository, fixture.worktree, {
+    worktreeSetup: `cd ${fixture.plugin} && ${fixture.install}`,
+  }, { declaredFiles: [`${fixture.plugin}/src/index.ts`], evidence, setupTimeoutMs: 120_000 });
+  assert.equal(failure, null);
+  assert.deepEqual(fixture.registeredEntries(), before, 'setup npm ci never reaches the registered checkout install');
+  const modules = path.join(fixture.worktree, fixture.plugin, 'node_modules');
+  assert.equal(fs.lstatSync(modules).isSymbolicLink(), false, 'the worktree node_modules is a real directory');
+  assert.deepEqual(evidence, [`${fixture.plugin}: dependencies present after provisioning`]);
+  fixture.git(['worktree', 'remove', '--force', fixture.worktree]);
+  assert.deepEqual(fixture.registeredEntries(), before, 'removing the worktree leaves the registered checkout install intact');
+});
+
+test('a quality-gate worktree is never linked and its deferred install resolves under the plugin root', async () => {
+  const fixture = lockedPluginCheckout('sq-3881-quality-gate-', 'quality-gate');
+  const before = fixture.registeredEntries();
+  const evidence: string[] = [];
+  const failure = await worktrees.provisionWorktree(fixture.repository, fixture.worktree, {}, { declaredFiles: [`${fixture.plugin}/src/core.js`], evidence });
+  assert.equal(failure, null);
+  const pluginRoot = path.join(fixture.worktree, fixture.plugin);
+  assert.equal(fs.existsSync(path.join(pluginRoot, 'node_modules')), false, 'provisioning creates no link to the registered checkout install');
+  assert.deepEqual(evidence, [`${fixture.plugin}: install deferred (npm ci --prefix ${fixture.plugin} --ignore-scripts --no-audit --no-fund)`]);
+  execFileSync(fixture.install, { cwd: pluginRoot, windowsHide: true, stdio: 'pipe', shell: true });
+  const installed = fs.realpathSync(path.join(pluginRoot, 'node_modules', 'locked-fixture'));
+  assert.ok(installed.startsWith(fs.realpathSync(pluginRoot)), `quality-gate's realpath check sees ${installed} under the worktree plugin root`);
+  assert.deepEqual(fixture.registeredEntries(), before, 'the deferred install never reaches the registered checkout install');
+});
+
+test('releasing gate dependency links before git worktree remove keeps the linked install intact', () => {
+  const fixture = lockedPluginCheckout('sq-3881-gate-', 'docs-like');
+  const before = fixture.registeredEntries();
+  const dependencies = [{ path: `${fixture.plugin}/node_modules`, mode: 'link' }];
+  assert.equal(worktrees.provisionGateDependencies(fixture.repository, fixture.worktree, dependencies).ok, true);
+  assert.equal(fs.lstatSync(path.join(fixture.worktree, fixture.plugin, 'node_modules')).isSymbolicLink(), true, 'the gate checkout holds the configured link');
+  worktrees.releaseGateDependencyLinks(fixture.worktree, dependencies);
+  assert.equal(fs.existsSync(path.join(fixture.worktree, fixture.plugin, 'node_modules')), false, 'the link is unlinked, not walked');
+  fixture.git(['worktree', 'remove', fixture.worktree]);
+  assert.equal(fs.existsSync(fixture.worktree), false);
+  assert.deepEqual(fixture.registeredEntries(), before, 'git worktree remove never reaches the linked install');
+});

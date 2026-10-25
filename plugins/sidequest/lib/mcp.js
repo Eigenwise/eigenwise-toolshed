@@ -13,7 +13,7 @@ function boardMcpSessionId() {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 29400;
+const MCP_TOOLS_LIST_MAX_BYTES = 29600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -84,6 +84,7 @@ const CONDITIONAL_MUTATION_FIELDS = {
     "readOnlyDeniedTools",
     "generatedPairs",
     "integrationMode",
+    "integrationQuality",
     "integrationBranch",
     "worktreeIsolation",
     "worktreeBase",
@@ -95,7 +96,7 @@ const CONDITIONAL_MUTATION_FIELDS = {
     "worktreeDependencyPaths"
   ]
 };
-const NULL_NONMUTATING_BOARD_FIELDS = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationBranch"]);
+const NULL_NONMUTATING_BOARD_FIELDS = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationQuality", "integrationBranch"]);
 function toolMutates(name, args = {}) {
   if (MUTATING_TOOLS.has(name)) return true;
   const fields = CONDITIONAL_MUTATION_FIELDS[name];
@@ -109,8 +110,11 @@ function toolMutates(name, args = {}) {
 function mutationQueueKey(name, args) {
   if (name === "new_board_profile") return "<global>";
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return "<global>";
-  const board = resolveProject(args.project).slug;
-  return name === "commit" ? `${board}\0commit\0${args.ref}` : board;
+  return boardMutationQueueKey(resolveProject(args.project).slug, name, args);
+}
+function boardMutationQueueKey(board, name, args) {
+  if (name === "commit") return `${board}\0commit\0${args.ref}`;
+  return name === "integrate" ? `${board}\0integrate` : board;
 }
 async function enqueueMutation(board, operation) {
   const previous = mutationTails.get(board) || Promise.resolve();
@@ -243,17 +247,28 @@ function controlPlaneByArgs(tool, args) {
   const sessionId = runtimeSessionId();
   return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
 }
-async function runTool(tool, rawArgs) {
+async function runTool(tool, rawArgs, context) {
   const validated = validateToolArguments(tool, rawArgs);
   const args = controlPlaneByArgs(tool, validated.args);
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
-    const output = await tool.handler(args);
+    const output = await tool.handler(args, context);
     return acknowledgeAliases(tool.name === "context_page" ? output : boundedReadPayload(tool.name, output), aliases);
   }
   assertMutationFreshness(args.project);
   const board = mutationQueueKey(tool.name, args);
-  return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
+  return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args, context), aliases));
+}
+function toolCallContext(params, connection) {
+  const progressToken = params?._meta?.progressToken;
+  let progress = 0;
+  return {
+    isolateLongRunningWork: connection?.isolateLongRunningWork === true,
+    progress(message) {
+      if (progressToken === void 0 || progressToken === null || !connection) return;
+      connection.notify({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken, progress: ++progress, message } });
+    }
+  };
 }
 const ATTESTATION_VERIFY_CONTRACT = "Attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
 const DELIVERY_REVISION_CONTRACT = "Target-reachable, never an ancestor of the candidate base; proves paths at its tree, not the working tree. Ignored when reachable.";
@@ -284,7 +299,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
-  board_config: { verifyEnvironment: "shared: verify at integration only. Frozen per dispatch; default isolated." },
+  board_config: { integrationQuality: "enforce (default): measured failures refuse. report: record only. off: skip quality, verify normally.", verifyEnvironment: "shared: verify at integration only. Frozen per dispatch; default isolated." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."
@@ -342,7 +357,7 @@ function rpcResult(id, result) {
 function rpcError(id, code, message) {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
-async function handleRequest(msg) {
+async function handleRequest(msg, connection) {
   if (!msg || msg.jsonrpc !== "2.0") return null;
   const { id, method, params } = msg;
   const isNotification = id === void 0 || id === null;
@@ -369,7 +384,7 @@ async function handleRequest(msg) {
       return rpcResult(id, { content: [{ type: "text", text: `Unknown tool "${name}".` }], isError: true });
     }
     try {
-      const out = await runTool(tool, args);
+      const out = await runTool(tool, args, toolCallContext(params, connection));
       return rpcResult(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
     } catch (e) {
       const error = e;

@@ -4032,7 +4032,7 @@ test('worktree-create binds a linked checkout to its registered main board', () 
   }).ok, true);
   gitFixture(['worktree', 'add', '--detach', linkedCheckout], repository);
   const name = `agent-linked-${sqSeq}`;
-  const target = worktrees.namedWorktreePath(linkedCheckout, name);
+  const target = worktrees.namedWorktreePath(repository, name);
   try {
     assert.equal(store.findProject(linkedCheckout).ok, false);
     const output = execFileSync(process.execPath, [WORKTREE_CREATE], {
@@ -4224,7 +4224,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   const plugin = path.join(repo, 'plugins', 'fixture');
   fs.mkdirSync(path.join(plugin, 'node_modules'), { recursive: true });
   fs.writeFileSync(path.join(plugin, 'package-lock.json'), '{"lockfileVersion":3}');
-  fs.writeFileSync(path.join(plugin, 'node_modules', 'ready.txt'), 'linked');
+  fs.writeFileSync(path.join(plugin, 'node_modules', 'ready.txt'), 'registered install');
   gitFixture(['add', 'tracked.txt', '.gitignore', 'plugins/fixture/package-lock.json'], repo);
   gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
   fs.mkdirSync(path.join(repo, 'cached-dependency'));
@@ -4266,13 +4266,13 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.equal(worktrees.canonicalPath(gitFixture(['rev-parse', '--show-toplevel'], first)), worktrees.canonicalPath(expected));
   assert.equal(gitFixture(['branch', '--show-current'], first), `worktree-${name}`);
   assert.equal(fs.readFileSync(path.join(first, 'cached-dependency', 'cache.txt'), 'utf8'), 'warm\n');
-  assert.equal(store.getTicket(project, createdTicket.ref).dispatch.worktreeProvisioningFailure, undefined, 'scoped dependency linking completes without a hook-time npm install');
+  assert.equal(store.getTicket(project, createdTicket.ref).dispatch.worktreeProvisioningFailure, undefined, 'scoped dependency provisioning completes without a hook-time npm install');
   assert.equal(fs.readFileSync(path.join(first, 'setup-ready.txt'), 'utf8'), 'ready');
 
   const createdDispatch = store.getTicket(project, createdTicket.ref).dispatch;
-  assert.deepEqual(createdDispatch.ownedDependencyLinks.map((record: any) => [record.relativePath, record.mode]), [['cached-dependency', 'copy'], ['plugins/fixture/node_modules', 'link']], 'the sweep reads provisioning ownership and mode from this record');
-  assert.match(createdDispatch.worktreeProvisioningEvidence.join('\n'), /plugins\/fixture: linked locked dependencies/);
-  assert.equal(fs.readFileSync(path.join(first, 'plugins/fixture/node_modules/ready.txt'), 'utf8'), 'linked');
+  assert.deepEqual(createdDispatch.ownedDependencyLinks.map((record: any) => [record.relativePath, record.mode]), [['cached-dependency', 'copy']], 'the sweep reads provisioning ownership and mode from this record');
+  assert.match(createdDispatch.worktreeProvisioningEvidence.join('\n'), /plugins\/fixture: install deferred/);
+  assert.equal(fs.existsSync(path.join(first, 'plugins/fixture/node_modules')), false, 'a scoped plugin is never linked to the registered checkout install (SQ-3881)');
   runHook(SUBAGENT_START, {
     hook_event_name: 'SubagentStart',
     session_id: 'hook-test',
@@ -4297,6 +4297,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.equal(worktrees.canonicalPath(second), worktrees.canonicalPath(expected));
   gitFixture(['worktree', 'remove', '--force', expected], repo);
   gitFixture(['branch', '-D', `worktree-${name}`], repo);
+  assert.equal(fs.readFileSync(path.join(plugin, 'node_modules', 'ready.txt'), 'utf8'), 'registered install', 'removing the worktree leaves the registered install intact');
 
   fs.rmSync(path.join(plugin, 'node_modules'), { recursive: true });
   const timedOutSetup = 'node -e "process.stderr.write(\'setup audit notice\\n\'); setTimeout(() => process.exit(0), 5000)"';

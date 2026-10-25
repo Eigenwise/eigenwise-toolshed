@@ -66,12 +66,15 @@ const { correctReviewVerdict, finalizeReviewVerdict } = require('./mcp-review-co
 const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
 import { compositionIncludesSource, compositionSubmissionScope } from './store/composition-admission';
 import type { CompositionDispatch, CompositionTicket } from './store/composition-admission';
+const { fork } = require('node:child_process') as typeof import('node:child_process');
+
+type ToolCallContext = { progress: (message: string) => void; isolateLongRunningWork: boolean };
 
 type ToolDefinition = {
   name: string;
   description: string;
   inputSchema: any;
-  handler: (args: any) => any | Promise<any>;
+  handler: (args: any, context?: ToolCallContext) => any | Promise<any>;
 };
 
 type ShippedPlugin = {
@@ -1506,8 +1509,67 @@ const tools: ToolDefinition[] = [
   },
 ];
 
-for (const tool of tools) {
-  if (tool.name === 'integrate') tool.handler = refusingTheEnvironmentLane(tool.handler);
+const INTEGRATION_CHILD_SCRIPT = path.join(__dirname, 'integration-child.js');
+const INTEGRATION_PROGRESS_INTERVAL_MS = 30_000;
+
+const CHILD_MESSAGE_TYPES = ['progress', 'result', 'error'] as const;
+type ChildMessageType = typeof CHILD_MESSAGE_TYPES[number];
+type ChildMessageHandlers = Record<ChildMessageType, (value: unknown) => void>;
+
+function childMessage(raw: unknown): { type: ChildMessageType; value: unknown } | null {
+  if (typeof raw !== 'object' || raw === null || !('value' in raw)) return null;
+  const type = CHILD_MESSAGE_TYPES.find((candidate) => 'type' in raw && raw.type === candidate);
+  return type ? { type, value: raw.value } : null;
 }
 
-module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };
+// The child reads the host session record under its own parent pid, which is this server, not Claude Code
+// (GH-467). Handing it the session this server resolved keeps the publish-lock ownership check the same.
+function integrationChildEnvironment(): NodeJS.ProcessEnv {
+  const sessionId = runtimeSessionId();
+  return sessionId ? { ...process.env, CLAUDE_CODE_SESSION_ID: sessionId } : { ...process.env };
+}
+
+// The merged-tree gate is synchronous and runs for up to the integration timeout. Inside the board server it
+// froze every request on every board for the whole gate (SQ-3884), so the server delivers in a child process
+// and keeps answering pulse, comment and dispatch. The child records its own outcome, so a client that stops
+// waiting still finds it in pulse. It is detached because a delivery killed mid-gate leaves the merge on the
+// target with no verdict and no rollback; outside the server's Windows job it outlives a killed server.
+function integrateInChildProcess(args: any, context: ToolCallContext): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const child = fork(INTEGRATION_CHILD_SCRIPT, [], { execArgv: [], detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: integrationChildEnvironment() });
+    let latest = `integrate ${args.ref}: starting`;
+    let settled = false;
+    const heartbeat = setInterval(() => context.progress(latest), INTEGRATION_PROGRESS_INTERVAL_MS);
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      finish();
+    };
+    const handlers: ChildMessageHandlers = {
+      progress: (value) => {
+        latest = String(value);
+        context.progress(latest);
+      },
+      result: (value) => settle(() => resolve(value)),
+      error: (value) => settle(() => reject(new Error(String(value)))),
+    };
+    child.on('message', (raw: unknown) => {
+      const message = childMessage(raw);
+      if (message) handlers[message.type](message.value);
+    });
+    child.once('error', (error: Error) => settle(() => reject(error)));
+    child.once('close', (code: number | null, signal: string | null) => settle(() => reject(new Error(
+      `integrate: the delivery process for ${args.ref} exited (${signal || code}) before reporting an outcome. Call pulse ${args.ref} for the recorded integration state and gate log.`,
+    ))));
+    context.progress(latest);
+    child.send({ args });
+  });
+}
+
+const integrateTool = tools.find((tool) => tool.name === 'integrate');
+if (!integrateTool) throw new Error('mcp-lifecycle: the integrate tool is missing');
+const integrateInProcess = refusingTheEnvironmentLane(integrateTool.handler);
+integrateTool.handler = (args, context) => (context?.isolateLongRunningWork ? integrateInChildProcess(args, context) : integrateInProcess(args));
+
+module.exports = { tools, integrateInProcess, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };

@@ -73,7 +73,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   'native-agent': ['prompt', 'shared-tree', 'unverified-transport', 'session', 'dir', 'name'],
   models: ['full'],
   route: ['ticket'],
-  'board-config': ['github-sync', 'jira-base-url', 'name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
+  'board-config': ['github-sync', 'jira-base-url', 'name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-quality', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
   board: [],
   projects: ['archived'],
   routing: ['enabled', 'disabled'],
@@ -97,7 +97,7 @@ const MUTATING_COMMANDS = new Set([
   'global-fallback', 'global_fallback',
 ]);
 
-const BOARD_CONFIG_MUTATING_OPTIONS = ['github-sync', 'jira-base-url', 'name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'];
+const BOARD_CONFIG_MUTATING_OPTIONS = ['github-sync', 'jira-base-url', 'name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-quality', 'integration-branch', 'worktree-isolation', 'verify-environment', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'];
 
 function namedEntitySubcommandMutates(positional: any[]): boolean {
   return positional.length > 0 && !['list', 'ls', 'get', 'show'].includes(String(positional[0]).toLowerCase());
@@ -292,7 +292,7 @@ const HELP_COMMANDS: any = {
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json',
   board: 'sidequest board move <old-path> <new-path> [--json]. Refuses active claims, nonterminal dispatches, sweep flights, a non-Git target, or an occupied target.',
-  'board-config': 'sidequest board-config [--github-sync off|comment|close] [--jira-base-url <url>] [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment isolated|shared] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
+  'board-config': 'sidequest board-config [--github-sync off|comment|close] [--jira-base-url <url>] [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-quality enforce|report|off] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment isolated|shared] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -482,7 +482,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--github-sync off|comment|close] [--jira-base-url <url>] [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment <isolated|shared>] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
+  sidequest board-config [--github-sync off|comment|close] [--jira-base-url <url>] [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-quality enforce|report|off] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--verify-environment <isolated|shared>] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
     --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.

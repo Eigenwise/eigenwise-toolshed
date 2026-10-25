@@ -64,6 +64,7 @@ const { sourceRevisionBaseline } = require("./source-revision-capability");
 const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdictOutcome, reviewVerdictHistory } = require("./kernel/review-binding.js");
 const { correctReviewVerdict, finalizeReviewVerdict } = require("./mcp-review-correction.js");
 const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
+const { fork } = require("node:child_process");
 const VERIFICATION_WAIVER_PROP = {
   type: "object",
   description: "Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.",
@@ -1310,7 +1311,52 @@ const tools = [
     }
   }
 ];
-for (const tool of tools) {
-  if (tool.name === "integrate") tool.handler = refusingTheEnvironmentLane(tool.handler);
+const INTEGRATION_CHILD_SCRIPT = path.join(__dirname, "integration-child.js");
+const INTEGRATION_PROGRESS_INTERVAL_MS = 3e4;
+const CHILD_MESSAGE_TYPES = ["progress", "result", "error"];
+function childMessage(raw) {
+  if (typeof raw !== "object" || raw === null || !("value" in raw)) return null;
+  const type = CHILD_MESSAGE_TYPES.find((candidate) => "type" in raw && raw.type === candidate);
+  return type ? { type, value: raw.value } : null;
 }
-module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };
+function integrationChildEnvironment() {
+  const sessionId = runtimeSessionId();
+  return sessionId ? { ...process.env, CLAUDE_CODE_SESSION_ID: sessionId } : { ...process.env };
+}
+function integrateInChildProcess(args, context) {
+  return new Promise((resolve, reject) => {
+    const child = fork(INTEGRATION_CHILD_SCRIPT, [], { execArgv: [], detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"], env: integrationChildEnvironment() });
+    let latest = `integrate ${args.ref}: starting`;
+    let settled = false;
+    const heartbeat = setInterval(() => context.progress(latest), INTEGRATION_PROGRESS_INTERVAL_MS);
+    const settle = (finish) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      finish();
+    };
+    const handlers = {
+      progress: (value) => {
+        latest = String(value);
+        context.progress(latest);
+      },
+      result: (value) => settle(() => resolve(value)),
+      error: (value) => settle(() => reject(new Error(String(value))))
+    };
+    child.on("message", (raw) => {
+      const message = childMessage(raw);
+      if (message) handlers[message.type](message.value);
+    });
+    child.once("error", (error) => settle(() => reject(error)));
+    child.once("close", (code, signal) => settle(() => reject(new Error(
+      `integrate: the delivery process for ${args.ref} exited (${signal || code}) before reporting an outcome. Call pulse ${args.ref} for the recorded integration state and gate log.`
+    ))));
+    context.progress(latest);
+    child.send({ args });
+  });
+}
+const integrateTool = tools.find((tool) => tool.name === "integrate");
+if (!integrateTool) throw new Error("mcp-lifecycle: the integrate tool is missing");
+const integrateInProcess = refusingTheEnvironmentLane(integrateTool.handler);
+integrateTool.handler = (args, context) => context?.isolateLongRunningWork ? integrateInChildProcess(args, context) : integrateInProcess(args);
+module.exports = { tools, integrateInProcess, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };

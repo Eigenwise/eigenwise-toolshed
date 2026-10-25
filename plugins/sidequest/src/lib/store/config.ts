@@ -151,6 +151,12 @@ function normalizeIntegrationMode(mode?: any) {
   return value;
 }
 
+function normalizeIntegrationQuality(value?: unknown): 'enforce' | 'report' | 'off' {
+  if (value == null) return 'enforce';
+  if (value === 'enforce' || value === 'report' || value === 'off') return value;
+  throw new Error('integrationQuality must be "enforce", "report", or "off".');
+}
+
 function normalizeIntegrationBranch(value?: any) {
   const branch = String(value == null ? 'main' : value).trim();
   if (!branch || branch === '@' || branch.startsWith('/') || branch.endsWith('/') || branch.endsWith('.')
@@ -400,6 +406,7 @@ function boardConfig(slug?: any) {
     deniedTools: normalizeDeniedTools(meta.deniedTools),
     generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
+    integrationQuality: normalizeIntegrationQuality(meta.integrationQuality),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     delivery: normalizeDeliveryMode(meta.delivery),
     integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
@@ -450,6 +457,7 @@ const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any, repository?: string
   deniedTools: normalizeDeniedTools,
   generatedPairs: normalizeGeneratedPairs,
   integrationMode: normalizeIntegrationMode,
+  integrationQuality: normalizeIntegrationQuality,
   integrationBranch: normalizeIntegrationBranch,
   delivery: normalizeDeliveryMode,
   integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs,

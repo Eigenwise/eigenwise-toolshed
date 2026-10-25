@@ -28,7 +28,15 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var integration_tests_exports = {};
 __export(integration_tests_exports, {
+  beginIntegrationProgress: () => beginIntegrationProgress,
+  deliveryOutcomeState: () => deliveryOutcomeState,
+  finishIntegrationProgress: () => finishIntegrationProgress,
+  integrationProgressPath: () => integrationProgressPath,
+  integrationProgressSummary: () => integrationProgressSummary,
   integrationTestBatches: () => integrationTestBatches,
+  onIntegrationProgress: () => onIntegrationProgress,
+  readIntegrationProgress: () => readIntegrationProgress,
+  reportIntegrationProgress: () => reportIntegrationProgress,
   runImportingIntegrationTests: () => runImportingIntegrationTests,
   selectIntegrationTests: () => selectIntegrationTests
 });
@@ -128,46 +136,189 @@ function pinnedTestFile(selection, file, patterns) {
   const localPathsApply = pluginPaths.length === 0 || pluginPaths.some((pattern) => pattern.startsWith(selection.plugin + "/")) || pluginPaths.includes(selection.plugin);
   return patterns.some((pattern) => localPathsApply && import_node_path.default.matchesGlob(file, pattern) || import_node_path.default.matchesGlob(`${selection.plugin}/${file}`, pattern));
 }
-function testFileCommand(project, plugin, file) {
+function performanceTest(file) {
+  return /(?:^|[./_-])(?:perf|benchmark)(?:[./_-]|$)/i.test(file);
+}
+function testScripts(project, plugin) {
   const manifestPath = import_node_path.default.join(project, plugin, "package.json");
-  const manifest = import_node_fs.default.existsSync(manifestPath) ? JSON.parse(import_node_fs.default.readFileSync(manifestPath, "utf8")) : {};
-  const runner = manifest.scripts?.["test:files"] ? "npm run test:files --" : "node --test";
-  return `${runner} --test-concurrency=1 ${quoteArgument(file.replaceAll("[", "[[]"))}`;
+  if (!import_node_fs.default.existsSync(manifestPath)) return {};
+  return JSON.parse(import_node_fs.default.readFileSync(manifestPath, "utf8")).scripts ?? {};
+}
+function pluginTestFiles(project, plugin) {
+  const root = import_node_path.default.join(project, plugin);
+  return directoryFiles(import_node_path.default.join(root, "test")).filter(importingTest).map((file) => import_node_path.default.relative(root, file).replaceAll("\\", "/")).sort();
+}
+function testBatchCommand(scripts, files, normalSuite) {
+  if (normalSuite && scripts.test) return "npm test";
+  const runner = scripts["test:files"] ? "npm run test:files --" : "node --test";
+  return runner + " --test-concurrency=1 " + files.map((file) => quoteArgument(file.replaceAll("[", "[[]"))).join(" ");
+}
+function pluginTestBatch(project, selection, patterns, timeoutMilliseconds) {
+  const files = selection.files.filter((file) => !performanceTest(file) && !pinnedTestFile(selection, file, patterns));
+  if (!files.length) return [];
+  const normalSuite = files.length > 40;
+  const batchFiles = normalSuite ? pluginTestFiles(project, selection.plugin).filter((file) => !performanceTest(file)) : files;
+  return [{
+    plugin: selection.plugin,
+    files: batchFiles,
+    command: testBatchCommand(testScripts(project, selection.plugin), batchFiles, normalSuite),
+    timeoutMilliseconds: Math.min(timeoutMilliseconds, 6e5)
+  }];
 }
 function integrationTestBatches(project, selections, pinnedCommand, timeoutMilliseconds) {
   if (/\btest:full\b/.test(pinnedCommand)) return [];
   const patterns = pinnedTestPatterns(pinnedCommand);
-  return selections.flatMap((selection) => selection.files.filter((file) => !pinnedTestFile(selection, file, patterns)).map((file) => ({
-    plugin: selection.plugin,
-    file,
-    command: testFileCommand(project, selection.plugin, file),
-    timeoutMilliseconds: Math.min(timeoutMilliseconds, 6e5)
-  })));
+  return selections.flatMap((selection) => pluginTestBatch(project, selection, patterns, timeoutMilliseconds));
 }
-function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment) {
-  const selections = selectIntegrationTests(project, changedPaths);
-  const batches = integrationTestBatches(project, selections, pinned.command || "", timeoutMilliseconds);
-  const results = [];
-  for (const batch of batches) {
-    if (pinned.status !== "passed") break;
-    const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing test file passes on the merged tree" }, {
+function selectionWithExclusions(project, selection) {
+  const excludedFiles = pluginTestFiles(project, selection.plugin).filter(performanceTest);
+  return { ...selection, excludedFiles };
+}
+function executeImportBatches(project, batches, pinned, environment) {
+  if (pinned.status !== "passed") return [];
+  const failures = [];
+  for (const [index, batch] of batches.entries()) {
+    reportIntegrationProgress("importing tests", `${batch.plugin}/${batch.files.join(", ")}`, { index: index + 1, count: batches.length });
+    const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing tests pass on the merged tree" }, {
       cwd: import_node_path.default.join(project, batch.plugin),
       timeoutMilliseconds: batch.timeoutMilliseconds,
-      logPath: `${pinned.logPath}.import-${results.length}.log`,
+      logPath: pinned.logPath + ".import-" + index + ".log",
       environment
     });
-    results.push(result);
-    if (result.status !== "passed") return { ...result, integrationTests: selections, importingTestResults: results };
+    if (result.status !== "passed") {
+      failures.push(result);
+      break;
+    }
   }
-  return { ...pinned, integrationTests: selections, importingTestResults: results };
+  return failures;
+}
+function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment) {
+  const started = Date.now();
+  const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
+  const batches = integrationTestBatches(project, selections, pinned.command || "", timeoutMilliseconds);
+  const failures = executeImportBatches(project, batches, pinned, environment);
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, exclusionReason: "Wall-clock performance and benchmark tests remain in CI and test:full." };
+  if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk gate: " + JSON.stringify({ ...importingTestSummary, selections, batches }) + "\n");
+  return { ...failures[0] ?? pinned, integrationTests: selections, importingTestResults: failures, importingTestSummary };
 }
 function selectIntegrationTests(project, changedPaths) {
   const pluginNames = changedPaths.map((file) => /^plugins\/([^/]+)\//.exec(file.replaceAll("\\", "/"))?.[1]).filter((name) => name !== void 0);
   return Array.from(new Set(pluginNames), (plugin) => pluginSelection(project, plugin, changedPaths));
 }
+const progressListeners = /* @__PURE__ */ new Set();
+let activeProgress = null;
+function integrationProgressPath(boardDirectory, ref) {
+  return import_node_path.default.join(boardDirectory, "integrations", `${ref.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`);
+}
+function onIntegrationProgress(listener) {
+  progressListeners.add(listener);
+  return () => {
+    progressListeners.delete(listener);
+  };
+}
+function writeProgressFile(file, record) {
+  try {
+    import_node_fs.default.mkdirSync(import_node_path.default.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    import_node_fs.default.writeFileSync(temporary, JSON.stringify(record));
+    import_node_fs.default.renameSync(temporary, file);
+  } catch {
+    try {
+      import_node_fs.default.writeFileSync(file, JSON.stringify(record));
+    } catch {
+    }
+  }
+}
+function publishProgress() {
+  if (!activeProgress) return;
+  const { files, record } = activeProgress;
+  for (const file of files) writeProgressFile(file, record);
+  for (const listener of progressListeners) {
+    try {
+      listener(record);
+    } catch {
+    }
+  }
+}
+function beginIntegrationProgress(files, refs, logPath) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  activeProgress = {
+    files,
+    record: { state: "running", refs, logPath, phase: "merging", currentFile: null, fileIndex: null, fileCount: null, startedAt: now, updatedAt: now, pid: process.pid }
+  };
+  publishProgress();
+}
+function reportIntegrationProgress(phase, currentFile = null, position = null) {
+  if (!activeProgress) return;
+  activeProgress.record = {
+    ...activeProgress.record,
+    phase,
+    currentFile,
+    fileIndex: position ? position.index : null,
+    fileCount: position ? position.count : null,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  publishProgress();
+}
+function integrationProgressSummary(progress) {
+  const file = progress.currentFile ? ` ${progress.currentFile}` : "";
+  const position = progress.fileIndex ? ` (${progress.fileIndex}/${progress.fileCount})` : "";
+  return `integrate ${progress.refs}: ${progress.phase}${file}${position}`;
+}
+function deliveryOutcomeState(outcome) {
+  if (outcome.ok) return "delivered";
+  const reason = String(outcome.reason || "");
+  if (reason.endsWith("rollback_failed")) return "rollback_failed";
+  return /_(?:post_merge|wave_delivery)$/.test(reason) ? "rolled_back" : "refused";
+}
+function finishIntegrationProgress(outcome) {
+  if (!activeProgress) return;
+  const state = deliveryOutcomeState(outcome);
+  activeProgress.record = {
+    ...activeProgress.record,
+    state,
+    phase: "finished",
+    currentFile: null,
+    fileIndex: null,
+    fileCount: null,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    ...state === "delivered" ? {} : { reason: String(outcome.reason || "unknown") }
+  };
+  publishProgress();
+  activeProgress = null;
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+function isIntegrationProgress(value) {
+  return typeof value === "object" && value !== null && "state" in value && "refs" in value && "pid" in value;
+}
+function readIntegrationProgress(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(import_node_fs.default.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isIntegrationProgress(parsed)) return null;
+  return parsed.state === "running" ? { ...parsed, writerAlive: processAlive(Number(parsed.pid)) } : parsed;
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  beginIntegrationProgress,
+  deliveryOutcomeState,
+  finishIntegrationProgress,
+  integrationProgressPath,
+  integrationProgressSummary,
   integrationTestBatches,
+  onIntegrationProgress,
+  readIntegrationProgress,
+  reportIntegrationProgress,
   runImportingIntegrationTests,
   selectIntegrationTests
 });
