@@ -1,10 +1,10 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+const { execFileSync, spawnSync } = require('node:child_process');
 
-export function experimentRoundRef(ref: string, round: number | string): string {
+function experimentRoundRef(ref: string, round: number | string): string {
   return `refs/sidequest-rounds/${ref}/r${round}`;
 }
 
-export function resolveExperimentRoundRef(project: string, ref: string, round: number): string {
+function resolveExperimentRoundRef(project: string, ref: string, round: number): string {
   const target = experimentRoundRef(ref, round);
   const current = spawnSync('git', ['show-ref', '--verify', '--quiet', target], { cwd: project, windowsHide: true });
   if (current.status === 0) return target;
@@ -28,7 +28,7 @@ function migrateExperimentRound(project: string, name: string, commit: string, r
   });
 }
 
-export function migrateExperimentRoundRefs(project: string, ref: string): void {
+function migrateExperimentRoundRefs(project: string, ref: string): void {
   const repository = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: project, windowsHide: true });
   if (repository.status !== 0) return;
   const prefix = `refs/sidequest/${ref}/`;
@@ -40,3 +40,6 @@ export function migrateExperimentRoundRefs(project: string, ref: string): void {
     if (/^r[1-9]\d*$/.test(name.slice(prefix.length))) migrateExperimentRound(project, name, commit, ref);
   }
 }
+
+module.exports = { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs };
+
