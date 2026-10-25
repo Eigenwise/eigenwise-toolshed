@@ -564,13 +564,17 @@ function cleanupErrorResult(run: VerifierRun, shell: ShellCommand, outcome: Spaw
   return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
 }
 
+function ownerReportedFailureResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, report: VerifierReport): VerificationResult | null {
+  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
+  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+}
+
 // The verifier's own exit code passes nothing while its tree may still be running (SQ-3480), or
 // when the owner died before it reported how the run ended (SQ-3484).
 function abnormalVerifierResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, report: VerifierReport): VerificationResult | null {
   if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail, report);
   if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
-  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
-  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+  return ownerReportedFailureResult(run, shell, outcome, tail, report);
 }
 
 function exitCodeResult(run: VerifierRun, shell: ShellCommand, outcome: SpawnOutcome, tail: string, exitCode: number | null): VerificationResult {

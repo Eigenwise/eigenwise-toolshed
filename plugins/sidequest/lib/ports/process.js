@@ -391,11 +391,14 @@ function cleanupErrorResult(run, shell, outcome, tail, exitCode, cleanupError) {
   const verdict = exitCodeVerdict(run, shell, exitCode, tail);
   return Object.freeze({ ...verdict, evidence: `${verdict.evidence} Its process tree did not end either: ${cleanupError}` });
 }
+function ownerReportedFailureResult(run, shell, outcome, tail, report) {
+  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
+  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+}
 function abnormalVerifierResult(run, shell, outcome, tail, report) {
   if (processTimedOut(outcome.error) || report.timedOut) return timeoutResult(run, shell, outcome, tail, report);
   if (!report.done) return unreportedOwnerResult(run, shell, outcome, tail);
-  if (report.phaseError !== null) return shellNeverStartedResult(run, shell, outcome, tail, report);
-  return report.cleanupError === null ? null : cleanupErrorResult(run, shell, outcome, tail, report.exitCode, report.cleanupError);
+  return ownerReportedFailureResult(run, shell, outcome, tail, report);
 }
 function exitCodeResult(run, shell, outcome, tail, exitCode) {
   if (exitCode !== null) return exitCodeVerdict(run, shell, exitCode, tail);
