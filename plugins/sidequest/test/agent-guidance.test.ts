@@ -20,6 +20,15 @@ const readonlyGuidance = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 const activeGuidance = [skill, orchestration, executorTemplate];
 
+test('claimed dispatch guidance names the abandon rule and launching-session recovery', () => {
+  assert.match(orchestration, /24-hour abandon backstop \(`SIDEQUEST_CLAIM_ABANDON_MIN`\)/);
+  assert.match(orchestration, /one-hour idle rule \(`SIDEQUEST_CLAIM_IDLE_MIN`\) applies only to claims without a dispatch or verification marker/);
+  assert.match(orchestration, /launching session can release it with `sidequest release <ref> --by <claim name>`/);
+  assert.match(orchestration, /`pulse` and list expose `staleRule` \(`abandon` or `idle`\) alongside `staleAfterMs`/);
+  assert.match(orchestration, /Compact MCP `pulse` keeps both claim fields/);
+  assert.doesNotMatch(orchestration, /DID claim[\s\S]{0,100}hour-long idle backstop/);
+});
+
 test('published guidance excludes retired instructions', () => {
   assert.doesNotMatch(orchestration, /ephemeral|registration wait|waiting for registration/);
   assert.doesNotMatch(executorTemplate, /sidequest submit <ref>/);

@@ -36,6 +36,7 @@ export interface IntegrationQuality {
   failures: unknown[];
   unverified: QualityRow[];
   captureGap?: string;
+  debtTicketNote?: string;
   coverageSupport?: string;
   mode?: IntegrationQualityMode;
   worstBody?: QualityRow;

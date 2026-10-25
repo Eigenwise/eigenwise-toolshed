@@ -204,7 +204,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   launch, a refused claim, a failed or cancelled WorktreeCreate, the Agent call returning with no claim) has no
   claim to release and no TaskStop to make: the one recovery is `recoveryEvidence`. **The session that prepared
   the dispatch is the authority:** it spawned the runtime, so the host's failure text or the returned Agent call is
-  proof the board never receives, and its evidence retires the attempt at once, grace or idle backstop
+  proof the board never receives, and its evidence retires the unclaimed attempt at once, grace or unclaimed-attempt idle backstop
   notwithstanding (SQ-3110). Any other session uses it only when `pulse` reports the unclaimed attempt as
   `stalled`: it has no readable runtime signal, or its deadline has passed. Retire it in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
@@ -217,11 +217,23 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   is requested. It refuses while the attempt is still inside the grace, and once it is claimed,
   checkpointed, or terminal; the refusal names which of those it found and, for an unclaimed one, the exact instant
   it becomes retirable, the minutes left until then, and the runtime signal it measured from. An attempt that
-  DID claim is untouched by the grace and still waits for the hour-long idle backstop.
+  DID claim is untouched by the grace. Claimed dispatched attempts and claims with a verification marker
+  wait for the 24-hour abandon backstop (`SIDEQUEST_CLAIM_ABANDON_MIN`) after the holder's last board activity,
+  unless a durable terminal record proves the executor stopped. The one-hour idle rule (`SIDEQUEST_CLAIM_IDLE_MIN`) applies only to claims without a dispatch or verification marker.
+  `pulse` and list expose `staleRule` (`abandon` or `idle`) alongside `staleAfterMs`; the rule names the age
+  threshold, not proof of process death. Compact MCP `pulse` keeps both claim fields, so callers can
+  interpret `stale` without a second full read.
+  **Known-dead claimed executor, no terminal record.** Once the host confirms the executor died, the
+  launching session can release it with `sidequest release <ref> --by <claim name>` (MCP `release` with
+  `by` equal to `claim.by`), then dispatch a replacement. Preserve its work. MCP release also requires a
+  classification and evidence. Your own orchestrator name is refused as `not_owner`; use this recovery only
+  from the launching session that observed the death. A quiet executor alone
+  supplies no death evidence. `dispatch --recovery-evidence` currently refuses a claimed attempt without a
+  terminal record; GH-409 tracks that missing-terminal recovery path. Use claim release until that path ships.
   **What the grace actually is.** `recoveryEvidence` is your attestation and the board does not verify it:
   any text is accepted. So the grace is the ONLY mechanical protection against retiring a runtime that is
   still starting, and an elapsed grace does not prove the runtime is gone. It is 15 minutes
-  (`SIDEQUEST_CLAIM_GRACE_MIN`, clamped to the idle backstop) measured from the newest runtime signal:
+  (`SIDEQUEST_CLAIM_GRACE_MIN`, clamped to `SIDEQUEST_CLAIM_IDLE_MIN`, one hour by default) measured from the newest runtime signal:
   launch, WorktreeCreate start and completion, finished worktree provisioning, SubagentStart bind,
   briefing fetch, claim, or a board write from that runtime itself. The launcher session is the trust boundary
   for that eighth signal, and it is a wide one: you and every fan-out sibling write on it, so a board write
@@ -234,7 +246,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   Each signal pushes the deadline out because a gateway first turn, a briefing fetch,
   and a pre-claim skill load are all legitimately slow. Preparing the dispatch is not one of those signals, so an
   attempt that recorded none of them, a spawn that never started, is retirable at once. An attempt whose WorktreeCreate has not recorded
-  finished provisioning (a cold `npm ci` is minutes of silence) waits for the idle backstop. One authority answers this
+  finished provisioning (a cold `npm ci` is minutes of silence) waits for the unclaimed-attempt idle backstop (`SIDEQUEST_CLAIM_IDLE_MIN`, one hour by default). One authority answers this
   for every route, so `groomClose` with `recoveryEvidence` refuses with the same countdown the dispatch call prints, and
   `sidequest groom-close --recovery-evidence` is that same authority rather than a second implementation: both surfaces
   print the same refusal inside the deadline and retire-and-close together past it. Retiring an attempt whose runtime is still
@@ -249,6 +261,17 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   session and the checkout. It refuses `stale_attempt` when a retired attempt still holds the checkout rather than
   handing a late hook some other live attempt, and refuses `missing_attempt` rather than letting a generation-less
   second caller acquire the live generation of a checkout that is still being created.
+  **Nothing in a WorktreeCreate payload names the Agent call or the ticket** (Claude Code 2.1.310 sends session id,
+  cwd, prompt id and the `agent-<id>` name it generates inside the call), so same-message siblings are attributed in
+  creation order and the claim settles the guess. So an unclaimed isolated briefing prints no worktree path (Path,
+  Expected worktree root and verify-capture `--worktree` name the claim result instead), and every isolated claim
+  result carries the settled `worktree` (GH-640). A claim from a linked checkout the lease does not record, which no
+  swap can settle, is denied by the claim hook with `worktree_lease_crossed` naming both paths and is never admitted
+  (GH-648); the executor stops without writing and reports it, and the orchestrator redispatches. The hook also follows the session id to one board, so `dispatch`
+  refuses an isolated dispatch while this session holds a PREPARED or launched isolated dispatch on another board,
+  from either side (GH-665): prepare and spawn one board's batch, let it claim or finish, then the other's.
+  A prepared dispatch you will not spawn keeps counting until the prepared-dispatch TTL sweep expires it (6h); the
+  refusal names the `dispatch` call with `recoveryEvidence` and `retireOnly: true` that retires it at once (SQ-3936).
   **A WorktreeCreate that fails before its checkout exists** (lease refusal, an occupied destination, a failed
   `git worktree add`) records the attempt `failed` with `worktree_create_failed` and the hook error, and clears its
   binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`. While another

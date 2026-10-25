@@ -178,6 +178,15 @@ export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWor
     + ' The orchestrator then redispatches it onto a checkout of its own and salvages any commit by hash.';
 }
 
+// Refused before the claim exists, so live-claim recovery has nothing to rebind yet: the remedy is the orchestrator's.
+export function crossedClaimLeaseMessage(ref: string, lease: { expected: string; observed: string }): string {
+  // The code and the instruction come first: the PreToolUse budget (768 bytes) cuts the tail, and two Windows
+  // temp-directory paths alone can fill it.
+  return `sidequest: refused claim of ${ref}; code worktree_lease_crossed: this executor's checkout is not the worktree its dispatch lease records, and the claim could not prove an exact crossing to swap, so claiming here would succeed with every later write refused.`
+    + ` Stop without claiming and write nothing. Tell the orchestrator ${ref}'s worktree binding is crossed, quoting this refusal, so it can redispatch the ticket onto a checkout of its own.`
+    + ` Observed ${lease.observed}; recorded ${lease.expected}.`;
+}
+
 export function routingDisabledMessage(ref: string): string {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }
@@ -188,13 +197,13 @@ export function manualCandidateDeliveryGuidance(): string {
 
 export function candidateReviewRequiredGuidance(): string {
   return 'A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it.'
-    + ' The two sides are held to different proof. The submitting side may identify itself by the attempt\'s hook-bound agent id, or by the token prefix and agent name recorded against a proven claim-token binding; an attempt older than bind-source recording proves that binding through its recorded bind time instead.'
+    + ' The two sides are held to different proof. The submitting side may identify itself by the attempt\'s hook-bound agent id, by the token prefix and agent name recorded against a proven claim-token binding, or by the main-attestation session a main-thread direct claim records; an attempt older than bind-source recording proves that binding through its recorded bind time instead.'
     + ' The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those.'
     + ' Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing.'
     + ' If the review never ran to a terminal done attempt, dispatch it and let it close normally.'
     + ' If it reviewed a different candidate, that candidate needs its own bound review.'
     + ' If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally.'
-    + ' If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers it: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate.'
+    + ' If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers this candidate: dispatch, rework, and reclaim all refuse it while it is under review, so carry the same change on a fresh ticket, review that candidate, and retire this one with supersede_submission once the fresh one integrates.'
     + ' Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.';
 }
 

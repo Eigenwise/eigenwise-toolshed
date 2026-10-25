@@ -31,6 +31,7 @@ interface Pulse {
     by: string;
     lastBoardActivityAt: string | null;
     reclaimable: string | null;
+    staleRule: 'abandon' | 'idle';
     verifying: boolean;
   };
   lastComment: { at: string; by: string; kind: string; body: string };
@@ -84,8 +85,10 @@ test('seed telemetry fixture', () => {
 
 test('CLI and MCP pulse return the compact liveness shape with git activity', async () => {
   const pulse = cliJson<Pulse>(['pulse', ref]);
-  assert.deepStrictEqual(Object.keys(pulse).sort(), ['archived', 'checkpoint', 'claim', 'claimHeld', 'comments', 'delivery', 'died', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastComment', 'liveness', 'livenessEvidence', 'project', 'projectName', 'reclaimable', 'ref', 'refs', 'scope', 'status', 'submission', 'title']);
-  assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'boardQuietMs', 'boardQuietNote', 'by', 'lastBoardActivityAt', 'reclaimable', 'stale', 'staleAfterMs', 'verifying']);
+  assert.deepStrictEqual(Object.keys(pulse).sort(), ['archived', 'checkpoint', 'claim', 'claimHeld', 'comments', 'delivery', 'died', 'direct', 'dispatch', 'dispatchExecutor', 'externalDeliverable', 'git', 'lastComment', 'liveness', 'livenessEvidence', 'project', 'projectName', 'reclaimable', 'ref', 'refs', 'scope', 'status', 'submission', 'title']);
+  assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'boardQuietMs', 'boardQuietNote', 'by', 'lastBoardActivityAt', 'reclaimable', 'stale', 'staleAfterMs', 'staleRule', 'verifying']);
+  assert.strictEqual(pulse.claim.staleRule, 'idle');
+  assert.strictEqual(pulse.externalDeliverable, false);
   assert.strictEqual(pulse.claim.verifying, false);
   assert.match(pulse.claim.boardQuietNote, /not process liveness/);
   assert.strictEqual(pulse.claim.reclaimable, null, 'a working claim is never reclaimable');
@@ -95,7 +98,11 @@ test('CLI and MCP pulse return the compact liveness shape with git activity', as
   assert.match(pulse.git.commitNote, /declared files.*differ from repository HEAD/);
   assert.strictEqual(pulse.git.dirty, false);
   assert.match(pulse.git.dirtyNote, /declared files.*not repository-wide/);
+  const compact = await callTool<Pulse>('pulse', { ref });
+  assert.deepStrictEqual(Object.keys(compact.claim).sort(), Object.keys(pulse.claim).sort());
+  assert.strictEqual(compact.claim.staleRule, 'idle');
   const viaMcp = await callTool<Pulse>('pulse', { ref, full: true });
+  assert.strictEqual(viaMcp.claim.staleRule, 'idle');
   assert.strictEqual(viaMcp.ref, ref);
   assert.strictEqual(viaMcp.git.commit.hash, pulse.git.commit.hash);
 });

@@ -82,11 +82,12 @@ function attestationErrors(value?: any, artifact?: any) {
   const observedArtifact = String(artifact || '').trim();
   if (!observedArtifact) return ['verifyKind: attestation requires attestationArtifact: name the URL, file, frame, or returned count that was observed.'];
   if (!evidence) return [];
-  const expected = `attestation: ${observedArtifact} | `;
+  const expectedArtifact = `attestation: ${observedArtifact}`;
+  const expected = `${expectedArtifact} | `;
   const receivedArtifact = evidence.split('|', 1)[0]?.trim() || '';
   const evidenceParts = evidence.slice(expected.length).split('|').map((part) => part.trim());
   if (!evidence.startsWith(expected) || evidenceParts.length !== 2 || evidenceParts.some((part) => !part)) {
-    return [`verify must use ${ATTESTATION_FORMAT}; its first segment must equal attestationArtifact verbatim. Expected prefix: \`${expected}\`. Received first segment: \`${receivedArtifact}\`.`];
+    return [`verify must use ${ATTESTATION_FORMAT}; its first segment must equal attestationArtifact verbatim. Expected first segment: \`${expectedArtifact}\`. Received first segment: \`${receivedArtifact}\`.`];
   }
   return [];
 }
@@ -1049,12 +1050,22 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   return warnings.map((warning) => `Dispatch warning: ${warning}`);
 }
 
+// The briefing renders from the executor's own cwd, which is a linked worktree by design for an isolated dispatch,
+// so the leftover-worktree warning fired on every healthy isolated briefing (GH-640).
+function cwdIsOwnIsolatedWorktree(cwd: string, dispatch: any): boolean {
+  const ownWorktree = String(dispatch.worktree || '').trim();
+  if (!ownWorktree || dispatch.sharedTree === true) return false;
+  const relative = path.relative(canonicalPath(ownWorktree), canonicalPath(cwd));
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 function preparedDispatchWarnings(dispatch?: any, projectPath?: any): string[] {
   if (!dispatch) return [];
+  const cwd = process.cwd();
   return [
     dispatch.fallbackReason ? `Route fallback: ${dispatch.fallbackReason}` : null,
     worktreeSetupIncompleteWarning(dispatch),
-    staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true),
+    cwdIsOwnIsolatedWorktree(cwd, dispatch) ? null : staleWorktreeCwdWarning(cwd, projectPath, dispatch.sharedTree === true),
   ].filter((warning): warning is string => Boolean(warning));
 }
 

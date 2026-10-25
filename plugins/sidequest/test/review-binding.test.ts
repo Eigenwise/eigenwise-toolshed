@@ -786,6 +786,7 @@ test('public wave assembly keeps overlap protection for an accepted pending cand
 
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'candidate_overlap');
+  assert.match(refused.conflicts[0].evidence, /Trial merge could not run, so the changed-path overlap stands/);
   assert.match(refused.message, new RegExp(`${participant.ref} and ${acceptedSibling.ref}`));
 });
 
@@ -937,6 +938,17 @@ async function completedNormalReviewFixture(label: string, readonly = true) {
   const source = submittedSource(slug, commit, label, { admittedScope: ['candidate.txt'] });
   const review = store.createTicket(slug, { title: `normal review ${label}`, category: 'review-audit',
     readonly, route: { model: 'sonnet', effort: 'high' }, files: ['candidate.txt'] }, { ref: source.ref, commit });
+  await completeReviewThroughDispatch(repository, slug, review.ref, label);
+  const input = { by: 'native-owner', sessionId: 'synthetic-main-finalization', text: 'Explicit candidate decision',
+    evidence: 'Original completed independent review report', outcome: 'accepted' as const,
+    expected: { sourceRef: source.ref, candidate: { source: 'git', value: commit } } };
+  return { repository, slug, commit, source, review: store.getTicket(slug, review.ref), input };
+}
+
+// The real reviewer lifecycle: an isolated dispatch whose runtime binds through
+// its worktree creation, claims with its token, and closes with public done.
+async function completeReviewThroughDispatch(repository: string, slug: string, reviewRef: string, label: string) {
+  const review = store.getTicket(slug, reviewRef);
   const session = `normal-review-session-${label}`;
   const by = `independent-reviewer-${label}`;
   const prepared = store.prepareDispatch(slug, review.ref, { sharedTree: false, sessionId: session, runtimeCwd: repository });
@@ -953,10 +965,6 @@ async function completedNormalReviewFixture(label: string, readonly = true) {
   const done = await tool('done').handler({ project: repository, ref: review.ref, by,
     body: 'ACCEPTED. Inspected the exact immutable synthetic candidate and its original range.' });
   assert.equal(done.ok, true, JSON.stringify(done));
-  const input = { by: 'native-owner', sessionId: 'synthetic-main-finalization', text: 'Explicit candidate decision',
-    evidence: 'Original completed independent review report', outcome: 'accepted' as const,
-    expected: { sourceRef: source.ref, candidate: { source: 'git', value: commit } } };
-  return { repository, slug, commit, source, review: store.getTicket(slug, review.ref), input };
 }
 
 // The verdict handler reads the runtime session from the host environment; CI has none, so a
@@ -1839,7 +1847,9 @@ test('a submitting attempt that bound nothing refuses with the reason it cannot 
   assert.equal(refused.reason, 'candidate_review_required');
   assert.match(refused.message, /recorded no runtime binding on the terminal attempt that submitted the candidate/);
   assert.match(refused.message, /older than bind-source recording still resolves through that bind time/, 'the refusal names why no recovery applies');
-  assert.match(refused.message, /re-dispatch the ticket so the replacement attempt binds/);
+  assert.match(refused.message, /cannot be redispatched, reworked, or reclaimed/);
+  assert.match(refused.message, /fresh ticket carrying the same change/, 'the refusal names the route that works');
+  assert.doesNotMatch(refused.message, /re-dispatch (the|that) ticket/, 'dispatch refuses a submitted ticket, so it is never the recourse');
 });
 
 test('a live attempt that records bindSource never falls back to its bind time', () => {
@@ -2039,4 +2049,89 @@ test('GH-215: a write-scoped bound review closes with done when it never used it
   const closed = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
   assert.equal(closed.ok, true, closed.message);
   assert.equal(store.getTicket(slug, review.ref).status, 'done');
+});
+
+// GH-654. The main thread claims directly and submits through the ordinary store
+// path; priorDispatch leaves behind the terminal record of an earlier executor
+// whose runtime fields the direct claim must not inherit.
+function directClaimSubmittedSource(label: string, priorDispatch: boolean, sessionId: string | null) {
+  const { repository, slug } = board(`direct-${label}`);
+  const source = store.createTicket(slug, { title: `direct source ${label}`, files: ['candidate.txt'], route: { model: 'sonnet', effort: 'high' } });
+  if (priorDispatch) {
+    const prepared = store.prepareDispatch(slug, source.ref, { sharedTree: true, sessionId: 'earlier-orchestration', runtimeCwd: repository });
+    assert.ok(prepared.token, JSON.stringify(prepared));
+    const released = store.getTicket(slug, source.ref);
+    Object.assign(released.dispatch, { outcome: 'released', terminalAt: new Date().toISOString(), agentId: 'earlier-executor', bindSource: 'claim_runtime_identity' });
+    released.dispatchNonce = null;
+    released.dispatchExecutor = null;
+    persist(slug, released);
+  }
+  const by = `main-thread-${label}`;
+  const session = sessionId ? { sessionId } : {};
+  const claim = store.claimTicket(slug, source.ref, by, { direct: true, reason: 'The GH-654 fixture is a main-thread direct claim.', ...session });
+  assert.equal(claim.ok, true, claim.message);
+  fs.writeFileSync(path.join(repository, 'candidate.txt'), `direct candidate ${label}\n`);
+  git(repository, ['commit', '-am', `direct candidate ${label}`]);
+  const commit = git(repository, ['rev-parse', 'HEAD']);
+  const submitted = store.submitTicket(slug, source.ref, by, { commit, verify: 'manual: fixture candidate inspected', ...session });
+  assert.equal(submitted.ok, true, submitted.message);
+  return { repository, slug, commit, sourceRef: source.ref };
+}
+
+function boundReviewOf(slug: string, sourceRef: string, commit: string, label: string) {
+  return store.createTicket(slug, { title: `review ${label}`, category: 'review-audit', readonly: true,
+    route: { model: 'sonnet', effort: 'high' }, files: ['candidate.txt'] }, { ref: sourceRef, commit });
+}
+
+test('GH-654: a main-thread direct claim submits a candidate an independent review finalizes and integration admits', async () => {
+  for (const priorDispatch of [false, true]) {
+    const label = priorDispatch ? 'after-dispatch' : 'undispatched';
+    const mainSession = `main-session-${label}`;
+    const { repository, slug, commit, sourceRef } = directClaimSubmittedSource(label, priorDispatch, mainSession);
+    assert.equal(reviewBinding.submittedSourceIdentity(store.getTicket(slug, sourceRef))?.identity, `main:${mainSession}`,
+      `${label}: the direct claim records the main-thread session as the submitting identity, not the earlier executor`);
+
+    const review = boundReviewOf(slug, sourceRef, commit, label);
+    await completeReviewThroughDispatch(repository, slug, review.ref, `gh654-${label}`);
+    const provenance = reviewBinding.reviewProvenance(store.getTicket(slug, sourceRef), store.getTicket(slug, review.ref));
+    assert.equal(provenance.reason, 'ok', `${label}: ${JSON.stringify(provenance)}`);
+
+    const previousSession = process.env.CLAUDE_CODE_SESSION_ID;
+    try {
+      process.env.CLAUDE_CODE_SESSION_ID = mainSession;
+      const accepted = tool('verdict').handler({ project: repository, ref: review.ref, by: 'orchestrator', outcome: 'accepted',
+        text: 'Independent review accepted the direct-claim candidate.', finalize: { sourceRef, commit, evidence: 'Completed bound review report' } });
+      assert.equal(accepted.ok, true, `${label}: ${JSON.stringify(accepted)}`);
+    } finally {
+      if (previousSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = previousSession;
+    }
+    assert.equal(store.getTicket(slug, sourceRef).submission.review.outcome, 'accepted');
+    const readiness = store.validateIntegrationSubmission(slug, sourceRef, {});
+    assert.equal(readiness.ok, true, `${label}: ${JSON.stringify(readiness.message || readiness.reason)}`);
+  }
+});
+
+test('GH-654: main attestation never identifies a reviewer', () => {
+  const { slug, commit, sourceRef } = directClaimSubmittedSource('reviewer-side', false, 'main-session-reviewer-side');
+  const review = boundReviewOf(slug, sourceRef, commit, 'reviewer-side');
+  const done = store.getTicket(slug, review.ref);
+  const terminalAt = new Date().toISOString();
+  done.status = 'done';
+  done.dispatch = { terminalAt, outcome: 'done', attempts: [{ outcome: 'done', bindSource: 'main_attestation', sessionId: 'another-main-session', terminalAt }] };
+  persist(slug, done);
+  const provenance = reviewBinding.reviewProvenance(store.getTicket(slug, sourceRef), store.getTicket(slug, review.ref));
+  assert.equal(provenance.reason, 'agent_identity_missing');
+  assert.equal(provenance.reviewer, null, 'only a hook-bound agent id identifies the reviewing runtime');
+});
+
+test('GH-654: binding refuses a candidate whose submitting attempt recorded no identity, before any review exists', () => {
+  const { slug, commit, sourceRef } = directClaimSubmittedSource('sessionless', true, null);
+  const before = JSON.stringify(store.getTicket(slug, sourceRef));
+  assert.throws(() => boundReviewOf(slug, sourceRef, commit, 'sessionless'),
+    /recorded no runtime identity.*Nothing was bound.*rework .*dispatch it so the replacement attempt binds/s);
+  assert.equal(JSON.stringify(store.getTicket(slug, sourceRef)), before, 'the refused bind leaves the source untouched');
+  assert.equal(store.listTickets(slug).some((ticket: any) => ticket.title === 'review sessionless'), false, 'no review ticket was created');
+  assert.equal(store.claimTicket(slug, sourceRef, 'anyone', { direct: true, reason: 'probe that the candidate is still unbound.' }).reason, 'submitted',
+    'the candidate stays an ordinary unbound submission, not a review-locked one');
 });

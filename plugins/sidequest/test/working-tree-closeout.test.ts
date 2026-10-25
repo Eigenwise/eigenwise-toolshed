@@ -101,3 +101,95 @@ test('outside dirt cannot replace an empty own deliverable', () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'working_tree_delivery_empty');
 });
+
+
+test('manual delivery records both commits of a reachable submitted range', () => {
+  const { slug, git, write } = fixture();
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: 'main' });
+  const base = git(['rev-parse', 'HEAD']).toString().trim();
+  write('first.md', 'First commit');
+  git(['add', 'first.md']);
+  git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'first']);
+  const first = git(['rev-parse', 'HEAD']).toString().trim();
+  write('second.md', 'Second commit');
+  git(['add', 'second.md']);
+  git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'second']);
+  const candidate = git(['rev-parse', 'HEAD']).toString().trim();
+  const ticket = store.createTicket(slug, { title: 'Two-commit manual delivery', files: ['first.md', 'second.md'] });
+  const gitRef = 'refs/sidequest/' + ticket.ref;
+  git(['update-ref', gitRef, candidate]);
+  ticket.status = 'doing';
+  ticket.submission = {
+    commit: candidate, base, gitRef, commits: [first, candidate],
+    upstream: 'main', upstreamCommit: base, integrationMode: 'local', integrationBranch: 'main',
+    admittedScope: ['first.md', 'second.md'], changedPaths: ['first.md', 'second.md'],
+    verify: 'node -e "process.exit(0)"', integratedAt: null,
+  };
+  const database = require('../lib/db.js');
+  database.putRow(database.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: 0, ord: ticket.order, claim_by: null, data: ticket,
+  });
+  const result = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    by: 'integrator', purpose: 'delivery', deliveryCommit: candidate,
+    reason: 'Both submitted commits reached main.',
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(store.getTicket(slug, ticket.ref).submission.integration.deliveredFiles, ['first.md', 'second.md']);
+});
+
+test('manual squash delivery with partial quality gaps files debt without the candidate release fragment', () => {
+  const { project, slug, git, write } = fixture();
+  const previousHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  const gateHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closeout-quality-'));
+  try {
+    const gate = path.join(gateHome, 'gate');
+    fs.mkdirSync(path.join(gateHome, 'plugins'), { recursive: true });
+    fs.mkdirSync(path.join(gate, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(gate, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(gate, 'lib', 'core.mjs'), '');
+    fs.writeFileSync(path.join(gateHome, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: gate }],
+    } }));
+    const missing = { relativePath: 'source.js', name: 'missingBody', complexity: 2, classification: 'new', unverified: 'no authentic executed source map' };
+    const covered = { relativePath: 'source.js', name: 'coveredBody', complexity: 1, classification: 'new', crap: 1 };
+    fs.writeFileSync(path.join(gate, 'bin', 'quality-gate.js'), 'process.stdout.write(' + JSON.stringify(JSON.stringify({ changedMetrics: [missing, covered], unverified: [missing], failures: [] })) + ');');
+    process.env.SIDEQUEST_CLAUDE_HOME = gateHome;
+    const category = store.getCategory('codebase-exploration');
+    store.setCategory({ ...category, route: { model: 'sonnet', effort: 'medium' }, fallback: null });
+    const ticket = store.createTicket(slug, {
+      title: 'Manual quality debt delivery', category: 'codebase-exploration', files: ['source.js'],
+      executorVerifyKind: 'command', executorVerify: 'node -e "process.exit(0)"', source: 'test',
+    });
+    git(['checkout', '-b', 'candidate']);
+    write('source.js', 'function missingBody() { return true; }');
+    const fragment = '.release/unreleased/' + ticket.ref + '.md';
+    write(fragment, 'Candidate release');
+    git(['add', '--', 'source.js', fragment]);
+    git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'candidate']);
+    const candidate = git(['rev-parse', 'HEAD']).toString().trim();
+    const gitRef = 'refs/sidequest/' + ticket.ref;
+    git(['update-ref', gitRef, candidate]);
+    const target = store.integrationTarget(slug);
+    const range = require('../lib/commit-scope.js').submissionRange(project, { commit: candidate, gitRef, upstream: target.upstream, integrationBranch: target.branch });
+    assert.equal(range.ok, true, JSON.stringify(range));
+    assert.equal(store.claimTicket(slug, ticket.ref, 'quality-worker', { direct: true, reason: 'Local direct claim for manual delivery regression.' }).ok, true);
+    execFileSync(process.execPath, [path.resolve(__dirname, '../lib/verify-capture.js'), '--project', project, '--ticket', ticket.ref], { cwd: project, env: process.env, windowsHide: true });
+    const submitted = store.submitTicket(slug, ticket.ref, 'quality-worker', { commit: candidate, gitRef, range, worktree: project, verify: 'node -e "process.exit(0)"' });
+    assert.equal(submitted.ok, true, JSON.stringify(submitted));
+    git(['checkout', 'main']);
+    git(['merge', '--squash', 'candidate']);
+    git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'squash landing']);
+    const delivery = git(['rev-parse', 'HEAD']).toString().trim();
+    const recorded = store.recordDeliveredSubmission(slug, ticket.ref, { target, deliveryCommit: delivery, deliveryMethod: 'manual', by: 'orchestrator', reason: 'Candidate landed as a squash commit with unchanged source and release bytes.' });
+    assert.equal(recorded.ok, true, JSON.stringify(recorded));
+    assert.equal(recorded.ticket.submission.integration.outcome, 'verified');
+    const debts = store.listTickets(slug).filter((entry: { source: string }) => entry.source === 'integration-quality');
+    assert.equal(debts.length, 1);
+    assert.deepEqual(debts[0].files, ['source.js']);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = previousHome;
+    fs.rmSync(gateHome, { recursive: true, force: true });
+  }
+});

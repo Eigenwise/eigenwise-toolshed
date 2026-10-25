@@ -143,8 +143,7 @@ function independentReviewRefusal(source, review) {
   const provenance = (0, import_review_binding.reviewProvenance)(source, review);
   if (provenance.reason !== "ok") return refuse(provenance.reason, "Finalization requires distinct immutable submitted-source and completed-review runtime provenance.");
   const current = [
-    source.dispatch?.outcome === "submitted",
-    source.dispatch?.terminalAt === provenance.source?.terminalAt,
+    (0, import_review_binding.submittedSourceGenerationCurrent)(source, provenance.source),
     review.dispatch?.terminalAt === provenance.reviewer?.terminalAt
   ];
   if (current.includes(false)) return refuse("stale_provenance", "Finalization requires the current original submitted-source and completed-review generations.");

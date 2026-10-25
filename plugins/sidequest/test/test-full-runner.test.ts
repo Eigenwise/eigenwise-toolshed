@@ -1200,12 +1200,24 @@ function runOwnedVerifyCli(spec: Record<string, unknown>) {
   return { ...result, records: records.map(({ record, value }) => (value === undefined ? [record] : [record, value])) };
 }
 
+// SQ-3927: a Windows timeout leads with the job's account of the members it closed, so the result can
+// name the pids the deadline ended; a POSIX group has no member list to report.
+function recordsAfterJobAccount(records: unknown[][]): Readonly<{ closed: number[]; rest: unknown[][] }> {
+  if (process.platform !== 'win32') return { closed: [], rest: records };
+  const [account, ...rest] = records;
+  assert.equal(account?.[0], 'closed', 'a Windows timeout reports its job account first');
+  assert.ok(Array.isArray(account[1]) && account[1].every(Number.isInteger), 'the job account is a pid list');
+  return { closed: account[1], rest };
+}
+
 test('SQ-3425: the owned verify entry reports a deadline on its channel and exits 124 after ending the descendant', { timeout: 60_000 }, async () => {
   const fixture = descendantFixture(SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS, false, 'spin');
   const result = runOwnedVerifyCli({ command: process.execPath, args: fixture.args, cwd: workspace, timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS });
 
   assert.equal(result.status, 124, result.stderr);
-  assert.deepEqual(result.records, [['timeout', SPAWN_ARMED_DEADLINE_MILLISECONDS], ['done']], 'the done record follows the timeout record');
+  const { closed, rest } = recordsAfterJobAccount(result.records);
+  assert.deepEqual(rest, [['timeout', SPAWN_ARMED_DEADLINE_MILLISECONDS], ['done']], 'the done record follows the timeout record');
+  if (process.platform === 'win32') assert.ok(closed.includes(fixture.descendantPid()), 'the job account names the descendant it ended');
   await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the descendant of the owned verify entry');
   assert.equal(fixture.markerWritten(), false);
 });
@@ -1224,7 +1236,8 @@ test('SQ-3425: the owned verify entry forwards output and passes the verifier ex
   const unspawned = runOwnedVerifyCli({ command: 'sidequest-no-such-verifier-sq3425', args: [], cwd: workspace, timeoutMilliseconds: 20_000 });
   assert.equal(unspawned.status, 2, unspawned.stderr);
   assert.match(unspawned.stderr, MISSING_VERIFIER_MESSAGE);
-  assert.deepEqual(unspawned.records, [['done']], 'a phase that never ran reports no exit');
+  assert.deepEqual(unspawned.records.map((record) => record[0]), ['error', 'done'], 'a phase that never ran reports the spawn error, then done, and no exit');
+  assert.match(String(unspawned.records[0]?.[1]), /ENOENT|cannot find the file/, 'the error record carries the spawn failure');
 });
 
 // A detached descendant leaves libuv's job, so before the job owner (SQ-3456) it outlived a Windows deadline
@@ -1254,7 +1267,7 @@ test('SQ-3477: a Windows deadline ends a detached descendant holding the output 
   });
 
   assert.equal(result.status, 124, result.stderr);
-  assert.deepEqual(result.records, [['timeout', deadlineMilliseconds], ['done']]);
+  assert.deepEqual(recordsAfterJobAccount(result.records).rest, [['timeout', deadlineMilliseconds], ['done']]);
   await assertTerminalWithin(requireProcessId(recordedDescendantPid(descendantPidPath), 'the detached descendant'), SETTLED_BUDGET_MILLISECONDS, 'the detached descendant');
   assert.equal(fs.existsSync(markerPath), false, 'the detached descendant acted after the deadline');
 });

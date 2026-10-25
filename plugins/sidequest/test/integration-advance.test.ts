@@ -702,11 +702,12 @@ test('groomClose delivers a landed candidate despite an overlapping pending sibl
     files: ['feature.txt'],
   });
   submitFixture(slug, participant, fixture);
+  const baseBeforeLanding = head(fixture.repo);
   git(['cherry-pick', fixture.submitted], fixture.repo);
   const landedCommit = head(fixture.repo);
 
   const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-ovl');
-  git(['worktree', 'add', '-b', 'worktree-agent-ovl', siblingWorktree, 'main'], fixture.repo);
+  git(['worktree', 'add', '-b', 'worktree-agent-ovl', siblingWorktree, baseBeforeLanding], fixture.repo);
   const siblingCommit = commitFile(siblingWorktree, 'feature.txt', 'overlapping sibling candidate\n');
   const sibling = store.createTicket(slug, {
     title: 'overlapping pending sibling candidate',
@@ -717,8 +718,9 @@ test('groomClose delivers a landed candidate despite an overlapping pending sibl
   submitFixture(slug, sibling, { ...fixture, executor: siblingWorktree, submitted: siblingCommit });
 
   const assembled = store.assembleSubmissionWave(slug, [participant.ref]);
-  assert.equal(assembled.ok, false);
+  assert.equal(assembled.ok, false, assembled.message);
   assert.equal(assembled.reason, 'candidate_overlap');
+  assert.match(assembled.conflicts[0].evidence, /CONFLICT.*feature.txt/);
 
   const response = await mcp.handleRequest({
     jsonrpc: '2.0',
@@ -1382,7 +1384,7 @@ function gateProbe(verification: any) {
   return JSON.parse(line.slice('SQ_GATE_PROBE '.length));
 }
 
-function twoCandidateWave(label: string, verify: string) {
+function twoCandidateWave(label: string, verify: string, secondVerify = verify) {
   const fixture = makeRepo(label);
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
   git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
@@ -1395,7 +1397,7 @@ function twoCandidateWave(label: string, verify: string) {
     files: [file],
   }));
   submitFixture(slug, first, fixture, verify);
-  submitFixture(slug, second, { executor: secondWorktree, submitted: secondCommit }, verify);
+  submitFixture(slug, second, { executor: secondWorktree, submitted: secondCommit }, secondVerify);
   return { fixture, slug, secondWorktree, refs: [first.ref, second.ref] };
 }
 
@@ -1422,6 +1424,21 @@ test('GH-273: a multi-ticket gate runs the pinned command in the composed wave t
   assert.equal(head(fixture.repo), projectHead, 'the gate never moves the project checkout');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'second.txt')), false);
 });
+
+for (const secondPasses of [true, false]) {
+  test('SQ-3911: different pinned commands both inspect the composed tree, second passes=' + secondPasses, () => {
+    const firstCommand = gateProbeVerify("fs.existsSync('feature.txt')&&fs.existsSync('second.txt')");
+    const secondCommand = gateProbeVerify("fs.existsSync('feature.txt')&&fs.existsSync('second.txt')&&" + secondPasses);
+    const { slug, refs } = twoCandidateWave('different-verifiers', firstCommand, secondCommand);
+    const assembled = store.assembleSubmissionWave(slug, refs);
+    assert.equal(assembled.ok, secondPasses, JSON.stringify(assembled));
+    assert.ok(assembled.gate, 'executable verifier differences must reach composed-tree gate');
+    const verification = assembled.gate.verification;
+    assert.deepEqual(verification.results.map((result: { command: string }) => result.command), [firstCommand, secondCommand]);
+    assert.deepEqual(verification.results.map((result: { status: string }) => result.status), ['passed', secondPasses ? 'passed' : 'failed_suite']);
+    assert.equal(gateProbe(verification.results[0]).tree, gateProbe(verification.results[1]).tree);
+  });
+}
 
 test('GH-246: a multi-ticket gate fails when the composed candidates fail even though the baseline passes', () => {
   const { slug, refs } = twoCandidateWave('wave-gate-baseline-passes', gateProbeVerify("!fs.existsSync('second.txt')"));
@@ -1601,7 +1618,7 @@ test('SQ-3425: CLI integrate on the environment lane ends the verifier tree at t
   assert.equal(fs.existsSync(path.join(fixture.repo, '.git', 'sidequest-delivery.lock')), false, 'the lock was released');
 });
 
-test('SQ-3425: a default-board delivery runs its verifier outside the owned tree', () => {
+test('SQ-3927: a default-board delivery runs its verifier under the owned tree too', () => {
   const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-lane-default-'));
   const envFile = forwardSlashes(path.join(evidenceDirectory, 'owned-phase.env'));
   const { slug, ticket, runCli } = deliveryTicket('environment-lane-default', {
@@ -1611,7 +1628,7 @@ test('SQ-3425: a default-board delivery runs its verifier outside the owned tree
 
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
-  assert.equal(fs.readFileSync(envFile, 'utf8'), '');
+  assert.equal(fs.readFileSync(envFile, 'utf8'), '1');
 });
 
 test('SQ-3425: a verifier whose log cannot be opened reports could_not_run with the spawn failure', () => {
