@@ -6684,7 +6684,7 @@ test('SQ-2972: only an oracle-rejected related source admits inherited commits, 
     const partialInheritance = await sq2972Submit(repair.ref, 'classification-repair', fixture.repairCommit);
     assert.strictEqual(partialInheritance.ok, false);
     assert.strictEqual(partialInheritance.reason, 'duplicate_submission');
-    assert.match(partialInheritance.message, /only part of that rejected range/);
+    assert.match(partialInheritance.message, /only part of that ticket's submitted range/);
     partial.submission = Object.assign({}, partial.submission, { commits: [fixture.sourceCommit] });
     persist(partial);
 
@@ -6844,6 +6844,107 @@ test('SQ-2972: apply delivery materializes the whole inherited range and superse
     git(['checkout', '-f', fixture.branch]);
     git(['clean', '-fd']);
   });
+});
+
+// GH-636. A follow-up declared at dispatch as building on a pending candidate carries that candidate's whole
+// range, may move its release fragment, and closes it as superseded when the follow-up itself is delivered.
+const GH636_SOURCE = 'lib/gh636-source.js';
+const GH636_FOLLOW_UP = 'lib/gh636-follow-up.js';
+
+function gh636Dispatch(ticket: { ref: string }, by: string, workProvenance?: object) {
+  const sessionId = `${by}-session`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false, ...(workProvenance ? { workProvenance } : {}) }, { allowWorkProvenance: true });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+}
+
+function gh636Fragment(ref: string) {
+  return `.release/unreleased/${ref}.md`;
+}
+
+test('a builds-on follow-up submits its source range, integrates, and supersedes the source with its fragment moved (GH-636)', async () => {
+  const original = store.boardConfig(slug);
+  const branch = `gh636-builds-on-${++branchSeq}`;
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: branch });
+  try {
+    git(['checkout', '-f', '-B', branch, 'origin/main']);
+    git(['clean', '-fd']);
+    sq2972Write(GH636_SOURCE, 'base source\n');
+    git(['add', GH636_SOURCE]);
+    git(['commit', '-m', 'gh636 integration base']);
+    const integrationHead = git(['rev-parse', 'HEAD']);
+    const source = addTicket('gh636 pending source', { files: [GH636_SOURCE], category: 'submission.fixture' });
+    const followUp = addTicket('gh636 follow-up', { files: [GH636_FOLLOW_UP], category: 'submission.fixture' });
+    gh636Dispatch(source, 'gh636-source');
+
+    git(['checkout', '-B', `${branch}-work`, integrationHead]);
+    sq2972Write(GH636_SOURCE, 'source candidate\n');
+    sq2972Write(gh636Fragment(source.ref), `---\nref: ${source.ref}\nbump: patch\n---\nSource change.\n`);
+    git(['add', '-A', 'lib', '.release']);
+    git(['commit', '-m', 'gh636 source candidate']);
+    const sourceCommit = git(['rev-parse', 'HEAD']);
+    pin(source, sourceCommit);
+    const sourceSubmitted = await sq2972Submit(source.ref, 'gh636-source', sourceCommit);
+    assert.strictEqual(sourceSubmitted.ok, true, sourceSubmitted.message);
+
+    git(['checkout', '-f', branch]);
+    const sourceDispatch = store.getTicket(slug, source.ref).dispatch;
+    gh636Dispatch(followUp, 'gh636-follow-up', { kind: 'builds-on', sources: [{ ref: source.ref, preparedAt: sourceDispatch.preparedAt, commit: sourceCommit }] });
+    git(['checkout', '-f', `${branch}-work`]);
+    sq2972Write(GH636_SOURCE, 'source candidate, extended by the follow-up\n');
+    sq2972Write(GH636_FOLLOW_UP, 'follow-up addition\n');
+    git(['mv', gh636Fragment(source.ref), gh636Fragment(followUp.ref)]);
+    git(['add', '-A', 'lib', '.release']);
+    git(['commit', '-m', 'gh636 follow-up']);
+    const followUpCommit = git(['rev-parse', 'HEAD']);
+    pin(followUp, followUpCommit);
+
+    const resubmittedSource = store.getTicket(slug, source.ref);
+    resubmittedSource.submission = Object.assign({}, resubmittedSource.submission, { commit: integrationHead });
+    persist(resubmittedSource);
+    const stale = await sq2972Submit(followUp.ref, 'gh636-follow-up', followUpCommit);
+    assert.strictEqual(stale.ok, false);
+    const staleOverlap = stale.failures.find((failure: any) => failure.code === 'duplicate_submission');
+    assert.ok(staleOverlap, JSON.stringify(stale.failures));
+    assert.match(staleOverlap.message, /no longer the candidate this dispatch froze in workProvenance builds-on/);
+    persist(Object.assign(resubmittedSource, { submission: Object.assign({}, resubmittedSource.submission, { commit: sourceCommit }) }));
+
+    const submitted = await sq2972Submit(followUp.ref, 'gh636-follow-up', followUpCommit);
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    const submission = store.getTicket(slug, followUp.ref).submission;
+    assert.deepStrictEqual(submission.commits, [sourceCommit, followUpCommit], 'the follow-up range carries the source candidate whole');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, source.ref)), true, 'the source stays pending until the follow-up is delivered');
+
+    git(['checkout', '-f', branch]);
+    const delivered = store.integrateSubmission(slug, followUp.ref, { target: store.integrationTarget(slug), mode: 'merge', by: 'orchestrator' });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    const closed = store.completeTicketAsControlPlane(slug, followUp.ref, { by: 'orchestrator', reason: `Delivered ${followUpCommit}.`, purpose: 'integration' });
+    assert.strictEqual(closed.ok, true, closed.message);
+    assert.deepStrictEqual(closed.supersededSources, [{ ref: source.ref, ok: true }]);
+
+    const superseded = store.getTicket(slug, source.ref);
+    assert.strictEqual(superseded.status, 'done');
+    assert.strictEqual(superseded.completion.purpose, 'submission-supersession');
+    assert.strictEqual(superseded.submission.supersededBy.ref, followUp.ref);
+    const replaced = Object.fromEntries(superseded.submission.supersededBy.reviewedReplacements.map((entry: any) => [entry.path, entry]));
+    assert.deepStrictEqual(Object.keys(replaced).sort(), [gh636Fragment(source.ref), GH636_SOURCE].sort());
+    assert.match(replaced[gh636Fragment(source.ref)].reason, /moved this release fragment into its own/);
+    assert.strictEqual(replaced[GH636_SOURCE].reviewedBy, followUp.ref);
+    assert.strictEqual(fs.existsSync(path.join(PROJECT_DIR, gh636Fragment(source.ref))), false, 'the source fragment moved');
+    assert.match(sq2972Read(gh636Fragment(followUp.ref)), /Source change/);
+  } finally {
+    git(['checkout', '-f', 'main']);
+    git(['clean', '-fd']);
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  }
+});
+
+test('without a builds-on declaration the overlap refusal names it, and a stale declaration is refused (GH-636)', () => {
+  const guidance = require('../lib/refusal-guidance.js');
+  assert.match(guidance.inheritedRejectedDuplicateGuidance('not_related'), /workProvenance kind `builds-on`/);
+  assert.match(guidance.inheritedRejectedDuplicateGuidance(), /workProvenance kind `builds-on`/);
+  const stale = guidance.inheritedRejectedDuplicateGuidance('builds_on_stale', true);
+  assert.match(stale, /^A builds-on range is admitted only when/);
+  assert.match(stale, /re-dispatches this ticket naming the current candidate/);
 });
 
 // SQ-2978. An apply delivery is only half recorded: the delivered bytes sit in the
@@ -7350,19 +7451,20 @@ function submittedCandidate(title: string, by: string) {
   return ticket;
 }
 
-test('rework defaults an omitted by to the session id: it passes for the owner and names both labels otherwise (GH-424)', async () => {
+test('rework defaults an omitted by to the session id as the orchestrator, and an explicit by is still judged as owner (GH-424, GH-636)', async () => {
   const owned = submittedCandidate('gh424 owner session', 'gh424-session');
   const defaulted = await reworkAsSession('gh424-session', { ref: owned.ref, review: 'Missing a case.', reason: 'Repair the case.' });
   assert.strictEqual(defaulted.ok, true, defaulted.message);
   assert.strictEqual(store.getTicket(slug, owned.ref).rejectedSubmissions[0].rejectedBy, 'gh424-session');
 
   const foreign = submittedCandidate('gh424 foreign owner', 'exec-y');
-  const refused = await reworkAsSession('gh424-session', { ref: foreign.ref, review: 'Missing a case.', reason: 'Repair the case.' });
-  assert.strictEqual(refused.ok, false);
-  assert.strictEqual(refused.reason, 'not_owner');
-  assert.match(refused.message, /submitter "exec-y"/);
-  assert.match(refused.message, /got "gh424-session"/);
-  assert.ok(store.getTicket(slug, foreign.ref).submission, 'a refused default leaves the candidate in place');
+  const wrongLabel = await reworkAsSession('gh424-session', { ref: foreign.ref, by: 'reviewer', review: 'Missing a case.', reason: 'Repair the case.' });
+  assert.strictEqual(wrongLabel.ok, false);
+  assert.strictEqual(wrongLabel.reason, 'not_owner');
+  assert.match(wrongLabel.message, /submitter "exec-y"/);
+  assert.match(wrongLabel.message, /got "reviewer"/);
+  assert.match(wrongLabel.message, /from the main thread with by omitted/, 'the refusal names the orchestrator route');
+  assert.ok(store.getTicket(slug, foreign.ref).submission, 'a refused label leaves the candidate in place');
 
   const anonymous = await reworkAsSession(null, { ref: foreign.ref, review: 'Missing a case.', reason: 'Repair the case.' });
   assert.strictEqual(anonymous.isError, true);
@@ -7370,6 +7472,65 @@ test('rework defaults an omitted by to the session id: it passes for the owner a
 
   const explicit = await reworkAsSession('gh424-session', { ref: foreign.ref, by: 'exec-y', review: 'Missing a case.', reason: 'Repair the case.' });
   assert.strictEqual(explicit.ok, true, 'an explicit by wins over the session default');
+  assert.strictEqual(store.getTicket(slug, foreign.ref).rejectedSubmissions[0].authority, undefined, 'an owner rejection records no orchestrator authority');
+});
+
+// GH-636. After submit the producer is terminal, so the orchestrator is the one caller left who can ask for changes.
+function dispatchedSubmit(ticket: { ref: string }, by: string, contents: string) {
+  const sessionId = `${by}-session`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh636.js'), contents);
+  git(['add', 'lib/gh636.js']);
+  git(['commit', '-m', contents.trim()]);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(ticket, commit);
+  const submitted = runCli(['submit', ticket.ref, '--by', by, '--commit', commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  return commit;
+}
+
+test('the orchestrator requests changes on a foreign candidate, which is redispatched, resubmitted and integrated (GH-636)', async () => {
+  cleanBranch();
+  const ticket = addTicket('gh636 orchestrator request', { files: ['lib/gh636.js'], category: 'submission.fixture' });
+  const original = dispatchedSubmit(ticket, 'gh636-exec', 'gh636 first candidate\n');
+  const requested = await reworkAsSession('gh636-main', { ref: ticket.ref, review: 'The candidate misses the empty-input case.', reason: 'Handle the empty input before resubmitting.' });
+  assert.strictEqual(requested.ok, true, requested.message);
+  const rejected = store.getTicket(slug, ticket.ref);
+  const [request] = rejected.rejectedSubmissions;
+  assert.strictEqual(rejected.status, 'todo');
+  assert.strictEqual(rejected.submission, null);
+  assert.deepStrictEqual(
+    { commit: request.commit, rejectedBy: request.rejectedBy, authority: request.authority, sessionId: request.sessionId, reason: request.reason },
+    { commit: original, rejectedBy: 'gh636-main', authority: 'orchestrator', sessionId: 'gh636-main', reason: 'Handle the empty input before resubmitting.' },
+    'the request records who asked, under which session, and why',
+  );
+  assert.strictEqual(git(['rev-parse', request.quarantineRef]), original, 'the candidate is kept as rejected evidence');
+
+  const repaired = dispatchedSubmit(ticket, 'gh636-repair', 'gh636 repaired candidate\n');
+  assert.strictEqual(store.getTicket(slug, ticket.ref).submission.supersedesRejectedSubmission, original);
+
+  const delivered = integrateOnCurrentTestBranch(ticket.ref);
+  assert.strictEqual(delivered.ok, true, delivered.message);
+  const closed = runCli(['groom-close', ticket.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${repaired}.`]);
+  assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+  const done = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(done.status, 'done');
+  assert.strictEqual(done.submission.commit, repaired);
+  assert.ok(done.submission.integratedAt);
+});
+
+test('an orchestrator request refuses a candidate whose ticket holds a live claim (GH-636)', () => {
+  const ticket = submittedCandidate('gh636 live claim', 'gh636-live');
+  const live = store.getTicket(slug, ticket.ref);
+  live.claim = { by: 'gh636-retrying', at: new Date().toISOString() };
+  persist(live);
+  const refused = store.reworkSubmission(slug, ticket.ref, { by: 'gh636-main', orchestratorSession: 'gh636-main', review: 'Needs another case.', reason: 'Repair it.' });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'not_owner');
+  assert.match(refused.message, /claimed by "gh636-retrying"/);
+  assert.ok(store.getTicket(slug, ticket.ref).submission, 'the candidate stays parked');
 });
 
 test('rework defaults an omitted by to the session the host switched to, not the startup environment (GH-424, GH-467)', async () => {

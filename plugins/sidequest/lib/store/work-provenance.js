@@ -30,6 +30,7 @@ var work_provenance_exports = {};
 __export(work_provenance_exports, {
   WORK_KINDS: () => WORK_KINDS,
   authorizeWorkDeclaration: () => authorizeWorkDeclaration,
+  buildsOnCandidates: () => buildsOnCandidates,
   ownedWorkPaths: () => ownedWorkPaths,
   prepareWorkProvenance: () => prepareWorkProvenance,
   retainedAttemptHistory: () => retainedAttemptHistory,
@@ -41,7 +42,7 @@ var import_node_child_process = require("node:child_process");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 var import_commit_scope = require("../commit-scope");
-const WORK_KINDS = ["new-behavior", "behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"];
+const WORK_KINDS = ["new-behavior", "behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only", "builds-on"];
 function requireFact(valid, reason) {
   if (!valid) throw new Error(`work provenance refused: ${reason}`);
 }
@@ -260,8 +261,15 @@ function observeSource(root, input, lookup, integrationCommit, consumerRef, reco
     ...derivedFacts.length ? { derivedFacts } : {}
   };
 }
+function requireBuildsOnSources(kind, sources) {
+  if (kind !== "builds-on") return;
+  requireFact(sources.length > 0, "builds-on names at least one pending submitted candidate");
+  requireFact(sources.every((source) => source.status === "submitted-unaccepted"), "builds-on sources must be pending submitted candidates");
+}
 function prepareWorkProvenance(root, declaration, sessionId, lookup, integrationCommit = "", consumerRef = "") {
   if (!declaration) return;
+  const sources = declaration.sources.map((input) => observeSource(root, input, lookup, integrationCommit, consumerRef));
+  requireBuildsOnSources(declaration.kind, sources);
   return structuredClone({
     kind: declaration.kind,
     authority: "main-thread-attestation",
@@ -269,30 +277,46 @@ function prepareWorkProvenance(root, declaration, sessionId, lookup, integration
     execution: "UNVERIFIED",
     quality: "UNVERIFIED",
     admission: "UNVERIFIED",
-    sources: declaration.sources.map((input) => observeSource(root, input, lookup, integrationCommit, consumerRef))
+    sources
   });
 }
 function workingFile(root, file) {
   const location = import_node_path.default.join(root, file.path);
   return { path: file.path, sha256: import_node_fs.default.existsSync(location) ? sha256(import_node_fs.default.readFileSync(location)) : null };
 }
-function unchangedSource(root, source, lookup, consumerRef) {
+function unchangedGeneration(root, source, lookup, consumerRef) {
   const derivedBase = source.derivedFacts?.find((fact) => fact.fact === "baseCommit");
   requireFact(JSON.stringify(source) === JSON.stringify(observeSource(root, source.input, lookup, derivedBase?.integrationCommit ?? "", consumerRef, source.inheritedTips ?? [])), "source generation or capture mutated");
-  requireFact(source.files.every((file) => workingFile(root, file).sha256 === file.sha256), "source/test bytes are incompatible with frozen origin");
+}
+function unchangedFile(root, file) {
+  return workingFile(root, file).sha256 === file.sha256;
+}
+function inheritedSourcePaths(root, provenance) {
+  const files = provenance.sources.flatMap((source) => source.files);
+  if (provenance.kind === "builds-on") return files.filter((file) => unchangedFile(root, file)).map((file) => file.path);
+  requireFact(files.every((file) => unchangedFile(root, file)), "source/test bytes are incompatible with frozen origin");
+  return files.map((file) => file.path);
 }
 function ownedWorkPaths(root, provenance, paths, lookup, consumerRef = "") {
   if (!provenance) return [...paths];
-  provenance.sources.forEach((source) => unchangedSource(root, source, lookup, consumerRef));
-  const inherited = new Set(provenance.sources.flatMap((source) => source.files.map((file) => file.path)));
+  provenance.sources.forEach((source) => unchangedGeneration(root, source, lookup, consumerRef));
+  const inherited = new Set(inheritedSourcePaths(root, provenance));
   const owned = paths.filter((file) => !inherited.has(file));
   requireFact(provenance.kind !== "inherited-read-only" || owned.every((file) => (0, import_commit_scope.isInScope)(file, [".release/unreleased/"])), "inherited-read-only declaration has new owned work");
   return owned;
+}
+function frozenProvenance(value) {
+  return record(value) && value.kind === "builds-on" && Array.isArray(value.sources);
+}
+function buildsOnCandidates(provenance) {
+  if (!frozenProvenance(provenance)) return [];
+  return provenance.sources.map((source) => ({ ref: source.input.ref, commit: source.input.commit, paths: source.files.map((file) => file.path) }));
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   WORK_KINDS,
   authorizeWorkDeclaration,
+  buildsOnCandidates,
   ownedWorkPaths,
   prepareWorkProvenance,
   retainedAttemptHistory,

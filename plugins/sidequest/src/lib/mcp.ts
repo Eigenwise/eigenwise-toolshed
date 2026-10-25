@@ -41,7 +41,7 @@ type ToolDefinition = {
 // The stdio transport that owns the client connection. Only it can send a notification mid-call, and only
 // the real server isolates long work in a child process; in-process callers (tests, the CLI) keep the
 // handler in their own process.
-type ToolCallContext = { progress: (message: string) => void; isolateLongRunningWork: boolean };
+type ToolCallContext = { progress: (message: string) => void; isolateLongRunningWork: boolean; controlPlaneSession?: string };
 type ClientConnection = { notify: (message: object) => void; isolateLongRunningWork?: boolean };
 type RpcId = string | number | null | undefined;
 type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any };
@@ -297,20 +297,21 @@ function assertMutationFreshness(projectArg: unknown) {
 }
 
 // Control-plane mutations name no worker of their own, so the main session's runtime identity is the caller
-// when `by` is omitted. rework is here too: the store's candidate-owner check still judges the defaulted value,
-// and the PreToolUse hook settles a subagent caller before this runs: rework gets its dispatch owner label, the other
-// two are refused, so this default only ever serves the main thread (GH-424, SQ-160).
+// when `by` is omitted. The PreToolUse hook settles a subagent caller before this runs: rework gets its dispatch
+// owner label, the other two are refused, so this default only ever serves the main thread (GH-424, SQ-160). That
+// is also why a defaulted rework carries the session as orchestrator authority to request changes (GH-636).
 const CONTROL_PLANE_DEFAULT_BY = new Set(['groomClose', 'rework', 'supersede_submission']);
 
-function controlPlaneByArgs(tool: ToolDefinition, args: Record<string, unknown>) {
-  if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || '').trim()) return args;
-  const sessionId = runtimeSessionId();
-  return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
+function controlPlaneSession(tool: ToolDefinition, args: Record<string, unknown>): string | null {
+  if (!CONTROL_PLANE_DEFAULT_BY.has(tool.name) || String(args.by || '').trim()) return null;
+  return runtimeSessionId() || null;
 }
 
-async function runTool(tool: ToolDefinition, rawArgs: any, context: ToolCallContext) {
+async function runTool(tool: ToolDefinition, rawArgs: any, callContext: ToolCallContext) {
   const validated = validateToolArguments(tool, rawArgs);
-  const args = controlPlaneByArgs(tool, validated.args);
+  const sessionId = controlPlaneSession(tool, validated.args);
+  const args = sessionId ? Object.assign({}, validated.args, { by: sessionId }) : validated.args;
+  const context = sessionId ? { ...callContext, controlPlaneSession: sessionId } : callContext;
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args, context);

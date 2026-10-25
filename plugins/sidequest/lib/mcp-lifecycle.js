@@ -1,5 +1,6 @@
 "use strict";
 var import_composition_admission = require("./store/composition-admission");
+var import_work_provenance = require("./store/work-provenance");
 const {
   path,
   fs,
@@ -207,17 +208,43 @@ function rejectedRelatedReleaseFragments(slug, ticket) {
     return fragment ? [fragment] : [];
   });
 }
+function declaredBuildsOn(ticket) {
+  return (0, import_work_provenance.buildsOnCandidates)(ticket?.dispatch?.workProvenance ?? ticket?.submission?.workProvenance);
+}
+function inheritedReleaseFragments(slug, ticket) {
+  const buildsOn = declaredBuildsOn(ticket).map((candidate) => commitScope.ticketReleaseFragment(candidate.ref));
+  return [.../* @__PURE__ */ new Set([...rejectedRelatedReleaseFragments(slug, ticket), ...buildsOn.filter((fragment) => Boolean(fragment))])];
+}
+function inheritedSubmissionPaths(slug, ticket) {
+  return [.../* @__PURE__ */ new Set([...inheritedReleaseFragments(slug, ticket), ...declaredBuildsOn(ticket).flatMap((candidate) => candidate.paths)])];
+}
+function otherSubmittedSource(slug, ticket, ref) {
+  const source = store.getTicket(slug, ref);
+  return source?.submission && source.id !== ticket.id ? { ...source, submission: source.submission } : null;
+}
+function buildsOnSourceRefusal(source, commit) {
+  const refusal = inheritedSourceRefusal(source, source.submission);
+  if (refusal) return refusal;
+  if (String(source.submission.commit).toLowerCase() !== commit.toLowerCase()) return { ok: false, reason: "builds_on_stale" };
+}
+function buildsOnAdmission(slug, ticket, entryRef, rangeCommits) {
+  const declared = declaredBuildsOn(ticket).find((candidate) => candidate.ref.toUpperCase() === String(entryRef).toUpperCase());
+  if (!declared) return null;
+  const source = otherSubmittedSource(slug, ticket, entryRef);
+  if (!source) return { ok: false, reason: "source_unavailable" };
+  return buildsOnSourceRefusal(source, declared.commit) || inheritedRangeAdmission(source, source.submission, { source: "git", value: declared.commit }, null, rangeCommits);
+}
 function relatedSubmissionAdmission(slug, ticket, entryRef, rangeCommits) {
   const source = store.getTicket(slug, entryRef);
   if (source && (0, import_composition_admission.compositionIncludesSource)(ticket, source, rangeCommits)) return { ok: true };
-  return inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
+  return buildsOnAdmission(slug, ticket, entryRef, rangeCommits) || inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
 }
 function ticketCommitScope(slug, ticket) {
   const compositionScope = (0, import_composition_admission.compositionSubmissionScope)(ticket);
   if (compositionScope) return [...compositionScope];
   return [.../* @__PURE__ */ new Set([
     ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
-    ...rejectedRelatedReleaseFragments(slug, ticket)
+    ...inheritedSubmissionPaths(slug, ticket)
   ])];
 }
 function environmentLaneRefusal(slug, refs, project) {
@@ -443,19 +470,23 @@ function duplicateSubmission(ticket, range, approvedBoundaries, refusedOverlap) 
   if (!range?.ok) return null;
   return sharedTreeSubmission(ticket) ? sharedTreeBoundaryDuplicate(range, approvedBoundaries) : refusedOverlapEntry(refusedOverlap);
 }
+function overlapGuidance(ticket, overlappingRef, reason) {
+  const declared = declaredBuildsOn(ticket).some((candidate) => candidate.ref.toUpperCase() === overlappingRef.toUpperCase());
+  return inheritedRejectedDuplicateGuidance(reason, declared);
+}
 function duplicateSubmissionFacts(ticket, duplicate, refusedOverlap) {
   if (!duplicate) return { identity: null };
   return {
     identity: duplicate.ref,
     diagnostic: {
       code: "duplicate_submission",
-      message: sharedTreeSubmission(ticket) ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.` : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${inheritedRejectedDuplicateGuidance(refusedOverlap?.admission?.reason)}`,
+      message: sharedTreeSubmission(ticket) ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.` : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${overlapGuidance(ticket, duplicate.ref, refusedOverlap?.admission?.reason)}`,
       retryable: false
     }
   };
 }
 function admittedSubmissionScope(slug, ticket) {
-  return (0, import_composition_admission.compositionSubmissionScope)(ticket) ?? [.../* @__PURE__ */ new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])];
+  return (0, import_composition_admission.compositionSubmissionScope)(ticket) ?? [.../* @__PURE__ */ new Set([...store.executionScope(slug, ticket), ...inheritedSubmissionPaths(slug, ticket)])];
 }
 function submissionBaseline(range, surfaces) {
   return range?.ok ? { candidateExists: true, containsCandidate: true } : { candidateExists: false, containsCandidate: false, diagnostic: surfaces.diagnostic };
@@ -954,7 +985,7 @@ const tools = [
       const foreignFragments = commitScope.foreignReleaseFragmentPaths(
         root,
         ticket.ref,
-        rejectedRelatedReleaseFragments(slug, ticket)
+        inheritedReleaseFragments(slug, ticket)
       );
       if (foreignFragments.length) {
         return mutationAck(slug, {
@@ -982,27 +1013,28 @@ const tools = [
   },
   {
     name: "rework",
-    description: "Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record review evidence on the review ticket. A completed normal review uses main-thread verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.",
+    description: "Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. The submitted candidate owner can reject it, and the orchestrator can request changes by calling it from the main thread with by omitted: that records authority orchestrator under its session id. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record review evidence on the review ticket. A completed normal review uses main-thread verdict.finalize with exact source/candidate and evidence; an active experimental review uses its oracle lifecycle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.",
     inputSchema: {
       type: "object",
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
-        by: { type: "string", description: "The candidate owner. Omitted, the main thread defaults to its session id and a subagent to the owner label its own dispatch recorded (refused when none or ambiguous). The owner check still judges the default." },
+        by: { type: "string", description: "The candidate owner. Omitted, the main thread requests changes as the orchestrator under its session id, and a subagent defaults to the owner label its own dispatch recorded (refused when none or ambiguous), which the owner check still judges." },
         review: { type: "string" },
         reviewRef: { type: "string", description: "Accepted for compatibility and ignored; it grants no authority over a bound candidate." },
         reason: { type: "string" }
       },
       required: ["ref", "review", "reason"]
     },
-    handler(args) {
+    handler(args, context) {
       const { slug } = resolveLifecycleProject(args.project, args, "rework");
       const by = requireBy(args, "rework");
       return mutationAck(slug, store.reworkSubmission(slug, args.ref, {
         by,
         review: args.review,
         reason: args.reason,
-        source: "mcp"
+        source: "mcp",
+        orchestratorSession: context?.controlPlaneSession
       }));
     }
   },
@@ -1359,4 +1391,4 @@ const integrateTool = tools.find((tool) => tool.name === "integrate");
 if (!integrateTool) throw new Error("mcp-lifecycle: the integrate tool is missing");
 const integrateInProcess = refusingTheEnvironmentLane(integrateTool.handler);
 integrateTool.handler = (args, context) => context?.isolateLongRunningWork ? integrateInChildProcess(args, context) : integrateInProcess(args);
-module.exports = { tools, integrateInProcess, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, rejectedRelatedReleaseFragments };
+module.exports = { tools, integrateInProcess, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts, inheritedReleaseFragments, inheritedSubmissionPaths };
