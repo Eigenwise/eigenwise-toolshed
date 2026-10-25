@@ -8,6 +8,32 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.613.0 (2026-10-25)
+
+### sidequest 6.4.0 → 6.5.0
+
+#### Features
+
+- Never record a passed integration verify that ran nothing (SQ-3898)
+  GH-643: on a board with no project verifier, a ticket whose dispatch pinned the legacy placeholder integrated with `verify: { kind: "custom", status: "passed", evidence: "legacy project verifier was not recorded" }`, no command and no log. The merged-tree gate now runs the ticket's own runnable verify (`executorVerify`, else the submitted verify) and records its command, exit code and log path. With no verifier at all, submit records `status: "unverified"` and integrate refuses `verification_unverified` before anything merges, unless `skipVerify` carries a structured `verificationWaiver`, which delivers it as `skipped` with the waiver recorded.
+- Configure capture deadlines and keep logs in durable storage (SQ-3900)
+  Verification capture uses the board integrationVerifyTimeoutMs deadline (25 minutes by default, up to 60 minutes). Capture logs go directly to durable verification storage instead of accumulating in the temporary directory.
+- Request changes on a submitted candidate, and build follow-ups on pending ones (SQ-3902)
+  After submit, the orchestrator had no supported way to ask for changes, and a follow-up built on a pending candidate was refused `duplicate_submission` (GH-636).
+
+  - `rework` called from the main thread without `by` is now the orchestrator requesting changes. It needs no candidate ownership, refuses while a live claim holds the ticket, and records `authority: "orchestrator"` with the session id and reason on the rejected candidate. An explicit `by` is still judged as the candidate owner.
+  - New `dispatch.workProvenance` kind `builds-on` names pending submitted candidates. The follow-up's range may carry each one whole, its changed paths and release fragment are admitted (so the fragment can be moved into the follow-up's), and delivering the follow-up closes the source as superseded, reported as `supersededSources`. Its negative-control rule is the undeclared one.
+  - The `not_owner`, `duplicate_submission`, `candidate_review_locked`, and `missing_release_fragment` refusals now name the supported next step.
+
+#### Fixes
+
+- SQ-3902 follow-up: publishing reference keeps the rework phrase (SQ-3916) [`e44e421`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e44e421ef3c4)
+  Keep the literal owner rework command wording in the publishing reference so the guidance regression stays green. Preserve the inherited SQ-3902 authority and ownership rules.
+- Explain pushes targeting directories that do not exist yet (SQ-3921)
+  Git publication guards now name missing directories and tell callers to run the push or tag separately after creating the directory. Directory-creating shell chains stay refused before Git starts.
+- Use documented full gates for large import selections (SQ-3925)
+  Large importing-test selections use test:full or npm test and honour the board deadline. Configure integrationTestFileThreshold to change the default 40-file cutoff. Guidance Markdown selects the guidance suites, and batch receipts record shape, deadline and elapsed time. The MCP tools/list budget rises by 100 bytes for the new board_config field.
+
 ## v3.612.0 (2026-10-25)
 
 ### quality-gate 1.3.0 → 1.3.1
