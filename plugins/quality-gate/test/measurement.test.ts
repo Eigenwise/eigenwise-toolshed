@@ -97,7 +97,7 @@ test('coverage notice shows once across projects and subagent cwd stays separate
   expect(projects).toEqual(['/work/subagent'])
   await complete($)
   expect(projects).toEqual(['/work/subagent', CWD])
-  expect(notices).toEqual(['quality-gate: complexity only, coverage not set up'])
+  expect(notices).toEqual(['complexity only, coverage not set up'])
   expect(Object.keys(observed.turn ?? {}).sort()).toEqual([CWD, '/work/subagent'].sort())
 })
 
