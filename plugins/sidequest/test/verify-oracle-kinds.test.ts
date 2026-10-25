@@ -40,7 +40,7 @@ test('attestation oracle requires an observed artifact and structured evidence',
     artifact,
   )[0];
   assert.match(descriptiveArtifactError, /first segment must equal attestationArtifact verbatim/);
-  assert.ok(descriptiveArtifactError.includes(`Expected prefix: \`attestation: ${artifact} | \`.`));
+  assert.ok(descriptiveArtifactError.includes(`Expected first segment: \`attestation: ${artifact}\`.`));
   assert.ok(descriptiveArtifactError.includes(`Received first segment: \`attestation: ${descriptiveArtifact}\`.`));
   assert.match(
     store.attestationErrors(`attestation: ${artifact} | render`, artifact)[0],
