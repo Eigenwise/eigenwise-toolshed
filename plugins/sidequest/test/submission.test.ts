@@ -5568,28 +5568,16 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
     assert.ok(!storedPrimary.commits.includes(siblingCandidate));
     assert.ok(!storedSibling.commits.includes(primaryCandidate));
     const singleton = store.assembleSubmissionWave(slug, [primary.ref]);
-    assert.strictEqual(singleton.ok, false);
-    assert.strictEqual(singleton.reason, 'candidate_overlap');
-    assert.match(singleton.message, new RegExp(`${primary.ref} and ${sibling.ref} \\(docs\\/guide\\.md\\)`));
-    assert.strictEqual(store.getTicket(slug, primary.ref).status, 'doing');
-    assert.strictEqual(store.getTicket(slug, sibling.ref).status, 'doing');
-    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, primary.ref)), true);
+    assert.strictEqual(singleton.ok, true, singleton.message);
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, sibling.ref)), true);
-    assert.match(singleton.message, /exact accepted candidate refs/i);
-    assert.match(singleton.message, /deliveryMethod:"manual"/);
 
     const primaryVerifier = store.getTicket(slug, primary.ref).executorVerify;
     const mismatchedSibling = store.getTicket(slug, sibling.ref);
     mismatchedSibling.executorVerify = 'node -e "process.exit(0);"';
     persist(mismatchedSibling);
     const verifierMismatch = store.assembleSubmissionWave(slug, [primary.ref, sibling.ref]);
-    assert.strictEqual(verifierMismatch.ok, false);
-    assert.strictEqual(verifierMismatch.reason, 'wave_verifier_mismatch');
-    assert.match(verifierMismatch.message, /cannot choose or rewrite one/i);
-    assert.match(verifierMismatch.message, /every pinned verifier/i);
-    assert.match(verifierMismatch.message, /full composed gate/i);
-    assert.match(verifierMismatch.message, /deliveryMethod:"manual"/);
-    assert.match(verifierMismatch.message, /omit integration:true/i);
+    assert.strictEqual(verifierMismatch.ok, true, verifierMismatch.message);
+    assert.strictEqual(verifierMismatch.gate.verification.results.length, 2);
 
     mismatchedSibling.executorVerify = primaryVerifier;
     persist(mismatchedSibling);
@@ -5602,7 +5590,7 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
   }
 });
 
-test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement while executable mismatches still refuse', () => {
+test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement while different executable commands run in order', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
@@ -5646,11 +5634,10 @@ test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement
     assert.match(mixed.message, new RegExp(`pin different verifier kinds \\(${refs[0]} document, ${refs[1]} suite, ${refs[2]} document\\)`));
     assert.match(mixed.message, /Non-executable kinds \(document, link, manual, attestation, review\) only need to agree on kind/);
 
-    pinVerifiers([['suite', 'npm test'], ['suite', 'npm run test:unit'], ['suite', 'npm test']]);
+    pinVerifiers([['suite', 'node -e "process.exit(0)"'], ['suite', 'node -e "process.exit(0);"'], ['suite', 'node -e "process.exit(0)"']]);
     const suites = store.assembleSubmissionWave(slug, refs);
-    assert.strictEqual(suites.reason, 'wave_verifier_mismatch');
-    assert.match(suites.message, /all pin kind suite but with different commands or evidence/);
-    assert.match(suites.message, /executable kinds must pin the same command/);
+    assert.strictEqual(suites.ok, true, suites.message);
+    assert.strictEqual(suites.gate.verification.results.length, 3);
   } finally {
     for (const ticket of participants) {
       persist(Object.assign(store.getTicket(slug, ticket.ref), { archived: true }));
@@ -5701,7 +5688,8 @@ test('SQ-2752: a pending candidate blocks a singleton only where their recorded 
     const refused = store.assembleSubmissionWave(slug, [participant.ref]);
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'candidate_overlap');
-    assert.deepStrictEqual(refused.conflicts, [{ participant: participant.ref, sibling: colliding.ref, surfaces: ['docs/alpha.md'] }]);
+    assert.deepStrictEqual(refused.conflicts.map(({ evidence, ...conflict }: { evidence: string }) => conflict), [{ participant: participant.ref, sibling: colliding.ref, surfaces: ['docs/alpha.md'] }]);
+    assert.match(refused.conflicts[0].evidence, /CONFLICT.*docs\/alpha.md/);
     assert.ok(!refused.message.includes(disjoint.ref), refused.message);
     assert.ok(!refused.message.includes('docs/gamma.md'), refused.message);
 
