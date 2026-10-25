@@ -163,12 +163,14 @@ test('builds-on freezes a submitted candidate, and a source file the follow-up c
   const { root, candidate, declaration, lookup } = submittedProducer();
   const provenance = prepareWorkProvenance(root, declaration, 'main-session', lookup);
   assert.equal(provenance.sources[0].status, 'submitted-unaccepted');
-  assert.deepEqual(buildsOnCandidates(provenance), [{ ref: 'SQ-7', commit: candidate, paths: [ownedFile] }]);
   assert.deepEqual(ownedWorkPaths(root, provenance, [ownedFile, 'lib/follow-up.js'], lookup), ['lib/follow-up.js'], 'an unchanged source file stays inherited');
   fs.writeFileSync(path.join(root, ownedFile), 'owned, extended by the follow-up\n');
-  assert.deepEqual(ownedWorkPaths(root, provenance, [ownedFile, 'lib/follow-up.js'], lookup), [ownedFile, 'lib/follow-up.js']);
+  let owned: string[] = [];
+  assert.doesNotThrow(() => { owned = ownedWorkPaths(root, provenance, [ownedFile, 'lib/follow-up.js'], lookup); }, 'a changed source file is owned work, not a refusal');
+  assert.deepEqual(owned, [ownedFile, 'lib/follow-up.js']);
   const readOnly = prepareWorkProvenance(root, { ...declaration, kind: 'inherited-read-only' }, 'main-session', lookup);
   assert.throws(() => ownedWorkPaths(root, readOnly, [ownedFile], lookup), { message: 'work provenance refused: source/test bytes are incompatible with frozen origin' });
+  assert.deepEqual(buildsOnCandidates(provenance), [{ ref: 'SQ-7', commit: candidate, paths: [ownedFile] }]);
   assert.deepEqual(buildsOnCandidates(readOnly), [], 'only builds-on declares a candidate to supersede');
 });
 
