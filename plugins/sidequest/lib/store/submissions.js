@@ -810,7 +810,7 @@ ${JSON.stringify(quality.unverified)}`,
     };
     const participants = opts?.qualityTickets || [ticket];
     const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
-    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment);
+    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
     const runWithQuality = (environment) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
     return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
   }

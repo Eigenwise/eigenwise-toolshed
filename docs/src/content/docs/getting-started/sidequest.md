@@ -633,7 +633,12 @@ New behavior requires the existing claim-holder marker: `[sidequest:negative-con
 
 Capture and integration command deadlines both default to 25 minutes. Set board_config
 `integrationVerifyTimeoutMs` to a positive integer in milliseconds, up to 3600000 (60 minutes),
-for both paths. Timeout results name the key and effective limit; the owned process tree is
+for both paths and importing-test batches. The board setting `integrationTestFileThreshold`
+(default 40 extra files, positive integer) switches large import selections to the plugin's
+`test:full` script, or `npm test` when unavailable. That gate controls its own concurrency.
+Smaller batches exclude performance and benchmark files. Guidance Markdown selects guidance,
+skill and compatibility tests. Batch receipts record the command shape, deadline and elapsed time.
+Timeout results name the key and effective limit; the owned process tree is
 terminated before the result is reported. Slot waiting and cleanup add to total wall time.
 Capture logs are written directly under the board project
 `verification/<ref>/` directory and stay readable through the returned `logPath`.
