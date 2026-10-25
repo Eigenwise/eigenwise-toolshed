@@ -33,6 +33,7 @@ export const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
 // SQLite's busy handler is not first-come-first-served, so in a burst one writer can wait out every other
 // writer's transactions (SQ-3844). While other writers keep committing the lock is moving, not stuck, so a
 // write keeps waiting up to this ceiling; like the migration wait, refusing would only drop the write.
+// Schema initialization shares the policy: racing cold openers starve each other the same way (SQ-3849).
 export const SQLITE_BUSY_MOVING_QUEUE_CEILING_MS = 15_000;
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
 
@@ -491,7 +492,7 @@ export function openDb(homeRoot: string): SidequestDatabase {
       key TEXT PRIMARY KEY,
       value TEXT
     );
-  `));
+  `), SQLITE_BUSY_TIMEOUT_MS, otherWriterCommittedSince(database));
 
   const stampedSchemaVersion = () => {
     const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
@@ -511,6 +512,7 @@ export function openDb(homeRoot: string): SidequestDatabase {
       'preparing a schema migration',
       () => prepareCached(database, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run(),
       SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+      otherWriterCommittedSince(database),
     );
     schemaVersion = stampedSchemaVersion();
   }
