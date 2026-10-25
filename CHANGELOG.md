@@ -8,6 +8,59 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.614.0 (2026-10-25)
+
+### model-gateway 0.55.2 → 0.55.3
+
+#### Fixes
+
+- Stop the sibling-ensure test from flaking on Windows pid reuse (SQ-3912)
+  Test-only fix. The sibling-ensure test used to confirm the older supervisor was gone by checking its pid number, and Windows can hand that number to another process once the supervisor exits. The test now waits for its own child's exit event instead. Nothing changes for users at runtime.
+
+### quality-gate 1.3.1 → 1.3.2
+
+#### Fixes
+
+- Keep edited test callbacks paired after insertions (SQ-3909)
+  Anonymous JS/TS callbacks keep their baseline partner by call expression and test title when earlier tests are inserted. Paired JSON rows report the matching rule. Unchanged bodies remain outside scoring scope.
+
+### sidequest 6.5.0 → 6.6.0
+
+#### Features
+
+- Isolated worktree binding settles at claim; crossed claims are refused; cross-board batches refuse at prepare (SQ-3867)
+  - `dispatch` now refuses an isolated dispatch while the same session holds a prepared or launched (unclaimed) isolated dispatch on another board, from either side, and names the competing board and ticket. Before, only launched siblings counted and only the foreign-repository side refused, so a batch prepared on two boards and spawned in one message could cut a board-B worktree from board A's repository (GH-665).
+  - The briefing no longer warns "board server cwd ... is a leftover linked worktree" when the executor reads it from its own isolated worktree (GH-640).
+  - An unclaimed isolated briefing no longer prints the creation-order worktree guess as its Path, Expected worktree root or verify-capture `--worktree`. It says the binding settles at claim, and every isolated claim result now carries the settled `worktree` (GH-640).
+  - A claim from a linked checkout its lease does not record, where no swap can settle the crossing, is denied by the claim hook with `worktree_lease_crossed` naming the expected and observed paths. Before, the claim succeeded and only the first write was refused (GH-648).
+- Trial-merge overlapping candidates and run each wave verifier (SQ-3911)
+  Pending candidates with disjoint edits in a shared file can integrate independently. Wave gates run different executable verifiers on the composed tree and retain each result.
+- Reviews of main-thread direct-claim candidates can finalize (GH-654) (SQ-3922)
+  A main-thread direct claim now records a main-attestation identity (its host session) for the candidate it submits, so a bound independent review of that candidate can be finalized with `verdict` and the candidate integrates. Before this a direct claim either inherited the previous executor's runtime fields or recorded none, and the review dead-ended at `agent_identity_missing` after spending its whole budget. Binding a review now refuses up front when the submitting attempt recorded no identity at all, while the candidate can still be reworked, and the integration refusal no longer tells you to re-dispatch a submitted ticket; it names the fresh-ticket route that works.
+
+#### Fixes
+
+- Dashboard design doc describes the list-row ticket API (SQ-3883)
+  The dashboard design doc now documents the list-row `/api/tickets` response, the per-ticket detail read, and the handoff-pid behaviour.
+- Preserve full candidate lineage in manual delivery (SQ-3917)
+  Manual closure of a reachable candidate now records paths from its full submitted range. Supersession accepts byte-identical inherited paths without replacement evidence and reports them in `identicalPaths`. Missing-lineage refusals distinguish identical paths from content that still needs review.
+- Show external-deliverable declarations in pulse and briefings (SQ-3918)
+  The GH-662 external-note attestation refusal reported on 5.8.0 no longer reproduces on develop. Regression coverage preserves the successful clean-scope closeout. Pulse and executor briefings now expose externalDeliverable, and attestation refusals show expected and received first segments in the same form.
+- Keep quality debt filing from blocking delivery (SQ-3919)
+  Scope quality debt to changed files with unverified rows, excluding release fragments and board-added docs. Record a receipt note when debt cannot be filed and keep the delivery result intact.
+- Name claimed-dispatch abandon backstop and dead-executor recovery (SQ-3920)
+  Keep the 24-hour abandon rule for dispatched and verifying claims. Pulse and list now name the staleness rule beside its threshold. Correct orchestration guidance and document launching-session release for a confirmed dead executor whose terminal record is missing.
+- A timed-out merged-tree gate ends its whole test tree on every board (SQ-3927)
+  Only environment-bound verifiers ran under the owned process tree. Every other gate (pinned verifier, wave gate, quality gate, importing-test batches) ran on a bare `spawnSync`, and on Windows its deadline killed just `sh.exe`, so `npm`, `node --test` and the current test file kept running long after the gate reported `timeout`. Two of those trees were found still alive 50 minutes past their deadlines. Every command verifier now runs under the owned tree (a process group on POSIX, the job owner's job on Windows), so the tree ends before the result is reported. On Windows the timeout evidence also names the job members the deadline ended, or the ones that survived it.
+- The cross-board dispatch refusal names the call that retires an unspawned prepared sibling (SQ-3936)
+  - When `dispatch` refuses because this session still holds a prepared isolated dispatch on another board (GH-665), the refusal now says that sibling keeps counting until the prepared-dispatch TTL sweep expires it, and names the exact `dispatch({ ref, project, recoveryEvidence, retireOnly: true })` call that retires it at once from the session that prepared it. Before, the only stated remedy was to wait for it to claim or end, so a dispatch you chose not to spawn blocked every other board for hours. The crossed-claim refusal now leads with its code and instruction so the PreToolUse budget never cuts them off; the two paths come last.
+- Keep candidate_overlap when a trial merge cannot run and run each shared wave verifier once (SQ-3937)
+  A trial merge that can't run, or a candidate with no Git commit, keeps the changed-path overlap and refuses `candidate_overlap` instead of a separate `candidate_overlap_trial_failed` code. Wave participants that pin the same verifier share one run on the composed tree.
+- Keep pulse staleness rules in the compact liveness contract (SQ-3938)
+  Pulse gained `claim.staleRule` (`abandon` or `idle`) alongside `staleAfterMs`. Keep it in compact responses so callers can interpret the threshold without another read. Update the CLI/MCP shape regression and compact-pulse guidance together.
+- A verifier whose shell never starts reports the spawn error again (SQ-3939)
+  After every gate moved under the owned process tree (SQ-3927), a verifier pointed at a missing working directory stopped the owner itself from starting, and the capture said only "The verification owner ended without reporting". The owner now starts in the board's own directory and hands the working directory to the shell, so a shell that cannot start is reported by the owner as an error record and the capture carries the spawn error text (ENOENT) again. On Windows a job owner that never spawned no longer claims "Survivor state unknown", since it never made a job.
+
 ## v3.613.0 (2026-10-25)
 
 ### sidequest 6.4.0 → 6.5.0
