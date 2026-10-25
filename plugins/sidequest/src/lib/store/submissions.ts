@@ -883,6 +883,7 @@ function skippedVerification(requirement: any, waiver: any) {
 interface QualityTicket {
   id: string;
   ref: string;
+  files?: string[];
   submission: { base?: string; commit?: string; changedPaths?: string[] };
 }
 
@@ -898,23 +899,47 @@ function qualityInput(slug: string, ticket: QualityTicket, project: string, time
   };
 }
 
+function qualityDebtFiles(ticket: QualityTicket, quality: IntegrationQuality): string[] {
+  const unverifiedFiles = new Set(quality.unverified.map((row) => row.relativePath));
+  return (ticket.submission.changedPaths || []).filter((file) => {
+    if (file.startsWith('.release/unreleased/')) return false;
+    if (file.startsWith('docs/') && !isInScope(file, ticket.files || [])) return false;
+    return unverifiedFiles.has(file);
+  });
+}
+
+function noteQualityDebt(quality: IntegrationQuality, reason: string): void {
+  quality.debtTicketNote = 'debt ticket not filed: ' + reason;
+  try {
+    if (quality.receipt) fs.writeFileSync(quality.receipt, JSON.stringify(quality, null, 2) + '\n');
+  } catch (error) {
+    quality.debtTicketNote += '; receipt update failed: ' + integrationGitError(error);
+  }
+}
+
 function recordQualityDebt(slug: string, ticket: QualityTicket, quality: IntegrationQuality) {
   if (!quality.unverified.length || quality.captureGap) return;
+  const files = qualityDebtFiles(ticket, quality);
+  if (!files.length) return noteQualityDebt(quality, 'no candidate source/test paths have unverified rows');
   const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
-  transaction(() => {
-    if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
-    dependencies.createTicket(slug, {
-      title,
-      description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
-      category: 'coding.normal',
-      complexity: 2,
-      complexityWhy: 'Capture missing native quality evidence for an existing candidate',
-      files: ticket.submission.changedPaths || [],
-      executorVerifyKind: 'manual',
-      executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
-      source: 'integration-quality',
+  try {
+    transaction(() => {
+      if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
+      dependencies.createTicket(slug, {
+        title,
+        description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
+        category: 'coding.normal',
+        complexity: 2,
+        complexityWhy: 'Capture missing native quality evidence for an existing candidate',
+        files,
+        executorVerifyKind: 'manual',
+        executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
+        source: 'integration-quality',
+      });
     });
-  });
+  } catch (error) {
+    noteQualityDebt(quality, integrationGitError(error));
+  }
 }
 
 function verifyCandidateQuality(slug: string, tickets: QualityTicket[], project: string, timeoutMilliseconds: number, verify: (environment: NodeJS.ProcessEnv) => VerificationResult, environment: NodeJS.ProcessEnv) {

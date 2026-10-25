@@ -109,7 +109,7 @@ function writeGapReport(input: QualityInput, partial: boolean): void {
   fs.writeFileSync(path.join(input.project, 'gate', 'bin', 'quality-gate.js'), 'process.stdout.write(' + JSON.stringify(JSON.stringify(report)) + ');');
 }
 
-function verifyDeliveredQuality(input: QualityInput, mode = 'enforce') {
+function verifyDeliveredQuality(input: QualityInput, mode = 'enforce', filingError?: string) {
   const { createSubmissions } = require('../src/lib/store/submissions.js');
   const ticket = {
     id: 'quality-fixture', ref: 'SQ-quality', comments: [],
@@ -126,7 +126,10 @@ function verifyDeliveredQuality(input: QualityInput, mode = 'enforce') {
     normalizeIntegrationVerifyTimeoutMs: () => input.timeoutMilliseconds,
     verifyCommandError: () => null, dispatchState: () => ({ evidenceDirectory: input.directory }),
     ensureDir: (directory: string) => fs.mkdirSync(directory, { recursive: true }),
-    listTickets: () => [], createTicket: (_slug: string, debt: unknown) => debts.push(debt),
+    listTickets: () => [], createTicket: (_slug: string, debt: unknown) => {
+      if (filingError) throw new Error(filingError);
+      debts.push(debt);
+    },
     transaction: (callback: () => void) => callback(),
     withTicketLock: (_slug: string, _id: string, callback: () => unknown) => callback(),
     putTicket: () => {}, queueEventNotification: () => {}, addComment: () => ({ ticket }),
@@ -155,6 +158,47 @@ test('partial capture gaps still file one debt ticket', (context) => {
   assert.equal(result.ok, true);
   assert.equal(result.verify.quality[0].captureGap, undefined);
   assert.equal(debts.length, 1);
+});
+
+test('partial debt scope includes only unverified candidate files without release fragments or board docs', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, true);
+  input.changedPaths.push('.release/unreleased/SQ-source.md', 'docs/guide.md', 'covered.js');
+  const unverified = ['source.js', 'docs/guide.md', '.release/unreleased/SQ-source.md'].map((relativePath) => ({
+    relativePath, name: 'missingBody', complexity: 2, unverified: 'no authentic executed source map',
+  }));
+  const report = { changedMetrics: unverified, failures: [], unverified };
+  fs.writeFileSync(path.join(input.project, 'gate', 'bin', 'quality-gate.js'), 'process.stdout.write(' + JSON.stringify(JSON.stringify(report)) + ');');
+  const { result, debts } = verifyDeliveredQuality(input);
+  assert.equal(result.ok, true);
+  assert.deepEqual((debts[0] as { files: string[] }).files, ['source.js']);
+});
+
+test('debt filing failure preserves successful delivery verification and records its receipt note', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, true);
+  let delivery: ReturnType<typeof verifyDeliveredQuality> | undefined;
+  assert.doesNotThrow(() => { delivery = verifyDeliveredQuality(input, 'enforce', 'forced createTicket refusal'); });
+  assert.ok(delivery);
+  const { result, debts } = delivery;
+  assert.equal(result.ok, true);
+  assert.equal(result.verify.status, 'passed');
+  assert.deepEqual(debts, []);
+  const quality = result.verify.quality[0];
+  assert.equal(quality.debtTicketNote, 'debt ticket not filed: forced createTicket refusal');
+  assert.equal(JSON.parse(fs.readFileSync(quality.receipt, 'utf8')).debtTicketNote, quality.debtTicketNote);
+});
+
+test('unverified rows outside candidate scope record a receipt gap without filing debt', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, true);
+  fs.writeFileSync(path.join(input.project, 'covered.js'), 'function coveredBody() { return true; }');
+  input.changedPaths = ['covered.js', '.release/unreleased/SQ-source.md'];
+  const { result, debts } = verifyDeliveredQuality(input);
+  assert.equal(result.ok, true);
+  assert.deepEqual(debts, []);
+  const quality = result.verify.quality[0];
+  assert.match(JSON.parse(fs.readFileSync(quality.receipt, 'utf8')).debtTicketNote, /debt ticket not filed: no candidate source\/test paths/);
 });
 
 test('report mode records measured failures without refusing the verifier', (context) => {
