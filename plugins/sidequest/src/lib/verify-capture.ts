@@ -35,6 +35,10 @@ type CaptureRecordResult = Readonly<{
 type VerificationCaptureStore = Readonly<{
   findProject(project: string): Readonly<{ ok: boolean; slug?: string; meta?: Readonly<{ path?: string }> }>;
   getTicket(slug: string, ticket: string): unknown;
+  homeRoot(): string;
+  projectDir(slug: string): string;
+  boardConfig(slug: string): Readonly<{ integrationVerifyTimeoutMs: number }>;
+  normalizeIntegrationVerifyTimeoutMs(value?: number): number;
   workingTreeDeliveryCandidate(slug: string, ticket: unknown): Readonly<{ candidate: Readonly<{ source: string; value: string }> }> | null;
   pinnedVerificationRequirement(ticket: unknown): Readonly<{ command?: string; environment?: 'shared'; suite?: unknown }>;
   recordVerificationCapture(slug: string, ticket: string, capture: Readonly<Record<string, unknown>>): CaptureRecordResult;
@@ -65,10 +69,31 @@ function captureRequirement(command: string) {
   return Object.freeze({ kind: 'command' as const, command, evidenceContract: 'command output' });
 }
 
-async function runVerifyCapture(command: string, cwd = process.cwd(), timeoutMilliseconds?: number, environment?: NodeJS.ProcessEnv): Promise<VerifyCapture> {
+function captureLogPath(target: CaptureTarget | null = null): string {
+  const store = require('./store.js') as VerificationCaptureStore;
+  const project = target ? captureProject(target) : null;
+  const directory = project
+    ? path.join(store.projectDir(project.slug), 'verification', target!.ticket)
+    : path.join(store.homeRoot(), 'verification', 'unbound');
+  fs.mkdirSync(directory, { recursive: true });
+  return path.join(directory, 'capture-' + process.pid + '-' + randomUUID() + '.log');
+}
+
+async function runConfiguredCapture(command: string, cwd: string, target: CaptureTarget | null, environment?: NodeJS.ProcessEnv): Promise<VerifyCapture> {
+  const store = require('./store.js') as VerificationCaptureStore;
+  const project = target ? captureProject(target) : null;
+  const timeoutMilliseconds = project ? store.boardConfig(project.slug).integrationVerifyTimeoutMs : store.normalizeIntegrationVerifyTimeoutMs();
+  const capture = await runVerifyCapture(command, cwd, timeoutMilliseconds, environment, captureLogPath(target));
+  if (capture.status !== 'timeout') return capture;
+  const reason = 'integrationVerifyTimeoutMs=' + timeoutMilliseconds + 'ms. ' + capture.reason;
+  return Object.freeze({ ...capture, evidence: reason, reason });
+}
+
+async function runVerifyCapture(command: string, cwd = process.cwd(), timeoutMilliseconds = (require('./store.js') as VerificationCaptureStore).normalizeIntegrationVerifyTimeoutMs(), environment?: NodeJS.ProcessEnv, logPath = captureLogPath()): Promise<VerifyCapture> {
   const result = await runOwnedProcessVerification(captureRequirement(command), {
     cwd,
-    ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }),
+    logPath,
+    timeoutMilliseconds,
     ...(environment === undefined ? {} : { environment }),
   });
   return Object.freeze({
@@ -414,10 +439,10 @@ function runFullSuiteVerification(command: string, project: string, verify: (env
   });
 }
 
-async function runFullSuiteCapture(command: string, project: string, cwd: string, fileSystem: CaptureSlotFileSystem = fs): Promise<VerifyCapture> {
+async function runFullSuiteCapture(command: string, target: CaptureTarget, cwd: string, fileSystem: CaptureSlotFileSystem = fs): Promise<VerifyCapture> {
   let slot: CaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure;
   try {
-    slot = await acquireCaptureSlot(project, captureSlotTimeoutMilliseconds, fileSystem);
+    slot = await acquireCaptureSlot(target.project, captureSlotTimeoutMilliseconds, fileSystem);
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : String(error);
     return captureSlotCouldNotRun(command, Object.freeze({
@@ -431,7 +456,7 @@ async function runFullSuiteCapture(command: string, project: string, cwd: string
   let capture: VerifyCapture;
   let releaseFailure: CaptureSlotFailure | null = null;
   try {
-    capture = await runVerifyCapture(command, cwd, undefined, {
+    capture = await runConfiguredCapture(command, cwd, target, {
       ...process.env,
       SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: String(slot.queuePosition - 1),
     });
@@ -606,8 +631,8 @@ async function runCapturedVerification(command: string, target: CaptureTarget | 
   }
   const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
   const capture = target && isFullSuiteCommand(command)
-    ? await runFullSuiteCapture(command, target.project, commandCwd, fileSystem)
-    : await runVerifyCapture(command, commandCwd);
+    ? await runFullSuiteCapture(command, target, commandCwd, fileSystem)
+    : await runConfiguredCapture(command, commandCwd, target);
   const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }

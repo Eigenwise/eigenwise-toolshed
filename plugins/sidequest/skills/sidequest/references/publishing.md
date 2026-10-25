@@ -480,3 +480,10 @@ yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's c
 record, recover any durable refs needed for the push, then finish the push or record the failure on the
 ticket. A done ticket alone never
 proves that its commit is reachable from `origin/main`.
+
+Capture and integration command deadlines both default to 25 minutes. Set board_config
+`integrationVerifyTimeoutMs` to a positive integer in milliseconds, up to 3600000 (60 minutes),
+for both paths. Timeout results name the key and effective limit; the owned process tree is
+terminated before the result is reported. Slot waiting and cleanup add to total wall time.
+Capture logs are written directly under the board project
+`verification/<ref>/` directory and stay readable through the returned `logPath`.
