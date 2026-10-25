@@ -1681,14 +1681,31 @@ test('GH-228: list and pulse report the same stale flag and the threshold it was
   assert.strictEqual(store.claimTicket(slug, hand.ref, 'human', { direct: true, reason: 'A hand claim needs no executor association.' }).ok, true);
   backdateClaim(hand.ref, 2 * HOUR);
 
+  const verifying = store.createTicket(slug, {
+    title: 'GH-658 verifying hand claim',
+    complexity: 2,
+    complexityWhy: 'fixture for verification staleness without a dispatch',
+    labels: ['direct-ok'],
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  assert.strictEqual(store.claimTicket(slug, verifying.ref, 'verifier', { direct: true, reason: 'A hand claim needs no executor association.' }).ok, true);
+  assert.strictEqual(store.addComment(slug, verifying.ref, {
+    by: 'verifier', body: '[sidequest:verify-start] node --test', kind: 'comment', source: 'mcp',
+  }).ok, true);
+  backdateClaim(verifying.ref, 2 * HOUR);
+
   const rows = store.listPayload(slug, { brief: true, status: 'doing', all: true }).tickets;
   const cases = [
-    { ref: dispatched.ref, stale: false, staleAfterMs: store.claimAbandonMs() },
-    { ref: hand.ref, stale: true, staleAfterMs: store.claimIdleMs() },
+    { ref: dispatched.ref, stale: false, staleAfterMs: store.claimAbandonMs(), staleRule: 'abandon' },
+    { ref: hand.ref, stale: true, staleAfterMs: store.claimIdleMs(), staleRule: 'idle' },
+    { ref: verifying.ref, stale: false, staleAfterMs: store.claimAbandonMs(), staleRule: 'abandon' },
   ];
   for (const expected of cases) {
     const row = rows.find((candidate: any) => candidate.ref === expected.ref);
     const pulse = store.pulsePayload(slug, expected.ref);
+    assert.strictEqual(row.claim.staleRule, expected.staleRule, `${expected.ref} list names the staleness rule`);
+    assert.strictEqual(pulse.claim.staleRule, expected.staleRule, `${expected.ref} pulse names the staleness rule`);
     assert.deepStrictEqual({ stale: row.claim.stale, staleAfterMs: row.claim.staleAfterMs }, { stale: expected.stale, staleAfterMs: expected.staleAfterMs }, expected.ref);
     assert.deepStrictEqual({ stale: pulse.claim.stale, staleAfterMs: pulse.claim.staleAfterMs }, { stale: row.claim.stale, staleAfterMs: row.claim.staleAfterMs }, `${expected.ref} pulse agrees with list`);
   }
