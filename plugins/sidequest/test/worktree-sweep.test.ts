@@ -224,7 +224,7 @@ function sizeSweepFixture(home: string) {
 for (const includeStoreUsage of [false, true]) {
   test('sweep sizes=' + includeStoreUsage + ' never walks sibling boards and reports named done trees', async () => {
     const previousHome = process.env.SIDEQUEST_HOME;
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-sizes-'));
+    const home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-sizes-')));
     process.env.SIDEQUEST_HOME = home;
     const fixture = sizeSweepFixture(home);
     const promises = require('node:fs/promises');
