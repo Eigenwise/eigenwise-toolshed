@@ -43,7 +43,7 @@ type WorktreeSweepOutputEntry = {
 };
 
 type WorktreeSweepProgress = {
-  phase: 'classifying' | 'sweeping' | 'complete';
+  phase: 'preparing' | 'classifying' | 'sweeping' | 'complete';
   candidates: number;
   observed: number;
   current: string | null;

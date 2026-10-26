@@ -2766,7 +2766,7 @@ async function recoveryStoreSizes(repo: string, recovery: Awaited<ReturnType<typ
 
 type SweepProgressEntry = { action: string; reason?: unknown };
 type SweepProgress = {
-  phase: 'classifying' | 'sweeping' | 'complete';
+  phase: 'preparing' | 'classifying' | 'sweeping' | 'complete';
   candidates: number;
   observed: number;
   current: string | null;
@@ -2882,7 +2882,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0
     ? Number(options.notIntegratedSalvageAgeMs)
     : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
-  reportSweepProgress(options, [], [], { phase: 'classifying', candidates: 0, observed: 0, current: repo, reason: 'recovery_retention' });
+  reportSweepProgress(options, [], [], { phase: 'preparing', candidates: 0, observed: 0, current: repo, reason: 'recovery_retention' });
   const recovery = await sweepRecoveryStores(repo, tickets, options.ticketRef ? { ...options, execute: false } : options);
   const { upstream, comparison, fallback: upstreamFallback, ambiguous } = await resolvedIntegrationUpstream(repo, options);
   const upstreamSafetyReason = ambiguous ? 'upstream_ambiguous' : comparison ? null : 'upstream_unavailable';
@@ -2922,7 +2922,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       skipped: 'repository_busy',
     };
   }
-  reportSweepProgress(options, [], [], { phase: 'classifying', candidates: 0, observed: 0, current: repo, reason: 'listing_candidates' });
+  reportSweepProgress(options, [], [], { phase: 'preparing', candidates: 0, observed: 0, current: repo, reason: 'listing_candidates' });
   const listed = await git(repo, ['worktree', 'list', '--porcelain']);
   if (!listed.ok) throw new Error(listed.stderr || 'could not list git worktrees');
   const worktreeList = parseWorktreeList(listed.stdout);
