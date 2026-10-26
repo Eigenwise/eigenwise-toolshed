@@ -2485,7 +2485,7 @@ type RecoveryStoreReport = {
   bytes: number | null;
   planned: number;
   removed: number;
-  reclaimedBytes: number;
+  reclaimedBytes: number | null;
 };
 
 function recoveryRetentionAgeMs(options: any): number {
@@ -2662,16 +2662,14 @@ async function reconcileRetainedParkedRegistrations(repo: string, entries: Recov
 async function recoveryStoreReport(store: RecoveryStoreName, root: string, entries: RecoveryStoreEntry[], options: any): Promise<RecoveryStoreReport> {
   const planned = entries.filter((entry) => entry.action === 'remove');
   let removed = 0;
-  let reclaimedBytes = 0;
+  const reclaimedBytes = null;
   for (const entry of planned) {
-    entry.sizeBytes = await directoryBytes(entry.path);
     if (!options.execute) continue;
     await fs.rm(entry.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     if (store === 'quarantine') clearQuarantineFailureForDestination(entry.path);
     removed += 1;
-    reclaimedBytes += entry.sizeBytes;
   }
-  const bytes = options.includeStoreUsage ? await directoryBytes(root) : null;
+  const bytes = null;
   return { path: root, entries, bytes, planned: planned.length, removed, reclaimedBytes };
 }
 
@@ -2750,8 +2748,8 @@ function recoveryCounts(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>
   };
 }
 
-async function recoveryStoreSizes(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>, options: any): Promise<StorageReport> {
-  const worktreePath = path.join(sidequestHome(), 'worktrees');
+async function recoveryStoreSizes(repo: string, recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>, options: any): Promise<StorageReport> {
+  const worktreePath = worktreeRoot(repo);
   let worktreeBytes: number | null = null;
   let worktreeDirectories: DirectorySize[] = [];
   if (options.includeStoreUsage) {
@@ -2853,6 +2851,30 @@ function reportSweepProgress(options: SweepProgressOptions, entries: readonly Sw
   if (typeof options.onProgress === 'function') options.onProgress(sweepProgress(entries, removed, status));
 }
 
+type SweepReportEntry = { path: string; ticket: string | null; action: string; reason: string };
+
+async function writeSweepCandidateReport(repo: string, entries: readonly SweepReportEntry[], planned: readonly string[], removed: readonly string[]): Promise<void> {
+  const { reportFile } = require('./sweep-state-path.js');
+  const filename = reportFile(repo).replace(/\.json$/, '.candidates.json');
+  const skipped = entries.filter((entry) => !removed.includes(entry.path));
+  await fs.mkdir(path.dirname(filename), { recursive: true });
+  await fs.writeFile(filename, JSON.stringify({ repository: repo, planned, removed, skipped, entries }));
+}
+
+async function finishSweepReport(
+  repo: string, entries: readonly SweepReportEntry[], planned: readonly string[], removed: readonly string[],
+  recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>, options: SweepProgressOptions & { includeStoreUsage?: boolean },
+  sweepingStatus: SweepProgressStatus, failures: Array<{ path: string | null; message: string }>,
+): Promise<StorageReport> {
+  try {
+    await writeSweepCandidateReport(repo, entries, planned, removed);
+  } catch (error) {
+    failures.push({ path: repo, message: String(error) });
+  }
+  if (options.includeStoreUsage) reportSweepProgress(options, entries, removed, { ...sweepingStatus, reason: 'measuring_sizes' });
+  return recoveryStoreSizes(repo, recovery, options);
+}
+
 async function sweep(repo: string, tickets: any[], options: any = {}): Promise<any> {
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0
     ? Number(options.minAgeMs)
@@ -2860,8 +2882,8 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0
     ? Number(options.notIntegratedSalvageAgeMs)
     : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
+  reportSweepProgress(options, [], [], { phase: 'classifying', candidates: 0, observed: 0, current: repo, reason: 'recovery_retention' });
   const recovery = await sweepRecoveryStores(repo, tickets, options.ticketRef ? { ...options, execute: false } : options);
-  const storage = await recoveryStoreSizes(recovery, options);
   const { upstream, comparison, fallback: upstreamFallback, ambiguous } = await resolvedIntegrationUpstream(repo, options);
   const upstreamSafetyReason = ambiguous ? 'upstream_ambiguous' : comparison ? null : 'upstream_unavailable';
   if (await repositoryBusy(repo)) {
@@ -2885,7 +2907,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       prunedOrphanBranches: [],
       quarantined: [],
       recovery,
-      storage,
+      storage: await recoveryStoreSizes(repo, recovery, {}),
       counts: {
         removedWorktrees: 0,
         salvagedWorktrees: 0,
@@ -2900,6 +2922,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       skipped: 'repository_busy',
     };
   }
+  reportSweepProgress(options, [], [], { phase: 'classifying', candidates: 0, observed: 0, current: repo, reason: 'listing_candidates' });
   const listed = await git(repo, ['worktree', 'list', '--porcelain']);
   if (!listed.ok) throw new Error(listed.stderr || 'could not list git worktrees');
   const worktreeList = parseWorktreeList(listed.stdout);
@@ -2991,6 +3014,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     reason: null,
   };
   const completeStatus: SweepProgressStatus = { ...sweepingStatus, phase: 'complete' };
+  const planned = entries.filter((entry) => entry.action !== 'keep').map((entry) => entry.path);
   const execute = !!options.execute;
   reportSweepProgress(options, entries, removed, sweepingStatus);
   const salvaged: Array<{ path: string; ref: string; uncommittedRef: string | null; recovery: string }> = [];
@@ -3167,6 +3191,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
 
   const strayDirectories = options.ticketRef ? [] : await sweepStrayWorktreeHome(repo, execute, failures);
 
+  const storage = await finishSweepReport(repo, entries, planned, removed, recovery, options, sweepingStatus, failures);
   reportSweepProgress(options, entries, removed, completeStatus);
   return {
     dryRun: !execute,

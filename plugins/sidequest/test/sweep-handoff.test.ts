@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { canonicalPath } from '../src/lib/kernel/worktree.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -234,7 +235,26 @@ test('SessionEnd finishes under the exit budget, starts no sweep, and hands the 
     for (const tree of trees) assert.equal(fs.existsSync(tree), true, 'SessionEnd itself touches no tree');
 
     Object.assign(process.env, { SIDEQUEST_HOME: home, CLAUDE_PLUGIN_ROOT: plugin, SIDEQUEST_SWEEP_DEADLINE_MS: '60000' });
+    const forbidden = path.join(home, 'worktrees', 'sibling-board', 'agent-large');
+    fs.mkdirSync(forbidden, { recursive: true });
+    fs.writeFileSync(path.join(forbidden, 'cache'), Buffer.alloc(1024 * 1024));
+    const preload = path.join(home, 'reject-size-walk.cjs');
+    fs.writeFileSync(preload, `
+const promises = require('node:fs/promises');
+const originalRead = promises.readdir;
+promises.readdir = async function(directory, ...argumentsList) {
+  if (String(directory) === ${JSON.stringify(forbidden)}) {
+    require('node:fs').writeFileSync(${JSON.stringify(path.join(home, 'size-walk-attempted'))}, 'walked');
+    throw new Error('SessionStart must never size-walk sibling boards');
+  }
+  return originalRead.call(this, directory, ...argumentsList);
+};
+`);
+    process.env.NODE_OPTIONS = (process.env.NODE_OPTIONS || '') + ' --require "' + preload.replaceAll(path.sep, '/') + '"';
     const notices = await runSweep({ cwd: project, session_id: 'next-session' });
+    assert.equal(fs.existsSync(path.join(home, 'size-walk-attempted')), false, 'SessionStart never calls the sibling size walk');
+    const candidateReport = JSON.parse(fs.readFileSync(reportFile(project).replace(/\.json$/, '.candidates.json'), 'utf8'));
+    assert.deepEqual(candidateReport.removed.map(canonicalPath).sort(), trees.map(canonicalPath).sort(), 'the SessionStart report names every removed tree');
 
     assert.doesNotMatch(notices.join('\n'), /could not run|failed/, notices.join('\n'));
     for (const tree of trees) assert.equal(fs.existsSync(tree), false, `SessionStart maintenance reclaimed ${tree}`);

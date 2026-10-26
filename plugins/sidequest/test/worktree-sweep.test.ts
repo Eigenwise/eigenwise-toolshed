@@ -183,3 +183,103 @@ test('a sweep lock with unreadable contents is cleared and the sweep runs', asyn
   assert.deepEqual(garbage.result, ['swept']);
   assert.equal(garbage.lockAfter, null);
 });
+
+const { execFileSync } = require('node:child_process');
+const worktrees = require('../src/lib/worktrees.ts');
+
+function sweepFixtureGit(repository: string, argumentsList: string[]): string {
+  return execFileSync('git', argumentsList, { cwd: repository, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function sizeSweepFixture(home: string) {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sizes-repository-'));
+  sweepFixtureGit(repository, ['init', '-b', 'main']);
+  sweepFixtureGit(repository, ['config', 'user.name', 'Sidequest Test']);
+  sweepFixtureGit(repository, ['config', 'user.email', 'test@example.invalid']);
+  fs.writeFileSync(path.join(repository, 'README'), 'fixture');
+  sweepFixtureGit(repository, ['add', '.']);
+  sweepFixtureGit(repository, ['commit', '-m', 'base']);
+  const group = worktrees.worktreeRoot(repository);
+  const tree = path.join(group, 'agent-done').replaceAll(path.sep, '/');
+  sweepFixtureGit(repository, ['worktree', 'add', '-b', 'worktree-agent-done', tree]);
+  const gitDirectory = sweepFixtureGit(tree, ['rev-parse', '--absolute-git-dir']);
+  const checkoutInstance = require('../src/lib/kernel/worktree.ts').createCheckoutInstanceMarker(gitDirectory);
+  const revision = sweepFixtureGit(tree, ['rev-parse', 'HEAD']);
+  const terminalAt = new Date().toISOString();
+  const terminal = { terminalAt, terminalSource: 'test-store-transition', outcome: 'done' };
+  const ticket = { ref: 'SQ-SIZES', status: 'done', claimLive: false, dispatch: {
+    agentId: 'done', sharedTree: false, worktree: tree, baseCommit: revision,
+    worktreeBindingSource: 'worktree-create', worktreeCreationCompletedAt: terminalAt,
+    worktreeGitDirectory: gitDirectory, worktreeCommonGitDirectory: path.join(repository, '.git'),
+    worktreeCheckoutInstance: checkoutInstance, worktreeObservedRevision: revision,
+    ownedDependencyLinks: [], ...terminal, attempts: [terminal],
+  } };
+  const sibling = path.join(home, 'worktrees', 'sibling-board', 'agent-large');
+  fs.mkdirSync(sibling, { recursive: true });
+  fs.writeFileSync(path.join(sibling, 'large-cache'), Buffer.alloc(1024 * 1024));
+  return { repository, tree, group, ticket, sibling };
+}
+
+for (const includeStoreUsage of [false, true]) {
+  test('sweep sizes=' + includeStoreUsage + ' never walks sibling boards and reports named done trees', async () => {
+    const previousHome = process.env.SIDEQUEST_HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-sizes-'));
+    process.env.SIDEQUEST_HOME = home;
+    const fixture = sizeSweepFixture(home);
+    const promises = require('node:fs/promises');
+    const originalRead = promises.readdir;
+    const reads: string[] = [];
+    const events: string[] = [];
+    promises.readdir = async (directory: string, ...argumentsList: unknown[]) => {
+      reads.push(String(directory));
+      if (String(directory) === fixture.sibling) throw new Error('sibling board must never be walked');
+      if (String(directory) === fixture.group) events.push('group-read:' + fs.existsSync(fixture.tree));
+      return originalRead(directory, ...argumentsList);
+    };
+    try {
+      const result = await worktrees.sweep(fixture.repository, [fixture.ticket], {
+        execute: true, minAgeMs: 0, integrationTarget: { upstream: 'main', branch: 'main' }, includeStoreUsage,
+        onProgress: (progress: { reason: string | null }) => events.push('progress:' + progress.reason),
+      });
+      assert.equal(events[0], 'progress:recovery_retention', 'progress precedes recovery and candidate discovery');
+      assert.equal(reads.includes(fixture.sibling), false, 'a large sibling board is never walked');
+      assert.deepEqual(result.removed, [fixture.tree], 'the done-ticket candidate is removed');
+      assert.equal(result.entries[0].reason, 'ticket_closed_settled');
+      assert.equal(result.storage.worktrees.path, fixture.group);
+      assert.equal(result.storage.worktrees.bytes, includeStoreUsage ? 0 : null);
+      assert.equal(events.includes('progress:measuring_sizes'), includeStoreUsage);
+      assert.equal(events.slice(includeStoreUsage ? events.indexOf('progress:measuring_sizes') + 1 : events.length).includes('group-read:true'), false, 'size measurement runs after candidate removal');
+      const reportPath = require('../src/lib/sweep-state-path.ts').reportFile(fixture.repository).replace(/\.json$/, '.candidates.json');
+      const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+      assert.deepEqual(report.planned, [fixture.tree]);
+      assert.deepEqual(report.removed, [fixture.tree]);
+      assert.deepEqual(report.skipped, []);
+      assert.equal(report.entries[0].ticket, 'SQ-SIZES');
+    } finally {
+      promises.readdir = originalRead;
+      process.env.SIDEQUEST_HOME = previousHome;
+      fs.rmSync(fixture.repository, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
+
+test('the shipped sweep CLI measures sizes only when --sizes is explicit', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-cli-sizes-'));
+  const previousHome = process.env.SIDEQUEST_HOME;
+  process.env.SIDEQUEST_HOME = home;
+  const fixture = sizeSweepFixture(home);
+  try {
+    const command = [path.resolve(__dirname, '../bin/sidequest.js'), 'worktrees', 'sweep', '--dry-run', '--json', '--project', fixture.repository];
+    const options = { encoding: 'utf8', windowsHide: true, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] };
+    const defaultResult = JSON.parse(execFileSync(process.execPath, command, options));
+    assert.equal(defaultResult.storage.worktrees.bytes, null, 'the CLI does not request a default size walk');
+    const sizedResult = JSON.parse(execFileSync(process.execPath, [...command, '--sizes'], options));
+    assert.equal(sizedResult.storage.worktrees.path, fixture.group);
+    assert.ok(sizedResult.storage.worktrees.bytes > 0, '--sizes measures the target folder');
+  } finally {
+    process.env.SIDEQUEST_HOME = previousHome;
+    fs.rmSync(fixture.repository, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
