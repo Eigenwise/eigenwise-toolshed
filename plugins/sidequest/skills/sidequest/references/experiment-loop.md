@@ -18,7 +18,7 @@ The round budget is a timebox, not a target to ignore. Hitting it requires eithe
 
 ## Branches and promotion
 
-Round work persists through git, not a worktree. Use one long-lived `sidequest/experiment/<ref>` branch, and pin every candidate as `refs/sidequest/<ref>/r<N>`. Never discard a rejected candidate. The next briefing names the exact base or ref to continue from.
+Round work persists through git, not a worktree. Use one long-lived `sidequest/experiment/<ref>` branch, and pin every candidate as `refs/sidequest-rounds/<ref>/r<N>`. Never discard a rejected candidate. The next briefing names the exact base or ref to continue from.
 
 Promotion requires an accepted verdict on the exact commit being promoted. A measurement never qualifies by itself. Cherry-pick that candidate onto the integration branch only after the log entry for that exact commit reads `accepted`.
 
@@ -36,3 +36,5 @@ The executor writes the oracle ask because it built the deliverable. Make it a b
 An already-done normal bound review uses main-thread MCP `verdict.finalize` (never-dispatched bound reviews require explicit `authority: "main-attestation"` and by/text/evidence naming the external review; accepted permits integration without reviewer runtime provenance) with explicit accepted/rejected, exact source/candidate and evidence. It preserves the original completion and report without starting an experiment round or restarting the reviewer. See `invocation-contracts.md` for finalization and correction requirements.
 
 After a readonly bound review releases with `kind: "oracle"`, `accepted` approves its candidate, `rejected` confirms the candidate must not ship, and `inconclusive` approves nothing. `verdict({ ref, outcome: "accepted", text, why })` writes `text` as the completion comment and changes that review to `done`. Do not dispatch that review again or call `done` afterward. A mistaken finalized accepted uses the main-thread MCP `verdict.correct` contract in `invocation-contracts.md`, with the original timestamp from `list({ref: reviewRef}).ticket.oracle.verdict.at`, exact source/candidate, and correction evidence. The correction appends audit history and rejects both binding halves without rewriting the experiment log. A retained repair still needs a fresh independent review before delivery.
+
+Round refs use `refs/sidequest-rounds/<ref>/r<N>` so the candidate pin `refs/sidequest/<ref>` can coexist. Briefing preparation migrates legacy `refs/sidequest/<ref>/r<N>` pins before candidate work; conflicting destination commits stop migration without deleting the legacy pin. Round lookup also accepts legacy pins.

@@ -49,6 +49,7 @@ const {
   openDb, getRow, putRow, deleteRow, listRows, listRowsPage, countRows, selectRows, prepareCached, txn,
   SQLITE_BUSY_TIMEOUT_MS, SQLITE_MIGRATION_BUSY_TIMEOUT_MS, SQLITE_BUSY_RETRY_ATTEMPTS, SQLITE_BUSY_RETRY_DELAYS_MS, CURRENT_SCHEMA_VERSION,
 } = databaseApi;
+const { DatabaseSync: DatabaseSyncClass } = require('node:sqlite') as typeof import('node:sqlite');
 
 function stampedSchemaVersion(database: DatabaseSync): number {
   return Number(JSON.parse(String(database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value)));
@@ -100,31 +101,28 @@ function holdWriteLock(homeRoot: string, durationMs: number): Promise<ReturnType
   });
 }
 
-// Back-to-back committed transactions with no gap between them: the lock keeps changing hands but is never
-// free long enough for a waiter's busy handler to catch it, like a burst of CLI writers.
-function relayWriteLock(homeRoot: string, holdMs: number, totalMs: number): Promise<ReturnType<typeof spawn>> {
-  const databasePath = path.join(homeRoot, 'sidequest.db');
-  const childProcess = spawn(process.execPath, ['-e', `
-    const { DatabaseSync } = require('node:sqlite');
-    const database = new DatabaseSync(${JSON.stringify(databasePath)}, { timeout: 5000 });
-    const pause = new Int32Array(new SharedArrayBuffer(4));
-    const startedAt = Date.now();
-    let relay = 0;
-    while (Date.now() - startedAt < ${totalMs}) {
-      database.exec('BEGIN IMMEDIATE');
-      database.prepare('INSERT OR REPLACE INTO globals (key, data) VALUES (?, ?)').run('relay', String(relay));
-      if (relay === 0) process.stdout.write('locked');
-      Atomics.wait(pause, 0, 0, ${holdMs});
-      database.exec('COMMIT');
-      relay += 1;
+// A real relay of committing processes let the waiter catch a gap on a starved runner, so these tests
+// script the burst instead: every matching statement fails busy right after another connection commits.
+function busyWhileAnotherWriterCommits<T>(homeRoot: string, statement: string, failures: number, work: () => T): { result: T; attempts: number } {
+  const otherWriter = new DatabaseSyncClass(path.join(homeRoot, 'sidequest.db'));
+  const originalExec = DatabaseSyncClass.prototype.exec;
+  let attempts = 0;
+  DatabaseSyncClass.prototype.exec = function execBehindCommittingWriter(this: DatabaseSync, sql: string): void {
+    if (this !== otherWriter && sql.includes(statement)) {
+      attempts += 1;
+      if (attempts <= failures) {
+        otherWriter.prepare('INSERT OR REPLACE INTO globals (key, data) VALUES (?, ?)').run('other-writer', String(attempts));
+        throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+      }
     }
-    database.close();
-  `], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  return new Promise((resolve, reject) => {
-    childProcess.once('error', reject);
-    childProcess.stdout.once('data', () => resolve(childProcess));
-    childProcess.stderr.once('data', (data) => reject(new Error(String(data))));
-  });
+    originalExec.call(this, sql);
+  };
+  try {
+    return { result: work(), attempts };
+  } finally {
+    DatabaseSyncClass.prototype.exec = originalExec;
+    otherWriter.close();
+  }
 }
 
 function waitForProcessExit(childProcess: ReturnType<typeof spawn>): Promise<void> {
@@ -301,7 +299,8 @@ test('txn does not retry genuine constraint errors', () => {
 test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
   const { db, homeRoot } = makeDb();
   db.exec('PRAGMA busy_timeout=50');
-  const childProcess = await holdWriteLock(homeRoot, 50 * 10);
+  // Held until killed: a fixed hold raced the three retries on a starved runner and released first.
+  const childProcess = await holdWriteLock(homeRoot, 120_000);
 
   try {
     assert.throws(
@@ -315,22 +314,37 @@ test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
   }
 });
 
-test('txn keeps waiting while other writers keep committing', async () => {
+test('txn keeps waiting while other writers keep committing', () => {
   const { db, homeRoot } = makeDb();
-  db.exec('PRAGMA busy_timeout=50');
-  const relayMs = 800;
-  const childProcess = await relayWriteLock(homeRoot, 20, relayMs);
-  const startedAt = Date.now();
+  const failures = SQLITE_BUSY_RETRY_ATTEMPTS * 2;
 
   try {
-    txn(db, () => putRow(db, 'globals', { key: 'after-relay', data: {} }));
-    const elapsedMs = Date.now() - startedAt;
+    const { attempts } = busyWhileAnotherWriterCommits(homeRoot, 'BEGIN IMMEDIATE', failures, () => {
+      assert.doesNotThrow(() => txn(db, () => putRow(db, 'globals', { key: 'after-relay', data: {} })));
+    });
+    assert.strictEqual(attempts, failures + 1, 'the write must outlast every busy attempt while the lock kept moving');
     assert.deepStrictEqual(getRow(db, 'globals', 'after-relay'), {});
-    assert.ok(elapsedMs >= relayMs / 2, `the write must have queued behind the committing relay, took ${elapsedMs}ms`);
   } finally {
-    await waitForProcessExit(childProcess);
     db.close();
   }
+});
+
+test('openDb keeps initializing the schema while other writers keep committing', () => {
+  const { db, homeRoot } = makeDb();
+  db.close();
+  const failures = SQLITE_BUSY_RETRY_ATTEMPTS * 2;
+
+  const { result: reopened, attempts } = busyWhileAnotherWriterCommits(homeRoot, 'CREATE TABLE IF NOT EXISTS projects', failures, () => {
+    try {
+      return openDb(homeRoot);
+    } catch (error) {
+      assert.fail(`schema initialization gave up while the lock kept moving: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  assert.strictEqual(attempts, failures + 1, 'schema initialization must outlast every busy attempt while the lock kept moving');
+  assert.strictEqual(stampedSchemaVersion(reopened), CURRENT_SCHEMA_VERSION);
+  reopened.close();
 });
 
 test('openDb takes no write lock on an already-migrated store', async () => {

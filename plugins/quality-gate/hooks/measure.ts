@@ -20,7 +20,7 @@ function unfinishedShell(output: unknown): boolean {
 async function coverageNotice($: EngineInterface, unverified: boolean) {
   if (!unverified) return
   if ((await $.state.get(NOTICE)).value) return
-  await $.ui.status('quality-gate: complexity only, coverage not set up')
+  await $.ui.status('complexity only, coverage not set up')
   await $.state.set(NOTICE, true)
 }
 
