@@ -8,6 +8,28 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.615.0 (2026-10-26)
+
+### quality-gate 1.3.2 → 1.3.3
+
+#### Fixes
+
+- Remove duplicate quality-gate status prefix (SQ-3935)
+
+### sidequest 6.6.0 → 6.6.1
+
+#### Fixes
+
+- Schema initialization keeps waiting while other writers keep committing (SQ-3849)
+  - Opening a store whose schema still needs writing (a cold store, or one missing a table) now uses the same busy policy as a write transaction: while other writers keep committing, it keeps waiting up to the 15s moving-queue ceiling instead of giving up after three stalled two-second waits. Racing cold openers could starve each other into "stayed locked while initializing database schema ... after 3 attempts".
+  - The db lock tests no longer race real processes for their outcome: the timed-out lock is held until the test kills it, and the moving-queue tests script the busy burst in-process. The hooks smoke test no longer treats a starved runner stretching a hook past 10s as a hook failure.
+- Make worktree sweep sizing opt-in and project-local (SQ-3874)
+  Worktree sweeps clean up before optional --sizes reporting, never walk sibling board storage, and save named candidate results under sweep-reports.
+- Keep experiment round pins separate from candidate refs (SQ-3895)
+  Experiment rounds now use refs/sidequest-rounds/<ref>/r<N>, allowing candidate refs for the same ticket. Briefings migrate legacy round pins without losing their commits and stop on conflicting destinations.
+- GH-607 follow-up: sweep reports its recovery and listing steps as a preparing phase (SQ-3942)
+  GH-607 follow-up: the worktree sweep's early recovery-retention and candidate-listing reports now use their own `preparing` progress phase, so `classifying` again means one row per classified candidate, and a test hook watching classification no longer fires before the sweep has listed anything.
+
 ## v3.614.0 (2026-10-25)
 
 ### model-gateway 0.55.2 → 0.55.3
