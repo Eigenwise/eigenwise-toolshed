@@ -192,7 +192,8 @@ function sweepFixtureGit(repository: string, argumentsList: string[]): string {
 }
 
 function sizeSweepFixture(home: string) {
-  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sizes-repository-'));
+  // realpath: the Windows CI runner's TEMP is an 8.3 short name and the sweep reports long-form paths.
+  const repository = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sizes-repository-')));
   sweepFixtureGit(repository, ['init', '-b', 'main']);
   sweepFixtureGit(repository, ['config', 'user.name', 'Sidequest Test']);
   sweepFixtureGit(repository, ['config', 'user.email', 'test@example.invalid']);
