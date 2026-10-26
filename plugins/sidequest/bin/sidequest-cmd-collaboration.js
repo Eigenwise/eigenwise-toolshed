@@ -32,7 +32,7 @@ async function cmdSweepClaims(opts) {
 function worktreeSweepProgressLine(progress) {
   const candidate = progress.current ? `: ${progress.current}` : "";
   const reason = progress.reason ? ` (${progress.reason})` : "";
-  const count = progress.phase === "classifying" ? ` ${progress.observed}/${progress.candidates}${candidate}${reason}` : "";
+  const count = progress.phase === "classifying" ? ` ${progress.observed}/${progress.candidates}${candidate}${reason}` : reason;
   return `worktrees sweep: ${progress.phase}${count}; planned ${progress.planned}, removed ${progress.removed}`;
 }
 function worktreeSweepEntryLine(entry) {
@@ -143,9 +143,7 @@ function sweepOptions(opts, hours, target, index) {
     integrationTarget: integrationTargetOrFallback(target.slug),
     minAgeMs: hours.minAgeHours * 60 * 60 * 1e3,
     recoveryRetentionAgeMs: hours.recoveryRetentionAgeHours * 60 * 60 * 1e3,
-    // The store lives in one shared home, so measuring it once per run is
-    // enough; repeating the walk per project is just slower.
-    includeStoreUsage: index === 0,
+    includeStoreUsage: !!opts.sizes,
     onProgress: (progress) => {
       const output = `${worktreeSweepProgressLine(progress)}
 `;

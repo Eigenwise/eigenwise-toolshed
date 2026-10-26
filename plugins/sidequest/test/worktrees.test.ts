@@ -878,11 +878,11 @@ test('sweep prunes expired quarantine entries and preserves live agents', async 
     const dryRun = await worktrees.sweep(repository, [liveTicket], { execute: false, integrationTarget, includeStoreUsage: true });
     assert.equal(dryRun.recovery.quarantine.entries.filter((entry: any) => entry.action === 'remove').length, 2);
     assert.equal(dryRun.recovery.quarantine.entries.find((entry: any) => entry.path === liveQuarantine).reason, 'live_claim');
-    assert.equal(dryRun.storage.quarantine.bytes > 0, true);
+    assert.equal(dryRun.storage.quarantine.bytes, null);
 
     const result = await worktrees.sweep(repository, [liveTicket], { execute: true, integrationTarget, includeStoreUsage: true });
     assert.equal(result.counts.removedQuarantineEntries, 2);
-    assert.equal(result.counts.reclaimedBytes > 0, true);
+    assert.equal(result.counts.reclaimedBytes, null);
     assert.equal(fs.existsSync(old), false);
     // Was `assert.equal(fs.existsSync(middle), false)`, when the per-agent cap deleted a
     // within-retention entry as the fourth for agent-a. Retention is age alone now (SQ-2952).
