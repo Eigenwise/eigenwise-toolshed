@@ -243,9 +243,9 @@ for (const includeStoreUsage of [false, true]) {
       });
       assert.equal(events[0], 'progress:recovery_retention', 'progress precedes recovery and candidate discovery');
       assert.equal(reads.includes(fixture.sibling), false, 'a large sibling board is never walked');
-      assert.deepEqual(result.removed, [fixture.tree], 'the done-ticket candidate is removed');
+      assert.deepEqual(result.removed.map(worktrees.canonicalPath), [worktrees.canonicalPath(fixture.tree)], 'the done-ticket candidate is removed');
       assert.equal(result.entries[0].reason, 'ticket_closed_settled');
-      assert.equal(result.storage.worktrees.path, fixture.group);
+      assert.equal(worktrees.canonicalPath(result.storage.worktrees.path), worktrees.canonicalPath(fixture.group));
       assert.equal(result.storage.worktrees.bytes, includeStoreUsage ? 0 : null);
       assert.equal(events.includes('progress:measuring_sizes'), includeStoreUsage);
       assert.equal(events.slice(includeStoreUsage ? events.indexOf('progress:measuring_sizes') + 1 : events.length).includes('group-read:true'), false, 'size measurement runs after candidate removal');
