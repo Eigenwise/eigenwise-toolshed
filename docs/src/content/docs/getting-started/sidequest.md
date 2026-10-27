@@ -48,6 +48,34 @@ When an executor hands back a clean committed checkpoint in a retained worktree,
 
 A repair linked to a rejected candidate restores it with `git merge --no-ff`, preserving its commit ancestry. Byte-identical inherited tests are recorded as `inherited-unchanged` on submission and need no new negative-control markers; changed tests still need their controls. Provisioning never links a scoped plugin's dependencies to the registered checkout, because `npm ci` empties `node_modules` through such a link. When configured worktree setup leaves no `node_modules` for a scoped plugin, provisioning records an install deferral, and the briefing tells the executor to run `npm ci --prefix plugins/<name> --ignore-scripts --no-audit --no-fund` before work. The WorktreeCreate hook never runs these plugin installs itself. Configured `link` dependency paths are unlinked before a gate checkout is removed, since `git worktree remove` on Windows deletes through a junction. Bounded verification needs no resource slot unless board configuration declares one, and any declared slot comes through the board.
 
+## Read what a ticket finished
+
+Run `sidequest completion SQ-12` (or the `completion` MCP read with `ref: "SQ-12"`) to get one short account of a ticket, under 200 words. It has four labelled parts:
+
+- **Result**: the stage (ready, running, submitted, integrated and so on) and what the records show landed.
+- **Checked**: the recorded verification, quality row and negative control.
+- **Still uncertain**: anything the records leave open, such as a quality gate that was never measured.
+- **Your action**: what is waiting on you, or "No action needed." only when the records support that.
+
+Add `--json` for the structured view. The stage and every fact come from board records (claim, submission, delivery, verify capture, quality row, review binding). An agent summary sits beside them, labelled agent-reported. It can never raise a stage or hide a blocker, and a newer candidate marks it stale rather than deleting it. Where the two disagree, the facts win. Older tickets with no summary just show the facts.
+
+A ticket reads `integrated` once a delivery is recorded. It never reads `released` without a release record.
+
+Evidence in the view carries one of these labels:
+
+| Label | What it means |
+| --- | --- |
+| `captured-command` | The pinned verifier ran through the capture wrapper and the board holds the log. |
+| `mocked-test` | A changed test exists, but nothing records it running against the real flow. |
+| `real-flow` | A behavior-verification record. |
+| `visual` | A screenshot record. |
+| `source-review` | A review-audit verdict on the candidate. |
+| `agent-reported` | An executor said so (for example a plain negative-control marker) and no capture backs it. |
+| `waived` | The check was skipped with a recorded reason. |
+| `unavailable` | No evidence could be produced. |
+
+Quality lines use the same honesty: `UNVERIFIED` means measurement was not possible, and `none` means no quality gate is configured. Neither reads as a pass.
+
 ## Read the overall story outcome
 
 Use `sidequest completion US-3` (or the `completion` MCP read with `story: "US-3"`) for one account of the non-archived children. Add `--json` for stages, child references, blockers and evidence counts. The text stays under 250 words and names Result, Checked, Still uncertain and Your action.
@@ -298,6 +326,12 @@ Stories group tickets into a plan you can filter and discuss before dispatch. Th
 ![Sidequest story filter showing synthetic stories across the combined board](../../../assets/screenshots/sidequest-stories.png)
 
 *Synthetic demo data showing the Checkout confidence, Storefront discovery, and fulfillment story groups.*
+
+Every ticket also carries a Completion panel with the same four parts. Facts are plain lines, each doubt is a chip, and agent summary text is tagged agent-reported. A blocker waiting on you is pinned to the top. Raw evidence paths sit in a collapsed section and only appear when they are under the board, evidence or project folders.
+
+![Sidequest ticket detail with the Completion panel showing Result, Checked, Still uncertain and Your action](../../../assets/screenshots/sidequest-ticket-completion.png)
+
+*Synthetic demo data showing the Completion panel for a ticket that has not been claimed yet.*
 
 Links show which tickets block or relate to each other. Use the dependency list to inspect the existing chain, then choose a link type and target when you add another relationship.
 
