@@ -71,7 +71,7 @@ interface SubmissionRecord {
   integratedAt?: string | null;
   supersedesRejectedSubmission?: string;
 }
-interface CaptureRecord { command?: string; status?: string; logPath?: string | null; candidate?: { value?: string }; completedAt?: string }
+interface CaptureRecord { command?: string; status?: string; logPath?: string | null; candidate?: { value?: string }; completedAt?: string; control?: boolean; controlOutcome?: string }
 interface RejectedRecord { commit?: string; rejectedAt?: string; reason?: string; supersededAt?: string }
 export interface CompletionTicket {
   id?: string;
@@ -91,7 +91,7 @@ export interface CompletionTicket {
 export interface CompletionContext {
   openBlockers?: string[];
   integrationProgress?: { state?: string; writerAlive?: boolean } | null;
-  negativeControl?: { kind?: string } | null;
+  negativeControl?: { kind?: string; evidence?: string; captureId?: string } | null;
   releaseRecord?: { version?: string; deliveryCommit?: string } | null;
   roots?: { project?: string | null; verification?: string | null; evidence?: string | null };
 }
@@ -190,7 +190,7 @@ function deliveryFacts(ticket: CompletionTicket): CompletionFacts['delivery'] {
 function candidateCapture(ticket: CompletionTicket): CaptureRecord | null {
   const candidate = candidateOf(ticket);
   const captures = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures : [];
-  return captures.slice().reverse().find((capture) => capture?.candidate?.value === candidate) ?? null;
+  return captures.slice().reverse().find((capture) => capture?.candidate?.value === candidate && capture?.control !== true) ?? null;
 }
 
 function verifyRecord(ticket: CompletionTicket): VerifyRecord | null {
@@ -268,8 +268,16 @@ function controlFacts(ticket: CompletionTicket, context: CompletionContext): Com
   const notRequired = notRequiredControl(ticket);
   if (notRequired) return { kind: notRequired, evidence: 'waived' };
   const kind = text(context.negativeControl?.kind) || 'missing';
-  if (kind === 'failed') return { kind: 'marker', evidence: 'agent-reported' };
+  if (kind === 'failed') return failedControlFacts(context.negativeControl);
   return kind === 'waived' ? { kind, evidence: 'waived' } : { kind, evidence: 'missing' };
+}
+
+// Only a marker whose named control capture was verified reads as captured; every other failing
+// control is the claim holder's own account.
+function failedControlFacts(control: CompletionContext['negativeControl']): CompletionFacts['negativeControl'] {
+  return control?.evidence === 'captured'
+    ? { kind: `capture(${text(control.captureId)})`, evidence: 'captured' }
+    : { kind: 'marker', evidence: 'agent-reported' };
 }
 
 function reviewFacts(ticket: CompletionTicket): CompletionFacts['review'] {
@@ -323,10 +331,16 @@ function approvedRoots(context: CompletionContext): string[] {
   return [roots.project, roots.verification, roots.evidence].map(text).filter(Boolean);
 }
 
+function captureLabel(capture: CaptureRecord): string {
+  return capture.control === true
+    ? `negative-control capture ${text(capture.controlOutcome)}: ${text(capture.command)}`
+    : `verify capture ${text(capture.status)}: ${text(capture.command)}`;
+}
+
 function evidenceEntries(ticket: CompletionTicket, roots: string[]): CompletionEvidence[] {
   const captures = (Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures : [])
     .filter((capture) => capture?.candidate?.value === candidateOf(ticket))
-    .map((capture): CompletionEvidence => ({ kind: 'captured-command', path: text(capture.logPath), label: `verify capture ${text(capture.status)}: ${text(capture.command)}` }));
+    .map((capture): CompletionEvidence => ({ kind: 'captured-command', path: text(capture.logPath), label: captureLabel(capture) }));
   const gateLog = text(ticket.submission?.integration?.verify?.logPath);
   const gate: CompletionEvidence[] = gateLog ? [{ kind: 'captured-command', path: gateLog, label: 'delivery gate log' }] : [];
   const tests = changedTestPaths(ticket).map((file): CompletionEvidence => ({ kind: 'mocked-test', path: file, label: 'changed test (no real-flow record)' }));
@@ -665,7 +679,7 @@ interface CompletionDependencies {
   listTickets: (slug: string) => Array<CompletionTicket & { storyId?: string; archived?: boolean }>;
   getTicket: (slug: string, idOrRef: string) => CompletionTicket | null;
   openBlockers: (slug: string, ticket: CompletionTicket) => string[];
-  negativeControlResult: (ticket: CompletionTicket) => { kind?: string };
+  negativeControlResult: (ticket: CompletionTicket, expectedTestNames: string[], candidate: string | null) => { kind?: string; evidence?: string; captureId?: string };
   projectDir: (slug: string) => string;
   readMeta: (slug: string) => { path?: string } | null;
 }
@@ -683,7 +697,7 @@ export function createCompletion(dependencies: CompletionDependencies) {
     return {
       openBlockers: openBlockers(slug, ticket),
       integrationProgress: readIntegrationProgress(integrationProgressPath(boardDirectory, ticket.ref)),
-      negativeControl: negativeControlResult(controlHolder(ticket)),
+      negativeControl: negativeControlResult(controlHolder(ticket), [], candidateOf(ticket)),
       releaseRecord: null,
       roots: {
         project: readMeta(slug)?.path ?? null,

@@ -26,11 +26,12 @@ type VerifyCapture = VerificationResult & Readonly<{
   queuePosition?: number;
 }>;
 type CaptureTarget = Readonly<{ project: string; ticket: string }>;
+type RecordedCapture = NonNullable<CaptureRecordResult['capture']>;
 type CaptureRecordResult = Readonly<{
   ok: boolean;
   reason?: string;
   message?: string;
-  capture?: Readonly<{ id: string; candidate: Readonly<{ source: string; value: string }> }>;
+  capture?: Readonly<{ id: string; candidate: Readonly<{ source: string; value: string }>; control?: boolean; controlOutcome?: string; failingTests?: readonly string[] }>;
 }>;
 type VerificationCaptureStore = Readonly<{
   findProject(project: string): Readonly<{ ok: boolean; slug?: string; meta?: Readonly<{ path?: string }> }>;
@@ -615,26 +616,67 @@ function verifyCommandDirectory(target: CaptureTarget, captureCwd: string): stri
   return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
 }
 
-async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs, explicitWorktree?: string) {
+async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs, explicitWorktree?: string, control = false) {
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
-  const captureCwd = resolution.cwd;
+  if (!target) return Object.freeze({ capture: await runConfiguredCapture(command, resolution.cwd, null), recorded: null, refusal: null });
+  return runTargetCapture(command, target, resolution.cwd, fileSystem, control);
+}
+
+// A negative control runs over source the executor reverted on purpose, so its dirty tree is the
+// point of the run rather than a hole in the proof; it is recorded as a control, never as the
+// candidate's verification.
+function dirtyCaptureRefusal(target: CaptureTarget, captureCwd: string, cleanWorktree: boolean, control: boolean): string | null {
+  if (cleanWorktree || control || isWorkingTreeDeliveryTarget(target)) return null;
+  return `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree\nVerification capture for ${target.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`;
+}
+
+async function runTargetCapture(command: string, target: CaptureTarget, captureCwd: string, fileSystem: CaptureSlotFileSystem, control: boolean) {
   // Cleanliness is observed before the run: a verifier may leave logs or coverage output behind,
   // and what matters is the content it read.
-  const cleanWorktree = target ? verifiedWorktreeIsClean(captureCwd) : true;
-  if (target && !cleanWorktree && !isWorkingTreeDeliveryTarget(target)) {
-    return Object.freeze({
-      capture: null,
-      recorded: null,
-      refusal: `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree\nVerification capture for ${target!.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`,
-    });
-  }
-  const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
-  const capture = target && isFullSuiteCommand(command)
+  const statusPaths = worktreeStatusPaths(captureCwd);
+  const cleanWorktree = statusPaths?.length === 0;
+  const refusal = dirtyCaptureRefusal(target, captureCwd, cleanWorktree, control);
+  if (refusal) return Object.freeze({ capture: null, recorded: null, refusal });
+  const commandCwd = verifyCommandDirectory(target, captureCwd);
+  const capture = isFullSuiteCommand(command)
     ? await runFullSuiteCapture(command, target, commandCwd, fileSystem)
     : await runConfiguredCapture(command, commandCwd, target);
-  const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
-  return Object.freeze({ capture, recorded, refusal: null });
+  const observation = control ? Object.freeze({ dirtyPaths: statusPaths ?? [] }) : null;
+  return Object.freeze({ capture, recorded: recordCapture(target, capture, captureCwd, cleanWorktree, observation), refusal: null });
+}
+
+const TAP_FAILURE = /^\s*not ok \d+ - (.+)$/;
+const SPEC_FAILURE = /^\s*✖ (.+?)(?: \([\d.]+m?s\))?$/;
+const TAP_DIRECTIVE = /\s#\s*(?:TODO|SKIP)\b/i;
+// node --test reports a file that failed to load or run under the file's own path; that is an
+// import or collection failure, which proves nothing about an assertion.
+const TEST_FILE_ENTRY = /\.[cm]?[jt]sx?$/i;
+
+function failingTestName(line: string): string | null {
+  const match = TAP_FAILURE.exec(line) || SPEC_FAILURE.exec(line);
+  const name = (match?.[1] ?? '').trim().replace(/\\(.)/g, '$1');
+  return [name, name !== 'failing tests:', !TAP_DIRECTIVE.test(line), !TEST_FILE_ENTRY.test(name)].every(Boolean) ? name : null;
+}
+
+function failingTestNames(output: string): string[] {
+  const names = output.split(/\r?\n/).map(failingTestName).filter((name): name is string => name !== null);
+  return [...new Set(names)];
+}
+
+function captureLogText(logPath: string | null | undefined): string {
+  try {
+    return logPath ? fs.readFileSync(logPath, 'utf8') : '';
+  } catch {
+    return '';
+  }
+}
+
+type ControlObservation = Readonly<{ dirtyPaths: readonly string[] }>;
+
+function controlCaptureFields(capture: VerifyCapture, observation: ControlObservation | null) {
+  if (!observation) return {};
+  return { control: true, failingTests: failingTestNames(captureLogText(capture.logPath)), dirtyPaths: observation.dirtyPaths };
 }
 
 function verifiedRevision(cwd: string) {
@@ -654,14 +696,18 @@ function verifiedRevision(cwd: string) {
 // actually read. Captures over uncommitted edits are refused before they can certify content
 // that no verifier ran.
 function verifiedWorktreeIsClean(cwd: string) {
+  return worktreeStatusPaths(cwd)?.length === 0;
+}
+
+function worktreeStatusPaths(cwd: string): string[] | null {
   try {
     return String(execFileSync('git', ['status', '--porcelain'], {
       cwd,
       encoding: 'utf8',
       windowsHide: true,
-    })).trim() === '';
+    })).split(/\r?\n/).filter((line) => line.trim()).map((line) => line.slice(3).trim());
   } catch (_) {
-    return false;
+    return null;
   }
 }
 
@@ -670,7 +716,33 @@ function foreignCaptureRepository(projectPath: string, cwd: string): string | nu
   return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
 }
 
-function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string, cleanWorktree = verifiedWorktreeIsClean(cwd)) {
+type CandidateRevision = Readonly<{ source: string; value: string }>;
+type CandidateResolution = Readonly<{ ok: true; candidate: CandidateRevision }> | Readonly<{ ok: false; reason: string; message?: string }>;
+
+function revisionCandidate(cwd: string): CandidateResolution {
+  const candidate = verifiedRevision(cwd);
+  return candidate ? { ok: true, candidate } : { ok: false, reason: 'verified_revision_unavailable' };
+}
+
+function committedCaptureCandidate(store: VerificationCaptureStore, slug: string, target: CaptureTarget, cwd: string, cleanWorktree: boolean): CandidateResolution {
+  const workingTreeCandidate = store.workingTreeDeliveryCandidate(slug, store.getTicket(slug, target.ticket));
+  // A working-tree delivery is identified by the content hash of its uncommitted paths, so the
+  // tree being dirty is the candidate, not a hole in the proof.
+  if (workingTreeCandidate) return { ok: true, candidate: workingTreeCandidate.candidate };
+  return cleanWorktree ? revisionCandidate(cwd) : {
+    ok: false,
+    reason: 'verification_capture_dirty_worktree',
+    message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`,
+  };
+}
+
+// A control reverts source on top of the committed candidate, so the commit it binds to is HEAD,
+// whatever the reverted tree's content hash would be.
+function captureCandidate(store: VerificationCaptureStore, slug: string, target: CaptureTarget, cwd: string, cleanWorktree: boolean, control: boolean): CandidateResolution {
+  return control ? revisionCandidate(cwd) : committedCaptureCandidate(store, slug, target, cwd, cleanWorktree);
+}
+
+function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string, cleanWorktree = verifiedWorktreeIsClean(cwd), control: ControlObservation | null = null) {
   const store = require('./store.js') as VerificationCaptureStore;
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_not_found' };
@@ -686,23 +758,12 @@ function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: strin
       message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`,
     };
   }
-  const ticket = store.getTicket(project.slug, target.ticket);
-  const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
-  // A working-tree delivery is identified by the content hash of its uncommitted paths, so the
-  // tree being dirty is the candidate, not a hole in the proof.
-  if (!cleanWorktree && !workingTreeCandidate) {
-    return {
-      ok: false,
-      reason: 'verification_capture_dirty_worktree',
-      message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`,
-    };
-  }
-  const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
-  if (!candidate) return { ok: false, reason: 'verified_revision_unavailable' };
+  const resolved = captureCandidate(store, project.slug, target, cwd, cleanWorktree, control !== null);
+  if (!resolved.ok) return resolved;
   return store.recordVerificationCapture(project.slug, target.ticket, {
     command: capture.command || '',
     status: capture.status,
-    candidate,
+    candidate: resolved.candidate,
     cleanWorktree,
     completedAt: new Date().toISOString(),
     worktree: cwd,
@@ -711,6 +772,7 @@ function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: strin
     shell: capture.shell,
     ...(capture.waitedForSlotMs === undefined ? {} : { waitedForSlotMs: capture.waitedForSlotMs }),
     ...(capture.queuePosition === undefined ? {} : { queuePosition: capture.queuePosition }),
+    ...controlCaptureFields(capture, control),
   });
 }
 
@@ -733,7 +795,32 @@ function report(capture: VerifyCapture, recorded?: CaptureRecordResult | null) {
   }
 }
 
-const usage = 'Usage: node verify-capture.js --project <path> --ticket <ref> [--worktree <path>]\n'
+function controlNextStep(capture: RecordedCapture): string {
+  return capture.controlOutcome === 'failed'
+    ? `Restore the change, then post: [sidequest:negative-control] capture=${capture.id}`
+    : 'This control proves nothing: a control must fail at least one named test assertion on the reverted source.';
+}
+
+function writeControlLines(capture: RecordedCapture) {
+  const failingTests = capture.failingTests ?? [];
+  process.stdout.write(`control=${capture.controlOutcome || 'unknown'} failures=${failingTests.length}\n`);
+  for (const name of failingTests) process.stdout.write(`control-failed=${name}\n`);
+  process.stdout.write(`${controlNextStep(capture)}\n`);
+}
+
+function reportControl(recorded: CaptureRecordResult | null) {
+  const capture = recorded?.ok ? recorded.capture : null;
+  if (capture?.control) writeControlLines(capture);
+}
+
+// The wrapper's own exit says whether the run proved what was asked: a candidate capture must pass,
+// and a control capture must be recorded with failing tests.
+function captureSucceeded(capture: VerifyCapture, recorded: CaptureRecordResult | null, control: boolean): boolean {
+  if (control) return recorded?.capture?.controlOutcome === 'failed';
+  return capture.exitCode === 0 && (!recorded || recorded.ok);
+}
+
+const usage = 'Usage: node verify-capture.js --project <path> --ticket <ref> [--worktree <path>] [--control]\n'
   + '       node verify-capture.js --base64 <base64 verify command> [--worktree <path>]';
 
 function base64Command(args: readonly string[]): string {
@@ -786,25 +873,34 @@ function captureCommand(args: readonly string[], target: CaptureTarget | null): 
   return passedCommand ? Object.freeze({ command: passedCommand }) : Object.freeze({ refusal: usage });
 }
 
+// --control runs the pinned command over source the executor reverted, so it needs a ticket to
+// record against; a bare --base64 run has nothing to bind the failure to.
+function captureCommandForArguments(args: readonly string[], target: CaptureTarget | null, control: boolean): Readonly<{ command: string }> | Readonly<{ refusal: string }> {
+  if (control && !target) return Object.freeze({ refusal: `--control needs --project and --ticket so the failing control is recorded against its ticket.\n${usage}` });
+  return captureCommand(args, target);
+}
+
 async function captureFromArguments(args: readonly string[]) {
   const target = captureTarget(args);
-  const resolved = captureCommand(args, target);
+  const control = args.includes('--control');
+  const resolved = captureCommandForArguments(args, target, control);
   if ('refusal' in resolved) return Object.freeze({ capture: null, recorded: null, refusal: resolved.refusal });
-  return runCapturedVerification(resolved.command, target, process.cwd(), fs, explicitWorktreeArgument(args));
+  return runCapturedVerification(resolved.command, target, process.cwd(), fs, explicitWorktreeArgument(args), control);
 }
 
 async function main() {
-  const { capture, recorded, refusal } = await captureFromArguments(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  const { capture, recorded, refusal } = await captureFromArguments(args);
   if (refusal) {
     process.stderr.write(`${refusal}\n`);
     process.exitCode = 2;
     return;
   }
   report(capture!, recorded);
-  // recorded is null exactly when no --project/--ticket target was given.
-  process.exitCode = capture!.exitCode === 0 && (!recorded || recorded.ok) ? 0 : 2;
+  reportControl(recorded);
+  process.exitCode = captureSucceeded(capture!, recorded, args.includes('--control')) ? 0 : 2;
 }
 
-module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, failingTestNames, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 
 if (require.main === module) void main();

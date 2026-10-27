@@ -1213,10 +1213,68 @@ function parseNegativeControlMarker(markerLine) {
     failed: Number(tail[2])
   };
 }
-function negativeControlResult(ticket, expectedTestNames = []) {
+const CAPTURED_CONTROL_CHECKS = [
+  ["capture_not_found", (facts) => !facts.capture],
+  ["capture_not_control", (facts) => facts.capture?.control !== true],
+  ["control_passed_unexpectedly", (facts) => facts.capture?.controlOutcome === "control_passed_unexpectedly"],
+  ["control_could_not_run", (facts) => facts.capture?.controlOutcome === "control_could_not_run"],
+  ["control_no_test_failures", (facts) => facts.capture?.controlOutcome !== "failed"],
+  ["capture_candidate_mismatch", (facts) => !facts.candidate || facts.capture?.candidate?.value !== facts.candidate]
+];
+function ticketControlCaptures(ticket) {
+  return Array.isArray(ticket?.verificationCaptures) ? ticket.verificationCaptures : [];
+}
+function uncoveredControlTests(failingTests, expectedTestNames) {
+  const reportedNames = (Array.isArray(failingTests) ? failingTests : []).map(String).map(normalizedNegativeControlTestName).filter(Boolean);
+  return expectedTestNames.filter((expectedName) => {
+    const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
+    return !reportedNames.some((reportedName) => negativeControlTestNameMatches(normalizedExpectedName, reportedName));
+  });
+}
+function capturedControlResult(ticket, captureId, expectedTestNames, candidate) {
+  const facts = { capture: ticketControlCaptures(ticket).find((capture) => capture?.id === captureId), candidate: candidate ? candidate.toLowerCase() : null };
+  const refused = CAPTURED_CONTROL_CHECKS.find(([, fails]) => fails(facts));
+  if (refused) return { kind: refused[0], captureId };
+  const uncovered = uncoveredControlTests(facts.capture?.failingTests, expectedTestNames);
+  return uncovered.length ? { kind: "capture_tests_uncovered", tests: uncovered, captureId } : { kind: "failed", evidence: "captured", captureId };
+}
+function markerCaptureId(markerLine) {
+  return markerLine.match(/^\[sidequest:negative-control\]\s+capture=([A-Za-z0-9-]+)/)?.[1] ?? "";
+}
+function failureKindRefusal(markerLine) {
+  const declaredFailureKind = negativeControlDeclaredFailureKind(markerLine);
+  if (!declaredFailureKind) return { kind: "undeclared_failure_kind" };
+  return declaredFailureKind === "assertion" ? null : { kind: `${declaredFailureKind}_error` };
+}
+function markerShapeRefusal(parsed, markerLine) {
+  if (!parsed.target || !parsed.assertion) {
+    return { kind: "missing_target_or_assertion", markerLine, detail: `its ${!parsed.target ? "target" : "assertion"}= value is blank` };
+  }
+  if (parsed.failed === 0) return { kind: "zero_failures" };
+  return failureKindRefusal(markerLine);
+}
+function plainMarkerResult(markerLine, claimHolderComments, expectedTestNames) {
+  const parsed = parseNegativeControlMarker(markerLine);
+  if (!parsed.ok) return { kind: "unparsed", markerLine, detail: parsed.detail };
+  const refusal = markerShapeRefusal(parsed, markerLine);
+  if (refusal) return refusal;
+  const testReport = negativeControlTestReport(claimHolderComments, expectedTestNames);
+  return testReport.unreported.length ? { kind: "unreported_tests", tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: "failed", evidence: "agent-reported" };
+}
+function claimHolderMarkerResult(ticket, markerLine, claimHolderComments, expectedTestNames, candidate) {
+  const waiverReason = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/)?.[1]?.trim();
+  if (waiverReason) return waiverReason.length >= 20 ? { kind: "waived", evidence: "waived" } : { kind: "short_waiver" };
+  const captureId = markerCaptureId(markerLine);
+  return captureId ? capturedControlResult(ticket, captureId, expectedTestNames, candidate) : plainMarkerResult(markerLine, claimHolderComments, expectedTestNames);
+}
+function unparsedMarkerIsAttempt(markerLine) {
+  return /^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine);
+}
+function negativeControlResult(ticket, expectedTestNames = [], candidate = null) {
   const claimHolder = String(ticket?.claim?.by || "").trim();
   if (!claimHolder) return { kind: "missing" };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  const claimHolderComments = comments.filter((comment) => comment.by === claimHolder);
   let otherControlAuthor = "";
   let skippedMalformed = null;
   for (const comment of comments.slice().reverse()) {
@@ -1227,26 +1285,10 @@ function negativeControlResult(ticket, expectedTestNames = []) {
       continue;
     }
     if (!markerLine) continue;
-    const waived = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/);
-    const waiverReason = waived?.[1]?.trim();
-    if (waiverReason) return waiverReason.length >= 20 ? { kind: "waived" } : { kind: "short_waiver" };
-    const parsed = parseNegativeControlMarker(markerLine);
-    if (parsed.ok) {
-      if (!parsed.target || !parsed.assertion) {
-        const blank = !parsed.target ? "target" : "assertion";
-        return { kind: "missing_target_or_assertion", markerLine, detail: `its ${blank}= value is blank` };
-      }
-      if (parsed.failed === 0) return { kind: "zero_failures" };
-      const declaredFailureKind = negativeControlDeclaredFailureKind(markerLine);
-      if (!declaredFailureKind) return { kind: "undeclared_failure_kind" };
-      if (declaredFailureKind !== "assertion") return { kind: `${declaredFailureKind}_error` };
-      const testReport = negativeControlTestReport(comments.filter((comment2) => comment2.by === claimHolder), expectedTestNames);
-      return testReport.unreported.length ? { kind: "unreported_tests", tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: "failed" };
-    }
-    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
-      return { kind: "missing_target_or_assertion", markerLine, detail: parsed.detail };
-    }
-    if (!skippedMalformed) skippedMalformed = { markerLine, detail: parsed.detail };
+    const result = claimHolderMarkerResult(ticket, markerLine, claimHolderComments, expectedTestNames, candidate);
+    if (result.kind !== "unparsed") return result;
+    if (unparsedMarkerIsAttempt(markerLine)) return { kind: "missing_target_or_assertion", markerLine, detail: result.detail };
+    if (!skippedMalformed) skippedMalformed = { markerLine, detail: String(result.detail) };
   }
   if (skippedMalformed) return { kind: "missing_target_or_assertion", markerLine: skippedMalformed.markerLine, detail: skippedMalformed.detail };
   return otherControlAuthor ? { kind: "wrong_author", by: otherControlAuthor } : { kind: "missing" };
@@ -1258,6 +1300,23 @@ function boundedMarkerLineQuote(markerLine, maxChars = 200) {
 function foundMarkerLineClause(result) {
   return result.markerLine ? ' (found negative-control marker line "' + boundedMarkerLineQuote(result.markerLine) + '", but ' + result.detail + ")" : "";
 }
+const CAPTURED_CONTROL_REFUSAL_MESSAGES = {
+  capture_not_found: "the negative-control marker names a capture= id this ticket never recorded",
+  capture_not_control: "the negative-control marker names a verification capture that was not run with --control, so it proves nothing about a failing control",
+  control_passed_unexpectedly: "the captured control run passed, so the changed tests do not fail without the change",
+  control_could_not_run: "the captured control run never completed (it could not run, timed out, or found no toolchain)",
+  control_no_test_failures: "the captured control run failed without a single named test failure; a typecheck, import or collection failure proves nothing about an assertion",
+  capture_candidate_mismatch: "the captured control ran on a different commit than the candidate being completed; rerun it with --control on the current commit"
+};
+const CAPTURED_CONTROL_REFUSAL_REASONS = {
+  capture_not_found: "negative_control_capture_not_found",
+  capture_not_control: "negative_control_capture_not_control",
+  control_passed_unexpectedly: "negative_control_passed_unexpectedly",
+  control_could_not_run: "negative_control_capture_could_not_run",
+  control_no_test_failures: "negative_control_capture_no_test_failures",
+  capture_candidate_mismatch: "negative_control_capture_candidate_mismatch",
+  capture_tests_uncovered: "negative_control_test_required"
+};
 function negativeControlRefusal(ticket, result) {
   const messages = {
     import_error: "the recorded negative control failed with an ImportError",
@@ -1268,7 +1327,9 @@ function negativeControlRefusal(ticket, result) {
     unreported_tests: "the negative control did not report these added or modified tests: " + result.tests?.join(", "),
     short_waiver: "a negative-control waiver needs a reason of at least 20 characters",
     wrong_author: 'a negative control was recorded by "' + result.by + '", but the current claim holder is "' + ticket.claim?.by + '"',
-    missing: "new behavior needs a claim-holder negative control"
+    missing: "new behavior needs a claim-holder negative control",
+    ...CAPTURED_CONTROL_REFUSAL_MESSAGES,
+    capture_tests_uncovered: "the captured negative control did not fail these added or modified tests: " + result.tests?.join(", ")
   };
   const reasons = {
     import_error: "negative_control_import_error",
@@ -1277,7 +1338,8 @@ function negativeControlRefusal(ticket, result) {
     missing_target_or_assertion: "negative_control_evidence_required",
     zero_failures: "negative_control_zero_failures",
     unreported_tests: "negative_control_test_required",
-    short_waiver: "negative_control_waiver_too_short"
+    short_waiver: "negative_control_waiver_too_short",
+    ...CAPTURED_CONTROL_REFUSAL_REASONS
   };
   return {
     ok: false,
@@ -1294,6 +1356,15 @@ function completionScope(slug, ticket) {
     return fragment ? [fragment] : [];
   }) : [];
   return [.../* @__PURE__ */ new Set([...executionScope(slug, ticket), ...relatedFragments])];
+}
+function workspaceHead(delta) {
+  const root = delta?.workspace?.root;
+  if (!root) return null;
+  try {
+    return String(execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })).trim().toLowerCase() || null;
+  } catch {
+    return null;
+  }
 }
 function completionWorkFacts(slug, ticket) {
   const state = dispatchState(ticket);
@@ -1336,7 +1407,7 @@ function ownedControlCheck(slug, ticket, delta, ownedPaths) {
   const inheritedTests = own.inheritedTests;
   if ([inheritedTests.length, !own.testNames.length].every(Boolean)) return { ok: true, negativeControl: "not_required(inherited-unchanged)", inheritedTests };
   if ([!kind, !mixedChange(own.paths)].every(Boolean)) return { ok: true, negativeControl: "not_required(no changed source under changed tests)", inheritedTests };
-  const control = negativeControlResult(ticket, own.testNames);
+  const control = negativeControlResult(ticket, own.testNames, workspaceHead(delta));
   return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 function completionTreeCheck(slug, ticket, opts) {
@@ -4261,6 +4332,7 @@ module.exports = {
   pulsePayload,
   completionPayload,
   storyCompletionPayload,
+  negativeControlResult,
   claimPulse,
   changesPayload,
   boundedExcerpt,
