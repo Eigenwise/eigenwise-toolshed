@@ -730,6 +730,11 @@ var SUBAGENT_DIRECT_CLAIM = {
   matches: (input) => input.direct === true,
   denial: "sidequest: subagents cannot direct-claim a ticket. Claim through the dispatched route: copy the claim call your briefing printed (executor and tokenFile, no direct). If this ticket has no dispatch, report it to the orchestrator so it dispatches one."
 };
+var CLI_DIRECT_CLAIM = /\bsidequest(?:-launcher)?(?:\.js)?["']?\s+(?:claim|take|next)\b[^\n]*\s--direct\b/i;
+var SUBAGENT_CLI_DIRECT_CLAIM = {
+  matches: (input) => typeof input.command === "string" && CLI_DIRECT_CLAIM.test(input.command),
+  denial: SUBAGENT_DIRECT_CLAIM.denial
+};
 var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "files",
   "addFiles",
@@ -752,6 +757,8 @@ var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
 var MAIN_THREAD_MUTATIONS = {
   mcp__plugin_sidequest_board__claim: SUBAGENT_DIRECT_CLAIM,
   mcp__plugin_sidequest_board__next: SUBAGENT_DIRECT_CLAIM,
+  Bash: SUBAGENT_CLI_DIRECT_CLAIM,
+  PowerShell: SUBAGENT_CLI_DIRECT_CLAIM,
   mcp__plugin_sidequest_board__dispatch: {
     matches: (input) => Object.hasOwn(input, "workProvenance"),
     denial: "sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing."
