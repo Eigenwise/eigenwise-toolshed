@@ -679,7 +679,7 @@ interface CatchupStore {
 }
 
 function catchupField(value: string): string {
-  return escapeCompletionText(value.replace(/\s+/g, ' ').trim().slice(0, 180));
+  return sanitizeCompletionText(value.replace(/\s+/g, ' ').trim().slice(0, 180));
 }
 
 function catchupAction(slug: string, view: CompletionView, store: CatchupStore): string {

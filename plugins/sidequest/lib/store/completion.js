@@ -515,7 +515,7 @@ function storyCompletionView(story, children) {
   return view;
 }
 function catchupField(value) {
-  return escapeCompletionText(value.replace(/\s+/g, " ").trim().slice(0, 180));
+  return sanitizeCompletionText(value.replace(/\s+/g, " ").trim().slice(0, 180));
 }
 function catchupAction(slug, view, store) {
   const refs = view.blocker?.refs ?? [];
