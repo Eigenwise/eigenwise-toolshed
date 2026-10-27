@@ -90,7 +90,7 @@ test('integrating and released lines use completion authority and sanitize multi
   ticket.completion = { delivery: { commit: 'a'.repeat(40) } };
   const released = completionView(ticket, { releaseRecord: { version: '1.0.0', deliveryCommit: 'a'.repeat(40) } });
   const result = changesCatchupPayload('fixture', delta, { ...adapter, completionPayload: () => released });
-  assert.match(result.text, /released · &lt;tag&gt; second line · no action/);
+  assert.match(result.text, /released · <tag> second line · no action/);
   assert.equal(result.text.split('\n').length, 1);
 });
 

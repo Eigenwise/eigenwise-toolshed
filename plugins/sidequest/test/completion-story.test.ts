@@ -108,7 +108,7 @@ test('blocked-only story reads blocked and user action wins over other blockers'
   assert.doesNotMatch(view.text, /No action needed/);
 });
 
-test('story text stays under 250 words, deduplicates uncertainties and escapes agent text', () => {
+test('story text stays under 250 words, deduplicates uncertainties and keeps agent text as plain text', () => {
   const { slug, story } = fixture('Outcome '.repeat(100));
   for (let index = 0; index < 12; index += 1) {
     child(slug, story.id, { ...delivery(), completionSummary: { version: 1, result: '<script>unsafe</script> '.repeat(100), uncertain: 'Needs real user input.', candidate } });
@@ -118,7 +118,8 @@ test('story text stays under 250 words, deduplicates uncertainties and escapes a
   assert.equal(view.uncertainties.filter((value: string) => value.includes('Needs real user input')).length, 1);
   assert.equal(new Set(view.uncertainties).size, view.uncertainties.length);
   assert.ok(view.uncertainties.length <= 6);
-  assert.doesNotMatch(view.text, /<script>/);
+  assert.match(view.text, /<script>unsafe<\/script>/);
+  assert.doesNotMatch(view.text, /&lt;/);
 });
 
 test('story decisions include ticket-naming decisions from live and archived logs', () => {

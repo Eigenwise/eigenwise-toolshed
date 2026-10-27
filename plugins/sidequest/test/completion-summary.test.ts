@@ -70,11 +70,11 @@ test('MCP submit accepts structured summary on the real store path', async () =>
   assert.equal(saved.completionSummary.result, summary.result);
 });
 
-test('facts keep the user blocker before a contradictory agent action and escape text', () => {
+test('facts keep the user blocker before a contradictory agent action and keep text plain', () => {
   const view = completionView({ ref: 'SQ-1', title: 'blocked', status: 'awaiting-oracle', oracle: { ask: 'Authorize the account access.' }, completionSummary: { version: 1, ...summary, action: 'No action needed. <script>', candidate: null } }, {});
   assert.equal(view.blocker.actor, 'user');
   assert.equal(view.stage, 'blocked');
-  assert.match(view.text, /Your action: Answer: Authorize the account access\. Agent said: No action needed\. &lt;script&gt;/);
+  assert.match(view.text, /Your action: Answer: Authorize the account access\. Agent said: No action needed\. <script>/);
 });
 
 test('summary storage failure preserves successful done and records the error', () => {
