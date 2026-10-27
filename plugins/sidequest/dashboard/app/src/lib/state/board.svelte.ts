@@ -58,7 +58,7 @@ export class BoardState {
 
   currentProject = $derived(this.selectedProject === 'all' ? null : this.raw?.projects.find((project) => project.slug === this.selectedProject) ?? null);
   scopedTickets = $derived(this.raw?.tickets.filter((ticket) => this.selectedProject === 'all' || this.ticketProject(ticket) === this.selectedProject) ?? []);
-  scopedStories = $derived(this.raw?.stories.filter((story) => this.selectedProject === 'all' || story.project === this.selectedProject) ?? []);
+  scopedStories = $derived(this.raw?.stories.filter((story) => this.selectedProject === 'all' || story.projectSlug === this.selectedProject) ?? []);
   visibleTickets = $derived.by(() => this.scopedTickets.filter((ticket) => this.matches(ticket)));
   columns = $derived.by(() => Object.fromEntries(statusOrder.map((status) => [status, this.sortTickets(this.visibleTickets.filter((ticket) => ticket.status === status))])) as Record<Status, Ticket[]>);
   counts = $derived.by(() => ({ todo: this.columns.todo.length, doing: this.columns.doing.length, done: this.columns.done.length }));
