@@ -170,7 +170,9 @@ function coverageProducer(input: QualityInput): CoverageProducer | undefined {
 }
 
 function pluginCoverageProducer(input: QualityInput): CoverageProducer | undefined {
-  const directories = [...new Set(input.changedPaths.map((file) => file.match(/^plugins\/[^/]+\//)?.[0]).filter((directory): directory is string => Boolean(directory)))];
+  const directories = [...new Set(input.changedPaths
+    .map((file) => file.match(/^plugins\/[^/]+\//)?.[0])
+    .filter((directory): directory is string => Boolean(directory)))];
   if (directories.length !== 1) return undefined;
   const directory = directories[0]!;
   const manifest = path.join(input.project, directory, 'package.json');
