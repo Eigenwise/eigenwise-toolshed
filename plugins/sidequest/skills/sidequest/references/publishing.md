@@ -265,7 +265,7 @@ delivery lock and the publish lock still serialize deliveries. A client that sen
 fire while the gate is alive. If the client still gives up, or the board server goes away, the delivery
 process finishes and records the outcome itself. `pulse <ref>` then carries an `integration` block:
 `state` (`running`, `delivered`, `rolled_back`, `rollback_failed` or `refused`), `phase` (`merging`,
-`wave gate`, `pinned verifier`, `importing tests`, `finished`), `currentFile` with `fileIndex`/`fileCount`
+`wave gate`, `pinned verifier`, `importing tests`, `plugin-runner tests`, `finished`), `currentFile` with `fileIndex`/`fileCount`
 during the import walk, `logPath`, `startedAt`/`updatedAt`, and `reason` for a failure. A `running` block
 with `writerAlive: false` means the delivery process died mid-gate: inspect the target and its log before
 retrying. Read the outcome there instead of waiting on node processes.

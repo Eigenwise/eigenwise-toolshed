@@ -44,6 +44,10 @@ module.exports = __toCommonJS(integration_tests_exports);
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 var import_process = require("./ports/process.js");
+const { resolveSuite } = require("./suite-resolver.js");
+const PLUGIN_RUNNER_SPECIFIER = /^claude-code(?:\/|$)/;
+const DEFAULT_PLUGIN_RUNNER = "claude plugin test .";
+const PLUGIN_RUNNER_SPLIT = "Tests that import claude-code or live under a hooks module root run through the plugin runner (its moduleTest command, else claude plugin test .), never node --test; without a runnable claude CLI they are recorded as unverified (or toolchain_missing) and do not fail delivery.";
 const MODULE_EXTENSIONS = ["", ".ts", ".tsx", ".js", ".mjs", ".cjs", "/index.ts", "/index.js"];
 const STATIC_MODULE_SPECIFIER = /\b(?:import\s+(?:[^;'"()]*?\s+from\s*)?|export\s+[^;'"()]*?\s+from\s*|require\s*\(\s*)['"]([^'"\r\n]+)['"]/g;
 function moduleIdentity(file) {
@@ -65,11 +69,13 @@ function importedModule(importer, specifier, plugin) {
   if (!specifier.startsWith(".")) return void 0;
   const imported = import_node_path.default.resolve(import_node_path.default.dirname(importer), specifier);
   const source = sourceIdentity(imported, plugin);
-  return existingModule(source) ?? existingModule(imported);
+  return existingModule(source) ?? existingModule(imported) ?? existingModule(imported.replace(/\.([cm]?)js$/, ".$1ts"));
+}
+function moduleSpecifiers(file) {
+  return Array.from(import_node_fs.default.readFileSync(file, "utf8").matchAll(STATIC_MODULE_SPECIFIER), (match) => match[1]);
 }
 function staticImports(file, plugin) {
-  const imports = Array.from(import_node_fs.default.readFileSync(file, "utf8").matchAll(STATIC_MODULE_SPECIFIER), (match) => match[1]);
-  return imports.map((specifier) => importedModule(file, specifier, plugin)).filter((imported) => imported !== void 0);
+  return moduleSpecifiers(file).map((specifier) => importedModule(file, specifier, plugin)).filter((imported) => imported !== void 0);
 }
 function directoryFiles(directory) {
   if (!import_node_fs.default.existsSync(directory)) return [];
@@ -82,6 +88,26 @@ function entryFiles(directory, entry) {
 }
 function importingTest(file) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file);
+}
+function hooksModuleRoots(plugin) {
+  const hooks = import_node_path.default.join(plugin, "hooks");
+  const manifest = import_node_path.default.join(hooks, "hooks.json");
+  if (!import_node_fs.default.existsSync(manifest)) return [];
+  const modules = JSON.parse(import_node_fs.default.readFileSync(manifest, "utf8")).modules;
+  if (!Array.isArray(modules)) return [];
+  const hooksIdentity = moduleIdentity(hooks);
+  return modules.filter((entry) => typeof entry === "string").map((entry) => moduleIdentity(import_node_path.default.dirname(import_node_path.default.join(hooks, entry)))).filter((root) => root === hooksIdentity || root.startsWith(hooksIdentity + "/"));
+}
+function pluginRunnerTest(file, moduleRoots) {
+  const identity = moduleIdentity(file);
+  return moduleRoots.some((root) => identity.startsWith(root + "/")) || moduleSpecifiers(file).some((specifier) => PLUGIN_RUNNER_SPECIFIER.test(specifier));
+}
+function discoveredTests(plugin, moduleRoots) {
+  const files = [import_node_path.default.join(plugin, "test"), ...moduleRoots].flatMap(directoryFiles).filter(importingTest);
+  return Array.from(new Set(files.map((file) => import_node_path.default.resolve(file))));
+}
+function pluginRelative(plugin, files) {
+  return files.map((file) => import_node_path.default.relative(plugin, file).replaceAll("\\", "/")).sort();
 }
 function importedGraph(tests, plugin) {
   const graph = /* @__PURE__ */ new Map();
@@ -115,14 +141,18 @@ function addDependents(file, dependents, affected, pending) {
 }
 function pluginSelection(project, pluginName, changedPaths) {
   const plugin = import_node_path.default.join(project, "plugins", pluginName);
-  const tests = directoryFiles(import_node_path.default.join(plugin, "test")).filter(importingTest);
+  const moduleRoots = hooksModuleRoots(plugin);
+  const tests = discoveredTests(plugin, moduleRoots);
   const guidance = changedPaths.some(guidancePath) ? tests.filter((file) => /(?:^|[/\\])(?:agent-guidance|skill|compatibility)\.test\.[jt]s$/.test(file)) : [];
   const graph = importedGraph(tests, plugin);
   const changed = new Set(changedPaths.map((file) => sourceIdentity(import_node_path.default.resolve(project, file), plugin)));
   const affected = dependentModules(graph, changed);
+  const selected = tests.filter((file) => affected.has(moduleIdentity(file)) || guidance.includes(file));
+  const pluginRunnerFiles = selected.filter((file) => pluginRunnerTest(file, moduleRoots));
   return {
     plugin: `plugins/${pluginName}`,
-    files: tests.filter((file) => affected.has(moduleIdentity(file)) || guidance.includes(file)).map((file) => import_node_path.default.relative(plugin, file).replaceAll("\\", "/")).sort()
+    files: pluginRelative(plugin, selected.filter((file) => !pluginRunnerFiles.includes(file))),
+    ...pluginRunnerFiles.length ? { pluginRunnerFiles: pluginRelative(plugin, pluginRunnerFiles) } : {}
   };
 }
 function quoteArgument(value) {
@@ -147,14 +177,23 @@ function testScripts(project, plugin) {
 }
 function pluginTestFiles(project, plugin) {
   const root = import_node_path.default.join(project, plugin);
-  return directoryFiles(import_node_path.default.join(root, "test")).filter(importingTest).map((file) => import_node_path.default.relative(root, file).replaceAll("\\", "/")).sort();
+  const moduleRoots = hooksModuleRoots(root);
+  return pluginRelative(root, directoryFiles(import_node_path.default.join(root, "test")).filter((file) => importingTest(file) && !pluginRunnerTest(file, moduleRoots)));
 }
 function testBatchCommand(scripts, files, normalSuite) {
   if (normalSuite) return scripts["test:full"] ? "npm run test:full" : "npm test";
   const runner = scripts["test:files"] ? "npm run test:files --" : "node --test";
   return runner + " --test-concurrency=1 " + files.map((file) => quoteArgument(file.replaceAll("[", "[[]"))).join(" ");
 }
+function pluginRunnerBatch(project, selection, timeoutMilliseconds) {
+  if (!selection.pluginRunnerFiles?.length) return [];
+  const command = resolveSuite(project, { name: import_node_path.default.basename(selection.plugin), dir: selection.plugin })?.moduleTest ?? DEFAULT_PLUGIN_RUNNER;
+  return [{ plugin: selection.plugin, files: selection.pluginRunnerFiles, command, timeoutMilliseconds, shape: "plugin-runner" }];
+}
 function pluginTestBatch(project, selection, patterns, timeoutMilliseconds, fileThreshold) {
+  return [...nodeTestBatch(project, selection, patterns, timeoutMilliseconds, fileThreshold), ...pluginRunnerBatch(project, selection, timeoutMilliseconds)];
+}
+function nodeTestBatch(project, selection, patterns, timeoutMilliseconds, fileThreshold) {
   const files = selection.files.filter((file) => !performanceTest(file) && !pinnedTestFile(selection, file, patterns));
   if (!files.length) return [];
   const normalSuite = files.length > fileThreshold;
@@ -177,35 +216,65 @@ function selectionWithExclusions(project, selection) {
   const excludedFiles = pluginTestFiles(project, selection.plugin).filter(performanceTest);
   return { ...selection, excludedFiles };
 }
+function runImportBatch(project, batch, logPath, pinned, environment) {
+  const started = Date.now();
+  const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing tests pass on the merged tree" }, {
+    cwd: import_node_path.default.join(project, batch.plugin),
+    timeoutMilliseconds: batch.timeoutMilliseconds,
+    logPath,
+    environment
+  });
+  const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
+  if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk batch: " + JSON.stringify(receipt) + "\n");
+  return receipt;
+}
 function executeImportBatches(project, batches, pinned, environment) {
   if (pinned.status !== "passed") return [];
-  const failures = [];
   for (const [index, batch] of batches.entries()) {
     reportIntegrationProgress("importing tests", `${batch.plugin}/${batch.files.join(", ")}`, { index: index + 1, count: batches.length });
-    const started = Date.now();
-    const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing tests pass on the merged tree" }, {
-      cwd: import_node_path.default.join(project, batch.plugin),
-      timeoutMilliseconds: batch.timeoutMilliseconds,
-      logPath: pinned.logPath + ".import-" + index + ".log",
-      environment
-    });
-    const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
-    if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk batch: " + JSON.stringify(receipt) + "\n");
-    if (result.status !== "passed") {
-      failures.push(receipt);
-      break;
-    }
+    const receipt = runImportBatch(project, batch, pinned.logPath + ".import-" + index + ".log", pinned, environment);
+    if (receipt.status !== "passed") return [receipt];
   }
-  return failures;
+  return [];
+}
+function environmentPath(environment) {
+  return Object.entries(environment).find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
+}
+function claudeCliAvailable(environment) {
+  const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  const candidates = environmentPath(environment).split(import_node_path.default.delimiter).filter(Boolean).flatMap((directory) => extensions.map((extension) => import_node_path.default.join(directory, "claude" + extension)));
+  return candidates.some((candidate) => import_node_fs.default.existsSync(candidate) && import_node_fs.default.statSync(candidate).isFile());
+}
+function executePluginRunner(project, batch, index, pinned, environment) {
+  const target = { plugin: batch.plugin, files: batch.files };
+  if (!claudeCliAvailable(environment)) return { ...target, command: batch.command, status: "unverified", evidence: "The claude CLI is not on PATH, so these plugin-runner tests did not run here; CI runs them." };
+  reportIntegrationProgress("plugin-runner tests", `${batch.plugin}/${batch.files.join(", ")}`);
+  return { ...target, ...runImportBatch(project, batch, pinned.logPath + ".plugin-runner-" + index + ".log", pinned, environment) };
+}
+const PLUGIN_RUNNER_NOT_FAILED = /* @__PURE__ */ new Set(["passed", "unverified", "toolchain_missing"]);
+function pluginRunnerFailed(result) {
+  return !PLUGIN_RUNNER_NOT_FAILED.has(result.status);
+}
+function executePluginRunners(project, batches, pinned, environment) {
+  if (pinned.status !== "passed") return [];
+  const results = [];
+  for (const [index, batch] of batches.entries()) {
+    const result = executePluginRunner(project, batch, index, pinned, environment);
+    results.push(result);
+    if (pluginRunnerFailed(result)) break;
+  }
+  return results;
 }
 function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment, fileThreshold = 40) {
   const started = Date.now();
   const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
   const batches = integrationTestBatches(project, selections, pinned.command || "", timeoutMilliseconds, fileThreshold);
-  const failures = executeImportBatches(project, batches, pinned, environment);
-  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: "Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions." };
-  if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk gate: " + JSON.stringify({ ...importingTestSummary, selections, batches }) + "\n");
-  return { ...failures[0] ?? pinned, integrationTests: selections, importingTestResults: failures, importingTestSummary };
+  const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== "plugin-runner"), pinned, environment);
+  const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === "plugin-runner"), pinned, environment);
+  const importingTestResults = [...failures, ...pluginRunnerResults.filter(pluginRunnerFailed)];
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: "Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.", pluginRunnerSplit: PLUGIN_RUNNER_SPLIT };
+  if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk gate: " + JSON.stringify({ ...importingTestSummary, selections, batches, pluginRunnerResults }) + "\n");
+  return { ...importingTestResults[0] ?? pinned, integrationTests: selections, importingTestResults, pluginRunnerResults, importingTestSummary };
 }
 function guidancePath(file) {
   return /^(?:docs\/|plugins\/[^/]+\/(?:skills|docs)\/).*\.md$/.test(file.replaceAll("\\", "/"));
