@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { runIntegrationQuality, type QualityInput } from '../src/lib/integration-quality.js';
+import type { QualityInput } from '../src/lib/integration-quality.js';
+
+const runIntegrationQuality: typeof import('../src/lib/integration-quality.js').runIntegrationQuality = require('../lib/integration-quality.js').runIntegrationQuality;
 
 function qualityFixture(directory: string, complexity: number, covered: boolean): QualityInput {
   const gate = path.join(directory, 'gate');
@@ -32,6 +35,82 @@ function withQualityFixture(context: { after(callback: () => void): void }, comp
   process.env.SIDEQUEST_CLAUDE_HOME = path.join(directory, 'claude');
   return input;
 }
+
+function initializeNativeProject(input: QualityInput): void {
+  for (const argumentsList of [['init', '-q'], ['add', '.'], ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'baseline']]) {
+    const result = spawnSync('git', argumentsList, { cwd: input.project, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  input.base = 'HEAD';
+}
+
+function nativeMappedPlugin(input: QualityInput): void {
+  const plugin = path.join(input.project, 'plugins/neutral');
+  fs.mkdirSync(path.join(plugin, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(plugin, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(plugin, 'src/subject.ts'), 'export function subject(): number {\n  return 1;\n}\n');
+  fs.writeFileSync(path.join(plugin, 'package.json'), JSON.stringify({ scripts: { 'coverage:lcov': 'node coverage.cjs' } }));
+  fs.writeFileSync(path.join(plugin, 'coverage.cjs'), `const fs = require('node:fs');
+const path = require('node:path');
+fs.writeFileSync(path.join(process.env.QUALITY_GATE_COVERAGE_DIR, 'lcov.info'), 'SF:lib/subject.js\\nDA:1,1\\nDA:2,1\\nDA:3,1\\nend_of_record\\n');`);
+  initializeNativeProject(input);
+  const source = 'export function subject(): number {\n  return 2;\n}\n';
+  fs.writeFileSync(path.join(plugin, 'src/subject.ts'), source);
+  fs.writeFileSync(path.join(plugin, 'lib/subject.js'), 'function subject() {\n  return 2;\n}\n//# sourceMappingURL=subject.js.map\n');
+  fs.writeFileSync(path.join(plugin, 'lib/subject.js.map'), JSON.stringify({ version: 3, sources: ['../src/subject.ts'], sourcesContent: [source], names: [], mappings: 'AAAA;AACA;AACA' }));
+  input.changedPaths = ['plugins/neutral/src/subject.ts', 'plugins/neutral/lib/subject.js'];
+  const gate = path.resolve(__dirname, '../../quality-gate');
+  fs.writeFileSync(path.join(input.project, 'claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: { 'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: input.project, installPath: gate }] } }));
+}
+
+test('native generated LCOV integration measures TypeScript and reports the missing-map refusal', (context) => {
+  const input = withQualityFixture(context, 1, true);
+  nativeMappedPlugin(input);
+  const verify = () => ({ kind: 'command' as const, status: 'passed' as const, evidence: 'fixture verifier' });
+  const measured = runIntegrationQuality([input], verify);
+  assert.equal(measured.quality[0]!.measurementPath, 'crap', JSON.stringify(measured));
+  assert.equal(measured.quality[0]!.status, 'measured', JSON.stringify(measured));
+  assert.equal(measured.quality[0]!.worstBody!.name, 'subject');
+  assert.equal(measured.quality[0]!.worstBody!.crap, 1);
+  assert.equal(measured.quality[0]!.sourceMapTranslations!.length, 1);
+  assert.deepEqual(measured.quality[0]!.sourceMapRefusals, []);
+  fs.rmSync(path.join(input.project, 'plugins/neutral/lib/subject.js.map'));
+  const missing = runIntegrationQuality([input], verify);
+  assert.equal(missing.quality[0]!.status, 'unverified', JSON.stringify(missing));
+  assert.match(JSON.stringify(missing.quality[0]!.sourceMapRefusals), /source map/i);
+  assert.match(missing.quality[0]!.unverified[0]!.unverified!, /LCOV/);
+});
+
+test('native quality orchestration selects configured LCOV command and retains translations', (context) => {
+  const input = withQualityFixture(context, 2, true);
+  fs.mkdirSync(path.join(input.project, '.claude/quality-gate'), { recursive: true });
+  fs.writeFileSync(path.join(input.project, '.claude/quality-gate/crap.json'), JSON.stringify({ coverageCommand: 'node capture.js', lcovBase: 'plugin' }));
+  const translations = [{ generated: 'plugin/lib/subject.js', sources: ['plugin/src/subject.ts'] }];
+  const row = { name: 'candidateBody', complexity: 2, crap: 2, classification: 'new' };
+  const report = { changedMetrics: [row], failures: [], unverified: [], sourceMapTranslations: translations };
+  fs.writeFileSync(path.join(input.project, 'gate/bin/quality-gate.js'), `
+const assert = require('node:assert/strict');
+assert.equal(process.argv[2], 'crap');
+assert.equal(process.argv[process.argv.indexOf('--coverage-command') + 1], 'node capture.js');
+assert.equal(process.argv[process.argv.indexOf('--lcov-base') + 1], 'plugin');
+assert.equal(process.argv[process.argv.indexOf('--source') + 1], 'source.js');
+process.stdout.write(${JSON.stringify(JSON.stringify(report))});`);
+  const result = runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'fixture verifier' }));
+  assert.equal(result.quality[0]!.measurementPath, 'crap');
+  assert.deepEqual(result.quality[0]!.sourceMapTranslations, translations);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result.quality[0]!.receipt!, 'utf8')).sourceMapTranslations, translations);
+});
+
+test('native quality refuses a zero-row report when AST inventory finds changed bodies', (context) => {
+  const input = withQualityFixture(context, 2, true);
+  const inventory = { changedMetrics: [{ name: 'candidateBody', complexity: 2, classification: 'new' }], failures: [], unverified: [] };
+  const empty = { changedMetrics: [], failures: [], unverified: [], nothingToScoreReason: 'coverage path selected no bodies' };
+  fs.writeFileSync(path.join(input.project, 'gate/bin/quality-gate.js'), `process.stdout.write(JSON.stringify(process.argv.includes('--cc-only') ? ${JSON.stringify(inventory)} : ${JSON.stringify(empty)}));`);
+  const result = runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'fixture verifier' }));
+  assert.equal(result.status, 'failed_check');
+  assert.equal(result.quality[0]!.measurementSummary, '0 of 1 changed bodies measured: coverage path selected no bodies');
+  assert.equal(result.quality[0]!.unverified[0]!.complexity, 2);
+});
 
 test('native quality orchestration refuses the owner-reported CC floor even without coverage', (context) => {
   const input = withQualityFixture(context, 7, false);

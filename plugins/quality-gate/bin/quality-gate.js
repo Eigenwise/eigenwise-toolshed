@@ -58,6 +58,8 @@ With a base, only selected files that differ from it or are untracked are parsed
 DUPLICATE? and CALLERS OPEN are informational reuse signals (also in --json signals).
 They use JS/TS/Python name regexes, never affect the verdict, and also run with --cc-only.
 --cc-only checks the complexity floor without running coverage; it cannot prove a full CRAP pass.
+--lcov-base <dir> (config lcovBase) resolves relative SF paths before translation; default project root.
+Absolute SF paths stay absolute; all source/map identity checks still apply.
 --lcov overrides both isolated command output and config lcov. Config lcov is a fallback
 behind fresh isolated command output, then coverage/lcov.info when unset.
 Without a command, existing LCOV requires a sibling <lcov>.sources.json SHA-256 map
@@ -88,7 +90,7 @@ Bound passes retain the reason and boundVerdict=pass in changedMetrics; branch c
 `;
 
 function argumentsForCommand() {
-  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'coverage-timeout-ms', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'lcov-base', 'coverage-command', 'coverage-timeout-ms', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
   Object.assign(options, Object.fromEntries(['cc-only', 'json', 'help'].map((name) => [name, { type: 'boolean' }])));
   options.source = { type: 'string', multiple: true };
   options['new-external-file'] = { type: 'string', multiple: true };
@@ -118,7 +120,7 @@ async function runMeasure(values, files) {
 
 async function capturedReport(values) {
   try {
-    return await crapReport({ ...values, ccOnly: values['cc-only'], coverageCommand: values['coverage-command'], coverageTimeoutMs: values['coverage-timeout-ms'], pythonPolicy: values['python-policy'] });
+    return await crapReport({ ...values, ccOnly: values['cc-only'], lcovBase: values['lcov-base'], coverageCommand: values['coverage-command'], coverageTimeoutMs: values['coverage-timeout-ms'], pythonPolicy: values['python-policy'] });
   } catch (error) {
     const unverified = [{ relativePath: '<gate>', line: 1, name: 'prerequisite', unverified: error.message }];
     return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], signals: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };

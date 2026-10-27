@@ -511,3 +511,5 @@ Capture logs are written directly under the board project
 `verification/<ref>/` directory and stay readable through the returned `logPath`.
 
 Executor submit/done accepts `summary: { result, checked, uncertain, action }`, each plain-text field up to 600 characters. It lives in `ticket.completionSummary`, bound to the submitted candidate (null for done without a submission). Candidate changes mark it stale in `completion`; lifecycle records still decide stage, blockers and facts. Read `completion <ref|US-n> --text` for the closeout report. `body` remains required. A failed summary write returns `summaryError` and records a comment without undoing delivery.
+
+Integration quality uses `crap` when the project Quality Gate config supplies `coverageCommand`, or a single changed plugin supplies `coverage:lcov`. Plugin LCOV paths resolve from that plugin directory. Otherwise integration keeps the V8 `measure` path. Integration receipts record `measurementPath`, `sourceMapTranslations`, and `sourceMapRefusals`. A report with no changed bodies is cross-checked with the AST complexity inventory; a nonzero inventory refuses delivery with the missing-body count.

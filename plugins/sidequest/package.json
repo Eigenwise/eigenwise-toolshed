@@ -14,7 +14,7 @@
     "test:full": "npm run typecheck && npm run build:check && node scripts/test-full.mjs",
     "test:perf": "node --import tsx --test test/*.perf.test.ts",
     "quality:crap": "node ../../scripts/quality/crap.mjs",
-    "coverage:lcov": "node scripts/build.mjs --sourcemap=external && node --import tsx --import ./test/_sidequest-test-home.ts --test --test-concurrency=2 --experimental-test-coverage --test-coverage-include=lib/** --test-coverage-include=hooks/** --test-coverage-include=bin/** --test-reporter=lcov"
+    "coverage:lcov": "node scripts/coverage-lcov.mjs"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
