@@ -45,7 +45,7 @@ const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
 const { createLocks } = require("./store/locks.js");
 const { createPulse } = require("./store/pulse.js");
-const { createCompletion } = require("./store/completion.js");
+const { createCompletion, createSummaryCloseout } = require("./store/completion.js");
 const { createRouting } = require("./store/routing.js");
 const { createTickets } = require("./store/tickets.js");
 const { createSubmissions } = require("./store/submissions.js");
@@ -1638,7 +1638,7 @@ const {
   closeSubmissionAsSuperseded,
   supersedeBuiltOnSources,
   submissionOwnershipFailure,
-  submitTicket,
+  submitTicket: submitTicketWithoutSummary,
   pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
@@ -3305,7 +3305,7 @@ function externalDeliverableCloseout(slug, ticket, verify) {
   const capture = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures.find((entry) => entry?.status === "passed" && entry?.cleanWorktree === true && entry?.candidate?.source === candidate.source && entry?.candidate?.value === candidate.value && entry?.command === verification.verification.command && entry?.dispatchNonce === ticket.dispatchNonce) : null;
   return { ok: true, worktree: workspace.root, candidate, verification: verification.verification, capture: capture || null };
 }
-function completeTicket(slug, idOrRef, by, opts) {
+function completeTicketWithoutSummary(slug, idOrRef, by, opts) {
   opts = opts || {};
   const ticket = getTicket(slug, idOrRef);
   const dispatched = resolvedDispatchRoute(ticket);
@@ -3974,6 +3974,13 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   storyDecisionLogWarnings,
   submissionProjection
 });
+const summaryCloseout = createSummaryCloseout({ getTicket, putTicket, addComment, withTicketLock });
+function submitTicket(slug, ref, by, opts = {}) {
+  return summaryCloseout(slug, ref, by, opts, "submit", () => submitTicketWithoutSummary(slug, ref, by, opts));
+}
+function completeTicket(slug, ref, by, opts = {}) {
+  return summaryCloseout(slug, ref, by, opts, "done", () => completeTicketWithoutSummary(slug, ref, by, opts));
+}
 const { completionPayload } = createCompletion({ getTicket, openBlockers, negativeControlResult, projectDir, readMeta });
 module.exports = {
   normalizeIntegrationVerifyTimeoutMs,

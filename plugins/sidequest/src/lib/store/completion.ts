@@ -74,6 +74,7 @@ interface SubmissionRecord {
 interface CaptureRecord { command?: string; status?: string; logPath?: string | null; candidate?: { value?: string }; completedAt?: string }
 interface RejectedRecord { commit?: string; rejectedAt?: string; reason?: string; supersededAt?: string }
 export interface CompletionTicket {
+  id?: string;
   ref: string;
   title?: string;
   status?: string;
@@ -518,12 +519,20 @@ function uncertainSection(view: CompletionView): string {
   return doubts.length ? doubts.join(' ') : 'Nothing flagged by the records.';
 }
 
-function actionSection(view: CompletionView): string {
+function factualAction(view: CompletionView): string {
   const blocker = view.blocker;
   if (blocker?.actor === 'user') return blocker.nextAction;
   const noAction = TERMINAL_STAGES.has(view.stage) || Boolean(blocker);
   const next = blocker ? ` Next (${blocker.actor}): ${blocker.nextAction}` : '';
   return noAction ? `No action needed.${next}` : 'Check the ticket; the records name no next step.';
+}
+
+function actionSection(view: CompletionView): string {
+  return factualAction(view) + summaryAction(view);
+}
+
+function summaryAction(view: CompletionView): string {
+  return view.summary?.action ? ` Agent said: ${view.summary.action}` : '';
 }
 
 export function completionText(view: CompletionView): string {
@@ -574,4 +583,118 @@ export function createCompletion(dependencies: CompletionDependencies) {
   }
 
   return { completionPayload };
+}
+
+export type CompletionSummaryInput = Pick<CompletionSummary, 'result' | 'checked' | 'uncertain' | 'action'>;
+const SUMMARY_FIELDS = ['result', 'checked', 'uncertain', 'action'] as const;
+export const COMPLETION_SUMMARY_SCHEMA = {
+  type: 'object',
+  properties: Object.fromEntries(SUMMARY_FIELDS.map(field => [field, { type: 'string', maxLength: 600 }])),
+  required: [...SUMMARY_FIELDS],
+  additionalProperties: false,
+};
+
+function validateSummaryField(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 600 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value)) {
+    throw new Error('summary fields must be plain text of at most 600 characters');
+  }
+  return value;
+}
+
+function summaryDescriptors(value: unknown): PropertyDescriptorMap {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('summary must contain result, checked, uncertain and action');
+  return Object.getOwnPropertyDescriptors(value);
+}
+
+export function completionSummaryInput(value: unknown): CompletionSummaryInput | undefined {
+  if (value === undefined) return undefined;
+  const fields = summaryDescriptors(value);
+  if (Object.keys(fields).some(field => !SUMMARY_FIELDS.some(allowed => allowed === field))) throw new Error('summary contains an unknown field');
+  return {
+    result: validateSummaryField(fields.result?.value),
+    checked: validateSummaryField(fields.checked?.value),
+    uncertain: validateSummaryField(fields.uncertain?.value),
+    action: validateSummaryField(fields.action?.value),
+  };
+}
+
+function matchesCandidateSummary(recorded: Partial<CompletionSummary> | null | undefined, summary: CompletionSummaryInput, candidate: string | null): boolean {
+  return recorded?.candidate === candidate && identicalSummary(recorded, summary);
+}
+
+function identicalSummary(recorded: Partial<CompletionSummary> | null | undefined, summary: CompletionSummaryInput): boolean {
+  return SUMMARY_FIELDS.every(field => recorded?.[field] === summary[field]);
+}
+
+interface SummaryCloseoutResult { ok: boolean; ticket?: CompletionTicket; summaryError?: string }
+interface SummaryCloseoutOptions { summary?: unknown; commit?: string; sourceRevision?: { value: string } }
+interface SummaryCloseoutDependencies {
+  getTicket: (slug: string, ref: string) => CompletionTicket | null;
+  putTicket: (slug: string, ticket: CompletionTicket) => void;
+  addComment: (slug: string, ref: string, comment: { by: string; body: string; source: string }) => unknown;
+  withTicketLock: (slug: string, ref: string, callback: () => void) => unknown;
+}
+
+function summaryCloseoutRecorded(ticket: CompletionTicket, kind: string, by: string): boolean {
+  if (kind === 'done') return ticket.status === 'done' && ticket.completion?.by === by;
+  return ticket.submission?.by === by && !ticket.submission.integratedAt;
+}
+
+function summaryCandidate(ticket: CompletionTicket | null, options: SummaryCloseoutOptions, kind: string): string | null {
+  if (kind === 'submit') return options.commit?.toLowerCase() || options.sourceRevision?.value || null;
+  return candidateOf(ticket || { ref: '' });
+}
+
+function repeatSummaryCloseout(ticket: CompletionTicket | null, by: string, candidate: string | null, kind: string, summary: CompletionSummaryInput): boolean {
+  if (!ticket || ticket.claim || ticket.completionSummary?.by !== by) return false;
+  const terminal = summaryCloseoutRecorded(ticket, kind, by);
+  return terminal && matchesCandidateSummary(ticket.completionSummary, summary, candidate);
+}
+
+function persistCompletionSummary(dependencies: SummaryCloseoutDependencies, slug: string, ref: string, by: string, summary: CompletionSummaryInput, candidate: string | null): CompletionTicket {
+  const ticket = dependencies.getTicket(slug, ref);
+  if (!ticket) throw new Error('summary ticket disappeared after closeout');
+  if (matchesCandidateSummary(ticket.completionSummary, summary, candidate)) return ticket;
+  ticket.completionSummary = { version: 1, ...summary, by, at: new Date().toISOString(), candidate };
+  dependencies.putTicket(slug, ticket);
+  return ticket;
+}
+
+function recordSummaryError(dependencies: SummaryCloseoutDependencies, slug: string, ref: string, by: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    dependencies.addComment(slug, ref, { by, body: `Completion summary could not be saved: ${message}`, source: 'summary' });
+  } catch {
+    return `${message} (summary error comment also could not be saved)`;
+  }
+  return message;
+}
+
+export function createSummaryCloseout(dependencies: SummaryCloseoutDependencies) {
+  return function summaryCloseout(slug: string, ref: string, by: string, options: SummaryCloseoutOptions, kind: 'submit' | 'done', close: () => SummaryCloseoutResult): SummaryCloseoutResult {
+    const summary = completionSummaryInput(options.summary);
+    if (!summary) return close();
+    const ticket = dependencies.getTicket(slug, ref);
+    const candidate = summaryCandidate(ticket, options, kind);
+    if (ticket && repeatSummaryCloseout(ticket, by, candidate, kind, summary)) return { ok: true, ticket };
+    const result = close();
+    if (!result.ok) return result;
+    return saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result);
+  };
+}
+
+function saveSummaryAfterCloseout(dependencies: SummaryCloseoutDependencies, slug: string, ref: string, by: string, summary: CompletionSummaryInput, result: SummaryCloseoutResult): SummaryCloseoutResult {
+  try {
+    const candidate = candidateOf(result.ticket || { ref });
+    let saved = false;
+    const ticket = dependencies.getTicket(slug, ref);
+    dependencies.withTicketLock(slug, ticket?.id || ref, () => {
+      result.ticket = persistCompletionSummary(dependencies, slug, ref, by, summary, candidate);
+      saved = true;
+    });
+    if (!saved) throw new Error('summary ticket lock unavailable');
+    return result;
+  } catch (error) {
+    return { ...result, summaryError: recordSummaryError(dependencies, slug, ref, by, error) };
+  }
 }

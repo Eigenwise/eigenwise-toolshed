@@ -313,6 +313,9 @@ async function closeExecutorAndReclaimTree(slug, projectPath, res, ticket, recla
   closeDispatchExecutor(ticket);
   if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
 }
+function completionNotices(result) {
+  return Object.fromEntries(Object.entries(result).filter(([key, value]) => ["advisory", "summaryError"].includes(key) && Boolean(value)));
+}
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
   const out = { ok: !!result.ok, project };
@@ -324,7 +327,7 @@ function mutationAck(project, result, changed) {
     }
     return out;
   }
-  if (result.advisory) out.advisory = result.advisory;
+  Object.assign(out, completionNotices(result));
   return Object.assign(out, changed || {});
 }
 const QUIET_INTEGRATION_BRANCH_REASONS = ["remote_mode", "already_integrated"];
