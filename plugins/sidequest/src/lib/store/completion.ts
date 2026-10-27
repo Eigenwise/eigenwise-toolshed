@@ -1,5 +1,6 @@
 'use strict';
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { integrationProgressPath, readIntegrationProgress } from '../integration-tests.js';
 
@@ -27,6 +28,13 @@ export interface CompletionFacts {
 }
 export interface CompletionSummary { version: 1; result: string; checked: string; uncertain: string; action: string; by: string; at: string; candidate: string | null; stale: boolean }
 export interface CompletionEvidence { kind: EvidenceKind; path: string; label: string }
+export type AcceptanceKind = 'main' | 'boundary';
+export interface AcceptanceExample { scenario: string; expected: string; kind: AcceptanceKind }
+export type DemonstrationStatus = 'demonstrated' | 'failed' | 'stale' | 'not demonstrated';
+type DemonstrationEvidence = 'real-flow' | 'visual';
+interface DemonstrationOutcome { status: DemonstrationStatus; detail: string; observed: string | null; evidence: DemonstrationEvidence | null }
+export interface AcceptanceResult extends AcceptanceExample, DemonstrationOutcome {}
+export interface DemonstrationRecord { directory: string; entries: unknown[]; presentArtifacts: string[]; error: string | null }
 export interface CompletionView {
   ref: string;
   title: string;
@@ -35,6 +43,7 @@ export interface CompletionView {
   facts: CompletionFacts;
   summary: CompletionSummary | null;
   evidence: CompletionEvidence[];
+  acceptance: AcceptanceResult[];
   text: string;
 }
 
@@ -88,8 +97,10 @@ export interface CompletionTicket {
   comments?: { body?: string }[];
   completionSummary?: Partial<CompletionSummary> | null;
   shipped?: Array<{ version: string; plugins: string[]; commit: string; deliveryCommit: string | null; at: string }>;
+  acceptance?: AcceptanceExample[] | null;
 }
 export interface CompletionContext {
+  demonstrations?: DemonstrationRecord | null;
   openBlockers?: string[];
   integrationProgress?: { state?: string; writerAlive?: boolean } | null;
   negativeControl?: { kind?: string; evidence?: string; captureId?: string } | null;
@@ -350,6 +361,163 @@ function evidenceEntries(ticket: CompletionTicket, roots: string[]): CompletionE
     .filter((entry) => entry.path);
 }
 
+export const DEMONSTRATIONS_FILE = 'demonstrations.json';
+const SCREENSHOT_ARTIFACT = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
+const REQUIRED_DEMONSTRATION_FIELDS = ['expected', 'observed', 'environment', 'candidate', 'fixture', 'artifact'] as const;
+interface DemonstrationEntry {
+  scenario: string;
+  expected: string;
+  observed: string;
+  environment: string;
+  candidate: string;
+  fixture: string;
+  artifact: string;
+  matches: boolean | null;
+  kind: DemonstrationEvidence;
+}
+interface AssessedDemonstration extends DemonstrationOutcome { entry: DemonstrationEntry; artifact: string | null }
+
+function recordFields(value: unknown): Map<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? new Map<string, unknown>(Object.entries(value)) : null;
+}
+
+function demonstrationKind(declared: unknown, artifact: string): DemonstrationEvidence {
+  return declared === 'visual' || SCREENSHOT_ARTIFACT.test(artifact) ? 'visual' : 'real-flow';
+}
+
+function demonstrationEntry(value: unknown): DemonstrationEntry | null {
+  const record = recordFields(value);
+  if (!record) return null;
+  const field = (name: string) => text(record.get(name));
+  const matches = record.get('matches');
+  return {
+    scenario: field('scenario'),
+    expected: field('expected'),
+    observed: field('observed'),
+    environment: field('environment'),
+    candidate: field('candidate'),
+    fixture: field('fixture'),
+    artifact: field('artifact'),
+    matches: typeof matches === 'boolean' ? matches : null,
+    kind: demonstrationKind(record.get('kind'), field('artifact')),
+  };
+}
+
+function missingDemonstrationFields(entry: DemonstrationEntry): string[] {
+  const missing: string[] = REQUIRED_DEMONSTRATION_FIELDS.filter((field) => !entry[field]);
+  return entry.matches === null ? [...missing, 'matches'] : missing;
+}
+
+function sameCommit(recorded: string, current: string): boolean {
+  const left = recorded.toLowerCase();
+  const right = current.toLowerCase();
+  return Math.min(left.length, right.length) >= 7 && (left.startsWith(right) || right.startsWith(left));
+}
+
+function boardEvidenceRoots(context: CompletionContext): string[] {
+  const roots = context.roots ?? {};
+  return [roots.verification, roots.evidence].map(text).filter(Boolean);
+}
+
+function demonstrationArtifact(entry: DemonstrationEntry, directory: string, roots: string[]): string | null {
+  if (!entry.artifact) return null;
+  const absolute = path.resolve(directory, entry.artifact);
+  const candidate = comparablePath(absolute);
+  return roots.some((root) => insideRoot(candidate, root)) ? absolute : null;
+}
+
+function demonstrationProblem(entry: DemonstrationEntry, artifact: string | null, present: Set<string>): string | null {
+  const missing = missingDemonstrationFields(entry);
+  if (missing.length) return `partial record, missing ${missing.join(', ')}`;
+  if (!artifact) return 'artifact outside the board evidence directory';
+  return present.has(comparablePath(artifact)) ? null : 'artifact file not found';
+}
+
+function settledDemonstration(entry: DemonstrationEntry, candidate: string | null): [DemonstrationStatus, string] {
+  if (candidate && !sameCommit(entry.candidate, candidate)) {
+    return ['stale', `recorded for ${shortCommit(entry.candidate)}, candidate is now ${shortCommit(candidate)}`];
+  }
+  return entry.matches ? ['demonstrated', `${entry.kind} in ${entry.environment}`] : ['failed', 'observed differs from expected'];
+}
+
+function assessDemonstration(entry: DemonstrationEntry, artifact: string | null, present: Set<string>, candidate: string | null): DemonstrationOutcome {
+  const problem = demonstrationProblem(entry, artifact, present);
+  if (problem) return { status: 'not demonstrated', detail: problem, observed: entry.observed || null, evidence: null };
+  const [status, detail] = settledDemonstration(entry, candidate);
+  return { status, detail, observed: entry.observed, evidence: entry.kind };
+}
+
+function assessedDemonstrations(ticket: CompletionTicket, context: CompletionContext): AssessedDemonstration[] {
+  const record = context.demonstrations;
+  if (!record) return [];
+  const roots = boardEvidenceRoots(context);
+  const present = new Set(record.presentArtifacts.map(comparablePath));
+  const candidate = candidateOf(ticket);
+  return record.entries
+    .map(demonstrationEntry)
+    .filter((entry): entry is DemonstrationEntry => Boolean(entry))
+    .map((entry) => {
+      const artifact = demonstrationArtifact(entry, record.directory, roots);
+      return { entry, artifact, ...assessDemonstration(entry, artifact, present, candidate) };
+    });
+}
+
+function acceptanceExamples(ticket: CompletionTicket): AcceptanceExample[] {
+  return Array.isArray(ticket.acceptance) ? ticket.acceptance.filter((example) => Boolean(text(example?.scenario))) : [];
+}
+
+function undemonstrated(record: DemonstrationRecord | null | undefined): DemonstrationOutcome {
+  const detail = record?.error ? `${DEMONSTRATIONS_FILE} ${record.error}` : 'no record';
+  return { status: 'not demonstrated', detail, observed: null, evidence: null };
+}
+
+function acceptanceResults(ticket: CompletionTicket, demonstrations: AssessedDemonstration[], record: DemonstrationRecord | null | undefined): AcceptanceResult[] {
+  return acceptanceExamples(ticket).map((example): AcceptanceResult => {
+    const latest = demonstrations.filter((demonstration) => demonstration.entry.scenario === text(example.scenario)).at(-1);
+    const { status, detail, observed, evidence } = latest ?? undemonstrated(record);
+    return { scenario: example.scenario, expected: example.expected, kind: example.kind, status, detail, observed, evidence };
+  });
+}
+
+function demonstrationLabel(demonstration: AssessedDemonstration): string {
+  const { scenario, expected, observed } = demonstration.entry;
+  return sanitizeCompletionText(`${demonstration.status} demonstration "${scenario}": expected ${expected}; observed ${observed}`).slice(0, 400);
+}
+
+function demonstrationEvidence(demonstrations: AssessedDemonstration[]): CompletionEvidence[] {
+  return demonstrations.flatMap((demonstration): CompletionEvidence[] => demonstration.artifact && demonstration.evidence
+    ? [{ kind: demonstration.evidence, path: demonstration.artifact, label: demonstrationLabel(demonstration) }]
+    : []);
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function parsedDemonstrations(file: string): Pick<DemonstrationRecord, 'entries' | 'error'> {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(parsed) ? { entries: parsed, error: null } : { entries: [], error: 'is not a JSON array' };
+  } catch (error) {
+    return { entries: [], error: `is unreadable: ${errorText(error)}` };
+  }
+}
+
+function presentArtifacts(directory: string, entries: unknown[]): string[] {
+  return entries
+    .map((entry) => text(recordFields(entry)?.get('artifact')))
+    .filter(Boolean)
+    .map((artifact) => path.resolve(directory, artifact))
+    .filter((absolute) => fs.existsSync(absolute));
+}
+
+export function readDemonstrations(directory: string): DemonstrationRecord | null {
+  const file = path.join(directory, DEMONSTRATIONS_FILE);
+  if (!fs.existsSync(file)) return null;
+  const { entries, error } = parsedDemonstrations(file);
+  return { directory, entries, error, presentArtifacts: presentArtifacts(directory, entries) };
+}
+
 type StageRule = [(ticket: CompletionTicket, context: CompletionContext) => boolean, CompletionStage];
 
 const STAGE_RULES: StageRule[] = [
@@ -421,6 +589,7 @@ function completionFacts(ticket: CompletionTicket, context: CompletionContext, s
 export function completionView(ticket: CompletionTicket, context: CompletionContext = {}): CompletionView {
   const summary = summaryRecord(ticket);
   const stage = completionStage(ticket, context);
+  const demonstrations = assessedDemonstrations(ticket, context);
   const view: CompletionView = {
     ref: ticket.ref,
     title: text(ticket.title),
@@ -428,7 +597,8 @@ export function completionView(ticket: CompletionTicket, context: CompletionCont
     blocker: completionBlocker(stage, ticket, context),
     facts: completionFacts(ticket, context, summary),
     summary,
-    evidence: evidenceEntries(ticket, approvedRoots(context)),
+    evidence: [...evidenceEntries(ticket, approvedRoots(context)), ...demonstrationEvidence(demonstrations)],
+    acceptance: acceptanceResults(ticket, demonstrations, context.demonstrations),
     text: '',
   };
   view.text = completionText(view);
@@ -490,10 +660,37 @@ function checkedSection(view: CompletionView): string {
   const agent = view.summary?.checked ? ` Agent says: ${view.summary.checked}` : '';
   return [
     verifyClause(facts.verify),
+    demonstrationClause(view.acceptance),
     `Quality: ${QUALITY_WORDING[facts.quality.status]}.`,
     controlClause(facts.negativeControl),
     reviewClause(facts.review),
-  ].join(' ') + agent;
+  ].filter(Boolean).join(' ') + agent;
+}
+
+function demonstrationClause(acceptance: AcceptanceResult[]): string {
+  if (!acceptance.length) return '';
+  const demonstrated = acceptance.filter((result) => result.status === 'demonstrated');
+  const visual = demonstrated.filter((result) => result.evidence === 'visual').length;
+  const visualNote = visual ? ` (${visual} by screenshot only)` : '';
+  return `Demonstrated ${demonstrated.length} of ${acceptance.length} acceptance examples${visualNote}.`;
+}
+
+const OPEN_DEMONSTRATION_LABEL: Record<DemonstrationStatus, string> = {
+  demonstrated: '',
+  'not demonstrated': 'Not demonstrated',
+  failed: 'Demonstration FAILED',
+  stale: 'Demonstration stale',
+};
+
+function demonstrationDoubt(view: CompletionView): string | null {
+  const open = view.acceptance.filter((result) => result.status !== 'demonstrated');
+  if (!open.length) return null;
+  return open.map((result) => `${OPEN_DEMONSTRATION_LABEL[result.status]}: ${clampWords(result.scenario, 8)} (${result.detail}).`).join(' ');
+}
+
+function demonstrationAction(view: CompletionView): string | null {
+  const failed = view.acceptance.some((result) => result.status === 'failed');
+  return failed && view.blocker?.actor !== 'user' ? 'Review the failed demonstration before accepting this candidate.' : null;
 }
 
 function hasCandidate(view: CompletionView): boolean {
@@ -521,6 +718,7 @@ const DOUBTS: ((view: CompletionView) => string | null)[] = [
   (view) => (view.summary?.stale ? 'Summary describes an older candidate.' : null),
   (view) => (view.facts.candidateChanged && !view.summary?.stale ? 'Candidate changed after a rejection.' : null),
   verifyDoubt,
+  demonstrationDoubt,
   qualityDoubt,
   controlDoubt,
   (view) => (view.stage === 'integrated' ? 'No release record; shipping is unconfirmed.' : null),
@@ -541,7 +739,7 @@ function factualAction(view: CompletionView): string {
 }
 
 function actionSection(view: CompletionView): string {
-  return factualAction(view) + summaryAction(view);
+  return (demonstrationAction(view) ?? factualAction(view)) + summaryAction(view);
 }
 
 function summaryAction(view: CompletionView): string {
@@ -729,7 +927,9 @@ export function createCompletion(dependencies: CompletionDependencies) {
 
   function completionContext(slug: string, ticket: CompletionTicket): CompletionContext {
     const boardDirectory = projectDir(slug);
+    const evidenceDirectory = text(ticket.dispatch?.evidenceDirectory) || path.join(boardDirectory, 'verification', ticket.ref);
     return {
+      demonstrations: readDemonstrations(evidenceDirectory),
       openBlockers: openBlockers(slug, ticket),
       integrationProgress: readIntegrationProgress(integrationProgressPath(boardDirectory, ticket.ref)),
       negativeControl: negativeControlResult(controlHolder(ticket), [], candidateOf(ticket)),
@@ -788,6 +988,61 @@ export function completionSummaryInput(value: unknown): CompletionSummaryInput |
     uncertain: validateSummaryField(fields.uncertain?.value),
     action: validateSummaryField(fields.action?.value),
   };
+}
+
+export const ACCEPTANCE_MAX_EXAMPLES = 8;
+export const ACCEPTANCE_TEXT_MAX = 300;
+const ACCEPTANCE_KINDS: readonly AcceptanceKind[] = ['main', 'boundary'];
+const ACCEPTANCE_FIELDS = ['scenario', 'expected', 'kind'];
+const ACCEPTANCE_TEXT_SCHEMA = { type: 'string', maxLength: ACCEPTANCE_TEXT_MAX };
+export const ACCEPTANCE_SCHEMA = {
+  type: 'array',
+  maxItems: ACCEPTANCE_MAX_EXAMPLES,
+  items: {
+    type: 'object',
+    properties: { scenario: ACCEPTANCE_TEXT_SCHEMA, expected: ACCEPTANCE_TEXT_SCHEMA, kind: { type: 'string', enum: ACCEPTANCE_KINDS } },
+    required: ACCEPTANCE_FIELDS,
+    additionalProperties: false,
+  },
+  description: 'Examples the executor demonstrates on the real surface; [] clears.',
+};
+
+function acceptanceRecord(value: unknown, index: number): Map<string, unknown> {
+  const record = recordFields(value);
+  if (!record) throw new Error(`acceptance[${index}] must be an object with scenario, expected and kind`);
+  const unknownField = [...record.keys()].find((field) => !ACCEPTANCE_FIELDS.includes(field));
+  if (unknownField) throw new Error(`acceptance[${index}] has unknown field ${unknownField}`);
+  return record;
+}
+
+function acceptanceText(value: unknown, field: string, index: number): string {
+  const trimmed = text(value);
+  const plain = Boolean(trimmed) && trimmed.length <= ACCEPTANCE_TEXT_MAX && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(trimmed);
+  if (!plain) throw new Error(`acceptance[${index}].${field} must be plain text of 1 to ${ACCEPTANCE_TEXT_MAX} characters`);
+  return trimmed;
+}
+
+function acceptanceKind(value: unknown, index: number): AcceptanceKind {
+  const kind = ACCEPTANCE_KINDS.find((candidate) => candidate === value);
+  if (!kind) throw new Error(`acceptance[${index}].kind must be main or boundary`);
+  return kind;
+}
+
+function acceptanceExample(value: unknown, index: number): AcceptanceExample {
+  const record = acceptanceRecord(value, index);
+  return {
+    scenario: acceptanceText(record.get('scenario'), 'scenario', index),
+    expected: acceptanceText(record.get('expected'), 'expected', index),
+    kind: acceptanceKind(record.get('kind'), index),
+  };
+}
+
+export function acceptanceExamplesInput(value: unknown): AcceptanceExample[] {
+  if (!Array.isArray(value)) throw new Error('acceptance must be an array of { scenario, expected, kind }');
+  if (value.length > ACCEPTANCE_MAX_EXAMPLES) throw new Error(`acceptance holds at most ${ACCEPTANCE_MAX_EXAMPLES} examples`);
+  const examples = value.map(acceptanceExample);
+  if (new Set(examples.map((example) => example.scenario)).size !== examples.length) throw new Error('acceptance scenarios must be distinct');
+  return examples;
 }
 
 function matchesCandidateSummary(recorded: Partial<CompletionSummary> | null | undefined, summary: CompletionSummaryInput, candidate: string | null): boolean {
