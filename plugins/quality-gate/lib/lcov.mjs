@@ -4,6 +4,7 @@ import path from 'node:path';
 import { runCoverageCommand } from './coverage-command.mjs';
 import { normalizedPath } from './core.mjs';
 import { sourceHashes } from './crap-inputs.mjs';
+import { projectFileHashes, translateCoverage } from './source-map-translation.mjs';
 
 export function coverageByFile(text, root) {
   const files = new Map();
@@ -31,9 +32,11 @@ function recordLine(lines, value) {
   lines.set(line, Math.max(lines.get(line) ?? 0, hits));
 }
 
-function readCoverage(lcovPath, hashes) {
+function readCoverage(lcovPath, hashes, root, base) {
   try {
-    return { text: fs.readFileSync(lcovPath, 'utf8'), hashes, lcovPath };
+    const original = fs.readFileSync(lcovPath, 'utf8');
+    const text = base === undefined ? original : original.replace(/^SF:(.*)$/gm, (_, file) => 'SF:' + path.resolve(root, base, file.trimEnd()));
+    return { text, hashes, lcovPath };
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     return { text: '', hashes, reason: `No LCOV at ${lcovPath}. Run coverage, set coverageCommand, or use your Vitest coverage provider's LCOV output; raw NODE_V8_COVERAGE does not identify vite-node modules.` };
@@ -68,7 +71,8 @@ export async function acquireCoverage(root, settings, files) {
   const explicitPath = settings.lcov ? path.resolve(root, settings.lcov) : null;
   if (!settings.coverageCommand) {
     const lcovPath = explicitPath || defaultPath;
-    return readCoverage(lcovPath, existingHashes(lcovPath));
+    const hashes = existingHashes(lcovPath);
+    return translateCoverage(readCoverage(lcovPath, hashes, root, settings.lcovBase), root, { hashes, allowsCreated: false, source: lcovPath + '.sources.json', changedWhen: `since ${lcovPath}.sources.json was captured` });
   }
   const reportsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-gate-coverage-'));
   try {
@@ -88,10 +92,12 @@ function capturedPath({ defaultPath, explicitPath, reportsDirectory }, before) {
 async function captureCoverage(root, settings, files, locations) {
   const hashes = sourceHashes(root, files);
   const before = new Map([locations.defaultPath, locations.explicitPath].filter(Boolean).map((file) => [file, coverageStamp(file)]));
+  const generatedBefore = projectFileHashes(root);
   await runCoverage(settings.coverageCommand, root, locations.reportsDirectory, settings.coverageTimeoutMs);
   const after = sourceHashes(root, files);
   if (JSON.stringify(hashes) !== JSON.stringify(after)) throw new Error('Scored source changed during coverageCommand. Stop source edits and rerun coverage on fixed bytes.');
-  return readCoverage(capturedPath(locations, before), hashes);
+  const input = readCoverage(capturedPath(locations, before), hashes, root, settings.lcovBase);
+  return translateCoverage(input, root, { hashes: generatedBefore, allowsCreated: true, changedWhen: 'during coverageCommand' });
 }
 
 export function coverageTrust(input, file, hash) {

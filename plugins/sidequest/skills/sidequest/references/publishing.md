@@ -72,6 +72,12 @@ The wakeups you already get are the triggers; never hold a turn open waiting for
 - `sidequest publish queue --json` showing pending submissions at any natural wakeup (`pulse` and
   `list --brief` also surface a ticket's `submission`).
 
+Read `completion <ref>` (MCP `completion {ref, text:true}`, CLI `sidequest completion <ref>`) for the human
+account of a finished ticket: Result, Checked, Still uncertain and Your action, derived from the claim,
+submission, delivery, verify capture, quality and review records. `submitted` never reads `integrated`, and
+the board keeps no release record yet, so `integrated` stops short of `released`. Agent text in it is
+escaped and never raises the stage.
+
 Batch deliberately: when a wave is mid-flight, let its remaining executors finish and publish the
 wave's submissions in one transaction — one lock hold, one version assignment, one seam check, one
 push — instead of one transaction per ticket. Don't wait on work that isn't in flight.
@@ -265,7 +271,7 @@ delivery lock and the publish lock still serialize deliveries. A client that sen
 fire while the gate is alive. If the client still gives up, or the board server goes away, the delivery
 process finishes and records the outcome itself. `pulse <ref>` then carries an `integration` block:
 `state` (`running`, `delivered`, `rolled_back`, `rollback_failed` or `refused`), `phase` (`merging`,
-`wave gate`, `pinned verifier`, `importing tests`, `finished`), `currentFile` with `fileIndex`/`fileCount`
+`wave gate`, `pinned verifier`, `importing tests`, `plugin-runner tests`, `finished`), `currentFile` with `fileIndex`/`fileCount`
 during the import walk, `logPath`, `startedAt`/`updatedAt`, and `reason` for a failure. A `running` block
 with `writerAlive: false` means the delivery process died mid-gate: inspect the target and its log before
 retrying. Read the outcome there instead of waiting on node processes.
@@ -503,3 +509,7 @@ for both paths. Timeout results name the key and effective limit; the owned proc
 terminated before the result is reported. Slot waiting and cleanup add to total wall time.
 Capture logs are written directly under the board project
 `verification/<ref>/` directory and stay readable through the returned `logPath`.
+
+Executor submit/done accepts `summary: { result, checked, uncertain, action }`, each plain-text field up to 600 characters. It lives in `ticket.completionSummary`, bound to the submitted candidate (null for done without a submission). Candidate changes mark it stale in `completion`; lifecycle records still decide stage, blockers and facts. Read `completion <ref|US-n> --text` for the closeout report. `body` remains required. A failed summary write returns `summaryError` and records a comment without undoing delivery.
+
+Integration quality uses `crap` when the project Quality Gate config supplies `coverageCommand`, or a single changed plugin supplies `coverage:lcov`. Plugin LCOV paths resolve from that plugin directory. Otherwise integration keeps the V8 `measure` path. Integration receipts record `measurementPath`, `sourceMapTranslations`, and `sourceMapRefusals`. A report with no changed bodies is cross-checked with the AST complexity inventory; a nonzero inventory refuses delivery with the missing-body count.

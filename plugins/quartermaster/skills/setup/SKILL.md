@@ -13,7 +13,7 @@ description: >-
 
 Outfit a project's `.claude/` workspace end to end. You are an orchestrator: the pieces already
 exist (codebase-mapper's `map-codebase`, live-rules' `add-rule`, sidequest, observability's
-`enable-project-telemetry`, model-gateway, the built-in `/init`). Your job is to ground the plan
+`/observability:track on|off|status`, model-gateway, the built-in `/init`). Your job is to ground the plan
 in the user's actual history, interview briefly, install in the right order around the plugin
 reload boundary, and verify the result really works.
 
@@ -108,17 +108,12 @@ handing off implementation. Draw from three sources, in this order:
   node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
   ```
 
-  If `autoCompactWindow` is unset, separately offer the optional setting
-  `"autoCompactWindow": 325000` through `configureSidequestCompaction`; get approval before running:
-
-  ```sh
-  node -e "const { configureSidequestCompaction } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(JSON.stringify(configureSidequestCompaction(process.cwd(), { autoCompactWindow: 325000, policy: 'pin' }), null, 2));"
-  ```
-
-  The tradeoff is a consistent Codex compaction point; Claude models keep their larger windows
-  because the cap only bounds the auto-compact trigger. Treat 325000 as a recommendation, not a
-  prerequisite. If either user or project settings already has a value, say which one wins and
-  leave it alone unless the user asks to change it.
+  Report the finding. Model Gateway owns backend windows and saved compact-at policy; use its
+  `context-window` command through `/model-gateway:model-gateway` when the user wants to change
+  that policy. Get approval before changing it. Do not recommend a fixed global `autoCompactWindow`:
+  it affects both providers and can make Codex `/compact` fail. Without Model Gateway, compaction
+  follows the model default. If user or project settings already has a value, say which one wins
+  and leave it alone unless the user asks to change it.
 
 - **Host capabilities**, using [references/host-capabilities.md](references/host-capabilities.md): only
   when the project needs a capability that direct evidence says the identified host cannot already

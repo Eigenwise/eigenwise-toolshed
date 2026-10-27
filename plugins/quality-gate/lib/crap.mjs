@@ -143,9 +143,16 @@ function unsupportedSourceReport(report, settings, selected) {
   return report;
 }
 
+function recordSourceMapOutcome(report, input) {
+  report.sourceMapTranslations = input?.sourceMapTranslations ?? [];
+  report.sourceMapRefusals = input?.sourceMapRefusals ?? [];
+  report.warnings.push(...report.sourceMapRefusals.map((refusal) => `Source map translation refused for ${refusal.generated}: ${refusal.reason}. Its original LCOV record was kept unchanged.`));
+}
+
 async function measureReport(report, settings) {
   const input = report.ccOnly || !report.changedMetrics.length ? null : await acquireCoverage(report.root, settings, Object.keys(report.files));
   const lines = input ? coverageByFile(input.text, report.root) : new Map();
+  recordSourceMapOutcome(report, input);
   report.changedMetrics = report.changedMetrics.map((metric) => scoredMetric(metric, report, input, lines));
   report.checked = enforcedMetrics(report.changedMetrics).filter((metric) => !metric.informational).length;
   return verdict(report);
@@ -156,7 +163,7 @@ export function writeReceipt(report, receiptsDirectory = process.env.QUALITY_GAT
   if (!head) return null;
   const rowCounts = Object.fromEntries(['new', 'modified-raised', LEGACY_UNCHANGED].map((classification) => [classification, report.changedMetrics.filter((metric) => metric.classification === classification).length]));
   rowCounts.unverified = report.unverified.length;
-  const receipt = { gateVersion: GATE_VERSION, pythonPolicy: report.pythonPolicy, pythonOracles: report.pythonOracles, project: report.root, base: report.base, head, files: report.files, rowCounts, verdict: report.verdict, timestamp: new Date().toISOString(), ccOnly: report.ccOnly, reasons: report.unverified.map((metric) => `${metric.relativePath}:${metric.line} ${metric.name}: ${metric.unverified}`) };
+  const receipt = { gateVersion: GATE_VERSION, pythonPolicy: report.pythonPolicy, pythonOracles: report.pythonOracles, project: report.root, base: report.base, head, files: report.files, rowCounts, verdict: report.verdict, timestamp: new Date().toISOString(), ccOnly: report.ccOnly, sourceMapTranslations: report.sourceMapTranslations, sourceMapRefusals: report.sourceMapRefusals, reasons: report.unverified.map((metric) => `${metric.relativePath}:${metric.line} ${metric.name}: ${metric.unverified}`) };
   const directory = receiptsDirectory ? path.resolve(receiptsDirectory) : path.join(report.root, '.claude/quality-gate/receipts');
   fs.mkdirSync(directory, { recursive: true });
   const target = path.join(directory, head + '.json');

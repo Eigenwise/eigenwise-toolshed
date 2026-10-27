@@ -1,3 +1,5 @@
+import { changesCatchupPayload } from '../lib/store/completion.js';
+import type { CompletionView } from '../lib/store/completion.js';
 const path = require('path');
 const os = require('os');
 const fs = require('node:fs/promises');
@@ -322,10 +324,28 @@ async function cmdPulse(opts: any, positional: any) {
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + '\n');
 }
 
+async function cmdCompletion(opts: any, positional: any) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('completion: pass a ticket or story ref, e.g. sidequest completion US-3');
+  if (typeof opts.text === 'string') fail(`completion: --text takes no value (text is the default output) but swallowed "${opts.text}". Put --text last or drop it.`);
+  const { slug, meta } = await resolveProject(opts);
+  const view = /^(US-|st_)/i.test(idOrRef)
+    ? store.storyCompletionPayload(slug, idOrRef)
+    : store.completionPayload(slug, idOrRef);
+  if (!view) fail(`completion: no ticket or story "${idOrRef}" in ${meta.name}`);
+  process.stdout.write(completionOutput(slug, view, opts.json) + '\n');
+}
+
+function completionOutput(slug: string, view: { text: string }, json?: boolean) {
+  return json ? JSON.stringify(Object.assign({ project: slug }, view), null, 2) : view.text;
+}
+
 async function cmdChanges(opts: any) {
   const { slug, meta } = await resolveProject(opts);
-  const changes = store.changesPayload(slug, opts.since);
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + '\n');
+  const delta = store.changesPayload(slug, opts.since);
+  const changes = opts.catchup ? changesCatchupPayload(slug, delta, store) : delta;
+  const output = opts.catchup && !opts.json ? changes.text : JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2);
+  process.stdout.write(output + '\n');
 }
 
 function clearsDeclaredFiles(files: any) {
@@ -437,4 +457,4 @@ async function cmdRm(opts: any, positional: any) {
 // release/complete it. Pass --by to be explicit; otherwise fall back to an env
 // hint or the machine name. Distinct concurrent workers should pass distinct --by.
 
-module.exports = { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
+module.exports = { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };

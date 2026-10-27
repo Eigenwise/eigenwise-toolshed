@@ -1,6 +1,7 @@
 "use strict";
 var import_composition_admission = require("./store/composition-admission");
 var import_work_provenance = require("./store/work-provenance");
+const { COMPLETION_SUMMARY_SCHEMA } = require("./store/completion.js");
 const {
   path,
   fs,
@@ -657,6 +658,7 @@ const tools = [
         by: { type: "string" },
         model: { type: "string", description: "Concrete runtime model that actually worked this ticket (provenance)." },
         effort: { type: "string", enum: store.VALID_EFFORTS },
+        summary: COMPLETION_SUMMARY_SCHEMA,
         body: { type: "string", description: "Final report stored as the completion comment; non-behavior frozen work records negativeControl: not_required(reason), while new behavior requires the claim-holder assertion-failure marker." },
         verify: { type: "string", maxLength: 4e3, description: "Typed evidence for active commandless working-tree delivery, and for a clean externalDeliverable:true closeout on a ticket without a pinned command. Command or suite delivery still requires its matching verify-capture." },
         session: { type: "string" }
@@ -669,7 +671,7 @@ const tools = [
       const body = requiredFinalReport(args, "done");
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel("done", args.model, ticket);
-      const opts = { source: "mcp", model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
+      const opts = { summary: args.summary, source: "mcp", model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
       if (!res.ok && ["submission_required", "empty_declared_scope"].includes(res.reason)) {
         const noOp = provenNoOpCloseout(slug, res.ticket, args.verify);
@@ -1073,6 +1075,7 @@ const tools = [
         verify: { type: "string", description: "Optional for pinned command verifiers, which Sidequest resolves automatically. Required evidence for manual and attestation contracts." },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },
+        summary: COMPLETION_SUMMARY_SCHEMA,
         body: { type: "string", description: "Final report: paths, verification, and skips." },
         session: { type: "string" },
         clear: { type: "boolean", description: "Drop a pending submission only after an integration bounce. Use rework to bounce an unbound candidate; a review-bound candidate refuses both." },
@@ -1109,6 +1112,7 @@ const tools = [
           ...adapterFacts ? { admissionFacts: adapterFacts } : {},
           verify: args.verify,
           force: args.force === true,
+          summary: args.summary,
           submissionComment: { body, by, kind: "comment", source: "mcp" },
           source: "mcp",
           sessionId: sessionOf(args)
@@ -1121,6 +1125,7 @@ const tools = [
           projectCapabilities: args.projectCapabilities,
           verify: args.verify,
           force: args.force === true,
+          summary: args.summary,
           submissionComment: { body, by, kind: "comment", source: "mcp" },
           source: "mcp",
           sessionId: sessionOf(args)
@@ -1149,6 +1154,7 @@ const tools = [
         unscopedPaths,
         admissionFacts: collected.admissionFacts,
         force: args.force === true,
+        summary: args.summary,
         submissionComment: { body, by, kind: "comment", source: "mcp" },
         source: "mcp",
         sessionId: sessionOf(args)

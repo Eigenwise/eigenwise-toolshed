@@ -113,6 +113,19 @@ A missing or differing hash makes coverage unverified. Generating hashes later a
 
 Vitest projects need their own coverage provider's LCOV output, for example through an installed matching `@vitest/coverage-v8`. Raw `NODE_V8_COVERAGE` from vite-node can contain only `evalmachine.<anonymous>` entries, which cannot identify scored sources. Missing coverage stays unverified, with the reason and complexity shown.
 
+### Coverage of generated code (Source Map v3)
+
+When the code that ran was generated from the scored source (transpiled, compiled or bundled), LCOV names the generated file, not the source. The gate translates those records through a Source Map v3 onto the original sources. It never looks at a file extension or language, so any generator that writes a flat v3 map with `sourcesContent` works. Each LCOV `SF` record is checked like this:
+
+1. Discovery: the map is the last `sourceMappingURL` in the named file (an inline `data:` URL or a relative path), else a sibling `<file>.map`. A record without a map passes through untouched and the same-byte hash check governs it.
+2. Shape: the map must be flat v3 (no `sections`) with `sourcesContent` text for every source.
+3. Source identity: every source (`sourceRoot` plus `sources[i]`, relative to the map; `file:` URLs allowed) is inside the project, and its `sourcesContent` hashes the same as the bytes on disk and the scored-source hash.
+4. Generated identity: with `--coverage-command`, a generated file or map that existed before the command must hold the same bytes after it (the command may create them). For existing LCOV, `<lcov>.sources.json` must list both with their capture-time SHA-256. A tracked generated file must also equal its committed blob, allowing only a trailing `sourceMappingURL` line, so the code that ran is the code that ships.
+5. Bounds: every mapping segment must land on an existing generated line and column and an existing original line. One bad segment refuses the whole map.
+6. Translation: each DA hit goes to every original line a segment on that generated line touches (maximum hits); FN/FNDA use the first segment on the function's line. Original lines no segment reaches stay absent, so their bodies stay UNVERIFIED instead of being guessed.
+
+The original record is kept alongside the translated ones. A refusal prints a warning naming the generated file and reason, and the affected rows stay UNVERIFIED. Receipts and `--json` reports carry `sourceMapTranslations: [{generated: {path, sha256}, map: {kind, path, sha256}, sources: [{path, sha256}]}]` and `sourceMapRefusals: [{generated, reason}]`. Write maps at measure time only (for esbuild, `sourcemap: 'external'` leaves the generated code byte-identical); committing inline maps grows tracked output several times over.
+
 Exit codes: 0 for passed, nothing to score or informational-only rows; 1 for a score failure; 2 for a missing prerequisite or an enforced row whose verdict still depends on unverified coverage. At cc 1 the maximum CRAP is 2, so UNVERIFIED coverage passes with a bound note and its coverage reason retained. At cc 2 the bound equals 6, so cc 2 to 5 still need coverage. JSON retains the reason in `changedMetrics[].unverified` and adds `boundVerdict: "pass"`; bound-passing rows are excluded from the blocking `unverified` list. `--json` prints rows, hashes, class counts, verdict and receipt path. `--help` lists the flags and next actions.
 
 ## Receipts for hook consumers
@@ -193,3 +206,5 @@ Verdict: fix empty-cart checkout before shipping.
 Lean: -0 lines
 Not checked: tests were not run; coverage is unavailable.
 ```
+
+Relative LCOV paths default to the project root. Use `--lcov-base <directory>` (config `lcovBase`) when the reporter ran in a plugin or package directory. The base is project-relative unless absolute, and is applied before source-map translation. Absolute `SF:` paths stay absolute. Source hashes and source-map trust checks still apply.

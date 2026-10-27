@@ -290,8 +290,33 @@ test('every compound destructive or publishing segment keeps its own repository 
   expect(await bash($, 'git reset --hard HEAD; cd C:/other && git reset --hard HEAD')).toMatchObject({ deny: expect.stringContaining('other-work.txt') })
 })
 
-test('unresolved cd and malformed git segments name the parse failure', async ($, on) => {
+test('unresolved cd still names the parse failure', async ($, on) => {
   await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT] })
   expect(await bash($, 'cd "$TARGET" && git push origin main')).toMatchObject({ deny: expect.stringContaining('could not parse command segment: cd "$TARGET"') })
-  expect(await bash($, 'git push origin "main')).toMatchObject({ deny: expect.stringContaining('could not parse command segment: git push origin "main') })
+})
+
+test('multiline quoted commits and heredoc commits allow harmless command chains', async ($, on) => {
+  await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT], integrationBranch: 'dev' })
+  for (const command of [
+    'git commit -q -m "Narrow two mocks\n\nCo-Authored-By: Claude Code"',
+    "git commit -q -m 'Narrow two mocks\n\nCo-Authored-By: Claude Code'",
+    "git commit -F - <<'MESSAGE'\nNarrow two mocks\n\nCo-Authored-By: Claude Code\nMESSAGE",
+    'git commit -m "msg" && git push origin dev',
+    'git add file && git commit -m "msg\n\ngit reset --hard HEAD; git push origin main" && git push origin dev',
+  ]) expect(await bash($, command)).toMatchObject({ text: 'ran' })
+})
+
+test('multiline commit prose preserves subsequent destructive and publication checks', async ($, on) => {
+  await world(on, { cwd: PROJECT, repos: [{ ...projectRepo, dirty: ['?? work.txt'] }], registered: [PROJECT], integrationBranch: 'dev' })
+  for (const command of ['git reset --hard HEAD', 'git clean -fd', 'git checkout --force feature', 'git checkout -- .']) {
+    expect(await bash($, 'git commit -m "msg\n\nbody"\n' + command)).toMatchObject({ deny: expect.stringContaining('work.txt') })
+  }
+  expect(await bash($, 'git commit -m "msg\n\nbody" && git push origin main')).toMatchObject({ deny: expect.stringContaining('publish lock') })
+})
+
+test('malformed git arguments reach operation checks without a blanket parse refusal', async ($, on) => {
+  await world(on, { cwd: PROJECT, repos: [{ ...projectRepo, dirty: ['?? work.txt'] }], registered: [PROJECT], integrationBranch: 'dev' })
+  expect(await bash($, 'git commit -m "unfinished')).toMatchObject({ text: 'ran' })
+  expect(await bash($, 'git reset --hard "unfinished')).toMatchObject({ deny: expect.stringContaining('work.txt') })
+  expect(await bash($, 'git push origin main "unfinished')).toMatchObject({ deny: expect.stringContaining('publish lock') })
 })

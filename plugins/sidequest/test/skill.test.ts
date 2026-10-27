@@ -44,3 +44,10 @@ test('SKILL.md stays inside its session-load byte budget', () => {
   assert.ok(Buffer.byteLength(skill, 'utf8') <= 18900,
     `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 18900 — move detail into references/`);
 });
+
+test('SKILL.md and publishing.md point the orchestrator at the completion read', () => {
+  assert.match(skill, /Read `completion <ref>` for the human account of a finished ticket/);
+  const publishing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
+  assert.match(publishing, /Read `completion <ref>`/);
+  assert.match(publishing, /`submitted` never reads `integrated`/);
+});

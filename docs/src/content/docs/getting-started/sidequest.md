@@ -7,6 +7,10 @@ Sidequest gives Claude Code a local board for planned work. It groups tickets in
 
 Every task saved as a ticket survives context compaction and new sessions. Its instructions, reproduction steps, status, and recorded discussion stay in the local Sidequest store, so Claude can retrieve the task after the chat context shrinks.
 
+## Catch up on changed tickets
+
+Use MCP `changes {since, view:"catchup"}` or `sidequest changes --since <iso> --catchup` for lifecycle stages, blockers, actors and next actions. Only tickets changed after the exclusive `since` timestamp appear. Keep the returned `serverTime` as your next cursor (CLI `--json` includes it). The list stops at 40 tickets and reports how many remain; narrow the time window to read a smaller delta. Without `since`, it covers the last hour. Plain `changes` and `pulse` keep their existing output.
+
 ## Install
 
 Install Sidequest for the project you are working in:
@@ -44,13 +48,47 @@ When an executor hands back a clean committed checkpoint in a retained worktree,
 
 A repair linked to a rejected candidate restores it with `git merge --no-ff`, preserving its commit ancestry. Byte-identical inherited tests are recorded as `inherited-unchanged` on submission and need no new negative-control markers; changed tests still need their controls. Provisioning never links a scoped plugin's dependencies to the registered checkout, because `npm ci` empties `node_modules` through such a link. When configured worktree setup leaves no `node_modules` for a scoped plugin, provisioning records an install deferral, and the briefing tells the executor to run `npm ci --prefix plugins/<name> --ignore-scripts --no-audit --no-fund` before work. The WorktreeCreate hook never runs these plugin installs itself. Configured `link` dependency paths are unlinked before a gate checkout is removed, since `git worktree remove` on Windows deletes through a junction. Bounded verification needs no resource slot unless board configuration declares one, and any declared slot comes through the board.
 
+## Read what a ticket finished
+
+Run `sidequest completion SQ-12` (or the `completion` MCP read with `ref: "SQ-12"`) to get one short account of a ticket, under 200 words. It has four labelled parts:
+
+- **Result**: the stage (ready, running, submitted, integrated and so on) and what the records show landed.
+- **Checked**: the recorded verification, quality row and negative control.
+- **Still uncertain**: anything the records leave open, such as a quality gate that was never measured.
+- **Your action**: what is waiting on you, or "No action needed." only when the records support that.
+
+Add `--json` for the structured view. The stage and every fact come from board records (claim, submission, delivery, verify capture, quality row, review binding). An agent summary sits beside them, labelled agent-reported. It can never raise a stage or hide a blocker, and a newer candidate marks it stale rather than deleting it. Where the two disagree, the facts win. Older tickets with no summary just show the facts.
+
+A ticket reads `integrated` once a delivery is recorded. It never reads `released` without a release record.
+
+Evidence in the view carries one of these labels:
+
+| Label | What it means |
+| --- | --- |
+| `captured-command` | The pinned verifier ran through the capture wrapper and the board holds the log. |
+| `mocked-test` | A changed test exists, but nothing records it running against the real flow. |
+| `real-flow` | A behavior-verification record. |
+| `visual` | A screenshot record. |
+| `source-review` | A review-audit verdict on the candidate. |
+| `agent-reported` | An executor said so (for example a plain negative-control marker) and no capture backs it. |
+| `waived` | The check was skipped with a recorded reason. |
+| `unavailable` | No evidence could be produced. |
+
+Quality lines use the same honesty: `UNVERIFIED` means measurement was not possible, and `none` means no quality gate is configured. Neither reads as a pass.
+
+## Read the overall story outcome
+
+Use `sidequest completion US-3` (or the `completion` MCP read with `story: "US-3"`) for one account of the non-archived children. Add `--json` for stages, child references, blockers and evidence counts. The text stays under 250 words and names Result, Checked, Still uncertain and Your action.
+
+A story reads integrated only when every child has a delivery record, and released only when every child has a release record. Mixed delivery reads partial; blocked and rejected children remain visible in Not yet. A live child claim reads running. Captured-command and quality counts keep missing evidence visible. Read `completion SQ-3` for a child's details. Ticket-linked story decisions appear as a count and the latest first sentence.
+
 ## Retrying delivery
 
 Each integration retry starts a fresh delivery record. Top-level fields describe the current attempt; earlier records are kept in `submission.integration.attempts[]`, including the failure reason, delivery head, rollback and completion time. `pulse` and CLI JSON include the attempt list. Plain CLI integration output prints earlier attempts too. A successful retry keeps the failed attempt's details in that history rather than beside the successful result.
 
 ## Importing tests at delivery
 
-Integration runs the pinned verifier on the merged tree, then runs additional test files that statically import the delivery's changed plugin modules, including transitive imports through Sidequest's compiled `lib/`. The delivery records the selection in `verify.integrationTests`, even when no tests match. Files already in the pinned command aren't repeated. Extra files run in one serial batch per plugin, with a maximum of 600 seconds and one typecheck through `test:files`. Above 40 extra files, Sidequest uses the plugin's `npm test` script, or one `test:files` invocation over all discovered non-performance files if no `test` script exists. It never invokes `test:full` for these extra runs. Performance and benchmark filenames are excluded and listed in `verify.integrationTests[].excludedFiles`; their timing checks stay in CI and `test:full`. The gate log and `verify.importingTestSummary` record selection size, elapsed time and the exclusion reason. A failure blocks delivery; `verify.importingTestResults` contains only failed batches and their logs.
+Integration runs the pinned verifier on the merged tree, then runs additional test files that statically import the delivery's changed plugin modules, including transitive imports through Sidequest's compiled `lib/`. The delivery records the selection in `verify.integrationTests`, even when no tests match. Files already in the pinned command aren't repeated. Extra files run in one serial batch per plugin, with a maximum of 600 seconds and one typecheck through `test:files`. Above 40 extra files, Sidequest uses the plugin's `npm test` script, or one `test:files` invocation over all discovered non-performance files if no `test` script exists. It never invokes `test:full` for these extra runs. Performance and benchmark filenames are excluded and listed in `verify.integrationTests[].excludedFiles`; their timing checks stay in CI and `test:full`. The gate log and `verify.importingTestSummary` record selection size, elapsed time and the exclusion reason. A failure blocks delivery; `verify.importingTestResults` contains only failed batches and their logs. Test files that import `claude-code` or `claude-code/testing`, or that sit under a hooks module root declared in the plugin's `hooks/hooks.json`, only load in the plugin's hooks-module runner, so they never go into a `node --test` batch. They are listed in `verify.integrationTests[].pluginRunnerFiles` and run once per plugin through its module runner: `node scripts/test-guards-module.mjs` for Sidequest, `claude plugin test .` from the plugin root otherwise. `verify.pluginRunnerResults` records each run. Without the `claude` CLI on PATH that entry says `unverified` and delivery goes ahead; CI still runs those tests. A runner that runs and fails blocks delivery like any other batch.
 
 ## Read-only shell writes
 
@@ -289,6 +327,12 @@ Stories group tickets into a plan you can filter and discuss before dispatch. Th
 
 *Synthetic demo data showing the Checkout confidence, Storefront discovery, and fulfillment story groups.*
 
+Every ticket also carries a Completion panel with the same four parts. Facts are plain lines, each doubt is a chip, and agent summary text is tagged agent-reported. A blocker waiting on you is pinned to the top. Raw evidence paths sit in a collapsed section and only appear when they are under the board, evidence or project folders.
+
+![Sidequest ticket detail with the Completion panel showing Result, Checked, Still uncertain and Your action](../../../assets/screenshots/sidequest-ticket-completion.png)
+
+*Synthetic demo data showing the Completion panel for a ticket that has not been claimed yet.*
+
 Links show which tickets block or relate to each other. Use the dependency list to inspect the existing chain, then choose a link type and target when you add another relationship.
 
 ![Sidequest ticket links editor showing two populated dependency relationships and the add-link controls](../../../assets/screenshots/sidequest-ticket-links.png)
@@ -501,7 +545,7 @@ A worked example:
 
 **An unscoped executor could only write `docs/`.** Older builds gave a write ticket with no declared files, dispatched with `allowUnscoped`, only the board's `alwaysInScope` paths, so a repo with a `docs/` folder quietly scoped the executor to `docs/` and nothing else. Now `allowUnscoped` gives the executor the whole tree, and the dispatch result's `writeScope` and the briefing say so in one line, for example `write scope: unscoped (whole tree), always-in-scope: docs/`. A whole-tree scope needs an isolated worktree, so an unscoped dispatch that would run in the shared checkout is refused at dispatch; declare the paths the ticket needs instead.
 
-**Destructive Git is refused in a dirty shared checkout.** The refusal lists dirty paths and gives a named-stash command followed by `sidequest recover-shared`. The project path appears only in the recovery command, leaving room for that guidance under long Windows temp paths within the hook's 768-byte output budget. An unregistered evidence clone stays outside this shared-checkout guard. This guard fails closed: when it can't run its own git check, it refuses the command instead of letting a reset or push through unchecked. It only starts git once the command text names a destructive, tagging or pushing invocation, and asks each directory for its repository once per session.
+**Destructive Git is refused in a dirty shared checkout.** The refusal lists dirty paths and gives a named-stash command followed by `sidequest recover-shared`. The project path appears only in the recovery command, leaving room for that guidance under long Windows temp paths within the hook's 768-byte output budget. An unregistered evidence clone stays outside this shared-checkout guard. This guard fails closed: when it can't run its own git check, it refuses the command instead of letting a reset or push through unchecked. Quoted commit messages can span lines, and heredoc commit messages stay outside executable command checks. Malformed Git arguments still reach the operation checks instead of causing a blanket parse refusal; unresolved directory changes remain refused when the target repository cannot be determined. It only starts git once the command text names a destructive, tagging or pushing invocation, and asks each directory for its repository once per session.
 
 **A legitimate recursive delete gets refused.** Sidequest blocks a Bash or PowerShell command that recursively deletes the user profile or the `.claude` root, even inside a real cleanup. A home-relative target such as `~/repos/app/build` or `$HOME/repos/app/build` is judged by where it resolves, the same as its absolute spelling, so only the profile, `.claude`, or a parent of either is refused. Point the delete at a specific project or scratchpad path instead.
 
@@ -535,7 +579,7 @@ A worked example:
 
 **A POSIX verify command fails on Windows.** Ask Claude to inspect the recorded verification result and the shell it used. On Windows a verify command runs through Git for Windows `sh.exe` when it's installed, unless it names an unquoted backslash path like `cd C:\repo\app` or `cd plugins\app`: `sh.exe` would strip those backslashes, so that command runs through Command Prompt instead, verbatim. The capture records which shell ran. Forward-slash paths and quoted backslash paths (`"C:\tools\node.exe" -e "..."`) stay on `sh.exe`, which keeps backslashes inside quotes. Command Prompt's `cd` doesn't switch drives, so a verifier on another drive should use `verifyCwd` instead of a `cd`.
 
-**A verify command needs to run from a subdirectory.** A nested workspace (its own `Cargo.toml`, `package.json`, or Nx root) only checks the right code when its gate runs from that directory. Set `verifyCwd` on the ticket (`--verify-cwd` on the CLI) to a path relative to the project root, like `plugins/app`. The verify-capture wrapper runs the command from that directory of the checkout, the integrate gate does the same, and the board checks npm scripts and paths in the command against it. Unset, the command runs from the project root as before. A `verifyCwd` that's absolute or climbs out with `..` is refused.
+**A verify command needs to run from a subdirectory.** A nested workspace (its own `Cargo.toml`, `package.json`, or Nx root) only checks the right code when its gate runs from that directory. Set `verifyCwd` on the ticket (`--verify-cwd` on the CLI) to a path relative to the project root, like `plugins/app`. The verify-capture wrapper runs the command from that directory of the checkout, the integrate gate does the same, and the board checks npm scripts and paths in the command against it. Omit `verifyCwd` to run from the project root. Naming the root itself, with `.` or its absolute path, is also accepted and stored as unset. An absolute directory inside the project is stored relative to the root, so it follows the isolated checkout. Paths outside the project and relative paths containing `..` are refused.
 
 **A `suite` verify runs the plugin's generated suite command.** With `verifyKind: suite` on a ticket whose files sit in one plugin, dispatch pins a generated command like `cd plugins/app && npm ci && npm run test:full` in place of the line you wrote, and add/update warns with both strings. That command carries its own `cd`, so the wrapper and the integrate gate run it from the checkout root and `verifyCwd` isn't applied a second time. An environment prefix on your line (`NODE_PATH=lib npm test`) is kept on each generated step. Use `verifyKind: command` when the line should run exactly as written.
 
@@ -637,7 +681,7 @@ submission in the existing composition flow.
 
 The author pins `verifyKind` and `verify` before dispatch: `suite` or `command` for executable regressions, `typecheck` with a typechecker command for annotation work, or `schema` or `document` for their evidence contracts. Dispatch freezes that oracle. The main thread also freezes `workProvenance.kind`: `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only` or `fixture-only`. Successful completion records `negativeControl: not_required(<reason>)` for the non-behavior kinds. With no frozen kind, changed source under changed tests still requires a control; declare annotation/refactor intent before dispatch instead of asking the executor to infer it.
 
-New behavior requires the existing claim-holder marker: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.
+New behavior needs a claim-holder negative control. The captured form comes first: commit the candidate, revert the changed source, and rerun the briefing's verify-capture wrapper with `--control`. It records a control capture bound to HEAD with the failing test names it parsed from the runner output; a control that passes is recorded as `control_passed_unexpectedly`, and one that fails without a named test failure proves nothing. Restore the change and post `[sidequest:negative-control] capture=<id>`; the completion view then reads the control as captured. The plain marker still works but reads as agent-reported: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.
 
 Capture and integration command deadlines both default to 25 minutes. Set board_config
 `integrationVerifyTimeoutMs` to a positive integer in milliseconds, up to 3600000 (60 minutes),
@@ -657,3 +701,7 @@ Capture logs are written directly under the board project
 Sidequest checks overlapping pending candidates with a checkout-free trial merge against their recorded target. Disjoint edits in the same file can integrate as singletons. Textual conflicts still refuse `candidate_overlap`, with the conflicting files and Git evidence. If the trial can't run, or a candidate has no Git commit, the shared changed paths still refuse `candidate_overlap`.
 
 An assembled wave can pin different executable verifiers. Each distinct command runs once, in order, on the composed tree, and the receipt records each result. A failing command blocks delivery. Shared-environment requirements stay deferred until delivery.
+
+## Completion reports
+
+Executors can pass four plain-text summary fields with MCP `submit` or `done`: `result`, `checked`, `uncertain`, and `action` (up to 600 characters each). The full `body` report is still required. `completion SQ-N --text` reads the saved summary beside recorded verification, delivery and blockers. A summary stays attached to its candidate; a later candidate makes it stale. Agent text cannot change lifecycle facts or dismiss a decision waiting on you. If saving the summary fails after closeout, the closeout stays successful and returns `summaryError`, with a ticket comment when storage allows it.

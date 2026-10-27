@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+var import_completion = require("../lib/store/completion.js");
 const path = require("path");
 const os = require("os");
 const fs = require("node:fs/promises");
@@ -287,10 +288,24 @@ async function cmdPulse(opts, positional) {
   if (!pulse) fail(`pulse: no ticket "${idOrRef}" in ${meta.name}`);
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + "\n");
 }
+async function cmdCompletion(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail("completion: pass a ticket or story ref, e.g. sidequest completion US-3");
+  if (typeof opts.text === "string") fail(`completion: --text takes no value (text is the default output) but swallowed "${opts.text}". Put --text last or drop it.`);
+  const { slug, meta } = await resolveProject(opts);
+  const view = /^(US-|st_)/i.test(idOrRef) ? store.storyCompletionPayload(slug, idOrRef) : store.completionPayload(slug, idOrRef);
+  if (!view) fail(`completion: no ticket or story "${idOrRef}" in ${meta.name}`);
+  process.stdout.write(completionOutput(slug, view, opts.json) + "\n");
+}
+function completionOutput(slug, view, json) {
+  return json ? JSON.stringify(Object.assign({ project: slug }, view), null, 2) : view.text;
+}
 async function cmdChanges(opts) {
   const { slug, meta } = await resolveProject(opts);
-  const changes = store.changesPayload(slug, opts.since);
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + "\n");
+  const delta = store.changesPayload(slug, opts.since);
+  const changes = opts.catchup ? (0, import_completion.changesCatchupPayload)(slug, delta, store) : delta;
+  const output = opts.catchup && !opts.json ? changes.text : JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2);
+  process.stdout.write(output + "\n");
 }
 function clearsDeclaredFiles(files) {
   return Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === "none" || String(files).toLowerCase() === "none";
@@ -382,4 +397,4 @@ async function cmdRm(opts, positional) {
   if (!store.deleteTicket(slug, ticket.id)) fail(`rm: could not delete "${ticket.ref}" from ${meta.name}`);
   console.log(`✓ removed ${ticket.ref} from ${meta.name}`);
 }
-module.exports = { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
+module.exports = { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };

@@ -1,3 +1,6 @@
+import { sweepWorktrees } from '../src/hooks/shared/worktree-sweep.js';
+import { readSweepProgress, deferralNotice } from '../src/hooks/shared/sweep-handoff.js';
+import type { SweepProgress } from '../src/hooks/shared/sweep-handoff.js';
 import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
 import './_hook-runtime.js';
@@ -48,6 +51,33 @@ function guardDecision(sessionId: string, linked: string) {
   });
   return out.trim() ? JSON.parse(out).hookSpecificOutput : null;
 }
+
+test('SessionStart aggregates preparing progress and its reason before classification', async () => {
+  const { repo } = initRepo();
+  store.ensureProject(repo);
+  const worktrees = require('../lib/worktrees.js');
+  const originalSweep = worktrees.sweep;
+  const snapshots: SweepProgress[] = [];
+  worktrees.sweep = async (_repo: string, _tickets: unknown[], options: { onProgress: (progress: unknown) => void }) => {
+    for (const reason of ['recovery_retention', 'listing_candidates']) {
+      options.onProgress({ phase: 'preparing', reason, candidates: 0, observed: 0, current: null, planned: 0, removed: 0, keptByReason: {} });
+      snapshots.push(readSweepProgress(repo));
+    }
+    return { entries: [] };
+  };
+  try {
+    await sweepWorktrees({ cwd: repo }, false);
+    assert.equal(snapshots.length, 2, 'both early sweep reports reach the hook aggregator');
+    assert.deepEqual(snapshots.map(({ phase, reason }) => ({ phase, reason })), [
+      { phase: 'preparing', reason: 'recovery_retention' },
+      { phase: 'preparing', reason: 'listing_candidates' },
+    ], 'preparing reports retain their phase and reason through aggregation');
+    assert.match(deferralNotice(repo, snapshots[1]!), /Preparing \(listing_candidates\)\./);
+    assert.equal(snapshots[1]!.observed, 0, 'preparation does not count as candidate classification');
+  } finally {
+    worktrees.sweep = originalSweep;
+  }
+});
 
 test('GH-467: an unmatched executor is told the dispatch carries an older session id only when live dispatches exist', () => {
   const { repo, linked } = initRepo();

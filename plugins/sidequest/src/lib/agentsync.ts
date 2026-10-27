@@ -529,6 +529,14 @@ function readOnlyCloseout(ticket: { dispatch: { evidenceMode?: boolean } }, mode
   return `Closeout: this prepared dispatch is read-only. MCP read tools are allowed; MCP write tools are refused by name (board_config readOnlyDeniedTools replaces the default list). Close with done --model ${model} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
 }
 
+// SQ-3965: a plain negative-control marker is the claim holder's own prose, so the closeout names
+// the captured form first wherever there is a pinned command for the wrapper to rerun.
+function negativeControlCloseout(requirement: { command?: string }): string {
+  return requirement.command
+    ? ' For new behavior, record the negative control by rerunning the verify-capture wrapper with --control while the changed source is reverted, then post the [sidequest:negative-control] capture=<id> line it prints; a plain marker is recorded as agent-reported.'
+    : '';
+}
+
 function ticketCloseout(ticket?: any) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
@@ -553,7 +561,7 @@ function ticketCloseout(ticket?: any) {
   const externalDeliverableVerify = externalDeliverableRequirement.command
     ? 'the pinned verify-capture wrapper records the current dispatch attempt and revision'
     : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || 'custom'} requirement is supplied`;
-  return `Closeout: this prepared dispatch is write-capable. If your change touches a plugin, write .release/unreleased/<REF>.md yourself (frontmatter ref, title, bump, plugins); submit refuses without it. The path is already in your scope; do not add it to the ticket's files. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after ${externalDeliverableVerify}; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
+  return `Closeout: this prepared dispatch is write-capable. If your change touches a plugin, write .release/unreleased/<REF>.md yourself (frontmatter ref, title, bump, plugins); submit refuses without it. The path is already in your scope; do not add it to the ticket's files. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work.${negativeControlCloseout(externalDeliverableRequirement)} A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after ${externalDeliverableVerify}; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
 }
 
 function continuationResumeDecision(continuation?: any) {
@@ -1228,7 +1236,7 @@ function scopeAddedBeyondDeclared(ticket: any, slug: string, declared: string[])
   const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
   const added = store.effectiveScope(slug, ticket).filter((file: string) => !declaredKeys.has(scopeKey(file)));
   return scopeListing('Auto-paired tracked generated files (regenerate before verifying)', added.filter((file: string) => !alwaysKeys.has(scopeKey(file))))
-    + scopeListing('Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)', added.filter((file: string) => alwaysKeys.has(scopeKey(file))));
+    + scopeListing('Added write scope (board config alwaysInScope, not declared on this ticket; paths are scope additions, not writes; a dirty path here still blocks submit)', added.filter((file: string) => alwaysKeys.has(scopeKey(file))));
 }
 
 function noDeclaredFilesText(ticket?: any) {
@@ -1308,7 +1316,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   }
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
   const executor = canonicalPreparedDispatchExecutor(ticket) || '';
-  const closeout = ticketCloseout(ticket);
+  const closeout = `${ticketCloseout(ticket)}\n\nPass summary with submit/done: result = user-visible change with one example; checked = exercised behavior and observed result (mocked or real); uncertain = skipped, unverified or assumed; action = a real decision, access or authorization needed, else "none". Each plain-text field is at most 600 characters; body still carries the full report.`;
   const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
   const readOnlyScratchSpace = ticketReadOnlyScratchSpace(ticket);

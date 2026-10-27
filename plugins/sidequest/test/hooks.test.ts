@@ -2269,10 +2269,19 @@ test('the guards module routes every live-claim mutation tool to the force-exec-
   const toolNames = mainThreadMutationTools();
   assert.deepEqual(
     [...toolNames].sort(),
-    ['mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
+    ['mcp__plugin_sidequest_board__claim', 'mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__next', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
     'the rule table changed: route the new tool in the guards module and list it here',
   );
-  for (const toolName of toolNames) {
+  // SQ-3934: every executor claims, so the guards module refuses a subagent's direct claim from the call alone
+  // instead of putting a decision process in front of every routed claim.
+  const callAloneTools = ['mcp__plugin_sidequest_board__claim', 'mcp__plugin_sidequest_board__next'];
+  const admissionSource = fs.readFileSync(path.join(HOOKS, 'guards', 'executor-admission.ts'), 'utf8');
+  assert.match(admissionSource, /on\('tool\.call', \{ tool: CLAIM_TOOLS \}/, 'the claim tools need their own call-alone guard');
+  for (const toolName of callAloneTools) {
+    assert.equal(executorAdmission.GUARDED_TOOLS.test(toolName), false, `${toolName} must not wait on a decision process`);
+    assert.equal(executorAdmission.CLAIM_TOOLS.test(toolName), true, `${toolName} must reach the call-alone guard`);
+  }
+  for (const toolName of toolNames.filter((name) => !callAloneTools.includes(name))) {
     assert.equal(routedToDecision(toolName, { ref: 'SQ-1' }, 'routed-child'), true, `${toolName} from a subagent never reaches force-exec-bypass.js`);
     assert.equal(routedToDecision(toolName, { ref: 'SQ-1' }, ''), false, `${toolName} from the main thread needs no decision process`);
     assert.equal(routedToDecision(`${toolName}_other`, { ref: 'SQ-1' }, 'routed-child'), false, 'a different tool must not route');
@@ -2293,6 +2302,10 @@ test('an executor subagent cannot mint a scope grant, force-remove, or correct a
     assert.equal(decision?.hookSpecificOutput?.permissionDecision, 'deny', tool_name);
     assert.match(decision.hookSpecificOutput.permissionDecisionReason, reason);
   }
+  const directClaim = runHookOutput(FORCE_BYPASS, { ...subagent, tool_name: 'mcp__plugin_sidequest_board__claim',
+    tool_input: { ref: 'SQ-1', by: 'self', direct: true, reason: 'a subagent minting the main-thread identity' } }, { SIDEQUEST_AGENT: 'routed-grant-child' });
+  assert.match(directClaim?.hookSpecificOutput?.permissionDecisionReason || '', /subagents cannot direct-claim a ticket\. Claim through the dispatched route/,
+    'the shared rule table refuses the direct claim on the decision path too');
 });
 
 

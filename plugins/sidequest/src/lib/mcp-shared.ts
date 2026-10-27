@@ -285,7 +285,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   context_page: '',
   list: 'List; poll via changes/pulse.',
   pulse: '',
-  changes: 'Poll ticket changes.',
+  changes: 'Poll; view:catchup',
   ready: 'List ready ticket refs.',
   story: '',
   story_contract: '',
@@ -307,7 +307,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   link: '',
   remove: '',
   claim: 'Claim before work; proceed on ok:true.',
-  dispatch: 'Tree. token and spawn spec; retireOnly.',
+  dispatch: 'Tree. token and spawn spec; scope additions, not writes; retireOnly.',
   done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason/kind required; oracle handoff.',
   groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in tree or at deliveryRevision; verifier replacement; reviewed interaction.',
@@ -452,6 +452,10 @@ async function closeExecutorAndReclaimTree(slug: string, projectPath: string, re
   if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
 }
 
+function completionNotices(result: { advisory?: string; summaryError?: string }) {
+  return Object.fromEntries(Object.entries(result).filter(([key, value]) => ['advisory', 'summaryError'].includes(key) && Boolean(value)));
+}
+
 function mutationAck(project?: any, result?: any, changed?: any) {
   const ticket = result.ticket;
   const out: any = { ok: !!result.ok, project };
@@ -463,7 +467,7 @@ function mutationAck(project?: any, result?: any, changed?: any) {
     }
     return out;
   }
-  if (result.advisory) out.advisory = result.advisory;
+  Object.assign(out, completionNotices(result));
   return Object.assign(out, changed || {});
 }
 

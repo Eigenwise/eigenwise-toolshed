@@ -11,7 +11,7 @@ const DESTRUCTIVE: Array<{ pattern: RegExp; label: string }> = [
   { pattern: new RegExp(`${GIT}(?:checkout|restore)\\s+(?:[^\\n;|&]*\\s)?(?:--\\s+)?(?:\\.|:/)(?:\\s|$|;|&|\\|)`, 'i'), label: 'a whole-tree checkout/restore' },
   { pattern: new RegExp(`${GIT}(?:checkout|switch)\\s+[^\\n;|&]*(?:--force|\\s-f)\\b`, 'i'), label: 'a forced checkout/switch' },
 ];
-const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix)\s+${WORD}\s+|--?[^\s]+\s+)*)([a-z][a-z-]*)\b((?:"[^"\n]*"|'[^'\n]*'|[^\n;|&])*)`, 'gi');
+const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix)\s+${WORD}\s+|--?[^\s]+\s+)*)([a-z][a-z-]*)\b((?:"[^"]*"|'[^']*'|[^\n;|&])*)`, 'gi');
 // Case-sensitive: `-c name=value` sets config, only `-C` names a directory.
 const DASH_C = new RegExp(String.raw`(?:^|\s)-C\s+(${WORD})`, 'g');
 const CD = /(?:^|[\n;&|])\s*cd\s+((?:"[^"\n]*"|'[^'\n]*'|[^\n;&|])*)/gi;
@@ -40,7 +40,6 @@ function lastDashC(text: string): string | null {
 }
 
 function parsedInvocation(match: RegExpMatchArray): GitInvocation {
-  if (!BALANCED_QUOTES.test(match[0])) throw new Error(`could not parse command segment: ${match[0].trim()}`);
   return { index: match.index!, dashC: lastDashC(match[1] ?? ''), subcommand: (match[2] ?? '').toLowerCase(), args: match[3] ?? '' };
 }
 

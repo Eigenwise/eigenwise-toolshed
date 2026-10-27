@@ -61,11 +61,13 @@ test('reports the effective compaction window and its winning settings file', (t
   const globalSettingsPath = path.join(directory, 'user-settings', '.claude', 'settings.json');
   const projectSettingsPath = path.join(projectDir, '.claude', 'settings.local.json');
 
-  const unsetFinding = compactionWindowFinding(projectDir, { globalSettingsPath });
+  const unsetFinding = compactionWindowFinding(projectDir, { globalSettingsPath, home: directory });
   assert.match(unsetFinding, /"autoCompactWindow"/);
   assert.match(unsetFinding, new RegExp(globalSettingsPath.replace(/\\/g, '\\\\')));
   assert.match(unsetFinding, new RegExp(projectSettingsPath.replace(/\\/g, '\\\\')));
-  assert.match(unsetFinding, /325000/);
+  assert.match(unsetFinding, /Compaction follows the model default/);
+  assert.match(unsetFinding, /model-gateway.js context-window/);
+  assert.doesNotMatch(unsetFinding, /325000|292000/);
 
   fs.mkdirSync(path.dirname(globalSettingsPath), { recursive: true });
   fs.writeFileSync(globalSettingsPath, JSON.stringify({ autoCompactWindow: 250_000 }));
@@ -79,6 +81,70 @@ test('reports the effective compaction window and its winning settings file', (t
   assert.match(projectFinding, /325000/);
   assert.match(projectFinding, new RegExp(projectSettingsPath.replace(/\\/g, '\\\\')));
   assert.match(projectFinding, /project setting wins/);
+});
+
+function gatewayFixture(t) {
+  const { directory: home, projectDir } = temporaryProject(t);
+  t.mock.method(os, 'homedir', () => home);
+  const registryPath = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+  const gatewayDirectory = path.join(home, '.claude', 'model-gateway');
+  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+  fs.mkdirSync(gatewayDirectory, { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
+    'model-gateway@eigenwise-toolshed': [{ installPath: path.resolve(__dirname, '../../model-gateway') }],
+  } }));
+  fs.writeFileSync(path.join(gatewayDirectory, 'model-gateway.js'), 'throw new Error("launcher must not run");');
+  const policyPath = path.join(gatewayDirectory, 'context-window.json');
+  fs.writeFileSync(policyPath, JSON.stringify({ codex: 300000, compactAt: { codex: 210000 } }));
+  return { home, projectDir, policyPath, registryPath, gatewayDirectory };
+}
+
+test('reports gateway-owned saved compact-at and gateway defaults without changing settings', (t) => {
+  const { home, projectDir, policyPath } = gatewayFixture(t);
+  const before = fs.readFileSync(policyPath, 'utf8');
+  const finding = compactionWindowFinding(projectDir, { home });
+  assert.match(finding, /Compaction is owned by Model Gateway/);
+  assert.match(finding, /codex: 300000 cap \[saved\].*requested compact-at 210000/);
+  assert.match(finding, /effective maximum 210000 \(compact-at\)/);
+  assert.match(finding, /claude: full/);
+  assert.match(finding, /grok: full/);
+  assert.match(finding, /installed gateway reader and defaults/);
+  assert.doesNotMatch(finding, /325000|292000/);
+  assert.equal(fs.readFileSync(policyPath, 'utf8'), before);
+});
+
+test('explicit user and project windows take precedence over gateway policy and remain unchanged', (t) => {
+  const { home, projectDir } = gatewayFixture(t);
+  const globalSettingsPath = path.join(home, '.claude', 'settings.json');
+  const projectPath = path.join(projectDir, '.claude', 'settings.local.json');
+  const userSettings = JSON.stringify({ autoCompactWindow: 240000, keep: true });
+  fs.writeFileSync(globalSettingsPath, userSettings);
+  assert.match(compactionWindowFinding(projectDir, { home }), /240000.*user setting wins/);
+  assert.equal(fs.readFileSync(globalSettingsPath, 'utf8'), userSettings);
+  fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+  const projectSettings = JSON.stringify({ autoCompactWindow: 220000 });
+  fs.writeFileSync(projectPath, projectSettings);
+  assert.match(compactionWindowFinding(projectDir, { home }), /220000.*project setting wins/);
+  assert.equal(fs.readFileSync(projectPath, 'utf8'), projectSettings);
+  assert.equal(fs.readFileSync(globalSettingsPath, 'utf8'), userSettings);
+});
+
+test('requires both gateway registry installation and stable launcher', (t) => {
+  const { home, projectDir, registryPath, gatewayDirectory } = gatewayFixture(t);
+  fs.unlinkSync(path.join(gatewayDirectory, 'model-gateway.js'));
+  assert.match(compactionWindowFinding(projectDir, { home }), /Compaction follows the model default/);
+  fs.writeFileSync(path.join(gatewayDirectory, 'model-gateway.js'), '');
+  fs.writeFileSync(registryPath, JSON.stringify({ plugins: { 'other@marketplace': [{}], 'model-gateway@empty': [] } }));
+  assert.match(compactionWindowFinding(projectDir, { home }), /Compaction follows the model default/);
+});
+
+test('reports unreadable gateway policy without inventing a compaction recommendation', (t) => {
+  const { home, projectDir, policyPath } = gatewayFixture(t);
+  fs.writeFileSync(policyPath, JSON.stringify({ compactAt: { codex: -1 } }));
+  const finding = compactionWindowFinding(projectDir, { home });
+  assert.match(finding, /Model Gateway compaction report unavailable/);
+  assert.match(finding, /invalid compactAt.codex/);
+  assert.doesNotMatch(finding, /325000|292000|Compaction follows the model default/);
 });
 
 test('configures a global compaction window without replacing either settings file', (t) => {

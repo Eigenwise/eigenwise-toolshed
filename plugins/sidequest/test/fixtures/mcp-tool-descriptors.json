@@ -93,8 +93,29 @@
     }
   },
   {
+    "name": "completion",
+    "description": "Ticket or story completion from lifecycle records.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "story": {
+          "type": "string"
+        },
+        "text": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
     "name": "changes",
-    "description": "Poll ticket changes.",
+    "description": "Poll; view:catchup",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -103,6 +124,12 @@
         },
         "since": {
           "type": "string"
+        },
+        "view": {
+          "type": "string",
+          "enum": [
+            "catchup"
+          ]
         }
       }
     }
@@ -1033,6 +1060,34 @@
             "max"
           ]
         },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "checked": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "uncertain": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "action": {
+              "type": "string",
+              "maxLength": 600
+            }
+          },
+          "required": [
+            "result",
+            "checked",
+            "uncertain",
+            "action"
+          ],
+          "additionalProperties": false
+        },
         "body": {
           "type": "string"
         },
@@ -1549,6 +1604,34 @@
         "worktree": {
           "type": "string"
         },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "checked": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "uncertain": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "action": {
+              "type": "string",
+              "maxLength": 600
+            }
+          },
+          "required": [
+            "result",
+            "checked",
+            "uncertain",
+            "action"
+          ],
+          "additionalProperties": false
+        },
         "body": {
           "type": "string"
         },
@@ -1875,7 +1958,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Tree. token and spawn spec; retireOnly.",
+    "description": "Tree. token and spawn spec; scope additions, not writes; retireOnly.",
     "inputSchema": {
       "type": "object",
       "properties": {

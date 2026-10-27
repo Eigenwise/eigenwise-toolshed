@@ -18,7 +18,7 @@ export const DEFERRAL_NOTICE =
   'sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background. Its worker has a 60-second lifetime limit.';
 
 export type SweepProgress = Readonly<{
-  phase: 'idle' | 'classifying' | 'sweeping' | 'complete';
+  phase: 'idle' | 'preparing' | 'classifying' | 'sweeping' | 'complete';
   candidates: number;
   observed: number;
   current: string | null;
@@ -67,7 +67,7 @@ function normalizedProgress(value: unknown): SweepProgress {
     keptByReason?: unknown;
   };
   const count = (candidate: unknown) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
-  const phase = ['idle', 'classifying', 'sweeping', 'complete'].includes(String(record.phase))
+  const phase = ['idle', 'preparing', 'classifying', 'sweeping', 'complete'].includes(String(record.phase))
     ? String(record.phase) as SweepProgress['phase']
     : 'idle';
   const text = (candidate: unknown) => typeof candidate === 'string' && candidate.trim() ? candidate : null;
@@ -109,6 +109,11 @@ function clearSweepProgress(cwd: string): void {
   } catch (_) {}
 }
 
+function preparationNotice(progress: SweepProgress): string {
+  if (progress.phase !== 'preparing') return '';
+  return ` Preparing${progress.reason ? ` (${progress.reason})` : ''}.`;
+}
+
 export function deferralNotice(cwd: string, progress: SweepProgress): string {
   const kept = Object.values(progress.keptByReason).reduce((total, count) => total + count, 0);
   const reasons = Object.entries(progress.keptByReason).map(([reason, count]) => `${reason} ${count}`).join(', ') || 'none';
@@ -116,7 +121,7 @@ export function deferralNotice(cwd: string, progress: SweepProgress): string {
     ? ` Classifying ${progress.observed}/${progress.candidates}${progress.current ? `: ${progress.current}` : ''}${progress.reason ? ` (${progress.reason})` : ''}.`
     : '';
   const command = `node "${pluginRoot()}/bin/sidequest.js" worktrees sweep --yes --project "${path.resolve(cwd || '.')}"`;
-  return `${DEFERRAL_NOTICE}${classification} Reached planned ${progress.planned}, removed ${progress.removed}, skipped ${kept} (${reasons}). Finish with ${command}.`;
+  return `${DEFERRAL_NOTICE}${preparationNotice(progress)}${classification} Reached planned ${progress.planned}, removed ${progress.removed}, skipped ${kept} (${reasons}). Finish with ${command}.`;
 }
 
 export function writeReport(cwd: string, notices: string[]): void {

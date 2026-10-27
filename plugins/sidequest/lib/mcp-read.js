@@ -1,5 +1,6 @@
 "use strict";
 var import_integration_tests = require("./integration-tests.js");
+var import_completion = require("./store/completion.js");
 const {
   path,
   fs,
@@ -120,6 +121,22 @@ function storyLogHandler(args) {
     ...result.advisory ? { advisory: result.advisory } : {}
   };
 }
+function completionResult(slug, view, textOnly) {
+  return textOnly ? { project: slug, ref: view.ref, stage: view.stage, text: view.text } : Object.assign({ project: slug }, view);
+}
+function ticketCompletion(slug, projectName, args) {
+  if (typeof args.ref !== "string" || !args.ref.trim()) throw new Error("completion: pass ref (a ticket ref or id) or story.");
+  const view = store.completionPayload(slug, args.ref);
+  if (!view) throw new Error(`completion: no ticket "${args.ref}" in ${projectName}`);
+  return completionResult(slug, view, args.text);
+}
+function completionHandler(args) {
+  const { slug, meta } = resolveProject(args.project);
+  if (args.story === void 0) return ticketCompletion(slug, meta.name, args);
+  const view = store.storyCompletionPayload(slug, args.story);
+  if (!view) throw new Error('completion: no story "' + args.story + '" in ' + meta.name);
+  return completionResult(slug, view, args.text);
+}
 const tools = [
   {
     name: "context_page",
@@ -207,18 +224,35 @@ const tools = [
     }
   },
   {
-    name: "changes",
-    description: "THE polling read for liveness/progress: compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value.",
+    name: "completion",
+    description: "Ticket or story completion from lifecycle records. Stories aggregate child outcomes, blockers and evidence under 250 words; tickets use four sections under 200 words. text:true returns only the rendering.",
     inputSchema: {
       type: "object",
       properties: {
         project: PROJECT_PROP,
-        since: { type: "string", description: "Exclusive ISO timestamp from a prior serverTime." }
+        ref: { type: "string", description: "Ticket ref or id." },
+        story: { type: "string", description: "Story ref or id; aggregates all non-archived children." },
+        text: { type: "boolean", description: "Return only the rendered text." }
+      }
+    },
+    handler: completionHandler
+  },
+  {
+    name: "changes",
+    description: 'THE polling read for liveness/progress: compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value. view:"catchup" gives bounded stage and action lines.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: PROJECT_PROP,
+        since: { type: "string", description: "Exclusive ISO timestamp from a prior serverTime." },
+        view: { type: "string", enum: ["catchup"], description: "Stage and action lines." }
       }
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(store.changesPayload(slug, args.since)));
+      const delta = store.changesPayload(slug, args.since);
+      const payload = args.view === "catchup" ? (0, import_completion.changesCatchupPayload)(slug, delta, store) : withoutCategories(delta);
+      return Object.assign({ project: slug, projectName: meta.name }, payload);
     }
   },
   {

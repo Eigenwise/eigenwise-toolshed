@@ -2,6 +2,7 @@
   import type { BoardState } from '../../state/board.svelte';
   import NotificationInbox from '../notifications/NotificationInbox.svelte';
   import SettingsDialog from '../settings/SettingsDialog.svelte';
+  import StoryCompletionDialog from '../story/StoryCompletionDialog.svelte';
 
   let { state }: { state: BoardState } = $props();
   let toolbar: HTMLElement;
@@ -57,6 +58,7 @@
       <div class="menu-wrap" data-tour="story-filter"><button class:active={state.story !== 'all'} aria-expanded={state.popover === 'stories'} onclick={() => toggle('stories')}>Stories: {state.story === 'all' ? 'All' : state.story === 'none' ? 'None' : selectedStory?.title}</button>
         {#if state.popover === 'stories'}<div class="popover" role="menu"><button role="menuitemradio" aria-checked={state.story === 'all'} onclick={() => { state.story = 'all'; state.popover = null; }}>All stories</button><button role="menuitemradio" aria-checked={state.story === 'none'} onclick={() => { state.story = 'none'; state.popover = null; }}>No story</button>{#each stories as story (story.id)}<button role="menuitemradio" aria-checked={state.story === story.id} onclick={() => { state.story = story.id; state.popover = null; }}><i style:background={story.color}></i>{story.ref ? `${story.ref} · ` : ''}{story.title} <small>{story.ticketCount ?? 0}</small></button>{/each}</div>{/if}
       </div>
+      {#if selectedStory}<button class="story-status" onclick={() => state.openStoryCompletion(selectedStory)}>Story status</button>{/if}
     {/if}
     <div class="menu-wrap"><button class:active={state.assignee !== 'all'} aria-expanded={state.popover === 'assignee'} onclick={() => toggle('assignee')}>Assignee: {selectedAssignee[1]}</button>
       {#if state.popover === 'assignee'}<div class="popover" role="menu">{#each assigneeOptions as [key, label, hint] (key)}<button role="menuitemradio" aria-checked={state.assignee === key} onclick={() => { state.assignee = key; state.popover = null; }}><span>{label}</span><small>{hint}</small></button>{/each}</div>{/if}
@@ -68,6 +70,7 @@
     <NotificationInbox {state} />
     <SettingsDialog {state} />
   </div>
+  <StoryCompletionDialog {state} />
 </header>
 
 <style>

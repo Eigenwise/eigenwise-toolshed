@@ -155,6 +155,33 @@ test('a subagent\'s main-thread-only board call is refused even when the engine 
   expect(removed).toMatchObject({ deny: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.' })
 })
 
+// SQ-3934: a subagent shares its main thread's session id, so only the hook-settled agent id tells its direct claim apart.
+test('a subagent\'s direct claim is refused while its routed claim and a main-thread direct claim pass', async ($, on) => {
+  session(on)
+  const decisions: string[][] = []
+  on('process.run', ($$, e) => {
+    decisions.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const claims: unknown[] = []
+  on('tool.call', ($$, e) => {
+    claims.push(e)
+    return { result: 'claimed', text: 'claimed' } as never
+  })
+  const direct = { tool: 'mcp__plugin_sidequest_board__claim', ref: 'SQ-1', by: 'self', direct: true, reason: 'a subagent minting the main-thread identity' }
+  const refused = await $.tool.call({ ...direct, agentId: 'subagent-1' } as never)
+  expect(Reflect.get(refused, 'deny')).toMatch(/^sidequest: subagents cannot direct-claim a ticket\. Claim through the dispatched route: copy the claim call your briefing printed \(executor and tokenFile, no direct\)/)
+  const directNext = await $.tool.call({ tool: 'mcp__plugin_sidequest_board__next', by: 'self', direct: true, reason: 'a subagent minting the main-thread identity', agentId: 'subagent-1' } as never)
+  expect(Reflect.get(directNext, 'deny')).toMatch(/^sidequest: subagents cannot direct-claim a ticket\./)
+  expect(claims.length).toBe(0)
+
+  const routed = { tool: 'mcp__plugin_sidequest_board__claim', ref: 'SQ-1', by: 'exec', executor: 'sidequest-exec-high', tokenFile: 'C:/t.token', agentId: 'subagent-1' }
+  expect(await $.tool.call(routed as never)).toMatchObject({ text: 'claimed' })
+  expect(await $.tool.call(direct as never)).toMatchObject({ text: 'claimed' })
+  expect(claims.length).toBe(2)
+  expect(decisions.length).toBe(0)
+})
+
 // SQ-3759 review: a teammate is its own session's main loop, known only by the session that claimed its ticket.
 test('a read-only teammate\'s shell write reaches the decision as its claimed executor', async ($, on) => {
   const teammate = row({ sessionId: 'preparer-session', claimSessionId: 'teammate-session', agentId: 'worker-1', executor: 'sidequest-exec-readonly-high', readonly: true })
