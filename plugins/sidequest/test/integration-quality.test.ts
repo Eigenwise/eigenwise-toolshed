@@ -33,6 +33,37 @@ function withQualityFixture(context: { after(callback: () => void): void }, comp
   return input;
 }
 
+test('native quality orchestration selects configured LCOV command and retains translations', (context) => {
+  const input = withQualityFixture(context, 2, true);
+  fs.mkdirSync(path.join(input.project, '.claude/quality-gate'), { recursive: true });
+  fs.writeFileSync(path.join(input.project, '.claude/quality-gate/crap.json'), JSON.stringify({ coverageCommand: 'node capture.js', lcovBase: 'plugin' }));
+  const translations = [{ generated: 'plugin/lib/subject.js', sources: ['plugin/src/subject.ts'] }];
+  const row = { name: 'candidateBody', complexity: 2, crap: 2, classification: 'new' };
+  const report = { changedMetrics: [row], failures: [], unverified: [], sourceMapTranslations: translations };
+  fs.writeFileSync(path.join(input.project, 'gate/bin/quality-gate.js'), `
+const assert = require('node:assert/strict');
+assert.equal(process.argv[2], 'crap');
+assert.equal(process.argv[process.argv.indexOf('--coverage-command') + 1], 'node capture.js');
+assert.equal(process.argv[process.argv.indexOf('--lcov-base') + 1], 'plugin');
+assert.equal(process.argv[process.argv.indexOf('--source') + 1], 'source.js');
+process.stdout.write(${JSON.stringify(JSON.stringify(report))});`);
+  const result = runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'fixture verifier' }));
+  assert.equal(result.quality[0]!.measurementPath, 'crap');
+  assert.deepEqual(result.quality[0]!.sourceMapTranslations, translations);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result.quality[0]!.receipt!, 'utf8')).sourceMapTranslations, translations);
+});
+
+test('native quality refuses a zero-row report when AST inventory finds changed bodies', (context) => {
+  const input = withQualityFixture(context, 2, true);
+  const inventory = { changedMetrics: [{ name: 'candidateBody', complexity: 2, classification: 'new' }], failures: [], unverified: [] };
+  const empty = { changedMetrics: [], failures: [], unverified: [], nothingToScoreReason: 'coverage path selected no bodies' };
+  fs.writeFileSync(path.join(input.project, 'gate/bin/quality-gate.js'), `process.stdout.write(JSON.stringify(process.argv.includes('--cc-only') ? ${JSON.stringify(inventory)} : ${JSON.stringify(empty)}));`);
+  const result = runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'fixture verifier' }));
+  assert.equal(result.status, 'failed_check');
+  assert.equal(result.quality[0]!.measurementSummary, '0 of 1 changed bodies measured: coverage path selected no bodies');
+  assert.equal(result.quality[0]!.unverified[0]!.complexity, 2);
+});
+
 test('native quality orchestration refuses the owner-reported CC floor even without coverage', (context) => {
   const input = withQualityFixture(context, 7, false);
   const result = runIntegrationQuality([input], (environment) => {

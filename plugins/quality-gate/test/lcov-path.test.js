@@ -53,6 +53,20 @@ function cli(root, argumentsList) {
   return spawnSync(process.execPath, [path.join(pluginRoot, 'bin/quality-gate.js'), 'crap', '--project', root, '--json', ...argumentsList], { encoding: 'utf8', timeout: 60000, env: process.env });
 }
 
+test('LCOV base resolves plugin-relative records before source map translation', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'quality-gate-lcov-base-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'plugin'), { recursive: true });
+  await fs.writeFile(path.join(root, 'plugin/subject.js'), 'export function subject() { return 1; }\n');
+  await fs.writeFile(path.join(root, 'capture.info'), 'SF:subject.js\nDA:1,1\nend_of_record\n');
+  await fs.writeFile(path.join(root, 'capture.info.sources.json'), JSON.stringify(sourceHashes(root, ['plugin/subject.js'])));
+  const settings = gateSettings({ lcovBase: 'plugin' }, { lcovBase: 'wrong' });
+  assert.equal(settings.lcovBase, 'plugin');
+  const input = await acquireCoverage(root, { ...settings, lcov: 'capture.info' }, ['plugin/subject.js']);
+  assert.ok(input.text.includes('SF:' + path.join(root, 'plugin/subject.js')));
+  assert.deepEqual(input.sourceMapRefusals, []);
+});
+
 test('settings preserve explicit LCOV separately from configured fallback', () => {
   const configured = gateSettings({}, { lcov: 'configured.info' });
   assert.equal(configured.lcov, undefined);

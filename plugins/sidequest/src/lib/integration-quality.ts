@@ -23,6 +23,9 @@ interface QualityRow {
 }
 
 interface NativeReport {
+  sourceMapTranslations?: unknown[];
+  sourceMapRefusals?: unknown[];
+  nothingToScoreReason?: string;
   changedMetrics?: QualityRow[];
   failures: unknown[];
   unverified: QualityRow[];
@@ -31,6 +34,10 @@ interface NativeReport {
 export interface IntegrationQuality {
   status: 'none' | 'measured' | 'failed' | 'unverified';
   receipt?: string;
+  measurementPath?: 'crap' | 'measure';
+  sourceMapTranslations?: unknown[];
+  sourceMapRefusals?: unknown[];
+  measurementSummary?: string;
   baseline?: string;
   enforced: number;
   failures: unknown[];
@@ -128,7 +135,7 @@ function reportQuality(report: NativeReport, base: string): IntegrationQuality {
   const floorFailures = enforced.filter((row) => (row.complexity ?? 0) >= 6).map((row) => `${row.relativePath}:${row.line} ${row.name} cc=${row.complexity} (complexity floor)`);
   const failures = [...report.failures, ...floorFailures];
   const unverified = report.unverified;
-  const measured = { ...emptyQuality('measured'), baseline: base, enforced: enforced.length, failures, unverified };
+  const measured = { ...emptyQuality('measured'), baseline: base, enforced: enforced.length, failures, unverified, sourceMapTranslations: report.sourceMapTranslations, sourceMapRefusals: report.sourceMapRefusals };
   return {
     ...measured,
     captureGap: wholeRunCaptureGap(report),
@@ -143,11 +150,56 @@ function qualityStatus(failures: unknown[], unverified: QualityRow[]): Integrati
   return unverified.length ? 'unverified' : 'measured';
 }
 
+interface CoverageProducer {
+  command: string;
+  base?: string;
+}
+
+function coverageProducer(input: QualityInput): CoverageProducer | undefined {
+  const configuration = path.join(input.project, '.claude/quality-gate/crap.json');
+  if (fs.existsSync(configuration)) {
+    const config = JSON.parse(fs.readFileSync(configuration, 'utf8')) as { coverageCommand?: string; lcovBase?: string };
+    if (config.coverageCommand) return { command: config.coverageCommand, base: config.lcovBase };
+  }
+  return pluginCoverageProducer(input);
+}
+
+function pluginCoverageProducer(input: QualityInput): CoverageProducer | undefined {
+  const directories = [...new Set(input.changedPaths.map((file) => file.match(/^plugins\/[^/]+\//)?.[0]).filter((directory): directory is string => Boolean(directory)))];
+  if (directories.length !== 1) return undefined;
+  const directory = directories[0]!;
+  const manifest = path.join(input.project, directory, 'package.json');
+  if (!fs.existsSync(manifest)) return undefined;
+  const plugin = JSON.parse(fs.readFileSync(manifest, 'utf8')) as { scripts?: Record<string, string> };
+  if (!plugin.scripts?.['coverage:lcov']) return undefined;
+  return { command: 'npm --prefix ' + quoteArgument(directory) + ' run coverage:lcov', base: directory };
+}
+
+function measurementCommand(input: QualityInput, files: string[], captureDirectory: string): string[] {
+  const producer = coverageProducer(input);
+  if (!producer) return ['measure', '--json', '--project', input.project, '--base', input.base, '--coverage', captureDirectory, ...files];
+  const command = ['crap', '--json', '--project', input.project, '--base', input.base, '--receipts-dir', input.directory, '--coverage-command', producer.command, '--coverage-timeout-ms', String(input.timeoutMilliseconds)];
+  if (producer.base) command.push('--lcov-base', producer.base);
+  return command.concat(files.flatMap((file) => ['--source', file]));
+}
+
 function measuredQuality(gate: string, input: QualityInput, captureDirectory: string): IntegrationQuality {
   const files = sourceFiles(input);
   if (!files.length) return emptyQuality('measured');
-  const report = runNativeReport(gate, input, ['measure', '--json', '--project', input.project, '--base', input.base, '--coverage', captureDirectory, ...files], 'measure');
-  return reportQuality(report, input.base);
+  const command = measurementCommand(input, files, captureDirectory);
+  const report = runNativeReport(gate, input, command, command[0]!);
+  const quality = reportQuality(report, input.base);
+  if (!report.changedMetrics?.length) return missingMeasurement(gate, input, files, report, quality);
+  return { ...quality, measurementPath: command[0] === 'crap' ? 'crap' : 'measure' };
+}
+
+function missingMeasurement(gate: string, input: QualityInput, files: string[], report: NativeReport, quality: IntegrationQuality): IntegrationQuality {
+  const inventory = runNativeReport(gate, input, ['crap', '--json', '--project', input.project, '--base', input.base, '--cc-only', '--receipts-dir', input.directory, ...files.flatMap((file) => ['--source', file])], 'complexity');
+  const count = inventory.changedMetrics?.length ?? 0;
+  const reason = report.nothingToScoreReason ?? 'Native coverage report returned no changed bodies';
+  const measurementSummary = `0 of ${count} changed bodies measured: ${reason}`;
+  if (!count) return { ...quality, measurementSummary };
+  return { ...reportQuality(inventory, input.base), status: 'failed', measurementSummary, failures: [measurementSummary], unverified: inventory.changedMetrics!.map((row) => ({ ...row, crap: undefined, unverified: reason })) };
 }
 
 function persistQuality(input: QualityInput, quality: IntegrationQuality): IntegrationQuality {
