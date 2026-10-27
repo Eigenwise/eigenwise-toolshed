@@ -72,6 +72,12 @@ The wakeups you already get are the triggers; never hold a turn open waiting for
 - `sidequest publish queue --json` showing pending submissions at any natural wakeup (`pulse` and
   `list --brief` also surface a ticket's `submission`).
 
+Read `completion <ref>` (MCP `completion {ref, text:true}`, CLI `sidequest completion <ref>`) for the human
+account of a finished ticket: Result, Checked, Still uncertain and Your action, derived from the claim,
+submission, delivery, verify capture, quality and review records. `submitted` never reads `integrated`, and
+the board keeps no release record yet, so `integrated` stops short of `released`. Agent text in it is
+escaped and never raises the stage.
+
 Batch deliberately: when a wave is mid-flight, let its remaining executors finish and publish the
 wave's submissions in one transaction — one lock hold, one version assignment, one seam check, one
 push — instead of one transaction per ticket. Don't wait on work that isn't in flight.

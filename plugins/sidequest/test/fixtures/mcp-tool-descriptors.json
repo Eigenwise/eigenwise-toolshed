@@ -93,6 +93,27 @@
     }
   },
   {
+    "name": "completion",
+    "description": "Ticket stage, blocker, facts and evidence from lifecycle records.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "story": {
+          "type": "string"
+        },
+        "text": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
     "name": "changes",
     "description": "Poll ticket changes.",
     "inputSchema": {

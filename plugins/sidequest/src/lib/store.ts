@@ -71,6 +71,7 @@ const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
 const { createPulse } = require('./store/pulse.js');
+const { createCompletion } = require('./store/completion.js');
 const { createRouting } = require('./store/routing.js');
 const { createTickets } = require('./store/tickets.js');
 const { createSubmissions } = require('./store/submissions.js');
@@ -4718,6 +4719,8 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   submissionProjection,
 });
 
+const { completionPayload } = createCompletion({ getTicket, openBlockers, negativeControlResult, projectDir, readMeta });
+
 module.exports = {
   normalizeIntegrationVerifyTimeoutMs,
   VALID_STATUS,
@@ -4995,6 +4998,7 @@ module.exports = {
   listPayload,
   readyPayload,
   pulsePayload,
+  completionPayload,
   claimPulse,
   changesPayload,
   boundedExcerpt,

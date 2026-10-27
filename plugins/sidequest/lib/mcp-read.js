@@ -120,6 +120,20 @@ function storyLogHandler(args) {
     ...result.advisory ? { advisory: result.advisory } : {}
   };
 }
+function completionResult(slug, view, textOnly) {
+  return textOnly ? { project: slug, ref: view.ref, stage: view.stage, text: view.text } : Object.assign({ project: slug }, view);
+}
+function ticketCompletion(slug, projectName, args) {
+  if (typeof args.ref !== "string" || !args.ref.trim()) throw new Error("completion: pass ref (a ticket ref or id) or story.");
+  const view = store.completionPayload(slug, args.ref);
+  if (!view) throw new Error(`completion: no ticket "${args.ref}" in ${projectName}`);
+  return completionResult(slug, view, args.text);
+}
+function completionHandler(args) {
+  const { slug, meta } = resolveProject(args.project);
+  if (args.story === void 0) return ticketCompletion(slug, meta.name, args);
+  return { ok: false, reason: "not_supported", project: slug, message: "completion: the story form lands with SQ-3963 (story completion view). Read each member ticket with completion {ref} until then." };
+}
 const tools = [
   {
     name: "context_page",
@@ -205,6 +219,20 @@ const tools = [
       const integration = (0, import_integration_tests.readIntegrationProgress)((0, import_integration_tests.integrationProgressPath)(store.projectDir(slug), pulse.ref));
       return Object.assign({ project: slug }, payload, integration ? { integration } : {});
     }
+  },
+  {
+    name: "completion",
+    description: "Ticket stage, blocker, facts and evidence from lifecycle records. text:true returns only the four-section rendering (Result, Checked, Still uncertain, Your action) in under 200 words.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: PROJECT_PROP,
+        ref: { type: "string", description: "Ticket ref or id." },
+        story: { type: "string", description: "Story ref; not supported until SQ-3963 lands." },
+        text: { type: "boolean", description: "Return only the rendered text." }
+      }
+    },
+    handler: completionHandler
   },
   {
     name: "changes",
