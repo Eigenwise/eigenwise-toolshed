@@ -2269,7 +2269,7 @@ test('the guards module routes every live-claim mutation tool to the force-exec-
   const toolNames = mainThreadMutationTools();
   assert.deepEqual(
     [...toolNames].sort(),
-    ['mcp__plugin_sidequest_board__claim', 'mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__next', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
+    ['Bash', 'PowerShell', 'mcp__plugin_sidequest_board__claim', 'mcp__plugin_sidequest_board__dispatch', 'mcp__plugin_sidequest_board__next', 'mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
     'the rule table changed: route the new tool in the guards module and list it here',
   );
   // SQ-3934: every executor claims, so the guards module refuses a subagent's direct claim from the call alone
@@ -2306,6 +2306,13 @@ test('an executor subagent cannot mint a scope grant, force-remove, or correct a
     tool_input: { ref: 'SQ-1', by: 'self', direct: true, reason: 'a subagent minting the main-thread identity' } }, { SIDEQUEST_AGENT: 'routed-grant-child' });
   assert.match(directClaim?.hookSpecificOutput?.permissionDecisionReason || '', /subagents cannot direct-claim a ticket\. Claim through the dispatched route/,
     'the shared rule table refuses the direct claim on the decision path too');
+  // SQ-3954: the same refusal reaches a subagent's CLI direct claim, whose shell carries only the parent's session id.
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    const cliDirectClaim = runHookOutput(FORCE_BYPASS, { ...subagent, tool_name,
+      tool_input: { command: 'node bin/sidequest.js claim SQ-1 --by self --direct --reason "a subagent minting the main-thread identity"' } }, { SIDEQUEST_AGENT: 'routed-grant-child' });
+    assert.match(cliDirectClaim?.hookSpecificOutput?.permissionDecisionReason || '', /subagents cannot direct-claim a ticket\. Claim through the dispatched route/,
+      `${tool_name}: the decision path refuses the CLI direct claim too`);
+  }
 });
 
 
