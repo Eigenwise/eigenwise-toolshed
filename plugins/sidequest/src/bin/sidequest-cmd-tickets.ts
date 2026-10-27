@@ -1,3 +1,4 @@
+import { changesCatchupPayload } from '../lib/store/completion.js';
 import type { CompletionView } from '../lib/store/completion.js';
 const path = require('path');
 const os = require('os');
@@ -339,8 +340,10 @@ function completionOutput(slug: string, view: CompletionView, json?: boolean) {
 
 async function cmdChanges(opts: any) {
   const { slug, meta } = await resolveProject(opts);
-  const changes = store.changesPayload(slug, opts.since);
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + '\n');
+  const delta = store.changesPayload(slug, opts.since);
+  const changes = opts.catchup ? changesCatchupPayload(slug, delta, store) : delta;
+  const output = opts.catchup && !opts.json ? changes.text : JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2);
+  process.stdout.write(output + '\n');
 }
 
 function clearsDeclaredFiles(files: any) {

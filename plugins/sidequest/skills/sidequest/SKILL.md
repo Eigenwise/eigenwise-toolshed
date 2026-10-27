@@ -20,6 +20,8 @@ matching MCP tools. Read references only when needed:
 - `references/readonly-guidance.md` — candidate reviews, repository audits, shortcut debt, and measurement claims.
 - `references/external-trackers.md` — ticket `refs`, `add --github`.
 
+For a bounded catch-up list, use MCP `changes {since, view:"catchup"}` or CLI `changes --since <iso> --catchup`, which lists only changed tickets with their stage and next action.
+
 ## Choose one owner before adding ceremony
 
 Before dispatching substantial or ambiguous work, pin a contract; see `user-story`. Check feasibility

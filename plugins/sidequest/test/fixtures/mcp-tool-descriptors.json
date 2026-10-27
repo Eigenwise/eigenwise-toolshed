@@ -124,6 +124,12 @@
         },
         "since": {
           "type": "string"
+        },
+        "view": {
+          "type": "string",
+          "enum": [
+            "catchup"
+          ]
         }
       }
     }

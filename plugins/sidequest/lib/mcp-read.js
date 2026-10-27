@@ -1,5 +1,6 @@
 "use strict";
 var import_integration_tests = require("./integration-tests.js");
+var import_completion = require("./store/completion.js");
 const {
   path,
   fs,
@@ -236,17 +237,20 @@ const tools = [
   },
   {
     name: "changes",
-    description: "THE polling read for liveness/progress: compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value.",
+    description: 'THE polling read for liveness/progress: compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value. view:"catchup" gives bounded stage and action lines.',
     inputSchema: {
       type: "object",
       properties: {
         project: PROJECT_PROP,
-        since: { type: "string", description: "Exclusive ISO timestamp from a prior serverTime." }
+        since: { type: "string", description: "Exclusive ISO timestamp from a prior serverTime." },
+        view: { type: "string", enum: ["catchup"], description: "Bounded stage, blocker, actor and next action per changed ticket." }
       }
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(store.changesPayload(slug, args.since)));
+      const delta = store.changesPayload(slug, args.since);
+      const payload = args.view === "catchup" ? (0, import_completion.changesCatchupPayload)(slug, delta, store) : withoutCategories(delta);
+      return Object.assign({ project: slug, projectName: meta.name }, payload);
     }
   },
   {

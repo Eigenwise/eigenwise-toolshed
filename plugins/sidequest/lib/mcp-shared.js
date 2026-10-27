@@ -199,7 +199,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   context_page: "",
   list: "List; poll via changes/pulse.",
   pulse: "",
-  changes: "Poll ticket changes.",
+  changes: "Poll ticket changes; view:catchup gives stage and action lines.",
   ready: "List ready ticket refs.",
   story: "",
   story_contract: "",
