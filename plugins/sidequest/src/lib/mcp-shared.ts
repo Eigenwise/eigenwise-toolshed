@@ -285,7 +285,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   context_page: '',
   list: 'List; poll via changes/pulse.',
   pulse: '',
-  changes: 'Poll ticket changes; view:catchup gives stage and action lines.',
+  changes: 'Poll; view:catchup',
   ready: 'List ready ticket refs.',
   story: '',
   story_contract: '',

@@ -1444,7 +1444,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.match(comments.inputSchema.properties.since.description, /Comment id.*ISO timestamp/);
   const add = tools.find((tool: any) => tool.name === 'add');
   assert.match(add.inputSchema.properties.complexity.description, /why required/);
-  assert.equal(tools.find((tool: any) => tool.name === 'changes').description, 'Poll ticket changes; view:catchup gives stage and action lines.');
+  assert.equal(tools.find((tool: any) => tool.name === 'changes').description, 'Poll; view:catchup');
   assert.equal(tools.find((tool: any) => tool.name === 'ready').description, 'List ready ticket refs.');
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref', 'since']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');

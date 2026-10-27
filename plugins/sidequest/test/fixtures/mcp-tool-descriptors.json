@@ -115,7 +115,7 @@
   },
   {
     "name": "changes",
-    "description": "Poll ticket changes.",
+    "description": "Poll; view:catchup",
     "inputSchema": {
       "type": "object",
       "properties": {

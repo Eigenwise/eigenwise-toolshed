@@ -243,7 +243,7 @@ const tools = [
       properties: {
         project: PROJECT_PROP,
         since: { type: "string", description: "Exclusive ISO timestamp from a prior serverTime." },
-        view: { type: "string", enum: ["catchup"], description: "Bounded stage, blocker, actor and next action per changed ticket." }
+        view: { type: "string", enum: ["catchup"], description: "Stage and action lines." }
       }
     },
     handler(args) {
