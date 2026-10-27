@@ -29,6 +29,8 @@ A release creates a marketplace tag, `v<marketplace-version>`, and a tag for eac
 
    This bumps the versions, writes the changelogs, consumes the fragments, runs the changed plugins' suites, and commits all of that on `release/v<version>`. It creates no tag, and neither `main` nor `develop` moves.
 
+   After its checks pass, preparation calls the checkout’s `sidequest release-record` for each fragment ref. Done tickets receive the marketplace version, affected plugin versions, release commit, and a snapshot of their delivery commit. `completion` reports `released` only while that snapshot matches the current delivery. Readonly tickets stay `closed`. These records describe the prepared cut, before promotion and tagging. Repeating a ref and version preserves the original record. If the board is unavailable or a ticket is missing or unfinished, the cut warns with the affected refs and continues; the release remains the authority.
+
 4. Open and merge the promotion PR the cut printed, once the required checks pass:
 
    ```text

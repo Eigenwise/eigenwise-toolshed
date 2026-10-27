@@ -11,14 +11,14 @@ const { sidequestMutationFreshness } = require('../lib/plugin-freshness');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
 const { fail, resolveProject, resolveWatchProject } = require('./sidequest-cmd-shared');
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require('./sidequest-cmd-server');
-const { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm } = require('./sidequest-cmd-tickets');
+const { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdReleaseRecord, cmdChanges, cmdUpdate, cmdRm } = require('./sidequest-cmd-tickets');
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require('./sidequest-cmd-configuration');
 const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require('./sidequest-cmd-execution');
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require('./sidequest-cmd-collaboration');
 const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge, cmdMoveBoard } = require('./sidequest-cmd-dispatch');
 const { cmdStory } = require('./sidequest-cmd-story');
 
-const ARRAY_FLAGS = new Set(['evidence', 'refs', 'image', 'label', 'file', 'add-file', 'remove-file', 'resolved-path', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes', 'changed-surface', 'dependency']);
+const ARRAY_FLAGS = new Set(['plugin', 'evidence', 'refs', 'image', 'label', 'file', 'add-file', 'remove-file', 'resolved-path', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes', 'changed-surface', 'dependency']);
 const ARRAY_FLAG_ALIASES: Record<string, string> = { files: 'file', labels: 'label', 'add-files': 'add-file', 'remove-files': 'remove-file' };
 const BOOLEAN_FLAGS = new Set(['json', 'catchup', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'working-tree-delivery', 'external-deliverable', 'unverified-transport', 'reduced-agent-schema', 'allow-repeat-failure', 'allow-unscoped', 'all-projects', 'sizes', 'no-process', 'no-worktree', 'review', 'abandon-submission', 'retained']);
 const NEGATED_ISOLATION_FLAGS = new Map([['no-shared-tree', 'shared-tree'], ['no-worktree-isolation', 'worktree-isolation']]);
@@ -28,6 +28,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   list: ['status', 'archived', 'brief', 'limit', 'cursor', 'all'],
   pulse: [],
   completion: ['text'],
+  'release-record': ['version', 'plugin', 'commit'],
   changes: ['since', 'catchup'],
   watch: ['interval', 'all'],
   update: ['refs', 'title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'add-file', 'remove-file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'working-tree-delivery', 'external-deliverable', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'verify-cwd', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'review-ref', 'review-commit', 'review-source', 'review-revision', 'by'],
@@ -90,7 +91,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
 };
 const COMMAND_ALIASES: Record<string, string> = { new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm', complete: 'done', finish: 'done', open: 'dashboard' };
 const MUTATING_COMMANDS = new Set([
-  'add', 'new', 'ticket', 'update', 'edit', 'set', 'rm', 'remove', 'delete', 'claim', 'take', 'checkpoint',
+  'release-record', 'add', 'new', 'ticket', 'update', 'edit', 'set', 'rm', 'remove', 'delete', 'claim', 'take', 'checkpoint',
   'recover-shared', 'next', 'grab', 'reconcile', 'work', 'drain', 'groom-close', 'done', 'complete', 'finish',
   'scope-request', 'scope_request', 'commit', 'rework', 'submit', 'assemble-wave', 'integrate', 'publish', 'release', 'unclaim',
   'assign', 'unassign', 'remind', 'unremind', 'comment', 'link', 'unlink', 'archive', 'unarchive', 'restore',
@@ -248,7 +249,8 @@ const HELP_COMMANDS: any = {
   add: 'sidequest add [-t "title" | --github <issue-or-pr-url>] [--refs <ref>]... (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc|--body-file path] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [-s todo|doing|done] [--dry-run] [--json]   (--file declares write scope; a write ticket without it is refused at dispatch)',
   list: 'sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
-  completion: 'sidequest completion <SQ-n|US-n> [--json|--text] [--project <path-or-slug>]  four-section account (Result, Checked, Still uncertain, Your action) derived from lifecycle records; --json prints the whole view',
+  'release-record': 'sidequest release-record <SQ-n> --version <vX.Y.Z> [--plugin <name@X.Y.Z>] --commit <release-sha>  record a cut for a done ticket, once per version; repeats preserve the original record',
+  completion: 'sidequest completion <SQ-n|US-n> [--json|--text] [--project <path-or-slug>]  four-section account (Result, Checked, Still uncertain, Your action) derived from lifecycle records; released requires a cut record; --json prints the whole view',
   changes: 'sidequest changes [--since <iso>] [--catchup] [--project <path-or-slug>]',
   watch: 'sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]  print session-owned, unowned, and terminal ticket alerts plus all GitHub CI alerts; --all includes every ticket',
   update: 'sidequest update <id|SQ-n> [--refs <ref>]... [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]  (--file replaces the whole declared list; --add-file/--remove-file adjust it without dropping the rest, refuse combined with --file, and apply additions before removals. Live-claim closeout fields require releasing the claim first or using MCP update from the orchestrator main thread; executors use scopeRequest for files)',
@@ -333,6 +335,7 @@ Usage:
   sidequest list [--status todo|doing|awaiting-oracle|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest completion <SQ-n|US-n> [--json|--text] [--project <path-or-slug>]   ticket or story outcome from lifecycle records (tickets under 200 words, stories under 250)
+  sidequest release-record <SQ-n> --version <vX.Y.Z> [--plugin <name@X.Y.Z>] --commit <release-sha>   record a cut on a done ticket
   sidequest changes [--since <iso>] [--catchup] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]   stream session-owned, unowned, and terminal ticket events plus all GitHub CI events; --all includes every ticket (30s default)
   sidequest update <id|SQ-n> [--refs <ref>]... [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
@@ -741,6 +744,7 @@ async function main() {
 
 const TABLE_COMMANDS: Record<string, (opts: any, positional: any) => Promise<void>> = {
   completion: cmdCompletion,
+  'release-record': cmdReleaseRecord,
 };
 
 async function runTableCommand(cmd: string, opts: any, positional: any) {

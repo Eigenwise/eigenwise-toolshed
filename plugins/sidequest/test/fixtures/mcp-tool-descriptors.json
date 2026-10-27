@@ -94,7 +94,7 @@
   },
   {
     "name": "completion",
-    "description": "Ticket or story completion from lifecycle records.",
+    "description": "Ticket or story completion from lifecycle records; released requires a cut record.",
     "inputSchema": {
       "type": "object",
       "properties": {

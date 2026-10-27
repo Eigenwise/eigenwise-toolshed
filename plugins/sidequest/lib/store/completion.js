@@ -552,7 +552,7 @@ function createCompletion(dependencies) {
       openBlockers: openBlockers(slug, ticket),
       integrationProgress: (0, import_integration_tests.readIntegrationProgress)((0, import_integration_tests.integrationProgressPath)(boardDirectory, ticket.ref)),
       negativeControl: negativeControlResult(controlHolder(ticket), [], candidateOf(ticket)),
-      releaseRecord: null,
+      releaseRecord: ticket.shipped?.slice().reverse().find((record) => record.deliveryCommit === deliveryFacts(ticket)?.commit) ?? null,
       roots: {
         project: readMeta(slug)?.path ?? null,
         verification: import_node_path.default.join(boardDirectory, "verification"),
