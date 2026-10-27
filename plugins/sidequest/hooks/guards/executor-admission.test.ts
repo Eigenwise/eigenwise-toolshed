@@ -182,6 +182,35 @@ test('a subagent\'s direct claim is refused while its routed claim and a main-th
   expect(decisions.length).toBe(0)
 })
 
+// SQ-3954: the CLI takes its session from the subagent shell's CLAUDE_CODE_SESSION_ID, which is the main thread's.
+test('a subagent\'s CLI direct claim is refused before any decision while the main thread\'s CLI direct claim runs', async ($, on) => {
+  session(on)
+  const decisions: string[][] = []
+  on('process.run', ($$, e) => {
+    decisions.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const ran: unknown[] = []
+  on('tool.call', ($$, e) => {
+    ran.push(e)
+    return { result: 'ran', text: 'ran' } as never
+  })
+  const commands = [
+    { tool: 'Bash', command: 'node bin/sidequest.js claim SQ-1 --by self --direct --reason "a subagent minting the main-thread identity"' },
+    { tool: 'Bash', command: 'cd /c/repo && sidequest next --direct --reason "a subagent minting the main-thread identity"' },
+    { tool: 'PowerShell', command: '& node "C:\\Users\\kenny\\.claude\\sidequest\\sidequest-launcher.js" take SQ-1 --reason "x" --direct' },
+  ]
+  for (const call of commands) {
+    const refused = await $.tool.call({ ...call, agentId: 'subagent-1' } as never)
+    expect(Reflect.get(refused, 'deny')).toMatch(/^sidequest: subagents cannot direct-claim a ticket\. Claim through the dispatched route/)
+  }
+  expect(ran.length).toBe(0)
+  expect(decisions.length).toBe(0)
+
+  for (const call of commands) expect(await $.tool.call(call as never)).toMatchObject({ text: 'ran' })
+  expect(ran.length).toBe(commands.length)
+})
+
 // SQ-3759 review: a teammate is its own session's main loop, known only by the session that claimed its ticket.
 test('a read-only teammate\'s shell write reaches the decision as its claimed executor', async ($, on) => {
   const teammate = row({ sessionId: 'preparer-session', claimSessionId: 'teammate-session', agentId: 'worker-1', executor: 'sidequest-exec-readonly-high', readonly: true })

@@ -28,8 +28,13 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var completion_exports = {};
 __export(completion_exports, {
+  ACCEPTANCE_MAX_EXAMPLES: () => ACCEPTANCE_MAX_EXAMPLES,
+  ACCEPTANCE_SCHEMA: () => ACCEPTANCE_SCHEMA,
+  ACCEPTANCE_TEXT_MAX: () => ACCEPTANCE_TEXT_MAX,
   COMPLETION_SUMMARY_SCHEMA: () => COMPLETION_SUMMARY_SCHEMA,
   COMPLETION_TEXT_MAX_WORDS: () => COMPLETION_TEXT_MAX_WORDS,
+  DEMONSTRATIONS_FILE: () => DEMONSTRATIONS_FILE,
+  acceptanceExamplesInput: () => acceptanceExamplesInput,
   changesCatchupPayload: () => changesCatchupPayload,
   completionStage: () => completionStage,
   completionSummaryInput: () => completionSummaryInput,
@@ -37,10 +42,12 @@ __export(completion_exports, {
   completionView: () => completionView,
   createCompletion: () => createCompletion,
   createSummaryCloseout: () => createSummaryCloseout,
+  readDemonstrations: () => readDemonstrations,
   sanitizeCompletionText: () => sanitizeCompletionText,
   storyCompletionView: () => storyCompletionView
 });
 module.exports = __toCommonJS(completion_exports);
+var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 var import_integration_tests = require("../integration-tests.js");
 const NOT_REQUIRED_CONTROL_KINDS = /* @__PURE__ */ new Set(["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"]);
@@ -250,6 +257,121 @@ function evidenceEntries(ticket, roots) {
   const tests = changedTestPaths(ticket).map((file) => ({ kind: "mocked-test", path: file, label: "changed test (no real-flow record)" }));
   return [...captures, ...gate, ...tests].map((entry) => ({ ...entry, path: approvedPath(entry.path, roots) ?? "" })).filter((entry) => entry.path);
 }
+const DEMONSTRATIONS_FILE = "demonstrations.json";
+const SCREENSHOT_ARTIFACT = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
+const REQUIRED_DEMONSTRATION_FIELDS = ["expected", "observed", "environment", "candidate", "fixture", "artifact"];
+function recordFields(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? new Map(Object.entries(value)) : null;
+}
+function demonstrationKind(declared, artifact) {
+  return declared === "visual" || SCREENSHOT_ARTIFACT.test(artifact) ? "visual" : "real-flow";
+}
+function demonstrationEntry(value) {
+  const record = recordFields(value);
+  if (!record) return null;
+  const field = (name) => text(record.get(name));
+  const matches = record.get("matches");
+  return {
+    scenario: field("scenario"),
+    expected: field("expected"),
+    observed: field("observed"),
+    environment: field("environment"),
+    candidate: field("candidate"),
+    fixture: field("fixture"),
+    artifact: field("artifact"),
+    matches: typeof matches === "boolean" ? matches : null,
+    kind: demonstrationKind(record.get("kind"), field("artifact"))
+  };
+}
+function missingDemonstrationFields(entry) {
+  const missing = REQUIRED_DEMONSTRATION_FIELDS.filter((field) => !entry[field]);
+  return entry.matches === null ? [...missing, "matches"] : missing;
+}
+function sameCommit(recorded, current) {
+  const left = recorded.toLowerCase();
+  const right = current.toLowerCase();
+  return Math.min(left.length, right.length) >= 7 && (left.startsWith(right) || right.startsWith(left));
+}
+function boardEvidenceRoots(context) {
+  const roots = context.roots ?? {};
+  return [roots.verification, roots.evidence].map(text).filter(Boolean);
+}
+function demonstrationArtifact(entry, directory, roots) {
+  if (!entry.artifact) return null;
+  const absolute = import_node_path.default.resolve(directory, entry.artifact);
+  const candidate = comparablePath(absolute);
+  return roots.some((root) => insideRoot(candidate, root)) ? absolute : null;
+}
+function demonstrationProblem(entry, artifact, present) {
+  const missing = missingDemonstrationFields(entry);
+  if (missing.length) return `partial record, missing ${missing.join(", ")}`;
+  if (!artifact) return "artifact outside the board evidence directory";
+  return present.has(comparablePath(artifact)) ? null : "artifact file not found";
+}
+function settledDemonstration(entry, candidate) {
+  if (candidate && !sameCommit(entry.candidate, candidate)) {
+    return ["stale", `recorded for ${shortCommit(entry.candidate)}, candidate is now ${shortCommit(candidate)}`];
+  }
+  return entry.matches ? ["demonstrated", `${entry.kind} in ${entry.environment}`] : ["failed", "observed differs from expected"];
+}
+function assessDemonstration(entry, artifact, present, candidate) {
+  const problem = demonstrationProblem(entry, artifact, present);
+  if (problem) return { status: "not demonstrated", detail: problem, observed: entry.observed || null, evidence: null };
+  const [status, detail] = settledDemonstration(entry, candidate);
+  return { status, detail, observed: entry.observed, evidence: entry.kind };
+}
+function assessedDemonstrations(ticket, context) {
+  const record = context.demonstrations;
+  if (!record) return [];
+  const roots = boardEvidenceRoots(context);
+  const present = new Set(record.presentArtifacts.map(comparablePath));
+  const candidate = candidateOf(ticket);
+  return record.entries.map(demonstrationEntry).filter((entry) => Boolean(entry)).map((entry) => {
+    const artifact = demonstrationArtifact(entry, record.directory, roots);
+    return { entry, artifact, ...assessDemonstration(entry, artifact, present, candidate) };
+  });
+}
+function acceptanceExamples(ticket) {
+  return Array.isArray(ticket.acceptance) ? ticket.acceptance.filter((example) => Boolean(text(example?.scenario))) : [];
+}
+function undemonstrated(record) {
+  const detail = record?.error ? `${DEMONSTRATIONS_FILE} ${record.error}` : "no record";
+  return { status: "not demonstrated", detail, observed: null, evidence: null };
+}
+function acceptanceResults(ticket, demonstrations, record) {
+  return acceptanceExamples(ticket).map((example) => {
+    const latest = demonstrations.filter((demonstration) => demonstration.entry.scenario === text(example.scenario)).at(-1);
+    const { status, detail, observed, evidence } = latest ?? undemonstrated(record);
+    return { scenario: example.scenario, expected: example.expected, kind: example.kind, status, detail, observed, evidence };
+  });
+}
+function demonstrationLabel(demonstration) {
+  const { scenario, expected, observed } = demonstration.entry;
+  return sanitizeCompletionText(`${demonstration.status} demonstration "${scenario}": expected ${expected}; observed ${observed}`).slice(0, 400);
+}
+function demonstrationEvidence(demonstrations) {
+  return demonstrations.flatMap((demonstration) => demonstration.artifact && demonstration.evidence ? [{ kind: demonstration.evidence, path: demonstration.artifact, label: demonstrationLabel(demonstration) }] : []);
+}
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function parsedDemonstrations(file) {
+  try {
+    const parsed = JSON.parse(import_node_fs.default.readFileSync(file, "utf8"));
+    return Array.isArray(parsed) ? { entries: parsed, error: null } : { entries: [], error: "is not a JSON array" };
+  } catch (error) {
+    return { entries: [], error: `is unreadable: ${errorText(error)}` };
+  }
+}
+function presentArtifacts(directory, entries) {
+  return entries.map((entry) => text(recordFields(entry)?.get("artifact"))).filter(Boolean).map((artifact) => import_node_path.default.resolve(directory, artifact)).filter((absolute) => import_node_fs.default.existsSync(absolute));
+}
+function readDemonstrations(directory) {
+  const file = import_node_path.default.join(directory, DEMONSTRATIONS_FILE);
+  if (!import_node_fs.default.existsSync(file)) return null;
+  const { entries, error } = parsedDemonstrations(file);
+  return { directory, entries, error, presentArtifacts: presentArtifacts(directory, entries) };
+}
 const STAGE_RULES = [
   [(ticket) => ticket.submission?.integration?.outcome === "abandoned", "abandoned"],
   [(ticket, context) => ticket.status === "done" && releaseFacts(deliveryFacts(ticket), context).evidence === "release-record", "released"],
@@ -312,6 +434,7 @@ function completionFacts(ticket, context, summary) {
 function completionView(ticket, context = {}) {
   const summary = summaryRecord(ticket);
   const stage = completionStage(ticket, context);
+  const demonstrations = assessedDemonstrations(ticket, context);
   const view = {
     ref: ticket.ref,
     title: text(ticket.title),
@@ -319,7 +442,8 @@ function completionView(ticket, context = {}) {
     blocker: completionBlocker(stage, ticket, context),
     facts: completionFacts(ticket, context, summary),
     summary,
-    evidence: evidenceEntries(ticket, approvedRoots(context)),
+    evidence: [...evidenceEntries(ticket, approvedRoots(context)), ...demonstrationEvidence(demonstrations)],
+    acceptance: acceptanceResults(ticket, demonstrations, context.demonstrations),
     text: ""
   };
   view.text = completionText(view);
@@ -371,10 +495,33 @@ function checkedSection(view) {
   const agent = view.summary?.checked ? ` Agent says: ${view.summary.checked}` : "";
   return [
     verifyClause(facts.verify),
+    demonstrationClause(view.acceptance),
     `Quality: ${QUALITY_WORDING[facts.quality.status]}.`,
     controlClause(facts.negativeControl),
     reviewClause(facts.review)
-  ].join(" ") + agent;
+  ].filter(Boolean).join(" ") + agent;
+}
+function demonstrationClause(acceptance) {
+  if (!acceptance.length) return "";
+  const demonstrated = acceptance.filter((result) => result.status === "demonstrated");
+  const visual = demonstrated.filter((result) => result.evidence === "visual").length;
+  const visualNote = visual ? ` (${visual} by screenshot only)` : "";
+  return `Demonstrated ${demonstrated.length} of ${acceptance.length} acceptance examples${visualNote}.`;
+}
+const OPEN_DEMONSTRATION_LABEL = {
+  demonstrated: "",
+  "not demonstrated": "Not demonstrated",
+  failed: "Demonstration FAILED",
+  stale: "Demonstration stale"
+};
+function demonstrationDoubt(view) {
+  const open = view.acceptance.filter((result) => result.status !== "demonstrated");
+  if (!open.length) return null;
+  return open.map((result) => `${OPEN_DEMONSTRATION_LABEL[result.status]}: ${clampWords(result.scenario, 8)} (${result.detail}).`).join(" ");
+}
+function demonstrationAction(view) {
+  const failed = view.acceptance.some((result) => result.status === "failed");
+  return failed && view.blocker?.actor !== "user" ? "Review the failed demonstration before accepting this candidate." : null;
 }
 function hasCandidate(view) {
   return Boolean(view.facts.submission || view.facts.delivery);
@@ -397,6 +544,7 @@ const DOUBTS = [
   (view) => view.summary?.stale ? "Summary describes an older candidate." : null,
   (view) => view.facts.candidateChanged && !view.summary?.stale ? "Candidate changed after a rejection." : null,
   verifyDoubt,
+  demonstrationDoubt,
   qualityDoubt,
   controlDoubt,
   (view) => view.stage === "integrated" ? "No release record; shipping is unconfirmed." : null,
@@ -414,7 +562,7 @@ function factualAction(view) {
   return noAction ? `No action needed.${next}` : "Check the ticket; the records name no next step.";
 }
 function actionSection(view) {
-  return factualAction(view) + summaryAction(view);
+  return (demonstrationAction(view) ?? factualAction(view)) + summaryAction(view);
 }
 function summaryAction(view) {
   return view.summary?.action ? ` Agent said: ${view.summary.action}` : "";
@@ -548,11 +696,13 @@ function createCompletion(dependencies) {
   }
   function completionContext(slug, ticket) {
     const boardDirectory = projectDir(slug);
+    const evidenceDirectory = text(ticket.dispatch?.evidenceDirectory) || import_node_path.default.join(boardDirectory, "verification", ticket.ref);
     return {
+      demonstrations: readDemonstrations(evidenceDirectory),
       openBlockers: openBlockers(slug, ticket),
       integrationProgress: (0, import_integration_tests.readIntegrationProgress)((0, import_integration_tests.integrationProgressPath)(boardDirectory, ticket.ref)),
       negativeControl: negativeControlResult(controlHolder(ticket), [], candidateOf(ticket)),
-      releaseRecord: null,
+      releaseRecord: ticket.shipped?.slice().reverse().find((record) => record.deliveryCommit === deliveryFacts(ticket)?.commit) ?? null,
       roots: {
         project: readMeta(slug)?.path ?? null,
         verification: import_node_path.default.join(boardDirectory, "verification"),
@@ -599,6 +749,55 @@ function completionSummaryInput(value) {
     uncertain: validateSummaryField(fields.uncertain?.value),
     action: validateSummaryField(fields.action?.value)
   };
+}
+const ACCEPTANCE_MAX_EXAMPLES = 8;
+const ACCEPTANCE_TEXT_MAX = 300;
+const ACCEPTANCE_KINDS = ["main", "boundary"];
+const ACCEPTANCE_FIELDS = ["scenario", "expected", "kind"];
+const ACCEPTANCE_TEXT_SCHEMA = { type: "string", maxLength: ACCEPTANCE_TEXT_MAX };
+const ACCEPTANCE_SCHEMA = {
+  type: "array",
+  maxItems: ACCEPTANCE_MAX_EXAMPLES,
+  items: {
+    type: "object",
+    properties: { scenario: ACCEPTANCE_TEXT_SCHEMA, expected: ACCEPTANCE_TEXT_SCHEMA, kind: { type: "string", enum: ACCEPTANCE_KINDS } },
+    required: ACCEPTANCE_FIELDS,
+    additionalProperties: false
+  },
+  description: "Examples the executor demonstrates on the real surface; [] clears."
+};
+function acceptanceRecord(value, index) {
+  const record = recordFields(value);
+  if (!record) throw new Error(`acceptance[${index}] must be an object with scenario, expected and kind`);
+  const unknownField = [...record.keys()].find((field) => !ACCEPTANCE_FIELDS.includes(field));
+  if (unknownField) throw new Error(`acceptance[${index}] has unknown field ${unknownField}`);
+  return record;
+}
+function acceptanceText(value, field, index) {
+  const trimmed = text(value);
+  const plain = Boolean(trimmed) && trimmed.length <= ACCEPTANCE_TEXT_MAX && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(trimmed);
+  if (!plain) throw new Error(`acceptance[${index}].${field} must be plain text of 1 to ${ACCEPTANCE_TEXT_MAX} characters`);
+  return trimmed;
+}
+function acceptanceKind(value, index) {
+  const kind = ACCEPTANCE_KINDS.find((candidate) => candidate === value);
+  if (!kind) throw new Error(`acceptance[${index}].kind must be main or boundary`);
+  return kind;
+}
+function acceptanceExample(value, index) {
+  const record = acceptanceRecord(value, index);
+  return {
+    scenario: acceptanceText(record.get("scenario"), "scenario", index),
+    expected: acceptanceText(record.get("expected"), "expected", index),
+    kind: acceptanceKind(record.get("kind"), index)
+  };
+}
+function acceptanceExamplesInput(value) {
+  if (!Array.isArray(value)) throw new Error("acceptance must be an array of { scenario, expected, kind }");
+  if (value.length > ACCEPTANCE_MAX_EXAMPLES) throw new Error(`acceptance holds at most ${ACCEPTANCE_MAX_EXAMPLES} examples`);
+  const examples = value.map(acceptanceExample);
+  if (new Set(examples.map((example) => example.scenario)).size !== examples.length) throw new Error("acceptance scenarios must be distinct");
+  return examples;
 }
 function matchesCandidateSummary(recorded, summary, candidate) {
   return recorded?.candidate === candidate && identicalSummary(recorded, summary);
@@ -665,8 +864,13 @@ function saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result) 
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  ACCEPTANCE_MAX_EXAMPLES,
+  ACCEPTANCE_SCHEMA,
+  ACCEPTANCE_TEXT_MAX,
   COMPLETION_SUMMARY_SCHEMA,
   COMPLETION_TEXT_MAX_WORDS,
+  DEMONSTRATIONS_FILE,
+  acceptanceExamplesInput,
   changesCatchupPayload,
   completionStage,
   completionSummaryInput,
@@ -674,6 +878,7 @@ function saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result) 
   completionView,
   createCompletion,
   createSummaryCloseout,
+  readDemonstrations,
   sanitizeCompletionText,
   storyCompletionView
 });

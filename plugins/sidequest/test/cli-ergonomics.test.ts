@@ -297,6 +297,29 @@ test('CLI never grants live-claim closeout updates from by, source, or session i
   assert.match(help.stdout, /live-claim closeout fields require releasing the claim first or using MCP update from the orchestrator main thread/i);
 });
 
+// SQ-3954: a direct claim records main:<session>, so naming another session would mint that session's main-thread identity.
+test('CLI direct claim refuses a --session other than its own and records the session it runs under', () => {
+  const env = { ...isolatedEnv(), CLAUDE_CODE_SESSION_ID: 'cli-direct-own-session' };
+  assert.equal(run(['add', '--title', 'direct claim ticket', '--unclassified', '--json'], env).status, 0);
+  const direct = ['claim', 'SQ-1', '--by', 'main-thread', '--direct', '--reason', 'The SQ-3954 fixture claims inline from the main thread.', '--json'];
+
+  const spoofed = run([...direct, '--session', 'another-main-session'], env);
+  assert.equal(spoofed.status, 1, spoofed.stdout);
+  assert.match(spoofed.stderr, /--session on a direct claim must match this shell's own session \(cli-direct-own-session\)/);
+  const unset = run([...direct, '--session', 'another-main-session'], { ...env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', SIDEQUEST_SESSION: '' });
+  assert.equal(unset.status, 1, unset.stdout);
+  assert.match(unset.stderr, /must match this shell's own session \(none set\)/);
+
+  const claimed = run([...direct, '--session', 'cli-direct-own-session'], env);
+  assert.equal(claimed.status, 0, claimed.stderr);
+  assert.equal(JSON.parse(claimed.stdout).ticket.claim.runtime.sessionId, 'cli-direct-own-session');
+
+  assert.equal(run(['add', '--title', 'ambient claim ticket', '--unclassified', '--json'], env).status, 0);
+  const ambient = run(['claim', 'SQ-2', '--by', 'main-thread', '--direct', '--reason', 'The SQ-3954 fixture claims inline from the main thread.', '--json'], env);
+  assert.equal(ambient.status, 0, ambient.stderr);
+  assert.equal(JSON.parse(ambient.stdout).ticket.claim.runtime.sessionId, 'cli-direct-own-session');
+});
+
 test('add --dry-run validates and previews without writing a board', () => {
   const cleanEnv = isolatedEnv();
   const missingTitle = run(['add', '--unclassified', '--dry-run'], cleanEnv);

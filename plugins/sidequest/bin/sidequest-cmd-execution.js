@@ -39,9 +39,16 @@ function claimPlanningWarnings(ticket, projectPath) {
   if (!warnings.length) return [];
   return warnings.map((warning) => `Dispatch context warning: ${warning.replace("Planning-depth warning: ", "")}`);
 }
+function refuseDirectClaimUnderAnotherSession(opts) {
+  if (!opts.direct || opts.session == null) return;
+  const ambientSession = sessionId({});
+  if (String(opts.session).trim() === ambientSession) return;
+  fail(`claim: --session on a direct claim must match this shell's own session (${ambientSession || "none set"}). Drop --session; the claim takes the session it runs under.`);
+}
 async function cmdClaim(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me");
+  refuseDirectClaimUnderAnotherSession(opts);
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, tokenFile: opts["token-file"], executor: opts.executor, effort: opts.effort, source: opts.source || "cli", sessionId: sessionId(opts), requireBoundAgent: true });

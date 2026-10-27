@@ -2141,6 +2141,33 @@ test('SQ-3934: a candidate a subagent submitted under its hook-settled agent id 
   assert.match(refused.message, new RegExp(`same runtime identity that submitted .* \\(agent:${subagentId}\\)`));
 });
 
+// SQ-3954. A subagent's shell carries only its parent's CLAUDE_CODE_SESSION_ID, so a CLI direct claim from it would
+// submit as main:<session>, an identity its own agent id is distinct from and could review. The guards refuse it.
+test('SQ-3954: a CLI direct claim under a subagent cannot mint a main-thread candidate that subagent could review', () => {
+  const { mainThreadMutationDenial } = require('../src/hooks/shared/main-thread-mutations.ts');
+  const mcpDenial = mainThreadMutationDenial('mcp__plugin_sidequest_board__claim', { direct: true });
+  const subagentCommands = [
+    ['Bash', 'node bin/sidequest.js claim SQ-1 --direct --reason "a subagent minting the main-thread identity"'],
+    ['Bash', 'sidequest next --by self --direct'],
+    ['PowerShell', '& node "C:\\plugins\\sidequest\\bin\\sidequest.js" claim SQ-1 --direct=true'],
+  ];
+  for (const [tool, command] of subagentCommands) {
+    assert.equal(mainThreadMutationDenial(tool, { command }), mcpDenial, `${tool}: ${command}`);
+  }
+  for (const command of ['node bin/sidequest.js claim SQ-1 --token-file C:/t.token --executor sidequest-exec-high', 'node bin/sidequest.js comment SQ-1 -m "claim it --direct later"']) {
+    assert.equal(mainThreadMutationDenial('Bash', { command }), null, command);
+  }
+
+  const { repository, slug } = board('cli-subagent-direct');
+  const source = store.createTicket(slug, { title: 'cli subagent direct source', files: ['candidate.txt'] });
+  const spoofed = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'claim', source.ref, '--project', repository,
+    '--by', 'self', '--direct', '--reason', 'a subagent naming another main-thread session', '--session', 'another-main-session', '--json'],
+  { encoding: 'utf8', windowsHide: true, env: { ...process.env, SIDEQUEST_HOME, CLAUDE_CODE_SESSION_ID: 'subagent-parent-session' } });
+  assert.equal(spoofed.status, 1, spoofed.stdout);
+  assert.match(spoofed.stderr, /--session on a direct claim must match this shell's own session \(subagent-parent-session\)/);
+  assert.ok(!store.getTicket(slug, source.ref).claim, 'the spoofed direct claim must leave no main-thread claim behind');
+});
+
 test('GH-654: binding refuses a candidate whose submitting attempt recorded no identity, before any review exists', () => {
   const { slug, commit, sourceRef } = directClaimSubmittedSource('sessionless', true, null);
   const before = JSON.stringify(store.getTicket(slug, sourceRef));

@@ -178,7 +178,7 @@ const DEFAULT_CATEGORIES = [
     description: "Add, run, repair, or interpret a focused verification flow where the intended behavior and deciding signal are already known. Those fixed constraints still benefit from high execution-and-test reasoning. Use debugging when the cause of a failing result is unknown.",
     route: { model: "sonnet", effort: "high" },
     fallback: null,
-    contract: "Exercise the named behavior with the narrowest reliable check and report the observed result faithfully.",
+    contract: "Exercise the named behavior with the narrowest reliable check and report the observed result faithfully. When the ticket lists acceptance examples, the deliverable is demonstrations.json in the ticket's board evidence directory: one { scenario, expected, observed, matches, environment, candidate, fixture, artifact, kind } entry per acceptance example, with its log or artifact beside it. A failed example is recorded as observed, never rewritten. Request independent review only for a named uncertainty.",
     artifactRoots: [],
     enabled: true
   },
@@ -198,7 +198,7 @@ const DEFAULT_CATEGORIES = [
     description: "Judge a rendered interface through browser screenshots as a first-time user would see it, finding confusing representations, misleading labels, dead panels, and layout or flow problems. Visual judgement needs a multimodal model, while the bounded review-only deliverable keeps effort at medium. Source-code evidence belongs in review-audit.",
     route: { model: "opus", effort: "medium" },
     fallback: null,
-    contract: "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliver a prioritized findings comment on the ticket, worst problems first, with each finding naming the exact element and what a user would misunderstand.",
+    contract: `Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliver a prioritized findings comment on the ticket, worst problems first, with each finding naming the exact element and what a user would misunderstand. Record each judged screen as a kind "visual" entry in demonstrations.json in the ticket's board evidence directory ({ scenario, expected, observed, matches, environment, candidate, fixture, artifact }) with the screenshot beside it; that board-owned record is not a repository edit, and a screenshot proves appearance only.`,
     artifactRoots: [],
     readonly: true,
     enabled: true

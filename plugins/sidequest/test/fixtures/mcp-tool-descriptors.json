@@ -94,7 +94,7 @@
   },
   {
     "name": "completion",
-    "description": "Ticket or story completion from lifecycle records.",
+    "description": "Ticket or story completion from lifecycle records; released requires a cut record.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -392,6 +392,36 @@
             "ref"
           ]
         },
+        "acceptance": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "scenario": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "expected": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "main",
+                  "boundary"
+                ]
+              }
+            },
+            "required": [
+              "scenario",
+              "expected",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
         "storyId": {
           "type": "string"
         },
@@ -577,6 +607,36 @@
           "required": [
             "ref"
           ]
+        },
+        "acceptance": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "scenario": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "expected": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "main",
+                  "boundary"
+                ]
+              }
+            },
+            "required": [
+              "scenario",
+              "expected",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
         },
         "status": {
           "type": "string",

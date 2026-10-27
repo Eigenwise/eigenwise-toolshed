@@ -324,6 +324,16 @@ async function cmdPulse(opts: any, positional: any) {
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + '\n');
 }
 
+interface ReleaseRecordOptions { project?: string; version: string; plugin?: string[]; commit: string }
+
+async function cmdReleaseRecord(opts: ReleaseRecordOptions, positional: string[]) {
+  if (!positional[0]) fail('release-record: pass a ticket ref');
+  const { slug } = await resolveProject(opts);
+  const result = store.recordShippedRelease(slug, positional[0], { version: opts.version, plugins: opts.plugin ?? [], commit: opts.commit });
+  if (!result.ok) fail('release-record: ticket lock busy; retry after the concurrent mutation');
+  process.stdout.write(JSON.stringify(result) + '\n');
+}
+
 async function cmdCompletion(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('completion: pass a ticket or story ref, e.g. sidequest completion US-3');
@@ -457,4 +467,4 @@ async function cmdRm(opts: any, positional: any) {
 // release/complete it. Pass --by to be explicit; otherwise fall back to an env
 // hint or the machine name. Distinct concurrent workers should pass distinct --by.
 
-module.exports = { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
+module.exports = { cmdReleaseRecord, cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
