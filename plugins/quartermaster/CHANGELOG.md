@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2 (2026-10-27)
+
+Released in v3.616.0, up from 1.0.1.
+
+### Fixes
+
+- Align Toolshed Doctor with local Observability recording (SQ-3958)
+  Toolshed Doctor checks the installed Observability registry row, recording status, local ledger and generated board without changing recording or history. Setup uses the current recording commands, and cross-plugin tests check consumer references against the shipped Observability files and registered commands.
+- Defer compaction policy reporting to Model Gateway (SQ-3959)
+  Quartermaster doctor reads installed Model Gateway compaction policy with the gateway's own defaults and report formatter. Explicit user and project windows stay unchanged. Setup and doctor no longer recommend a fixed global compaction window.
+
 ## 1.0.1 (2026-10-20)
 
 Released in v3.605.0, up from 1.0.0.
