@@ -674,6 +674,42 @@ export function storyCompletionView(story: CompletionStory, children: Completion
   return view;
 }
 
+interface ChangesDelta { since: string; serverTime: string; tickets: { ref: string }[] }
+interface CatchupStore {
+  completionPayload: (slug: string, ref: string) => CompletionView;
+  getTicket: (slug: string, ref: string) => CompletionTicket | null;
+}
+
+function catchupField(value: string): string {
+  return escapeCompletionText(value.replace(/\s+/g, ' ').trim().slice(0, 180));
+}
+
+function catchupAction(slug: string, view: CompletionView, store: CatchupStore): string {
+  const refs = view.blocker?.refs ?? [];
+  const scheduled = refs.length > 0 && refs.every((ref) => Boolean(store.getTicket(slug, ref)?.claim?.by));
+  if (scheduled) return 'The agent will continue when they finish.';
+  return view.blocker?.nextAction ?? 'no action';
+}
+
+function catchupRow(slug: string, ref: string, store: CatchupStore) {
+  const view = store.completionPayload(slug, ref);
+  const blocker = view.blocker;
+  const actor = blocker?.actor ?? null;
+  const nextAction = catchupAction(slug, view, store);
+  const detail = blocker?.reason ?? view.title;
+  const line = [ref, view.stage, catchupField(detail), catchupField(nextAction)].join(' · ');
+  return { ref, stage: view.stage, actor, blocker, nextAction, line };
+}
+
+export function changesCatchupPayload(slug: string, delta: ChangesDelta, store: CatchupStore) {
+  const tickets = delta.tickets.slice(0, 40).map(({ ref }) => catchupRow(slug, ref, store));
+  const omitted = delta.tickets.length - tickets.length;
+  const lines = tickets.map((ticket) => ticket.line);
+  if (omitted) lines.push('+' + omitted + ' more, narrow since');
+  if (!lines.length) lines.push('nothing changed since ' + delta.since);
+  return { since: delta.since, serverTime: delta.serverTime, tickets, omitted, text: lines.join('\n') };
+}
+
 interface CompletionDependencies {
   getStory: (slug: string, idOrRef: string) => CompletionStory | null;
   listTickets: (slug: string) => Array<CompletionTicket & { storyId?: string; archived?: boolean }>;

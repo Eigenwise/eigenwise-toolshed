@@ -30,6 +30,7 @@ var completion_exports = {};
 __export(completion_exports, {
   COMPLETION_SUMMARY_SCHEMA: () => COMPLETION_SUMMARY_SCHEMA,
   COMPLETION_TEXT_MAX_WORDS: () => COMPLETION_TEXT_MAX_WORDS,
+  changesCatchupPayload: () => changesCatchupPayload,
   completionStage: () => completionStage,
   completionSummaryInput: () => completionSummaryInput,
   completionText: () => completionText,
@@ -514,6 +515,32 @@ function storyCompletionView(story, children) {
   view.text = storyCompletionText(view);
   return view;
 }
+function catchupField(value) {
+  return escapeCompletionText(value.replace(/\s+/g, " ").trim().slice(0, 180));
+}
+function catchupAction(slug, view, store) {
+  const refs = view.blocker?.refs ?? [];
+  const scheduled = refs.length > 0 && refs.every((ref) => Boolean(store.getTicket(slug, ref)?.claim?.by));
+  if (scheduled) return "The agent will continue when they finish.";
+  return view.blocker?.nextAction ?? "no action";
+}
+function catchupRow(slug, ref, store) {
+  const view = store.completionPayload(slug, ref);
+  const blocker = view.blocker;
+  const actor = blocker?.actor ?? null;
+  const nextAction = catchupAction(slug, view, store);
+  const detail = blocker?.reason ?? view.title;
+  const line = [ref, view.stage, catchupField(detail), catchupField(nextAction)].join(" · ");
+  return { ref, stage: view.stage, actor, blocker, nextAction, line };
+}
+function changesCatchupPayload(slug, delta, store) {
+  const tickets = delta.tickets.slice(0, 40).map(({ ref }) => catchupRow(slug, ref, store));
+  const omitted = delta.tickets.length - tickets.length;
+  const lines = tickets.map((ticket) => ticket.line);
+  if (omitted) lines.push("+" + omitted + " more, narrow since");
+  if (!lines.length) lines.push("nothing changed since " + delta.since);
+  return { since: delta.since, serverTime: delta.serverTime, tickets, omitted, text: lines.join("\n") };
+}
 function createCompletion(dependencies) {
   const { getTicket, openBlockers, negativeControlResult, projectDir, readMeta } = dependencies;
   function controlHolder(ticket) {
@@ -641,6 +668,7 @@ function saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result) 
 0 && (module.exports = {
   COMPLETION_SUMMARY_SCHEMA,
   COMPLETION_TEXT_MAX_WORDS,
+  changesCatchupPayload,
   completionStage,
   completionSummaryInput,
   completionText,

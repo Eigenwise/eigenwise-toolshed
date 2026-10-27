@@ -7,6 +7,10 @@ Sidequest gives Claude Code a local board for planned work. It groups tickets in
 
 Every task saved as a ticket survives context compaction and new sessions. Its instructions, reproduction steps, status, and recorded discussion stay in the local Sidequest store, so Claude can retrieve the task after the chat context shrinks.
 
+## Catch up on changed tickets
+
+Use MCP `changes {since, view:"catchup"}` or `sidequest changes --since <iso> --catchup` for lifecycle stages, blockers, actors and next actions. Only tickets changed after the exclusive `since` timestamp appear. Keep the returned `serverTime` as your next cursor (CLI `--json` includes it). The list stops at 40 tickets and reports how many remain; narrow the time window to read a smaller delta. Without `since`, it covers the last hour. Plain `changes` and `pulse` keep their existing output.
+
 ## Install
 
 Install Sidequest for the project you are working in:

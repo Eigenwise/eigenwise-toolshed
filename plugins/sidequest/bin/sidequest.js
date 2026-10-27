@@ -20,7 +20,7 @@ const { cmdDispatch, cmdBriefing, cmdSyncCheck, cmdTempCleanup, cmdNativeAgent, 
 const { cmdStory } = require("./sidequest-cmd-story");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["evidence", "refs", "image", "label", "file", "add-file", "remove-file", "resolved-path", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface", "dependency"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label", "add-files": "add-file", "remove-files": "remove-file" };
-const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "sizes", "no-process", "no-worktree", "review", "abandon-submission", "retained"]);
+const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "catchup", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "sizes", "no-process", "no-worktree", "review", "abandon-submission", "retained"]);
 const NEGATED_ISOLATION_FLAGS = /* @__PURE__ */ new Map([["no-shared-tree", "shared-tree"], ["no-worktree-isolation", "worktree-isolation"]]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
 const COMMAND_FLAGS = {
@@ -28,7 +28,7 @@ const COMMAND_FLAGS = {
   list: ["status", "archived", "brief", "limit", "cursor", "all"],
   pulse: [],
   completion: ["text"],
-  changes: ["since"],
+  changes: ["since", "catchup"],
   watch: ["interval", "all"],
   update: ["refs", "title", "desc", "description", "body", "body-file", "priority", "status", "category", "complexity", "why", "high-stakes", "label", "image", "file", "add-file", "remove-file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "verify-cwd", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "by"],
   rm: ["force"],
@@ -273,7 +273,7 @@ const HELP_COMMANDS = {
   list: "sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)",
   pulse: "sidequest pulse <SQ-n> [--project <path-or-slug>]",
   completion: "sidequest completion <SQ-n|US-n> [--json|--text] [--project <path-or-slug>]  four-section account (Result, Checked, Still uncertain, Your action) derived from lifecycle records; --json prints the whole view",
-  changes: "sidequest changes [--since <iso>] [--project <path-or-slug>]",
+  changes: "sidequest changes [--since <iso>] [--catchup] [--project <path-or-slug>]",
   watch: "sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]  print session-owned, unowned, and terminal ticket alerts plus all GitHub CI alerts; --all includes every ticket",
   update: 'sidequest update <id|SQ-n> [--refs <ref>]... [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]  (--file replaces the whole declared list; --add-file/--remove-file adjust it without dropping the rest, refuse combined with --file, and apply additions before removals. Live-claim closeout fields require releasing the claim first or using MCP update from the orchestrator main thread; executors use scopeRequest for files)',
   rm: "sidequest rm <id|SQ-n> [--force]",
@@ -378,7 +378,7 @@ Usage:
   sidequest list [--status todo|doing|awaiting-oracle|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest completion <SQ-n|US-n> [--json|--text] [--project <path-or-slug>]   ticket or story outcome from lifecycle records (tickets under 200 words, stories under 250)
-  sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
+  sidequest changes [--since <iso>] [--catchup] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]   stream session-owned, unowned, and terminal ticket events plus all GitHub CI events; --all includes every ticket (30s default)
   sidequest update <id|SQ-n> [--refs <ref>]... [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
       --file replaces the whole declared list; --add-file/--remove-file adjust it in place without dropping the rest (refused together with --file, and additions apply before removals).
