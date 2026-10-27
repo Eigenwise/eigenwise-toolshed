@@ -485,23 +485,50 @@ function verifyCommandDirectory(target, captureCwd) {
   const directory = ticket ? verifyCwdForRequirement(store.pinnedVerificationRequirement(ticket), ticket.executorVerifyCwd) : "";
   return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
 }
-async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs, explicitWorktree) {
+async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs, explicitWorktree, control = false) {
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
-  const captureCwd = resolution.cwd;
-  const cleanWorktree = target ? verifiedWorktreeIsClean(captureCwd) : true;
-  if (target && !cleanWorktree && !isWorkingTreeDeliveryTarget(target)) {
-    return Object.freeze({
-      capture: null,
-      recorded: null,
-      refusal: `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree
-Verification capture for ${target.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
-    });
+  if (!target) return Object.freeze({ capture: await runConfiguredCapture(command, resolution.cwd, null), recorded: null, refusal: null });
+  return runTargetCapture(command, target, resolution.cwd, fileSystem, control);
+}
+function dirtyCaptureRefusal(target, captureCwd, cleanWorktree, control) {
+  if (cleanWorktree || control || isWorkingTreeDeliveryTarget(target)) return null;
+  return `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree
+Verification capture for ${target.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`;
+}
+async function runTargetCapture(command, target, captureCwd, fileSystem, control) {
+  const statusPaths = worktreeStatusPaths(captureCwd);
+  const cleanWorktree = statusPaths?.length === 0;
+  const refusal = dirtyCaptureRefusal(target, captureCwd, cleanWorktree, control);
+  if (refusal) return Object.freeze({ capture: null, recorded: null, refusal });
+  const commandCwd = verifyCommandDirectory(target, captureCwd);
+  const capture = isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target, commandCwd, fileSystem) : await runConfiguredCapture(command, commandCwd, target);
+  const observation = control ? Object.freeze({ dirtyPaths: statusPaths ?? [] }) : null;
+  return Object.freeze({ capture, recorded: recordCapture(target, capture, captureCwd, cleanWorktree, observation), refusal: null });
+}
+const TAP_FAILURE = /^\s*not ok \d+ - (.+)$/;
+const SPEC_FAILURE = /^\s*✖ (.+?)(?: \([\d.]+m?s\))?$/;
+const TAP_DIRECTIVE = /\s#\s*(?:TODO|SKIP)\b/i;
+const TEST_FILE_ENTRY = /\.[cm]?[jt]sx?$/i;
+function failingTestName(line) {
+  const match = TAP_FAILURE.exec(line) || SPEC_FAILURE.exec(line);
+  const name = (match?.[1] ?? "").trim().replace(/\\(.)/g, "$1");
+  return [name, name !== "failing tests:", !TAP_DIRECTIVE.test(line), !TEST_FILE_ENTRY.test(name)].every(Boolean) ? name : null;
+}
+function failingTestNames(output) {
+  const names = output.split(/\r?\n/).map(failingTestName).filter((name) => name !== null);
+  return [...new Set(names)];
+}
+function captureLogText(logPath) {
+  try {
+    return logPath ? fs.readFileSync(logPath, "utf8") : "";
+  } catch {
+    return "";
   }
-  const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
-  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target, commandCwd, fileSystem) : await runConfiguredCapture(command, commandCwd, target);
-  const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
-  return Object.freeze({ capture, recorded, refusal: null });
+}
+function controlCaptureFields(capture, observation) {
+  if (!observation) return {};
+  return { control: true, failingTests: failingTestNames(captureLogText(capture.logPath)), dirtyPaths: observation.dirtyPaths };
 }
 function verifiedRevision(cwd) {
   try {
@@ -516,21 +543,40 @@ function verifiedRevision(cwd) {
   }
 }
 function verifiedWorktreeIsClean(cwd) {
+  return worktreeStatusPaths(cwd)?.length === 0;
+}
+function worktreeStatusPaths(cwd) {
   try {
     return String(execFileSync("git", ["status", "--porcelain"], {
       cwd,
       encoding: "utf8",
       windowsHide: true
-    })).trim() === "";
+    })).split(/\r?\n/).filter((line) => line.trim()).map((line) => line.slice(3).trim());
   } catch (_) {
-    return false;
+    return null;
   }
 }
 function foreignCaptureRepository(projectPath, cwd) {
   const ticketRepository = repositoryRoot(projectPath);
   return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
 }
-function recordCapture(target, capture, cwd, cleanWorktree = verifiedWorktreeIsClean(cwd)) {
+function revisionCandidate(cwd) {
+  const candidate = verifiedRevision(cwd);
+  return candidate ? { ok: true, candidate } : { ok: false, reason: "verified_revision_unavailable" };
+}
+function committedCaptureCandidate(store, slug, target, cwd, cleanWorktree) {
+  const workingTreeCandidate = store.workingTreeDeliveryCandidate(slug, store.getTicket(slug, target.ticket));
+  if (workingTreeCandidate) return { ok: true, candidate: workingTreeCandidate.candidate };
+  return cleanWorktree ? revisionCandidate(cwd) : {
+    ok: false,
+    reason: "verification_capture_dirty_worktree",
+    message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
+  };
+}
+function captureCandidate(store, slug, target, cwd, cleanWorktree, control) {
+  return control ? revisionCandidate(cwd) : committedCaptureCandidate(store, slug, target, cwd, cleanWorktree);
+}
+function recordCapture(target, capture, cwd, cleanWorktree = verifiedWorktreeIsClean(cwd), control = null) {
   const store = require("./store.js");
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_not_found" };
@@ -543,21 +589,12 @@ function recordCapture(target, capture, cwd, cleanWorktree = verifiedWorktreeIsC
       message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`
     };
   }
-  const ticket = store.getTicket(project.slug, target.ticket);
-  const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
-  if (!cleanWorktree && !workingTreeCandidate) {
-    return {
-      ok: false,
-      reason: "verification_capture_dirty_worktree",
-      message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
-    };
-  }
-  const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
-  if (!candidate) return { ok: false, reason: "verified_revision_unavailable" };
+  const resolved = captureCandidate(store, project.slug, target, cwd, cleanWorktree, control !== null);
+  if (!resolved.ok) return resolved;
   return store.recordVerificationCapture(project.slug, target.ticket, {
     command: capture.command || "",
     status: capture.status,
-    candidate,
+    candidate: resolved.candidate,
     cleanWorktree,
     completedAt: (/* @__PURE__ */ new Date()).toISOString(),
     worktree: cwd,
@@ -565,7 +602,8 @@ function recordCapture(target, capture, cwd, cleanWorktree = verifiedWorktreeIsC
     exitCode: capture.exitCode,
     shell: capture.shell,
     ...capture.waitedForSlotMs === void 0 ? {} : { waitedForSlotMs: capture.waitedForSlotMs },
-    ...capture.queuePosition === void 0 ? {} : { queuePosition: capture.queuePosition }
+    ...capture.queuePosition === void 0 ? {} : { queuePosition: capture.queuePosition },
+    ...controlCaptureFields(capture, control)
   });
 }
 function report(capture, recorded) {
@@ -590,7 +628,27 @@ function report(capture, recorded) {
 `);
   }
 }
-const usage = "Usage: node verify-capture.js --project <path> --ticket <ref> [--worktree <path>]\n       node verify-capture.js --base64 <base64 verify command> [--worktree <path>]";
+function controlNextStep(capture) {
+  return capture.controlOutcome === "failed" ? `Restore the change, then post: [sidequest:negative-control] capture=${capture.id}` : "This control proves nothing: a control must fail at least one named test assertion on the reverted source.";
+}
+function writeControlLines(capture) {
+  const failingTests = capture.failingTests ?? [];
+  process.stdout.write(`control=${capture.controlOutcome || "unknown"} failures=${failingTests.length}
+`);
+  for (const name of failingTests) process.stdout.write(`control-failed=${name}
+`);
+  process.stdout.write(`${controlNextStep(capture)}
+`);
+}
+function reportControl(recorded) {
+  const capture = recorded?.ok ? recorded.capture : null;
+  if (capture?.control) writeControlLines(capture);
+}
+function captureSucceeded(capture, recorded, control) {
+  if (control) return recorded?.capture?.controlOutcome === "failed";
+  return capture.exitCode === 0 && (!recorded || recorded.ok);
+}
+const usage = "Usage: node verify-capture.js --project <path> --ticket <ref> [--worktree <path>] [--control]\n       node verify-capture.js --base64 <base64 verify command> [--worktree <path>]";
 function base64Command(args) {
   const encoded = args[0] === "--base64" ? args[1] : "";
   return encoded ? Buffer.from(encoded, "base64").toString("utf8").trim() : "";
@@ -630,14 +688,21 @@ function captureCommand(args, target) {
   if (target) return pinnedCommandMatching(target, passedCommand);
   return passedCommand ? Object.freeze({ command: passedCommand }) : Object.freeze({ refusal: usage });
 }
+function captureCommandForArguments(args, target, control) {
+  if (control && !target) return Object.freeze({ refusal: `--control needs --project and --ticket so the failing control is recorded against its ticket.
+${usage}` });
+  return captureCommand(args, target);
+}
 async function captureFromArguments(args) {
   const target = captureTarget(args);
-  const resolved = captureCommand(args, target);
+  const control = args.includes("--control");
+  const resolved = captureCommandForArguments(args, target, control);
   if ("refusal" in resolved) return Object.freeze({ capture: null, recorded: null, refusal: resolved.refusal });
-  return runCapturedVerification(resolved.command, target, process.cwd(), fs, explicitWorktreeArgument(args));
+  return runCapturedVerification(resolved.command, target, process.cwd(), fs, explicitWorktreeArgument(args), control);
 }
 async function main() {
-  const { capture, recorded, refusal } = await captureFromArguments(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  const { capture, recorded, refusal } = await captureFromArguments(args);
   if (refusal) {
     process.stderr.write(`${refusal}
 `);
@@ -645,7 +710,8 @@ async function main() {
     return;
   }
   report(capture, recorded);
-  process.exitCode = capture.exitCode === 0 && (!recorded || recorded.ok) ? 0 : 2;
+  reportControl(recorded);
+  process.exitCode = captureSucceeded(capture, recorded, args.includes("--control")) ? 0 : 2;
 }
-module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, failingTestNames, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 if (require.main === module) void main();

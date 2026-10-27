@@ -637,6 +637,30 @@ Captured command: ${JSON.stringify(capturedCommand)}`;
 ${captureCommandDetails(pinnedCommand, capturedCommand)}
 Checkpoint current work, release the claim, and re-dispatch; the recovery dispatch resumes the retained worktree and pins the amended verify. If the work is already verified by other evidence, release the claim and use orchestrator groomClose with deliveryCommit.`;
   }
+  const CONTROL_CAPTURE_LIST_MAX = 200;
+  function boundedCaptureStrings(value) {
+    return (Array.isArray(value) ? value : []).map((entry) => String(entry).trim()).filter(Boolean).slice(0, CONTROL_CAPTURE_LIST_MAX);
+  }
+  function controlCaptureOutcome(status, exitCode, failures) {
+    if (exitCode === 0 || status === "passed") return "control_passed_unexpectedly";
+    if (status !== "failed_suite") return "control_could_not_run";
+    return failures > 0 ? "failed" : "control_no_test_failures";
+  }
+  function controlCaptureFields(capture, status) {
+    if (capture?.control !== true) return {};
+    const failingTests = boundedCaptureStrings(capture.failingTests);
+    return {
+      control: true,
+      kind: "negative-control",
+      failingTests,
+      failures: failingTests.length,
+      controlOutcome: controlCaptureOutcome(status, capture.exitCode, failingTests.length),
+      dirtyPaths: boundedCaptureStrings(capture.dirtyPaths)
+    };
+  }
+  function recordedCaptureStatus(capture, status) {
+    return capture?.control === true && status === "passed" ? "failed_check" : status;
+  }
   function recordVerificationCapture(slug, idOrRef, capture) {
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
@@ -672,7 +696,7 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
         id: String(capture?.id || crypto.randomUUID()),
         ticket: ticket.ref,
         command,
-        status,
+        status: recordedCaptureStatus(capture, status),
         candidate: { source: candidateSource, value: candidateValue },
         // SQ-2789: only a proven-clean capture carries the flag. A capture whose cwd was dirty, or
         // one recorded before the wrapper proved it, stays unmarked and can never be reused.
@@ -684,7 +708,8 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
         ...Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {},
         ...capture?.shell ? { shell: String(capture.shell) } : {},
         ...Number.isFinite(capture?.waitedForSlotMs) ? { waitedForSlotMs: Number(capture.waitedForSlotMs) } : {},
-        ...Number.isInteger(capture?.queuePosition) ? { queuePosition: Number(capture.queuePosition) } : {}
+        ...Number.isInteger(capture?.queuePosition) ? { queuePosition: Number(capture.queuePosition) } : {},
+        ...controlCaptureFields(capture, status)
       };
       ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();

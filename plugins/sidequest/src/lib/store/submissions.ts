@@ -816,6 +816,41 @@ function amendedVerifierCaptureMessage(ticket: any, pinnedCommand: string, captu
   return `Verification capture for ${ticket.ref} used the live ticket verifier, but the verify was amended after dispatch. This dispatch still requires its pinned command.\n${captureCommandDetails(pinnedCommand, capturedCommand)}\nCheckpoint current work, release the claim, and re-dispatch; the recovery dispatch resumes the retained worktree and pins the amended verify. If the work is already verified by other evidence, release the claim and use orchestrator groomClose with deliveryCommit.`;
 }
 
+const CONTROL_CAPTURE_LIST_MAX = 200;
+
+function boundedCaptureStrings(value: unknown): string[] {
+  return (Array.isArray(value) ? value : []).map((entry) => String(entry).trim()).filter(Boolean).slice(0, CONTROL_CAPTURE_LIST_MAX);
+}
+
+// The outcome is derived here from the run itself, not taken from the wrapper, so a control that
+// passed, never ran, or failed without a single named test can never read as a captured failure.
+function controlCaptureOutcome(status: string, exitCode: unknown, failures: number) {
+  if (exitCode === 0 || status === 'passed') return 'control_passed_unexpectedly';
+  if (status !== 'failed_suite') return 'control_could_not_run';
+  return failures > 0 ? 'failed' : 'control_no_test_failures';
+}
+
+type ControlCaptureInput = { control?: unknown; failingTests?: unknown; dirtyPaths?: unknown; exitCode?: unknown };
+
+function controlCaptureFields(capture: ControlCaptureInput | null | undefined, status: string) {
+  if (capture?.control !== true) return {};
+  const failingTests = boundedCaptureStrings(capture.failingTests);
+  return {
+    control: true,
+    kind: 'negative-control',
+    failingTests,
+    failures: failingTests.length,
+    controlOutcome: controlCaptureOutcome(status, capture.exitCode, failingTests.length),
+    dirtyPaths: boundedCaptureStrings(capture.dirtyPaths),
+  };
+}
+
+// Every consumer that accepts a capture as the candidate's verification matches status 'passed',
+// so a control that passed is stored as failed_check and can never stand in for one.
+function recordedCaptureStatus(capture: ControlCaptureInput | null | undefined, status: string) {
+  return capture?.control === true && status === 'passed' ? 'failed_check' : status;
+}
+
 function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
@@ -852,7 +887,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       id: String(capture?.id || crypto.randomUUID()),
       ticket: ticket.ref,
       command,
-      status,
+      status: recordedCaptureStatus(capture, status),
       candidate: { source: candidateSource, value: candidateValue },
       // SQ-2789: only a proven-clean capture carries the flag. A capture whose cwd was dirty, or
       // one recorded before the wrapper proved it, stays unmarked and can never be reused.
@@ -865,6 +900,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       ...(capture?.shell ? { shell: String(capture.shell) } : {}),
       ...(Number.isFinite(capture?.waitedForSlotMs) ? { waitedForSlotMs: Number(capture.waitedForSlotMs) } : {}),
       ...(Number.isInteger(capture?.queuePosition) ? { queuePosition: Number(capture.queuePosition) } : {}),
+      ...controlCaptureFields(capture, status),
     };
     ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
     ticket.updatedAt = new Date().toISOString();

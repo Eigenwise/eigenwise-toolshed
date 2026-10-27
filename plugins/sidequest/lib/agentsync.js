@@ -359,6 +359,9 @@ function readOnlyCloseout(ticket, model, effort) {
   if (ticket.dispatch.evidenceMode) return `Closeout: this evidence dispatch closes with done --model ${model} --effort ${effort}. Name each saved evidence file relative to its admitted root, or explicitly say "nothing was saved". Do not commit, submit or integrate. Report once through the done comment, then stop.`;
   return `Closeout: this prepared dispatch is read-only. MCP read tools are allowed; MCP write tools are refused by name (board_config readOnlyDeniedTools replaces the default list). Close with done --model ${model} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
 }
+function negativeControlCloseout(requirement) {
+  return requirement.command ? " For new behavior, record the negative control by rerunning the verify-capture wrapper with --control while the changed source is reverted, then post the [sidequest:negative-control] capture=<id> line it prints; a plain marker is recorded as agent-reported." : "";
+}
 function ticketCloseout(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
@@ -379,7 +382,7 @@ function ticketCloseout(ticket) {
   }
   const externalDeliverableRequirement = ticket.dispatch?.verificationRequirement || {};
   const externalDeliverableVerify = externalDeliverableRequirement.command ? "the pinned verify-capture wrapper records the current dispatch attempt and revision" : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || "custom"} requirement is supplied`;
-  return `Closeout: this prepared dispatch is write-capable. If your change touches a plugin, write .release/unreleased/<REF>.md yourself (frontmatter ref, title, bump, plugins); submit refuses without it. The path is already in your scope; do not add it to the ticket's files. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after ${externalDeliverableVerify}; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
+  return `Closeout: this prepared dispatch is write-capable. If your change touches a plugin, write .release/unreleased/<REF>.md yourself (frontmatter ref, title, bump, plugins); submit refuses without it. The path is already in your scope; do not add it to the ticket's files. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work.${negativeControlCloseout(externalDeliverableRequirement)} A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after ${externalDeliverableVerify}; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
 }
 function continuationResumeDecision(continuation) {
   if (!continuation?.lease) return { allowed: false, reason: "the continuation has no immutable worktree lease." };
