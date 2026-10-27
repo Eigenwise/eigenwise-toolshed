@@ -221,7 +221,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   link: "",
   remove: "",
   claim: "Claim before work; proceed on ok:true.",
-  dispatch: "Tree. token, spawn spec; scope additions, not writes; retireOnly.",
+  dispatch: "Tree. token and spawn spec; scope additions, not writes; retireOnly.",
   done: "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
   release: "reason/kind required; oracle handoff.",
   groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in tree or at deliveryRevision; verifier replacement; reviewed interaction.",
