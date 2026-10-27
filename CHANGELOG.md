@@ -8,6 +8,77 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.616.0 (2026-10-27)
+
+### quality-gate 1.3.3 → 1.4.0
+
+#### Features
+
+- Translate LCOV through Source Map v3 so generated code gets measured coverage (SQ-3955)
+  Quality Gate's `crap` now moves LCOV recorded against generated code onto the original sources through a flat Source Map v3 with sourcesContent, for any language. It checks source identity against disk, generated and map identity across the coverage command (or `<lcov>.sources.json`), the committed blob for tracked generated files, and every segment's bounds. Unmapped lines stay UNVERIFIED, and receipts list `sourceMapTranslations` and `sourceMapRefusals`. Sidequest's build gains `--sourcemap=external` (sibling maps, byte-identical `.js`) and a `coverage:lcov` script.
+
+#### Fixes
+
+- Measure integration quality through configured LCOV (SQ-3956)
+  Integration quality can select a project's coverage command or a changed plugin's coverage:lcov script and retains source-map translation evidence. Quality Gate accepts lcovBase for reporters that write paths relative to a package directory. Missing integration rows are checked against the AST complexity inventory.
+
+### quartermaster 1.0.1 → 1.0.2
+
+#### Fixes
+
+- Align Toolshed Doctor with local Observability recording (SQ-3958)
+  Toolshed Doctor checks the installed Observability registry row, recording status, local ledger and generated board without changing recording or history. Setup uses the current recording commands, and cross-plugin tests check consumer references against the shipped Observability files and registered commands.
+- Defer compaction policy reporting to Model Gateway (SQ-3959)
+  Quartermaster doctor reads installed Model Gateway compaction policy with the gateway's own defaults and report formatter. Explicit user and project windows stay unchanged. Setup and doctor no longer recommend a fixed global compaction window.
+
+### sidequest 6.6.1 → 6.7.0
+
+#### Features
+
+- Read a ticket's completion account (stage, blocker, checked facts, evidence) through the new `completion` MCP read and `sidequest completion` CLI command (SQ-3960)
+  New `completion {ref, text?}` MCP read and `sidequest completion <ref> [--json|--text]` CLI command. Both
+  derive a ticket's stage, blocker and facts only from lifecycle records (claim, submission, delivery,
+  verify capture, quality rows, review mirror, negative-control marker, integration progress) and render
+  Result, Checked, Still uncertain and Your action in under 200 words. A pending submission reads
+  `submitted`, never `integrated`; with no board release record, a delivery stops at `integrated`. A
+  negative-control marker without a capture reads `agent-reported`; quality `none` reads "not measured".
+  Agent text is HTML-escaped, and evidence paths outside the project, board verification and dispatch
+  evidence directories are dropped. The story form answers `not_supported` until SQ-3963.
+
+  `MCP_TOOLS_LIST_MAX_BYTES` goes from 29700 to 29950 for the one new tool (measured 27408 payload bytes,
+  2.5KB reserve kept).
+
+#### Fixes
+
+- Stop the Windows termination-error test from awaiting a job owner exit that already happened, which cancelled the rest of test-full-runner under load (SQ-3667)
+- Refuse a subagent's direct claim so it can't pass as the main thread and review its own candidate (SQ-3934)
+- Run claude-code/testing tests through the plugin runner at integration (SQ-3940)
+  The integration import walk no longer hands tests that import `claude-code` or `claude-code/testing` (or live under a hooks module root) to `node --test`, where they failed at import and rolled back correct hooks-module deliveries. It runs them through the plugin's module runner instead, records the result in `verify.pluginRunnerResults`, and records `unverified` rather than failing when the `claude` CLI isn't on PATH.
+- Show sweep preparation in session budget notices (SQ-3943)
+  Session sweep budget notices preserve the preparing phase and its recovery-retention or candidate-listing reason before classification starts.
+- Allow multiline quoted Git commit messages through guards (SQ-3945)
+  Keep quoted multiline commit messages together and check malformed Git segments by operation instead of refusing every parse failure. Destructive checkout checks and publication locks remain enforced.
+- Accept project-local absolute verification directories (SQ-3949)
+  Accept the project root as an unset verifyCwd and store absolute directories inside the project as relative paths. Outside-project errors now start with guidance to omit verifyCwd for the project root.
+- Clarify added dispatch write scope (SQ-3953)
+  Dispatch results now name added write scope explicitly, separating scope additions from file writes.
+- Translate LCOV through Source Map v3 so generated code gets measured coverage (SQ-3955)
+  Quality Gate's `crap` now moves LCOV recorded against generated code onto the original sources through a flat Source Map v3 with sourcesContent, for any language. It checks source identity against disk, generated and map identity across the coverage command (or `<lcov>.sources.json`), the committed blob for tracked generated files, and every segment's bounds. Unmapped lines stay UNVERIFIED, and receipts list `sourceMapTranslations` and `sourceMapRefusals`. Sidequest's build gains `--sourcemap=external` (sibling maps, byte-identical `.js`) and a `coverage:lcov` script.
+- Measure integration quality through configured LCOV (SQ-3956)
+  Integration quality can select a project's coverage command or a changed plugin's coverage:lcov script and retains source-map translation evidence. Quality Gate accepts lcovBase for reporters that write paths relative to a package directory. Missing integration rows are checked against the AST complexity inventory.
+- Add bounded catch-up lines to changes reads (SQ-3961)
+  Changes reads accept view:catchup (CLI --catchup), with up to 40 lifecycle-derived stage and action lines using the existing exclusive cursor.
+- Save candidate-bound executor completion summaries (SQ-3962)
+  Submit and done accept four-section summaries. Completion reads keep recorded facts and user blockers authoritative, preserve stale summaries, and report summary storage failures without undoing closeout.
+- Read story completion from child lifecycle records (SQ-3963)
+  The completion MCP read accepts a story ref, and the CLI accepts completion US-n. Story outcomes keep partial delivery, blockers, rejected children, evidence counts and ticket-linked decisions visible in under 250 words.
+- Dashboard shows the completion view on a ticket and on a story, with every doubt as a visible chip (SQ-3964)
+- Bind a negative control to a captured failing run with verify-capture --control; plain markers now read agent-reported (SQ-3965)
+- Preserve literal text in completion CLI and MCP output (SQ-3970)
+  Completion text preserves quotes, ampersands and angle brackets instead of printing HTML entities. Control characters are stripped. Dashboard text-node rendering keeps HTML escaping at the display boundary.
+- Fix dashboard story board filtering (SQ-3974)
+  Filter dashboard stories using their project slug so selecting a board keeps its stories visible.
+
 ## v3.615.0 (2026-10-26)
 
 ### quality-gate 1.3.2 → 1.3.3
