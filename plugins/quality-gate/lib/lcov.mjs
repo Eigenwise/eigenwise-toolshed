@@ -4,6 +4,7 @@ import path from 'node:path';
 import { runCoverageCommand } from './coverage-command.mjs';
 import { normalizedPath } from './core.mjs';
 import { sourceHashes } from './crap-inputs.mjs';
+import { projectFileHashes, translateCoverage } from './source-map-translation.mjs';
 
 export function coverageByFile(text, root) {
   const files = new Map();
@@ -68,7 +69,8 @@ export async function acquireCoverage(root, settings, files) {
   const explicitPath = settings.lcov ? path.resolve(root, settings.lcov) : null;
   if (!settings.coverageCommand) {
     const lcovPath = explicitPath || defaultPath;
-    return readCoverage(lcovPath, existingHashes(lcovPath));
+    const hashes = existingHashes(lcovPath);
+    return translateCoverage(readCoverage(lcovPath, hashes), root, { hashes, allowsCreated: false, source: lcovPath + '.sources.json', changedWhen: `since ${lcovPath}.sources.json was captured` });
   }
   const reportsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-gate-coverage-'));
   try {
@@ -88,10 +90,12 @@ function capturedPath({ defaultPath, explicitPath, reportsDirectory }, before) {
 async function captureCoverage(root, settings, files, locations) {
   const hashes = sourceHashes(root, files);
   const before = new Map([locations.defaultPath, locations.explicitPath].filter(Boolean).map((file) => [file, coverageStamp(file)]));
+  const generatedBefore = projectFileHashes(root);
   await runCoverage(settings.coverageCommand, root, locations.reportsDirectory, settings.coverageTimeoutMs);
   const after = sourceHashes(root, files);
   if (JSON.stringify(hashes) !== JSON.stringify(after)) throw new Error('Scored source changed during coverageCommand. Stop source edits and rerun coverage on fixed bytes.');
-  return readCoverage(capturedPath(locations, before), hashes);
+  const input = readCoverage(capturedPath(locations, before), hashes);
+  return translateCoverage(input, root, { hashes: generatedBefore, allowsCreated: true, changedWhen: 'during coverageCommand' });
 }
 
 export function coverageTrust(input, file, hash) {

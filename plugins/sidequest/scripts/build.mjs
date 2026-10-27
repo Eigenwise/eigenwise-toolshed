@@ -9,6 +9,9 @@ const require = createRequire(import.meta.url);
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const budgetReportRequested = process.argv.includes('--mcp-tools-list-budget');
+// Maps are measure-time sidecars for coverage translation: 'external' writes sibling .js.map files
+// and leaves every .js byte-identical to the committed output.
+const sourcemap = process.argv.includes('--sourcemap=external') ? 'external' : false;
 
 function mcpToolsListBudgetReport() {
   const mcp = require(path.join(pluginRoot, 'lib', 'mcp.js'));
@@ -58,7 +61,7 @@ async function buildNonBundled(directory, banner) {
     target: 'node22',
     charset: 'utf8',
     legalComments: 'none',
-    sourcemap: false,
+    sourcemap,
     banner: banner ? { js: banner } : undefined,
   });
 }
@@ -76,7 +79,7 @@ async function buildHooks() {
         target: 'node22',
         charset: 'utf8',
         legalComments: 'none',
-        sourcemap: false,
+        sourcemap,
         external: ['node:*'],
       });
     }
