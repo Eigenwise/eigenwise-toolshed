@@ -551,7 +551,9 @@ test('dashboard completion reads serve the ticket view and degrade the story vie
   t.after(() => { store.storyCompletionPayload = storyRead; started.server.close(); });
   const query = `?project=${encodeURIComponent(project)}`;
 
-  const read = await fetchJson(started.port, `/api/tickets/${ticket.ref}/completion${query}`);
+  const response = await requestRaw(started.port, `/api/tickets/${ticket.ref}/completion${query}`);
+  assert.equal(response.status, 200);
+  const read = JSON.parse(response.body);
   assert.equal(read.completion.ref, ticket.ref);
   assert.equal(read.completion.stage, 'ready');
   assert.equal(read.completion.summary, null);
