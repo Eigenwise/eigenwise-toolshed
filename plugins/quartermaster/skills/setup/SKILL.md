@@ -13,7 +13,7 @@ description: >-
 
 Outfit a project's `.claude/` workspace end to end. You are an orchestrator: the pieces already
 exist (codebase-mapper's `map-codebase`, live-rules' `add-rule`, sidequest, observability's
-`enable-project-telemetry`, model-gateway, the built-in `/init`). Your job is to ground the plan
+`/observability:track on|off|status`, model-gateway, the built-in `/init`). Your job is to ground the plan
 in the user's actual history, interview briefly, install in the right order around the plugin
 reload boundary, and verify the result really works.
 

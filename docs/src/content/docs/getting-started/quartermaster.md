@@ -80,7 +80,7 @@ through a merge, rebase, or pull are never demanded.
 
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 
-If you choose telemetry, Claude hands the setup to Observability and tells you when a restart is needed. You can also decline and continue without it.
+If you choose local usage recording, Claude hands setup to Observability. Each project stays off until you run `/observability:track on`. `/observability:track status` checks recording; `/observability:track off` stops it and keeps history. `/observability:board` opens the local usage board. You can also decline and continue without recording.
 
 ## Keep a workspace current
 
@@ -102,7 +102,7 @@ Updating never wires a project. The Model Gateway step refreshes Claude alias pi
 
 Freshness hooks are advisory. They report cached availability and loaded-version mismatches, and they point to `/quartermaster:update-toolshed`; they do not install, restart, or replace the requested updater. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace in Claude Code. An open session still needs `/reload-plugins` after plugin code changes. Restart Claude Code when process-level gateway wiring or model discovery changed.
 
-The health check is read-only. It identifies stale installs, dead `enabledPlugins` entries, and Model Gateway startup-check results when that plugin is present. It also reports managed Observability storage limits without running a repair. Run the updater when you want installs changed.
+The health check is read-only. It identifies stale installs, dead `enabledPlugins` entries, and Model Gateway startup-check results when that plugin is present. For Observability, it checks installation, reports per-project recording state, and inspects the local JSONL ledger and generated board without changing them. Run the updater when you want installs changed.
 
 ## The in-the-moment loop
 
