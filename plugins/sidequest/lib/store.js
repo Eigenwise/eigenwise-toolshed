@@ -3974,7 +3974,7 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   storyDecisionLogWarnings,
   submissionProjection
 });
-const { completionPayload } = createCompletion({ getTicket, openBlockers, negativeControlResult, projectDir, readMeta });
+const { completionPayload, storyCompletionPayload } = createCompletion({ getTicket, getStory, listTickets, openBlockers, negativeControlResult, projectDir, readMeta });
 module.exports = {
   normalizeIntegrationVerifyTimeoutMs,
   VALID_STATUS,
@@ -4253,6 +4253,7 @@ module.exports = {
   readyPayload,
   pulsePayload,
   completionPayload,
+  storyCompletionPayload,
   claimPulse,
   changesPayload,
   boundedExcerpt,

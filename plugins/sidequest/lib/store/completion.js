@@ -33,7 +33,8 @@ __export(completion_exports, {
   completionText: () => completionText,
   completionView: () => completionView,
   createCompletion: () => createCompletion,
-  escapeCompletionText: () => escapeCompletionText
+  escapeCompletionText: () => escapeCompletionText,
+  storyCompletionView: () => storyCompletionView
 });
 module.exports = __toCommonJS(completion_exports);
 var import_node_path = __toESM(require("node:path"));
@@ -413,6 +414,91 @@ function completionText(view) {
   ];
   return sections.map(([label, body, limit]) => label + escapeCompletionText(clampWords(body, limit))).join("\n");
 }
+function childDelivered(child) {
+  return ["integrated", "released"].includes(child.stage);
+}
+function storyStage(children) {
+  if (!children.length) return "proposed";
+  if (children.every((child) => child.stage === "released")) return "released";
+  if (children.every(childDelivered)) return "integrated";
+  return activeStoryStage(children);
+}
+function activeStoryStage(children) {
+  if (children.some((child) => child.stage === "running")) return "running";
+  if (children.some(childDelivered)) return "partial";
+  if (children.some((child) => child.stage === "rejected")) return "partial";
+  return pendingStoryStage(children);
+}
+function pendingStoryStage(children) {
+  if (children.some((child) => child.stage === "blocked")) return "blocked";
+  if (children.some((child) => ["submitted", "integrating"].includes(child.stage))) return "running";
+  return "proposed";
+}
+function storyDecisions(story) {
+  const entries = [...story.archivedDecisionLog ?? [], ...story.decisionLog ?? []];
+  const decisions = entries.filter((entry) => entry.kind === "DECISION" && Boolean(entry.ref || /\bSQ-\d+\b/.test(entry.text)));
+  decisions.sort((first, second) => first.seq - second.seq);
+  const latest = decisions.at(-1);
+  return { count: decisions.length, latest: latest ? firstSentence(latest.text) : null };
+}
+function firstSentence(value) {
+  return value.split(/(?<=[.!?])\s/)[0] ?? "";
+}
+function storyChecked(children) {
+  const captured = children.filter((child) => child.facts.verify?.status === "passed" && child.facts.verify.kinds.includes("captured-command")).length;
+  const qualities = /* @__PURE__ */ new Map();
+  for (const child of children) qualities.set(child.facts.quality.status, (qualities.get(child.facts.quality.status) ?? 0) + 1);
+  const labels = [...qualities].map(([status, count]) => count + " quality " + QUALITY_WORDING[status]);
+  return captured + " of " + children.length + " verified by captured command; " + labels.join("; ") + ".";
+}
+function storyAction(view) {
+  const userBlocker = view.children.find((child) => child.blocker?.actor === "user")?.blocker;
+  if (userBlocker) return userBlocker.nextAction;
+  if (!view.children.length) return "Define the story scope before starting.";
+  if (view.children.every((child) => Boolean(child.blocker) || TERMINAL_STAGES.has(child.stage))) return "No action needed.";
+  return "Check completion <ref> for children whose next step is not recorded.";
+}
+function childResult(child) {
+  const result = child.summary?.stale ? "" : child.summary?.result;
+  return child.ref + ": " + firstSentence(result || deliveryLine(child.facts.delivery));
+}
+function storyCompletionText(view) {
+  const results = view.children.filter(childDelivered).map(childResult).join(" ");
+  const pending = view.notYet.map((child) => child.ref + " (" + child.stage + ")").join(", ");
+  const sections = [
+    "Result: " + clampWords(view.title + ". " + results, 55),
+    "Not yet: " + clampWords(pending || "none.", 35),
+    "Checked: " + clampWords(storyChecked(view.children), 45),
+    "Still uncertain: " + clampWords(view.uncertainties.join("\n") || "Nothing flagged by the records.", 50),
+    "Your action: " + clampWords(storyAction(view), 30),
+    "Decisions: " + clampWords(view.decisions.count + "; " + (view.decisions.latest ?? "none recorded."), 18),
+    "Details: completion <ref>"
+  ];
+  return sections.map(escapeCompletionText).join("\n");
+}
+function storyBlocker(children) {
+  const user = children.find((child) => child.blocker?.actor === "user");
+  const blocked = user ?? children.find((child) => child.blocker);
+  return blocked?.blocker ?? null;
+}
+function storyCompletionView(story, children) {
+  const doubts = children.flatMap((child) => DOUBTS.map((doubt) => doubt(child))).filter((value) => Boolean(value));
+  const uncertainties = [...new Set(doubts)].slice(0, 6);
+  const view = {
+    ref: story.ref,
+    title: story.title,
+    stage: storyStage(children),
+    blocker: storyBlocker(children),
+    children,
+    integrated: children.filter(childDelivered).map((child) => child.ref),
+    notYet: children.filter((child) => !childDelivered(child)).map((child) => ({ ref: child.ref, stage: child.stage })),
+    uncertainties,
+    decisions: storyDecisions(story),
+    text: ""
+  };
+  view.text = storyCompletionText(view);
+  return view;
+}
 function createCompletion(dependencies) {
   const { getTicket, openBlockers, negativeControlResult, projectDir, readMeta } = dependencies;
   function controlHolder(ticket) {
@@ -437,7 +523,13 @@ function createCompletion(dependencies) {
     const ticket = getTicket(slug, idOrRef);
     return ticket ? completionView(ticket, completionContext(slug, ticket)) : null;
   }
-  return { completionPayload };
+  function storyCompletionPayload(slug, idOrRef) {
+    const story = dependencies.getStory(slug, idOrRef);
+    if (!story) return null;
+    const children = dependencies.listTickets(slug).filter((ticket) => ticket.storyId === story.id && !ticket.archived);
+    return storyCompletionView(story, children.map((ticket) => completionView(ticket, completionContext(slug, ticket))));
+  }
+  return { completionPayload, storyCompletionPayload };
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
@@ -446,5 +538,6 @@ function createCompletion(dependencies) {
   completionText,
   completionView,
   createCompletion,
-  escapeCompletionText
+  escapeCompletionText,
+  storyCompletionView
 });

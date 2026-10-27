@@ -147,7 +147,7 @@ function storyLogHandler(args: StoryLogArgs) {
 
 type CompletionArgs = { project?: unknown; ref?: unknown; story?: unknown; text?: boolean };
 
-function completionResult(slug: string, view: CompletionView, textOnly?: boolean) {
+function completionResult(slug: string, view: { ref: string; stage: string; text: string }, textOnly?: boolean) {
   return textOnly ? { project: slug, ref: view.ref, stage: view.stage, text: view.text } : Object.assign({ project: slug }, view);
 }
 
@@ -161,7 +161,9 @@ function ticketCompletion(slug: string, projectName: string, args: CompletionArg
 function completionHandler(args: CompletionArgs) {
   const { slug, meta } = resolveProject(args.project);
   if (args.story === undefined) return ticketCompletion(slug, meta.name, args);
-  return { ok: false, reason: 'not_supported', project: slug, message: 'completion: the story form lands with SQ-3963 (story completion view). Read each member ticket with completion {ref} until then.' };
+  const view = store.storyCompletionPayload(slug, args.story);
+  if (!view) throw new Error('completion: no story "' + args.story + '" in ' + meta.name);
+  return completionResult(slug, view, args.text);
 }
 
 const tools: ToolDefinition[] = [
@@ -253,13 +255,13 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'completion',
-    description: 'Ticket stage, blocker, facts and evidence from lifecycle records. text:true returns only the four-section rendering (Result, Checked, Still uncertain, Your action) in under 200 words.',
+    description: 'Ticket or story completion from lifecycle records. Stories aggregate child outcomes, blockers and evidence under 250 words; tickets use four sections under 200 words. text:true returns only the rendering.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         ref: { type: 'string', description: 'Ticket ref or id.' },
-        story: { type: 'string', description: 'Story ref; not supported until SQ-3963 lands.' },
+        story: { type: 'string', description: 'Story ref or id; aggregates all non-archived children.' },
         text: { type: 'boolean', description: 'Return only the rendered text.' },
       },
     },
