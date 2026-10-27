@@ -1,5 +1,12 @@
 // The board fields only the main thread may set. This imports nothing, so the guards hooks module refuses
 // them from a subagent before any engine call that could fail, and the admission decision reads the same table.
+const SUBAGENT_DIRECT_CLAIM = {
+  // SQ-3934. A direct claim records the MCP server's session as the submitter (main:<session>), and a
+  // subagent shares that session, so its direct claim would pass as the main thread and could review its own candidate.
+  matches: (input: Record<string, unknown>) => input.direct === true,
+  denial: 'sidequest: subagents cannot direct-claim a ticket. Claim through the dispatched route: copy the claim call your briefing printed (executor and tokenFile, no direct). If this ticket has no dispatch, report it to the orchestrator so it dispatches one.',
+};
+
 const CLOSEOUT_UPDATE_FIELDS = new Set([
   'files', 'addFiles', 'removeFiles', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
   'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd', 'admitComposition',
@@ -7,6 +14,8 @@ const CLOSEOUT_UPDATE_FIELDS = new Set([
 ]);
 
 export const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, unknown>) => boolean; denial: string }> = {
+  mcp__plugin_sidequest_board__claim: SUBAGENT_DIRECT_CLAIM,
+  mcp__plugin_sidequest_board__next: SUBAGENT_DIRECT_CLAIM,
   mcp__plugin_sidequest_board__dispatch: {
     matches: (input) => Object.hasOwn(input, 'workProvenance'),
     denial: 'sidequest: subagents cannot declare work provenance. Ask the main thread to freeze source-bound factual provenance before dispatch; actor labels and shared session ids grant nothing.',

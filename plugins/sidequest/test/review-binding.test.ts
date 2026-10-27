@@ -2125,6 +2125,22 @@ test('GH-654: main attestation never identifies a reviewer', () => {
   assert.equal(provenance.reviewer, null, 'only a hook-bound agent id identifies the reviewing runtime');
 });
 
+// SQ-3934. The hooks module refuses a subagent's direct claim, so a subagent's candidate always carries its
+// hook-settled agent id, never the shared main:<session> identity, and that same agent id cannot review it.
+test('SQ-3934: a candidate a subagent submitted under its hook-settled agent id cannot be reviewed by that agent id', () => {
+  const { slug, commit } = board('subagent-self-review');
+  const source = submittedSource(slug, commit, 'subagent-self-review');
+  const subagentId = source.dispatch.agentId;
+  assert.equal(reviewBinding.submittedSourceIdentity(source)?.identity, `agent:${subagentId}`);
+  const review = boundReviewOf(slug, source.ref, commit, 'subagent-self-review');
+  completeReview(slug, review.ref, subagentId);
+  const provenance = reviewBinding.reviewProvenance(store.getTicket(slug, source.ref), store.getTicket(slug, review.ref));
+  assert.equal(provenance.reason, 'shared_agent_identity', JSON.stringify(provenance));
+  const refused = store.validateIntegrationSubmission(slug, source.ref, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, new RegExp(`same runtime identity that submitted .* \\(agent:${subagentId}\\)`));
+});
+
 test('GH-654: binding refuses a candidate whose submitting attempt recorded no identity, before any review exists', () => {
   const { slug, commit, sourceRef } = directClaimSubmittedSource('sessionless', true, null);
   const before = JSON.stringify(store.getTicket(slug, sourceRef));
