@@ -90,6 +90,21 @@ test('SQ-2731: the negative-control grammar an executor is told matches the guar
   assert.doesNotMatch(executorTemplate, /an ImportError or collection error only proves a symbol vanished/);
 });
 
+test('executor template and generated agents distinguish captured controls from plain reports', () => {
+  const sources = agentsync.bundledExecutorSources() as Map<string, string>;
+  sources.delete('sidequest-diagnostic-probe.md');
+  sources.set('executor template', executorTemplate);
+  for (const [filename, source] of sources) {
+    assert.match(source, /verify-capture\s+wrapper with `--control`/, filename);
+    assert.match(source, /\[sidequest:negative-control\] capture=<id>/, filename);
+    assert.match(source, /`captured` only when bound to the completed commit/, filename);
+    assert.match(source, /plain marker reads as `agent-reported`/, filename);
+    assert.match(source, /control_passed_unexpectedly/, filename);
+    assert.match(source, /Restore the source and run the pinned oracle after either control/, filename);
+    assert.match(source, /\[sidequest:negative-control-test\] failed <test name>/, filename);
+  }
+});
+
 test('sidequest listing description allows bounded inline fixes alongside delegated work', () => {
   const frontmatter = skill.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   assert.ok(frontmatter, 'skill frontmatter must be present');

@@ -1291,7 +1291,7 @@ function createDispatch(dependencies) {
     return null;
   }
   function lastReleasedVerification(ticket, commit) {
-    return ticket.verificationCaptures?.slice().reverse().find((capture) => capture.candidate.source === "git" && capture.candidate.value === commit) ?? null;
+    return ticket.verificationCaptures?.slice().reverse().find((capture) => capture.control !== true && capture.candidate.source === "git" && capture.candidate.value === commit) ?? null;
   }
   function releasedCheckpointEvidence(ticket, attempt, commit) {
     return { releaseReason: attempt?.release?.reason ?? null, verification: lastReleasedVerification(ticket, commit) };
