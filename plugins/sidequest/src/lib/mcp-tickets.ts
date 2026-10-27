@@ -62,6 +62,7 @@ const {
   cleanupClosedTicketWorktree,
   claimHeldLive,
 } = require('./mcp-shared');
+const { ACCEPTANCE_SCHEMA } = require('./store/completion.js');
 
 function liveClaimRemovalRefusal(ticket: any, force: unknown) {
   if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
@@ -194,6 +195,7 @@ const TICKET_FIELD_PROPS = {
   verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS },
   attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command.' },
   reviewTarget: REVIEW_TARGET_PROP,
+  acceptance: ACCEPTANCE_SCHEMA,
 };
 
 const tools: ToolDefinition[] = [
@@ -260,6 +262,7 @@ const tools: ToolDefinition[] = [
         readonly: args.readonly,
         workingTreeDelivery: args.workingTreeDelivery,
         externalDeliverable: args.externalDeliverable,
+        acceptance: args.acceptance,
         executorAnchors: args.anchors,
         executorVerifyKind: args.verifyKind,
         executorAttestationArtifact: args.attestationArtifact,
@@ -350,7 +353,7 @@ const tools: ToolDefinition[] = [
         : null;
       if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch: any = { source: 'mcp', by: String(args.by || '').trim() || null };
-      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'refs', 'files', 'addFiles', 'removeFiles', 'complexity']) {
+      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'refs', 'files', 'addFiles', 'removeFiles', 'complexity', 'acceptance']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
       if (args.produces !== undefined || args.changes !== undefined || args.consumes !== undefined) {

@@ -1,6 +1,22 @@
 "use strict";
 const { externalReference, originRepository } = require("../external-refs");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, submittedCandidateAttempt, submittedSourceIdentity } = require("../kernel/review-binding");
+const { acceptanceExamplesInput } = require("./completion.js");
+function acceptanceField(value) {
+  if (value === void 0 || value === null) return {};
+  const acceptance = acceptanceExamplesInput(value);
+  return acceptance.length ? { acceptance } : {};
+}
+function applyAcceptancePatch(ticket, patch) {
+  if (patch.acceptance === void 0) return;
+  delete ticket.acceptance;
+  Object.assign(ticket, acceptanceField(patch.acceptance));
+}
+function acceptanceCloseoutChange(ticket, patch) {
+  if (patch.acceptance === void 0) return [];
+  const next = acceptanceField(patch.acceptance).acceptance;
+  return JSON.stringify(next) === JSON.stringify(ticket.acceptance) ? [] : ["acceptance"];
+}
 function createTickets(dependencies) {
   const {
     EXECUTOR_ANCHORS_MAX,
@@ -260,6 +276,7 @@ function createTickets(dependencies) {
       readonlyOverride: requestedReadonlyOverride(fields),
       workingTreeDelivery: fields.workingTreeDelivery === true,
       externalDeliverable: fields.externalDeliverable === true,
+      ...acceptanceField(fields.acceptance),
       executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors"),
       executorVerifyKind,
       executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact"),
@@ -1151,6 +1168,7 @@ function createTickets(dependencies) {
       ...(patch.readonly !== void 0 || patch.readonlyOverride !== void 0) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ["readonly"] : [],
       ...patch.workingTreeDelivery !== void 0 && patch.workingTreeDelivery === true !== (ticket.workingTreeDelivery === true) ? ["workingTreeDelivery"] : [],
       ...patch.externalDeliverable !== void 0 && patch.externalDeliverable === true !== (ticket.externalDeliverable === true) ? ["externalDeliverable"] : [],
+      ...acceptanceCloseoutChange(ticket, patch),
       ...patch.executorVerify !== void 0 && patch.executorVerify !== ticket.executorVerify ? ["verify"] : [],
       ...patch.executorVerifyKind !== void 0 && patch.executorVerifyKind !== ticket.executorVerifyKind ? ["verifyKind"] : [],
       ...patch.executorAttestationArtifact !== void 0 && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ["attestationArtifact"] : [],
@@ -1215,6 +1233,7 @@ function createTickets(dependencies) {
       const prevStatus = t.status;
       const filesPatch = patchedFileScope(t, patch);
       patchExternalRefs(slug, t, patch);
+      applyAcceptancePatch(t, patch);
       if (patch.files !== void 0) assertLiveClaimReplace(t, normalizeFiles(patch.files));
       if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
       if (patch.description != null) t.description = String(patch.description).trim();

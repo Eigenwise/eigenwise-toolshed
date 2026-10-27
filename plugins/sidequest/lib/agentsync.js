@@ -1,6 +1,7 @@
 "use strict";
 const { referenceHeader } = require("./external-refs");
 const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs } = require("./experiment-refs");
+const { DEMONSTRATIONS_FILE } = require("./store/completion.js");
 "use strict";
 const fs = require("fs");
 const os = require("os");
@@ -904,6 +905,22 @@ function ticketAnchorsPacket(ticket) {
   return ticket.executorAnchors ? [`Anchors:
 ${ticket.executorAnchors}`] : [];
 }
+function demonstrationInstructions(directory) {
+  return `Demonstrate each example on the real surface in the authorized local or test environment, against your final committed candidate. API or CLI evidence is enough for a backend change; use a browser only when appearance matters. Record one entry per example in ${directory}, a JSON array of { scenario, expected, observed, matches, environment, candidate, fixture, artifact, kind }: scenario copied exactly, matches true only when observed equals expected, candidate the commit you demonstrated (a later commit marks the entry stale), fixture where the data came from, artifact the log or screenshot path beside the file, kind "visual" for a screenshot and otherwise "real-flow". Screenshots prove appearance only, and a narrated tour is not execution proof. When observed differs from expected, record it with matches false, then repair and demonstrate again or release with the record intact. Never run destructive tests, send external messages, take financial actions or change access to complete a demonstration.`;
+}
+function demonstrationsPath(ticket) {
+  const evidenceDirectory = String(ticket.dispatch?.evidenceDirectory || "").trim();
+  return evidenceDirectory ? path.join(evidenceDirectory, DEMONSTRATIONS_FILE) : `${DEMONSTRATIONS_FILE} in this ticket's board evidence directory`;
+}
+function acceptanceExamplesPacket(ticket) {
+  const examples = Array.isArray(ticket.acceptance) ? ticket.acceptance : [];
+  if (!examples.length) return [];
+  const listed = examples.map((example, index) => `${index + 1}. [${example.kind}] ${example.scenario}
+   Expected: ${example.expected}`);
+  return [`Acceptance examples:
+${listed.join("\n")}
+${demonstrationInstructions(demonstrationsPath(ticket))}`];
+}
 function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation) {
   return [
     "## This ticket",
@@ -913,6 +930,7 @@ function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocu
     ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || "(No additional description was recorded.)"}`,
+    ...acceptanceExamplesPacket(ticket),
     "Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.",
     `Category contract:
 Category: ${category.id || ticket.categoryId || "(Unclassified)"}

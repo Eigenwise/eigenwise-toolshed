@@ -2,6 +2,27 @@
 
 const { externalReference, originRepository } = require('../external-refs');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, submittedCandidateAttempt, submittedSourceIdentity } = require('../kernel/review-binding');
+const { acceptanceExamplesInput } = require('./completion.js');
+
+function acceptanceField(value: unknown) {
+  if (value === undefined || value === null) return {};
+  const acceptance = acceptanceExamplesInput(value);
+  return acceptance.length ? { acceptance } : {};
+}
+
+function applyAcceptancePatch(ticket: { acceptance?: unknown }, patch: { acceptance?: unknown }) {
+  if (patch.acceptance === undefined) return;
+  delete ticket.acceptance;
+  Object.assign(ticket, acceptanceField(patch.acceptance));
+}
+
+// The completion view reports undemonstrated examples, so a claim holder must not be able to
+// shrink the list it is measured against.
+function acceptanceCloseoutChange(ticket: { acceptance?: unknown }, patch: { acceptance?: unknown }): string[] {
+  if (patch.acceptance === undefined) return [];
+  const next = acceptanceField(patch.acceptance).acceptance;
+  return JSON.stringify(next) === JSON.stringify(ticket.acceptance) ? [] : ['acceptance'];
+}
 
 function createTickets(dependencies: any) {
   const {
@@ -254,6 +275,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     readonlyOverride: requestedReadonlyOverride(fields),
     workingTreeDelivery: fields.workingTreeDelivery === true,
     externalDeliverable: fields.externalDeliverable === true,
+    ...acceptanceField(fields.acceptance),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
     executorVerifyKind,
     executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact'),
@@ -1362,6 +1384,7 @@ function activeClaimCloseoutUpdateRefusal(ticket?: any, patch?: any, options: Up
     ...((patch.readonly !== undefined || patch.readonlyOverride !== undefined) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ['readonly'] : []),
     ...(patch.workingTreeDelivery !== undefined && (patch.workingTreeDelivery === true) !== (ticket.workingTreeDelivery === true) ? ['workingTreeDelivery'] : []),
     ...(patch.externalDeliverable !== undefined && (patch.externalDeliverable === true) !== (ticket.externalDeliverable === true) ? ['externalDeliverable'] : []),
+    ...acceptanceCloseoutChange(ticket, patch),
     ...(patch.executorVerify !== undefined && patch.executorVerify !== ticket.executorVerify ? ['verify'] : []),
     ...(patch.executorVerifyKind !== undefined && patch.executorVerifyKind !== ticket.executorVerifyKind ? ['verifyKind'] : []),
     ...(patch.executorAttestationArtifact !== undefined && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ['attestationArtifact'] : []),
@@ -1437,6 +1460,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     // addFiles/removeFiles throws here rather than after a title has been assigned.
     const filesPatch = patchedFileScope(t, patch);
     patchExternalRefs(slug, t, patch);
+    applyAcceptancePatch(t, patch);
     // After the closeout refusal, so a claim holder still hears to use scopeRequest and
     // only a control-plane caller that may change a live claim's scope meets this guard.
     if (patch.files !== undefined) assertLiveClaimReplace(t, normalizeFiles(patch.files));

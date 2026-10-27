@@ -95,6 +95,17 @@ test('CLI: list --json (no --brief) still returns full tickets', () => {
   assert.ok(Array.isArray(a.comments), 'full read keeps the thread');
 });
 
+test('acceptance examples ride the full read and stay out of brief rows', async () => {
+  const acceptance = [{ scenario: 'brief read of a ticket with examples', expected: 'no acceptance key on the brief row', kind: 'main' }];
+  const added = await callTool('add', { title: 'brief acceptance fixture', complexity: 2, why: 'a fixture that carries acceptance examples for the brief read', acceptance });
+  const brief = cliJson(['list', '--brief']).tickets.find((t?: any) => t.ref === added.ref);
+  assert.deepStrictEqual(Object.keys(brief).sort(), BRIEF_KEYS, 'acceptance is not a brief key');
+  const compact = (await callTool('list', {})).tickets.find((t?: any) => t.ref === added.ref);
+  assert.equal(compact.acceptance, undefined, 'the default MCP list row leaves examples in the full read');
+  const full = (await callTool('list', { detail: true })).tickets.find((t?: any) => t.ref === added.ref);
+  assert.deepStrictEqual(full.acceptance, acceptance);
+});
+
 test('list defaults to active tickets while done reads stay directly available', async () => {
   const cliDefault = cliJson(['list', '--json']);
   assert.equal(cliDefault.tickets.some((ticket?: any) => ticket.ref === refDone), false);

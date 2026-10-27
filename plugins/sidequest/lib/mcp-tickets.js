@@ -61,6 +61,7 @@ const {
   cleanupClosedTicketWorktree,
   claimHeldLive
 } = require("./mcp-shared");
+const { ACCEPTANCE_SCHEMA } = require("./store/completion.js");
 function liveClaimRemovalRefusal(ticket, force) {
   if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
   return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
@@ -163,7 +164,8 @@ const TICKET_FIELD_PROPS = {
   verifyCwd: VERIFY_CWD_PROP,
   verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS },
   attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
-  reviewTarget: REVIEW_TARGET_PROP
+  reviewTarget: REVIEW_TARGET_PROP,
+  acceptance: ACCEPTANCE_SCHEMA
 };
 const tools = [
   {
@@ -229,6 +231,7 @@ const tools = [
         readonly: args.readonly,
         workingTreeDelivery: args.workingTreeDelivery,
         externalDeliverable: args.externalDeliverable,
+        acceptance: args.acceptance,
         executorAnchors: args.anchors,
         executorVerifyKind: args.verifyKind,
         executorAttestationArtifact: args.attestationArtifact,
@@ -314,7 +317,7 @@ const tools = [
       const verificationAmendmentRefusal = verificationWasAmended ? recordedSubmissionVerificationAmendmentRefusal(existing) : null;
       if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch = { source: "mcp", by: String(args.by || "").trim() || null };
-      for (const k of ["title", "description", "priority", "status", "highStakes", "labels", "refs", "files", "addFiles", "removeFiles", "complexity"]) {
+      for (const k of ["title", "description", "priority", "status", "highStakes", "labels", "refs", "files", "addFiles", "removeFiles", "complexity", "acceptance"]) {
         if (args[k] !== void 0) patch[k] = args[k];
       }
       if (args.produces !== void 0 || args.changes !== void 0 || args.consumes !== void 0) {
