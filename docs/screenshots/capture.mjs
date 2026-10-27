@@ -521,6 +521,13 @@ async function captureSidequest(browser, port) {
   assert.match((await category.textContent()) ?? '', /Product/, 'Synthetic ticket detail did not load its board category');
   await capture('sidequest-ticket-detail.png', page.getByRole('dialog'));
 
+  const completionPanel = page.locator('section.completion');
+  await completionPanel.waitFor();
+  await completionPanel.evaluate((element) => element.scrollIntoView({ block: 'start' }));
+  await page.waitForTimeout(200);
+  assert.match(await completionPanel.innerText(), /Result[\s\S]*Checked[\s\S]*Still uncertain[\s\S]*Your action/i, 'Synthetic completion panel did not render its four sections');
+  await captureRegion('sidequest-ticket-completion.png', [completionPanel], 8);
+
   const linkTarget = page.getByRole('combobox', { name: 'Link target' });
   await linkTarget.scrollIntoViewIfNeeded();
   await linkTarget.click();
@@ -609,11 +616,11 @@ async function main() {
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
     await captureObservability(browser);
-    console.log(`Generated 11 synthetic screenshots in ${outputDir}`);
+    console.log(`Generated 12 synthetic screenshots in ${outputDir}`);
   } finally {
     await browser?.close();
     server?.kill();
-    await rm(tempRoot, { recursive: true, force: true });
+    await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }).catch(() => {});
   }
 }
 
