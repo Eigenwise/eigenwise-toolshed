@@ -85,9 +85,12 @@ setting wins when both files set the key:
 node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
 ```
 
-Report the one-line finding verbatim. When the key is unset, it advises the optional setting
-`"autoCompactWindow": 325000` in the named user settings file for a consistent 292000-token trigger
-instead of a model-dependent compaction point. Do not write or offer to fix it from the doctor.
+Report the finding verbatim. Explicit user or project values are reported and preserved. When neither
+sets the key, an installed Model Gateway owns the policy: the finding reads its saved context-window
+file through the installed gateway reader and report formatter, including its defaults and saved
+compact-at maximum. Without the gateway, compaction follows the model default; its `context-window`
+command is the supported policy control once installed. Do not recommend a fixed global window,
+write settings, or offer to fix them from the doctor.
 
 Report all results together. Explain each concrete problem and give the smallest next step. This skill does
 not update, install, uninstall, reload, or edit anything. If freshness is proven stale, tell the user to run

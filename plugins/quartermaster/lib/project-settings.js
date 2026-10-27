@@ -98,7 +98,29 @@ function configureSidequestCompaction(projectDir, {
   };
 }
 
-function compactionWindowFinding(projectDir, { globalSettingsPath = userSettingsPath() } = {}) {
+function installedGatewayPath(home) {
+  const registry = readSettings(path.join(home, '.claude', 'plugins', 'installed_plugins.json'));
+  const entry = Object.entries(registry.plugins || {}).find(([identifier, installs]) =>
+    identifier.startsWith('model-gateway@') && installs.length > 0);
+  return entry?.[1][0].installPath;
+}
+
+function gatewayCompactionFinding(home) {
+  try {
+    const installPath = installedGatewayPath(home);
+    const launcher = path.join(home, '.claude', 'model-gateway', 'model-gateway.js');
+    if (!installPath || !fs.existsSync(launcher)) return null;
+    const { readContextWindowSettings } = require(path.join(installPath, 'lib', 'runtime.js'));
+    const { contextWindowReport } = require(path.join(installPath, 'lib', 'context-window.js'));
+    const file = path.join(home, '.claude', 'model-gateway', 'context-window.json');
+    const windows = readContextWindowSettings({ file });
+    return `Compaction is owned by Model Gateway: ${contextWindowReport(windows).join('; ')}. Read ${file} using the installed gateway reader and defaults (context-window has no JSON form).`;
+  } catch (error) {
+    return `Model Gateway compaction report unavailable: ${error.message}. Inspect node ~/.claude/model-gateway/model-gateway.js context-window; no settings were changed.`;
+  }
+}
+
+function compactionWindowFinding(projectDir, { globalSettingsPath = userSettingsPath(), home = os.homedir() } = {}) {
   const projectPath = projectSettingsPath(projectDir);
   const projectSettings = readSettings(projectPath);
   const globalSettings = readSettings(globalSettingsPath);
@@ -109,7 +131,7 @@ function compactionWindowFinding(projectDir, { globalSettingsPath = userSettings
   if (Object.hasOwn(globalSettings, 'autoCompactWindow')) {
     return `Effective "autoCompactWindow" is ${globalSettings.autoCompactWindow} from ${globalSettingsPath}; the user setting wins.`;
   }
-  return `No "autoCompactWindow" is configured in ${globalSettingsPath} or ${projectPath}. Codex gateway sessions compact at the model default, which differs across models; set "autoCompactWindow": 325000 in ${globalSettingsPath} for a consistent 292000-token trigger.`;
+  return gatewayCompactionFinding(home) || `No "autoCompactWindow" is configured in ${globalSettingsPath} or ${projectPath}. Compaction follows the model default. Use node ~/.claude/model-gateway/model-gateway.js context-window to inspect or set a Model Gateway policy when installed.`;
 }
 
 function agentTeamsWarning(projectDir) {

@@ -4,7 +4,7 @@ Quartermaster helps with the setup work that tends to get repeated. It looks at 
 
 It can set up a new or existing workspace, keep active Toolshed installs current, check their health, and suggest a missing skill, rule, measurement, permission, or plugin after real work has accumulated. A later pass checks whether an accepted change helped. Unused or ineffective changes can be rolled back.
 
-When setup wires Model Gateway or Sidequest routing, it can also offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. This is a consistency choice, not a prerequisite. Setup asks before writing it, and an existing user or project value is reported and preserved.
+Setup and doctor report existing `autoCompactWindow` settings and preserve them. Model Gateway owns backend windows and saved compact-at policy through its `context-window` command. Doctor reads the installed gateway's own reader and report formatter, including its defaults. Without Model Gateway, compaction follows the model default. Quartermaster doesn't recommend a fixed global window.
 
 ## Install
 
