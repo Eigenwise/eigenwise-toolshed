@@ -287,6 +287,18 @@ async function cmdPulse(opts, positional) {
   if (!pulse) fail(`pulse: no ticket "${idOrRef}" in ${meta.name}`);
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + "\n");
 }
+async function cmdCompletion(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail("completion: pass a ticket id or ref, e.g. sidequest completion SQ-3");
+  if (typeof opts.text === "string") fail(`completion: --text takes no value (text is the default output) but swallowed "${opts.text}". Put --text last or drop it.`);
+  const { slug, meta } = await resolveProject(opts);
+  const view = store.completionPayload(slug, idOrRef);
+  if (!view) fail(`completion: no ticket "${idOrRef}" in ${meta.name}`);
+  process.stdout.write(completionOutput(slug, view, opts.json) + "\n");
+}
+function completionOutput(slug, view, json) {
+  return json ? JSON.stringify(Object.assign({ project: slug }, view), null, 2) : view.text;
+}
 async function cmdChanges(opts) {
   const { slug, meta } = await resolveProject(opts);
   const changes = store.changesPayload(slug, opts.since);
@@ -382,4 +394,4 @@ async function cmdRm(opts, positional) {
   if (!store.deleteTicket(slug, ticket.id)) fail(`rm: could not delete "${ticket.ref}" from ${meta.name}`);
   console.log(`✓ removed ${ticket.ref} from ${meta.name}`);
 }
-module.exports = { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
+module.exports = { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
