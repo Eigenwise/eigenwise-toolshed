@@ -59,6 +59,7 @@ export type CompletedVerificationCapture = Readonly<{
   status: VerificationStatus;
   candidate: Readonly<{ source: string; value: string }>;
   completedAt: string;
+  control?: boolean;
   cleanWorktree?: boolean;
   worktree?: string;
   logPath?: string | null;

@@ -1704,7 +1704,7 @@ function retainedOwnershipFallback(slug?: any, ticket?: any, state?: any, reposi
 }
 
 function lastReleasedVerification(ticket: { verificationCaptures?: readonly CompletedVerificationCapture[] }, commit: string): CompletedVerificationCapture | null {
-  return ticket.verificationCaptures?.slice().reverse().find(capture => capture.candidate.source === 'git' && capture.candidate.value === commit) ?? null;
+  return ticket.verificationCaptures?.slice().reverse().find(capture => capture.control !== true && capture.candidate.source === 'git' && capture.candidate.value === commit) ?? null;
 }
 
 function releasedCheckpointEvidence(ticket: { verificationCaptures?: readonly CompletedVerificationCapture[] }, attempt: { release?: { reason?: string } } | null, commit: string) {
