@@ -31,47 +31,40 @@ When `staleProcesses` has rows, report each PID, start time, and stale worktree 
 
 ## Observability, when that plugin is installed
 
-Telemetry lives in the separate Observability plugin. Its files are under a different plugin root, so resolve
-that root first and skip this whole section when the plugin is absent:
+Read the installed-plugin registry at `<claude config dir>/plugins/installed_plugins.json`.
+The config directory is `CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude`.
+A matching `observability@eigenwise-toolshed` install row identifies an installed plugin;
+use the row for the current project/scope and its `installPath` as `<OBS_ROOT>`.
+Do not require a particular plugin file to recognize an install, or infer installation from
+`enabledPlugins`. With no matching row, say "Observability is not installed" and skip this section.
 
-```sh
-node -e "const fs=require('node:fs'),os=require('node:os'),path=require('node:path');const reg=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.claude','plugins','installed_plugins.json'),'utf8'));const installs=reg?.plugins?.['observability@eigenwise-toolshed']||[];const hit=installs.map(i=>i?.installPath).filter(Boolean).find(p=>fs.existsSync(path.join(p,'bin','setup-observability.js')));console.log(hit||'');"
+Report the current project's recording state with the read-only command:
+
+```text
+/observability:track status
 ```
 
-An empty result means observability is not installed. Say so in one line and move on. Otherwise use that path
-as `<OBS_ROOT>` in the commands below.
+The command in `<OBS_ROOT>/hooks/register.ts` reads the engine plugin store's
+`track:<project.root>` key, where the root comes from the session repository or, outside a
+repository, the session working directory. Only boolean true opts in. The engine owns this
+store; no opt-in JSON filename is part of Observability's public contract. Do not infer consent
+from an existing ledger. If the command is unavailable, report recording state as unknown.
+For an installed plugin with recording off, say in one line: "Observability is installed; this
+project is not opted in." Do not enable recording or change settings.
 
-Read the consent/config record and report the managed observability health. This command is read-only and uses the configured ports/container:
+Inspect local files read-only, including when recording is off:
 
-```sh
-node "<OBS_ROOT>/lib/observability/ensure.js" --health
-```
+- Resolve `<claude config dir>/observability/ledger/<project-slug>.jsonl` with the same project
+  root and slug algorithm exported by `<OBS_ROOT>/hooks/ledger.ts` (`projectSlug`). Report the
+  absolute ledger path, whether it exists, its byte size, and the newest valid row's `at`
+  timestamp. An empty ledger has no newest timestamp. Report malformed rows or unreadable
+  files as findings rather than calling them empty or healthy. Missing history does not prove
+  recording is disabled.
+- Report whether `<claude config dir>/observability/board.html` exists. Its absence means no
+  generated board is present. The registered `/observability:board` command rebuilds and opens
+  it, so do not run that command during this read-only check.
 
-If it reports `configured: false`, observability was never consented to and needs no repair. If it reports `enabled: false`, say it is deliberately disabled. For an enabled record, report observer health, Collector listening state, selected sink, configured ports, dashboard/Docker state, and the `storage` block. Treat a listening observer with a failed `/health` response as unhealthy, and a configured dashboard without Docker as optional/unavailable rather than a pipeline failure.
-
-Report `storage.overDatabaseLimit: true` or `storage.overWalLimit: true` as a real finding with the two byte counts, not as a note. Over the database limit means retention pruning alone cannot get back under the cap, so the file can keep growing; the managed prune drops the oldest days and uses incremental vacuum. Do not describe this as a blocking full `VACUUM`, and do not predict its duration from the current file size.
-
-When the observer is healthy, audit project attribution. Hook events reach the observer from any directory,
-but the `claude_code_*` metrics only exist where Claude Code found the telemetry env in the settings of the
-directory the session started in. A project with observer events and no native samples in the same window is
-half-wired, and its dashboard reads empty rather than broken. This command is read-only:
-
-```sh
-node "<OBS_ROOT>/bin/verify-project-telemetry.js" --audit --project "<absolute-current-project-dir>"
-```
-
-Report every `UNWIRED` session directory by name, every `half-wired:` line, and the printed `fix:` command
-verbatim, adding that each affected session has to restart before its metrics appear. `native-samples=unknown`
-means Grafana was unreachable or unconfigured, so say the check could not run instead of calling it healthy. A
-`not opted in:` line is a hint, not a fault: those project names never opted in.
-
-Then run the local report too:
-
-```sh
-node "<OBS_ROOT>/bin/token-usage-report.js" --format json
-```
-
-From the JSON report, call out outbox queue depth/capacity, drops, schema drops, telemetry conflicts, sessions missing `SessionEnd`, and the newest event/source. The SessionStart ensure hook repairs stopped managed processes on the next startup/resume; if immediate repair is requested, rerun `/observability:enable-project-telemetry` and keep the current observability choices.
+Do not install, rebuild the board, delete history, or run recording changes from the doctor.
 
 ## Agent teams
 
