@@ -49,12 +49,16 @@ function isFile(candidate: string) {
 
 const VERIFY_CWD_OUTSIDE_PROJECT = /^(?:[A-Za-z]:|\/)|(?:^|\/)\.\.(?:\/|$)/;
 
-// GH-259: a nested workspace's gate has to run from its own directory, so verifyCwd names it relative to the
-// project root. Leaving it empty keeps the project root.
-function normalizeVerifyCwd(value?: unknown) {
-  const directory = String(value || '').trim().split(path.win32.sep).join('/').replace(/^(?:\.\/)+|\/+$/g, '');
+function projectRelativeVerifyDirectory(directory: string, projectPath: string) {
+  if (projectPath && path.isAbsolute(directory)) return path.relative(projectPath, directory);
+  return directory;
+}
+
+function normalizeVerifyCwd(value?: unknown, projectPath = '') {
+  const relativeDirectory = projectRelativeVerifyDirectory(String(value || '').trim().split(path.win32.sep).join('/'), projectPath);
+  const directory = relativeDirectory.split(path.win32.sep).join('/').replace(/^(?:\.\/)+|\/+$/g, '');
   if (VERIFY_CWD_OUTSIDE_PROJECT.test(directory)) {
-    throw new Error(`verifyCwd must be a directory relative to the project root that stays inside it; received ${JSON.stringify(String(value))}. Use a path such as plugins/app, or leave verifyCwd unset to run the verify command from the project root.`);
+    throw new Error(`omit verifyCwd to run from the project root. Otherwise, verifyCwd must be a directory relative to the project root that stays inside it; received ${JSON.stringify(String(value))}. An absolute directory inside the project is also accepted, such as the absolute path to plugins/app.`);
   }
   return directory === '.' ? '' : directory;
 }
