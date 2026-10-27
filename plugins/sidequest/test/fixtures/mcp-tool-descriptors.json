@@ -1875,7 +1875,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Tree. token, spawn spec; scope additions, not writes; retireOnly.",
+    "description": "Tree. token and spawn spec; scope additions, not writes; retireOnly.",
     "inputSchema": {
       "type": "object",
       "properties": {
