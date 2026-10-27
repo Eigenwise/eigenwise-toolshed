@@ -78,7 +78,7 @@ turn until a receipt exists, and if resupply finds one in your settings it recom
 names the file. The gate scores what the session changed since the merge base, so files that came in
 through a merge, rebase, or pull are never demanded.
 
-When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
+Quartermaster reports existing `autoCompactWindow` settings, including which file wins, and preserves them. When neither user nor project settings sets a value, an installed Model Gateway owns compaction: doctor reads its saved context-window policy through the gateway's own reader and report formatter, including defaults and saved compact-at limits. Without Model Gateway, compaction follows the model default. Use Model Gateway's `context-window` command to set a backend policy; Quartermaster doesn't recommend a fixed global window.
 
 If you choose telemetry, Claude hands the setup to Observability and tells you when a restart is needed. You can also decline and continue without it.
 
