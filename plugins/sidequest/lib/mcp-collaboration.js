@@ -263,7 +263,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Isolated read-only and write dispatches base at the recorded integration branch under the board worktreeBase policy; the result and briefing name the resolved commit and branch. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
+    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token; addedWriteScope lists scope additions, not writes. Isolated read-only and write dispatches base at the recorded integration branch under the board worktreeBase policy; the result and briefing name the resolved commit and branch. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
     inputSchema: {
       type: "object",
       properties: {
@@ -340,7 +340,7 @@ const tools = [
       const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, description, {
         reducedAgentSchema: dispatchState.reducedAgentSchema === true
       });
-      const boardAddedScope = dispatchState.boardAddedFiles?.length ? { boardAddedFiles: dispatchState.boardAddedFiles } : {};
+      const boardAddedScope = dispatchState.addedWriteScope?.length ? { addedWriteScope: dispatchState.addedWriteScope } : {};
       const unscopedWriteScope = dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {};
       const compact = {
         ref: prepared.ticket.ref,

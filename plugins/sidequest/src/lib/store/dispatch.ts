@@ -2494,8 +2494,8 @@ function dispatchArtifactRoot(slug: string, t: StoredRecord, sharedTree: boolean
 function dispatchWriteScope(t: StoredRecord, effectiveFiles: string[], wholeTreeScope: boolean, artifactMode: boolean) {
   const writeScope = wholeTreeScope ? [WHOLE_TREE_SCOPE, ...effectiveFiles] : effectiveFiles;
   const declaredFiles: string[] = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(writeScope, t.files, t.ref);
-  const boardAddedFiles = declaredFiles.filter((file: string) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
-  return { declaredFiles, boardAddedFiles };
+  const addedWriteScope = declaredFiles.filter((file: string) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
+  return { declaredFiles, addedWriteScope };
 }
 
 function workingTreeDirtyBaseline(dirtyBaselineCapture: StoredRecord | null, workingTreeDelivery: boolean): StoredRecord | null {
@@ -2850,7 +2850,7 @@ function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRe
     workProvenance,
     ...checkoutPlacementFields(plan, preflight, opts),
     declaredFiles: plan.artifact.declaredFiles,
-    boardAddedFiles: plan.artifact.boardAddedFiles,
+    addedWriteScope: plan.artifact.addedWriteScope,
     ...continuationFields(plan.isolation.sharedTree, plan.releasedContinuation),
     ...integrationFields(t, plan),
     readonly: plan.isolation.readonly,

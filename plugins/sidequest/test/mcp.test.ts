@@ -1767,13 +1767,14 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   const fullCategories = await callTool('category_list', { project, full: true });
   assert.equal(fullCategories.retrieval, undefined);
 
-  const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
+  store.setBoardConfig(project, { alwaysInScope: ['docs/'] });
+  const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0', files: ['fixture.ts'] });
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1300, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
-  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'worktreeBase', 'writeScope']);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['addedWriteScope', 'effort', 'ref', 'runsLabel', 'spawn', 'worktreeBase']);
+  assert.deepStrictEqual(dispatchPayload.addedWriteScope, ['docs/', '.release/unreleased/SQ-1.md']);
   assert.equal(dispatchPayload.worktreeBase, null);
-  assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
   assert.equal(dispatchPayload.token, undefined);
   assert.equal(dispatchPayload.agent, undefined);
   assert.equal(dispatchPayload.guidance, undefined);
