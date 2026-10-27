@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { runIntegrationQuality, type QualityInput } from '../src/lib/integration-quality.js';
+import type { QualityInput } from '../src/lib/integration-quality.js';
+
+const runIntegrationQuality: typeof import('../src/lib/integration-quality.js').runIntegrationQuality = require('../lib/integration-quality.js').runIntegrationQuality;
 
 function qualityFixture(directory: string, complexity: number, covered: boolean): QualityInput {
   const gate = path.join(directory, 'gate');
@@ -32,6 +35,51 @@ function withQualityFixture(context: { after(callback: () => void): void }, comp
   process.env.SIDEQUEST_CLAUDE_HOME = path.join(directory, 'claude');
   return input;
 }
+
+function initializeNativeProject(input: QualityInput): void {
+  for (const argumentsList of [['init', '-q'], ['add', '.'], ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'baseline']]) {
+    const result = spawnSync('git', argumentsList, { cwd: input.project, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  input.base = 'HEAD';
+}
+
+function nativeMappedPlugin(input: QualityInput): void {
+  const plugin = path.join(input.project, 'plugins/neutral');
+  fs.mkdirSync(path.join(plugin, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(plugin, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(plugin, 'src/subject.ts'), 'export function subject(): number {\n  return 1;\n}\n');
+  fs.writeFileSync(path.join(plugin, 'package.json'), JSON.stringify({ scripts: { 'coverage:lcov': 'node coverage.cjs' } }));
+  fs.writeFileSync(path.join(plugin, 'coverage.cjs'), `const fs = require('node:fs');
+const path = require('node:path');
+fs.writeFileSync(path.join(process.env.QUALITY_GATE_COVERAGE_DIR, 'lcov.info'), 'SF:lib/subject.js\\nDA:1,1\\nDA:2,1\\nDA:3,1\\nend_of_record\\n');`);
+  initializeNativeProject(input);
+  const source = 'export function subject(): number {\n  return 2;\n}\n';
+  fs.writeFileSync(path.join(plugin, 'src/subject.ts'), source);
+  fs.writeFileSync(path.join(plugin, 'lib/subject.js'), 'function subject() {\n  return 2;\n}\n//# sourceMappingURL=subject.js.map\n');
+  fs.writeFileSync(path.join(plugin, 'lib/subject.js.map'), JSON.stringify({ version: 3, sources: ['../src/subject.ts'], sourcesContent: [source], names: [], mappings: 'AAAA;AACA;AACA' }));
+  input.changedPaths = ['plugins/neutral/src/subject.ts', 'plugins/neutral/lib/subject.js'];
+  const gate = path.resolve(__dirname, '../../quality-gate');
+  fs.writeFileSync(path.join(input.project, 'claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: { 'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: input.project, installPath: gate }] } }));
+}
+
+test('native generated LCOV integration measures TypeScript and reports the missing-map refusal', (context) => {
+  const input = withQualityFixture(context, 1, true);
+  nativeMappedPlugin(input);
+  const verify = () => ({ kind: 'command' as const, status: 'passed' as const, evidence: 'fixture verifier' });
+  const measured = runIntegrationQuality([input], verify);
+  assert.equal(measured.quality[0]!.measurementPath, 'crap', JSON.stringify(measured));
+  assert.equal(measured.quality[0]!.status, 'measured', JSON.stringify(measured));
+  assert.equal(measured.quality[0]!.worstBody!.name, 'subject');
+  assert.equal(measured.quality[0]!.worstBody!.crap, 1);
+  assert.equal(measured.quality[0]!.sourceMapTranslations!.length, 1);
+  assert.deepEqual(measured.quality[0]!.sourceMapRefusals, []);
+  fs.rmSync(path.join(input.project, 'plugins/neutral/lib/subject.js.map'));
+  const missing = runIntegrationQuality([input], verify);
+  assert.equal(missing.quality[0]!.status, 'unverified', JSON.stringify(missing));
+  assert.match(JSON.stringify(missing.quality[0]!.sourceMapRefusals), /source map/i);
+  assert.match(missing.quality[0]!.unverified[0]!.unverified!, /LCOV/);
+});
 
 test('native quality orchestration selects configured LCOV command and retains translations', (context) => {
   const input = withQualityFixture(context, 2, true);

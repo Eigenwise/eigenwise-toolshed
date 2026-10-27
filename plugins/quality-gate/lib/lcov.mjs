@@ -34,7 +34,8 @@ function recordLine(lines, value) {
 
 function readCoverage(lcovPath, hashes, root, base) {
   try {
-    const text = fs.readFileSync(lcovPath, 'utf8').replace(/^SF:(.*)$/gm, (_, file) => 'SF:' + path.resolve(root, base ?? '.', file.trimEnd()));
+    const original = fs.readFileSync(lcovPath, 'utf8');
+    const text = base === undefined ? original : original.replace(/^SF:(.*)$/gm, (_, file) => 'SF:' + path.resolve(root, base, file.trimEnd()));
     return { text, hashes, lcovPath };
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;

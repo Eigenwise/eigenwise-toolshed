@@ -130,11 +130,16 @@ function wholeRunCaptureGap(report: NativeReport): string | undefined {
   return rows.every((row) => row.unverified === reason) ? reason : undefined;
 }
 
+function unverifiedRows(report: NativeReport): QualityRow[] {
+  const rows = [...report.unverified, ...(report.changedMetrics ?? []).filter((row) => row.unverified)];
+  return [...new Map(rows.map((row) => [`${row.relativePath}:${row.line}:${row.name}`, row])).values()];
+}
+
 function reportQuality(report: NativeReport, base: string): IntegrationQuality {
   const enforced = (report.changedMetrics ?? []).filter((row) => row.classification !== 'legacy-unchanged');
   const floorFailures = enforced.filter((row) => (row.complexity ?? 0) >= 6).map((row) => `${row.relativePath}:${row.line} ${row.name} cc=${row.complexity} (complexity floor)`);
   const failures = [...report.failures, ...floorFailures];
-  const unverified = report.unverified;
+  const unverified = unverifiedRows(report);
   const measured = { ...emptyQuality('measured'), baseline: base, enforced: enforced.length, failures, unverified, sourceMapTranslations: report.sourceMapTranslations, sourceMapRefusals: report.sourceMapRefusals };
   return {
     ...measured,
@@ -196,7 +201,7 @@ function measuredQuality(gate: string, input: QualityInput, captureDirectory: st
 function missingMeasurement(gate: string, input: QualityInput, files: string[], report: NativeReport, quality: IntegrationQuality): IntegrationQuality {
   const inventory = runNativeReport(gate, input, ['crap', '--json', '--project', input.project, '--base', input.base, '--cc-only', '--receipts-dir', input.directory, ...files.flatMap((file) => ['--source', file])], 'complexity');
   const count = inventory.changedMetrics?.length ?? 0;
-  const reason = report.nothingToScoreReason ?? 'Native coverage report returned no changed bodies';
+  const reason = report.nothingToScoreReason ?? report.unverified[0]?.unverified ?? 'Native coverage report returned no changed bodies';
   const measurementSummary = `0 of ${count} changed bodies measured: ${reason}`;
   if (!count) return { ...quality, measurementSummary };
   return { ...reportQuality(inventory, input.base), status: 'failed', measurementSummary, failures: [measurementSummary], unverified: inventory.changedMetrics!.map((row) => ({ ...row, crap: undefined, unverified: reason })) };
