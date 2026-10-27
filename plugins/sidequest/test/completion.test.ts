@@ -166,10 +166,11 @@ test('quality none renders as not measured and never as a pass', () => {
   assert.doesNotMatch(view.text, /Quality: measured, passed/);
 });
 
-test('the text stays within 200 words and escapes agent text', () => {
+test('the text stays within 200 words and preserves literal agent text', () => {
   const { slug } = board('escape');
   const longReason = '<script>alert(1)</script> ' + 'word '.repeat(400);
-  const ticket = ticketWith(slug, 'Escaping <script>alert(2)</script>', {
+  const title = 'Escaping "quotes" and <angle brackets>';
+  const ticket = ticketWith(slug, title, {
     status: 'todo',
     rejectedSubmissions: [{ commit: CANDIDATE, rejectedAt: '2026-10-27T10:30:00.000Z', reason: longReason, rejectionKind: 'rework' }],
     completionSummary: { version: 1, result: '<script>steal()</script> done', checked: 'word '.repeat(300), uncertain: 'word '.repeat(300), action: 'none', by: SUBMITTER, at: '2026-10-27T10:00:00.000Z', candidate: 'c'.repeat(40) },
@@ -177,8 +178,7 @@ test('the text stays within 200 words and escapes agent text', () => {
   store.addComment(slug, ticket.id, { by: 'someone', body: '<script>alert(3)</script>' });
   const view = viewOf(slug, ticket.ref);
   assert.ok(wordCount(view.text) <= COMPLETION_TEXT_MAX_WORDS, `text has ${wordCount(view.text)} words`);
-  assert.doesNotMatch(view.text, /<script>/);
-  assert.match(view.text, /&lt;script&gt;/);
+  assert.ok(view.text.includes(title), 'text preserves the literal title, including quotes and angle brackets');
   assert.equal(view.stage, 'rejected', 'a summary never changes the derived stage');
   assert.equal(view.summary.stale, true);
   assert.equal(completionText(view), view.text);

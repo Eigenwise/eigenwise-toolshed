@@ -419,10 +419,8 @@ export function completionView(ticket: CompletionTicket, context: CompletionCont
   return view;
 }
 
-const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-
 export function escapeCompletionText(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]!);
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
 function words(value: string): string[] {
