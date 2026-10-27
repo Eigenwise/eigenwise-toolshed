@@ -206,3 +206,5 @@ Verdict: fix empty-cart checkout before shipping.
 Lean: -0 lines
 Not checked: tests were not run; coverage is unavailable.
 ```
+
+Relative LCOV paths default to the project root. Use `--lcov-base <directory>` (config `lcovBase`) when the reporter ran in a plugin or package directory. The base is project-relative unless absolute, and is applied before source-map translation. Absolute `SF:` paths stay absolute. Source hashes and source-map trust checks still apply.

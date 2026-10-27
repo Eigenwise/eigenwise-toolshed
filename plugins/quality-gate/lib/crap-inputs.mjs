@@ -45,7 +45,7 @@ function validateConfig(config) {
   if (Object.prototype.toString.call(config) !== '[object Object]') throw new Error('Config must be a JSON object');
   validateCoverageTimeout(config.coverageTimeoutMs);
   for (const key of ['sources', 'exclude']) validateStringArray(config[key], key);
-  for (const key of ['base', 'ratchet', 'lcov', 'coverageCommand', 'pythonPolicy']) validateString(config[key], key);
+  for (const key of ['base', 'ratchet', 'lcov', 'lcovBase', 'coverageCommand', 'pythonPolicy']) validateString(config[key], key);
 }
 
 function validateStringArray(value, key) {
@@ -89,6 +89,7 @@ export function gateSettings(options, config) {
     exclude: config.exclude ?? ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/vendor/**', '**/test/fixtures/**'],
     base: firstDefined([options.base, config.base, options.ratchet, config.ratchet]),
     coverageTimeoutMs: coverageTimeoutMs(firstDefined([options.coverageTimeoutMs, config.coverageTimeoutMs])),
+    lcovBase: firstDefined([options.lcovBase, config.lcovBase]),
     lcov: options.lcov, fallbackLcov: config.lcov, coverageCommand: firstDefined([options.coverageCommand, config.coverageCommand]),
     usedDeprecatedRatchet: !firstDefined([options.base, config.base]) && Boolean(firstDefined([options.ratchet, config.ratchet])),
   };

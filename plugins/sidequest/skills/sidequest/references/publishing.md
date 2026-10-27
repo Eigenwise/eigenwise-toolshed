@@ -509,3 +509,5 @@ for both paths. Timeout results name the key and effective limit; the owned proc
 terminated before the result is reported. Slot waiting and cleanup add to total wall time.
 Capture logs are written directly under the board project
 `verification/<ref>/` directory and stay readable through the returned `logPath`.
+
+Integration quality uses `crap` when the project Quality Gate config supplies `coverageCommand`, or a single changed plugin supplies `coverage:lcov`. Plugin LCOV paths resolve from that plugin directory. Otherwise integration keeps the V8 `measure` path. Integration receipts record `measurementPath`, `sourceMapTranslations`, and `sourceMapRefusals`. A report with no changed bodies is cross-checked with the AST complexity inventory; a nonzero inventory refuses delivery with the missing-body count.
