@@ -70,6 +70,13 @@ $VAR, \${VAR} and %VAR% in the command expand before it runs, on every platform.
 Existing explicit or fallback output must be rewritten during the command. Missing or
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
+LCOV naming generated code is translated through a flat Source Map v3 with sourcesContent onto the
+original sources, for any language: the file's last sourceMappingURL (data: or relative), else <file>.map.
+Sources must be in the project and match disk; generated files and maps that existed before the command
+must be unchanged after it (existing LCOV: listed in <lcov>.sources.json); a tracked generated file must
+match its committed blob apart from a trailing sourceMappingURL line; every segment must be in bounds.
+Unmapped original lines stay UNVERIFIED. Refusals warn and keep the original record; receipts list
+sourceMapTranslations and sourceMapRefusals.
 Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 coverage-dependent unverified/prerequisite.
 crap and measure receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
 --receipts-dir <path> overrides QUALITY_GATE_RECEIPTS_DIR for both commands (relative to cwd).
