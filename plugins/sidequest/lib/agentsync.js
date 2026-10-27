@@ -941,7 +941,7 @@ function scopeAddedBeyondDeclared(ticket, slug, declared) {
   const declaredKeys = new Set(declared.map(scopeKey));
   const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
   const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
-  return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
+  return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Added write scope (board config alwaysInScope, not declared on this ticket; paths are scope additions, not writes; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
 }
 function noDeclaredFilesText(ticket) {
   const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
