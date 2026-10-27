@@ -169,7 +169,7 @@ test('quality none renders as not measured and never as a pass', () => {
 test('the text stays within 200 words and preserves literal agent text', () => {
   const { slug } = board('escape');
   const longReason = '<script>alert(1)</script> ' + 'word '.repeat(400);
-  const title = 'Escaping "quotes" and <angle brackets>';
+  const title = 'Literal "quotes", \'apostrophe\' & <angles>';
   const ticket = ticketWith(slug, title, {
     status: 'todo',
     rejectedSubmissions: [{ commit: CANDIDATE, rejectedAt: '2026-10-27T10:30:00.000Z', reason: longReason, rejectionKind: 'rework' }],
@@ -179,10 +179,18 @@ test('the text stays within 200 words and preserves literal agent text', () => {
   const view = viewOf(slug, ticket.ref);
   assert.ok(wordCount(view.text) <= COMPLETION_TEXT_MAX_WORDS, `text has ${wordCount(view.text)} words`);
   assert.ok(view.text.includes(title), 'text preserves the literal title, including quotes and angle brackets');
+  assert.ok(view.text.includes('<script>alert(1)</script>'), 'text preserves literal agent-authored rejection text');
+  assert.doesNotMatch(view.text, /&(?:quot|amp|lt|gt|#39);/);
   assert.equal(view.stage, 'rejected', 'a summary never changes the derived stage');
   assert.equal(view.summary.stale, true);
   assert.equal(completionText(view), view.text);
   for (const label of ['Result: ', 'Checked: ', 'Still uncertain: ', 'Your action: ']) assert.ok(view.text.includes(label), `has ${label}`);
+});
+
+test('plain completion text strips terminal controls without changing printable characters', () => {
+  const view = completionView({ ref: 'SQ-1', title: 'Safe\u001b[31m\u0000 "quote" & <tag>' }, {});
+  assert.ok(view.text.includes('Safe[31m "quote" & <tag>'));
+  assert.doesNotMatch(view.text, /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/);
 });
 
 test('evidence paths outside the approved roots are dropped', () => {

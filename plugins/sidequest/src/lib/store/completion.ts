@@ -419,7 +419,7 @@ export function completionView(ticket: CompletionTicket, context: CompletionCont
   return view;
 }
 
-export function escapeCompletionText(value: string): string {
+export function sanitizeCompletionText(value: string): string {
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
@@ -532,7 +532,7 @@ export function completionText(view: CompletionView): string {
     ['Still uncertain: ', uncertainSection(view), SECTION_WORDS.uncertain],
     ['Your action: ', actionSection(view), SECTION_WORDS.action],
   ];
-  return sections.map(([label, body, limit]) => label + escapeCompletionText(clampWords(body, limit))).join('\n');
+  return sections.map(([label, body, limit]) => label + sanitizeCompletionText(clampWords(body, limit))).join('\n');
 }
 
 
@@ -626,7 +626,7 @@ function storyCompletionText(view: StoryCompletionView): string {
     'Decisions: ' + clampWords(view.decisions.count + '; ' + (view.decisions.latest ?? 'none recorded.'), 18),
     'Details: completion <ref>',
   ];
-  return sections.map(escapeCompletionText).join('\n');
+  return sections.map(sanitizeCompletionText).join('\n');
 }
 
 function storyBlocker(children: CompletionView[]): CompletionBlocker | null {
