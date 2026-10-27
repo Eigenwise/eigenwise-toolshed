@@ -338,8 +338,7 @@ the reviewer whose whole job it was. You judge plans and route fixes.
   no docs ticket is not done.
 - **Decisions**: log the contract calls, the rejected proposals and why, and the assumptions you made
   without asking, on the story, so the next session inherits the reasoning instead of re-deriving it.
-- **A short report**: what shipped, the refs, the decisions that matter, and anything deferred with
-  the reason.
+- **A short report**: use `completion <ref|US-n> --text` output, plus decisions logged on the story. Do not re-describe the work by hand.
 
 ---
 

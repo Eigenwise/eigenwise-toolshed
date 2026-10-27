@@ -1003,7 +1003,9 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   }
   const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
   const executor = canonicalPreparedDispatchExecutor(ticket) || "";
-  const closeout = ticketCloseout(ticket);
+  const closeout = `${ticketCloseout(ticket)}
+
+Pass summary with submit/done: result = user-visible change with one example; checked = exercised behavior and observed result (mocked or real); uncertain = skipped, unverified or assumed; action = a real decision, access or authorization needed, else "none". Each plain-text field is at most 600 characters; body still carries the full report.`;
   const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
   const readOnlyScratchSpace = ticketReadOnlyScratchSpace(ticket);

@@ -28,11 +28,14 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var completion_exports = {};
 __export(completion_exports, {
+  COMPLETION_SUMMARY_SCHEMA: () => COMPLETION_SUMMARY_SCHEMA,
   COMPLETION_TEXT_MAX_WORDS: () => COMPLETION_TEXT_MAX_WORDS,
   completionStage: () => completionStage,
+  completionSummaryInput: () => completionSummaryInput,
   completionText: () => completionText,
   completionView: () => completionView,
   createCompletion: () => createCompletion,
+  createSummaryCloseout: () => createSummaryCloseout,
   escapeCompletionText: () => escapeCompletionText,
   storyCompletionView: () => storyCompletionView
 });
@@ -397,12 +400,18 @@ function uncertainSection(view) {
   const doubts = DOUBTS.map((doubt) => doubt(view)).filter(Boolean);
   return doubts.length ? doubts.join(" ") : "Nothing flagged by the records.";
 }
-function actionSection(view) {
+function factualAction(view) {
   const blocker = view.blocker;
   if (blocker?.actor === "user") return blocker.nextAction;
   const noAction = TERMINAL_STAGES.has(view.stage) || Boolean(blocker);
   const next = blocker ? ` Next (${blocker.actor}): ${blocker.nextAction}` : "";
   return noAction ? `No action needed.${next}` : "Check the ticket; the records name no next step.";
+}
+function actionSection(view) {
+  return factualAction(view) + summaryAction(view);
+}
+function summaryAction(view) {
+  return view.summary?.action ? ` Agent said: ${view.summary.action}` : "";
 }
 function completionText(view) {
   const sections = [
@@ -531,13 +540,107 @@ function createCompletion(dependencies) {
   }
   return { completionPayload, storyCompletionPayload };
 }
+const SUMMARY_FIELDS = ["result", "checked", "uncertain", "action"];
+const COMPLETION_SUMMARY_SCHEMA = {
+  type: "object",
+  properties: Object.fromEntries(SUMMARY_FIELDS.map((field) => [field, { type: "string", maxLength: 600 }])),
+  required: [...SUMMARY_FIELDS],
+  additionalProperties: false
+};
+function validateSummaryField(value) {
+  if (typeof value !== "string" || value.length > 600 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value)) {
+    throw new Error("summary fields must be plain text of at most 600 characters");
+  }
+  return value;
+}
+function summaryDescriptors(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("summary must contain result, checked, uncertain and action");
+  return Object.getOwnPropertyDescriptors(value);
+}
+function completionSummaryInput(value) {
+  if (value === void 0) return void 0;
+  const fields = summaryDescriptors(value);
+  if (Object.keys(fields).some((field) => !SUMMARY_FIELDS.some((allowed) => allowed === field))) throw new Error("summary contains an unknown field");
+  return {
+    result: validateSummaryField(fields.result?.value),
+    checked: validateSummaryField(fields.checked?.value),
+    uncertain: validateSummaryField(fields.uncertain?.value),
+    action: validateSummaryField(fields.action?.value)
+  };
+}
+function matchesCandidateSummary(recorded, summary, candidate) {
+  return recorded?.candidate === candidate && identicalSummary(recorded, summary);
+}
+function identicalSummary(recorded, summary) {
+  return SUMMARY_FIELDS.every((field) => recorded?.[field] === summary[field]);
+}
+function summaryCloseoutRecorded(ticket, kind, by) {
+  if (kind === "done") return ticket.status === "done" && ticket.completion?.by === by;
+  return ticket.submission?.by === by && !ticket.submission.integratedAt;
+}
+function summaryCandidate(ticket, options, kind) {
+  if (kind === "submit") return options.commit?.toLowerCase() || options.sourceRevision?.value || null;
+  return candidateOf(ticket || { ref: "" });
+}
+function repeatSummaryCloseout(ticket, by, candidate, kind, summary) {
+  if (!ticket || ticket.claim || ticket.completionSummary?.by !== by) return false;
+  const terminal = summaryCloseoutRecorded(ticket, kind, by);
+  return terminal && matchesCandidateSummary(ticket.completionSummary, summary, candidate);
+}
+function persistCompletionSummary(dependencies, slug, ref, by, summary, candidate) {
+  const ticket = dependencies.getTicket(slug, ref);
+  if (!ticket) throw new Error("summary ticket disappeared after closeout");
+  if (matchesCandidateSummary(ticket.completionSummary, summary, candidate)) return ticket;
+  ticket.completionSummary = { version: 1, ...summary, by, at: (/* @__PURE__ */ new Date()).toISOString(), candidate };
+  dependencies.putTicket(slug, ticket);
+  return ticket;
+}
+function recordSummaryError(dependencies, slug, ref, by, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    dependencies.addComment(slug, ref, { by, body: `Completion summary could not be saved: ${message}`, source: "summary" });
+  } catch {
+    return `${message} (summary error comment also could not be saved)`;
+  }
+  return message;
+}
+function createSummaryCloseout(dependencies) {
+  return function summaryCloseout(slug, ref, by, options, kind, close) {
+    const summary = completionSummaryInput(options.summary);
+    if (!summary) return close();
+    const ticket = dependencies.getTicket(slug, ref);
+    const candidate = summaryCandidate(ticket, options, kind);
+    if (ticket && repeatSummaryCloseout(ticket, by, candidate, kind, summary)) return { ok: true, ticket };
+    const result = close();
+    if (!result.ok) return result;
+    return saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result);
+  };
+}
+function saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result) {
+  try {
+    const candidate = candidateOf(result.ticket || { ref });
+    let saved = false;
+    const ticket = dependencies.getTicket(slug, ref);
+    dependencies.withTicketLock(slug, ticket?.id || ref, () => {
+      result.ticket = persistCompletionSummary(dependencies, slug, ref, by, summary, candidate);
+      saved = true;
+    });
+    if (!saved) throw new Error("summary ticket lock unavailable");
+    return result;
+  } catch (error) {
+    return { ...result, summaryError: recordSummaryError(dependencies, slug, ref, by, error) };
+  }
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  COMPLETION_SUMMARY_SCHEMA,
   COMPLETION_TEXT_MAX_WORDS,
   completionStage,
+  completionSummaryInput,
   completionText,
   completionView,
   createCompletion,
+  createSummaryCloseout,
   escapeCompletionText,
   storyCompletionView
 });

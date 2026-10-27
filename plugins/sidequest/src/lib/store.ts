@@ -71,7 +71,7 @@ const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
 const { createPulse } = require('./store/pulse.js');
-const { createCompletion } = require('./store/completion.js');
+const { createCompletion, createSummaryCloseout } = require('./store/completion.js');
 const { createRouting } = require('./store/routing.js');
 const { createTickets } = require('./store/tickets.js');
 const { createSubmissions } = require('./store/submissions.js');
@@ -1752,7 +1752,7 @@ const {
   closeSubmissionAsSuperseded,
   supersedeBuiltOnSources,
   submissionOwnershipFailure,
-  submitTicket,
+  submitTicket: submitTicketWithoutSummary,
   pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
@@ -3904,7 +3904,7 @@ function externalDeliverableCloseout(slug?: any, ticket?: any, verify?: any) {
 // Complete a ticket: mark it done and clear its claim. An optional { model,
 // effort } (from `done --model … --effort …`) is recorded as a workedBy
 // provenance stamp; invalid values throw before anything is written.
-function completeTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
+function completeTicketWithoutSummary(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
   const ticket = getTicket(slug, idOrRef);
   const dispatched = resolvedDispatchRoute(ticket);
@@ -4718,6 +4718,16 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   storyDecisionLogWarnings,
   submissionProjection,
 });
+
+const summaryCloseout = createSummaryCloseout({ getTicket, putTicket, addComment, withTicketLock });
+
+function submitTicket(slug: string, ref: string, by: string, opts: Parameters<typeof submitTicketWithoutSummary>[3] = {}) {
+  return summaryCloseout(slug, ref, by, opts, 'submit', () => submitTicketWithoutSummary(slug, ref, by, opts));
+}
+
+function completeTicket(slug: string, ref: string, by: string, opts: Parameters<typeof completeTicketWithoutSummary>[3] = {}) {
+  return summaryCloseout(slug, ref, by, opts, 'done', () => completeTicketWithoutSummary(slug, ref, by, opts));
+}
 
 const { completionPayload, storyCompletionPayload } = createCompletion({ getTicket, getStory, listTickets, openBlockers, negativeControlResult, projectDir, readMeta });
 

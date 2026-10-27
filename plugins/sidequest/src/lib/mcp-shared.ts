@@ -452,6 +452,10 @@ async function closeExecutorAndReclaimTree(slug: string, projectPath: string, re
   if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
 }
 
+function completionNotices(result: { advisory?: string; summaryError?: string }) {
+  return Object.fromEntries(Object.entries(result).filter(([key, value]) => ['advisory', 'summaryError'].includes(key) && Boolean(value)));
+}
+
 function mutationAck(project?: any, result?: any, changed?: any) {
   const ticket = result.ticket;
   const out: any = { ok: !!result.ok, project };
@@ -463,7 +467,7 @@ function mutationAck(project?: any, result?: any, changed?: any) {
     }
     return out;
   }
-  if (result.advisory) out.advisory = result.advisory;
+  Object.assign(out, completionNotices(result));
   return Object.assign(out, changed || {});
 }
 

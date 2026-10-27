@@ -663,3 +663,7 @@ Capture logs are written directly under the board project
 Sidequest checks overlapping pending candidates with a checkout-free trial merge against their recorded target. Disjoint edits in the same file can integrate as singletons. Textual conflicts still refuse `candidate_overlap`, with the conflicting files and Git evidence. If the trial can't run, or a candidate has no Git commit, the shared changed paths still refuse `candidate_overlap`.
 
 An assembled wave can pin different executable verifiers. Each distinct command runs once, in order, on the composed tree, and the receipt records each result. A failing command blocks delivery. Shared-environment requirements stay deferred until delivery.
+
+## Completion reports
+
+Executors can pass four plain-text summary fields with MCP `submit` or `done`: `result`, `checked`, `uncertain`, and `action` (up to 600 characters each). The full `body` report is still required. `completion SQ-N --text` reads the saved summary beside recorded verification, delivery and blockers. A summary stays attached to its candidate; a later candidate makes it stale. Agent text cannot change lifecycle facts or dismiss a decision waiting on you. If saving the summary fails after closeout, the closeout stays successful and returns `summaryError`, with a ticket comment when storage allows it.
