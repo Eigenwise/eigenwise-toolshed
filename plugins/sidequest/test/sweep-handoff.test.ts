@@ -60,6 +60,26 @@ Module._load = function(request, parent, isMain) {
   }
 });
 
+test('a SessionStart budget handoff names preparation before any candidate is classified', async () => {
+  const environment = { ...process.env };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-preparing-'));
+  process.env.SIDEQUEST_HOME = home;
+  const flight = acquireSweepFlight(home)!;
+  try {
+    for (const reason of ['recovery_retention', 'listing_candidates']) {
+      fs.writeFileSync(reportFile(home).replace(/\.json$/, '.progress.json'), JSON.stringify({
+        phase: 'preparing', reason, candidates: 0, observed: 0, planned: 0, removed: 0, keptByReason: {},
+      }));
+      const notices = await runSweep({ cwd: home });
+      assert.ok(notices.join('\n').includes(`Preparing (${reason}).`), 'the budget handoff preserves the preparing reason');
+    }
+  } finally {
+    flight.release();
+    process.env = environment;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('dead sweep ownership is reclaimed without letting an old token release its successor', () => {
   const environment = { ...process.env };
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-reclaim-'));

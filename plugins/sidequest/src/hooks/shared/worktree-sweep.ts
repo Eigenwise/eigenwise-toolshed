@@ -262,11 +262,11 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
       removed += currentProgress.removed;
       candidates += currentProgress.candidates;
       observed += currentProgress.observed;
-      if (currentProgress.phase === 'classifying') {
-        phase = 'classifying';
+      if (['preparing', 'classifying'].includes(currentProgress.phase)) {
+        phase = currentProgress.phase;
         current = currentProgress.current;
         reason = currentProgress.reason;
-      } else if (phase !== 'classifying' && currentProgress.phase === 'sweeping') {
+      } else if (!['preparing', 'classifying'].includes(phase) && currentProgress.phase === 'sweeping') {
         phase = 'sweeping';
       }
       for (const [reason, count] of Object.entries(currentProgress.keptByReason)) {

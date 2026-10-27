@@ -142,7 +142,7 @@ function normalizedProgress(value) {
   if (!value || typeof value !== "object") return EMPTY_SWEEP_PROGRESS;
   const record = value;
   const count = (candidate) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
-  const phase = ["idle", "classifying", "sweeping", "complete"].includes(String(record.phase)) ? String(record.phase) : "idle";
+  const phase = ["idle", "preparing", "classifying", "sweeping", "complete"].includes(String(record.phase)) ? String(record.phase) : "idle";
   const text = (candidate) => typeof candidate === "string" && candidate.trim() ? candidate : null;
   const keptByReason = Object.fromEntries(Object.entries(record.keptByReason || {}).map(([reason, amount]) => [reason, count(amount)]).filter(([, amount]) => amount > 0));
   return {
@@ -430,11 +430,11 @@ async function sweepWorktrees(data, includeKnownProjects) {
       removed += currentProgress.removed;
       candidates += currentProgress.candidates;
       observed += currentProgress.observed;
-      if (currentProgress.phase === "classifying") {
-        phase = "classifying";
+      if (["preparing", "classifying"].includes(currentProgress.phase)) {
+        phase = currentProgress.phase;
         current2 = currentProgress.current;
         reason = currentProgress.reason;
-      } else if (phase !== "classifying" && currentProgress.phase === "sweeping") {
+      } else if (!["preparing", "classifying"].includes(phase) && currentProgress.phase === "sweeping") {
         phase = "sweeping";
       }
       for (const [reason2, count] of Object.entries(currentProgress.keptByReason)) {
