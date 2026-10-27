@@ -394,6 +394,32 @@ function sendTicketDetail(res, slug, idOrRef) {
   }
   sendJson(res, 200, { ticket: annotateReminders([Object.assign(ticket, { project: slug })])[0] });
 }
+function ticketCompletionReply(slug, idOrRef) {
+  const view = store.completionPayload(slug, idOrRef);
+  return view ? [200, { completion: view }] : [404, { error: "ticket not found" }];
+}
+function storyCompletionReply(slug, idOrRef) {
+  if (typeof store.storyCompletionPayload !== "function") return [200, { available: false, completion: null }];
+  const view = store.storyCompletionPayload(slug, idOrRef);
+  return view ? [200, { available: true, completion: view }] : [404, { error: "story not found" }];
+}
+const COMPLETION_READS = [
+  [/^\/api\/tickets\/([^/]+)\/completion$/, ticketCompletionReply],
+  [/^\/api\/stories\/([^/]+)\/completion$/, storyCompletionReply]
+];
+function completionReply(pathname, project) {
+  const route = COMPLETION_READS.map(([pattern, reply]) => ({ match: pattern.exec(pathname), reply })).find((entry) => entry.match);
+  if (!route) return null;
+  const slug = String(project ?? "");
+  if (!slug || slug === "all") return [400, { error: "project query param is required" }];
+  return route.reply(slug, route.match[1]);
+}
+async function serveRead(pathname, query, res) {
+  const reply = completionReply(pathname, query.project);
+  if (!reply) return serveStatic(pathname, res);
+  sendJson(res, reply[0], reply[1]);
+  return true;
+}
 async function handle(req, res) {
   const parsed = url.parse(req.url, true);
   const pathname = decodeURIComponent(parsed.pathname);
@@ -1183,7 +1209,7 @@ async function handle(req, res) {
     }
     return;
   }
-  if (req.method === "GET" && await serveStatic(pathname, res)) return;
+  if (req.method === "GET" && await serveRead(pathname, q, res)) return;
   sendJson(res, 404, { error: "not found" });
 }
 const REMINDER_TICK_MS = 15 * 1e3;

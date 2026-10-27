@@ -543,6 +543,29 @@ test('dashboard ticket list serves card rows and the detail read carries the his
   assert.equal(missing.status, 404);
 });
 
+test('dashboard completion reads serve the ticket view and degrade the story view (SQ-3964)', async (t?: any) => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-completion-')), 'Dashboard completion').slug;
+  const ticket = store.createTicket(project, { title: 'completion panel ticket' });
+  const started = await start(await availablePort());
+  const storyRead = store.storyCompletionPayload;
+  t.after(() => { store.storyCompletionPayload = storyRead; started.server.close(); });
+  const query = `?project=${encodeURIComponent(project)}`;
+
+  const read = await fetchJson(started.port, `/api/tickets/${ticket.ref}/completion${query}`);
+  assert.equal(read.completion.ref, ticket.ref);
+  assert.equal(read.completion.stage, 'ready');
+  assert.equal(read.completion.summary, null);
+  assert.ok(read.completion.text.includes('Result: '));
+  assert.equal((await requestRaw(started.port, `/api/tickets/SQ-404404/completion${query}`)).status, 404);
+  assert.equal((await requestRaw(started.port, `/api/tickets/${ticket.ref}/completion?project=all`)).status, 400);
+
+  store.storyCompletionPayload = undefined;
+  assert.deepEqual(await fetchJson(started.port, `/api/stories/US-1/completion${query}`), { available: false, completion: null });
+  store.storyCompletionPayload = (slug: string, idOrRef: string) => (slug === project && idOrRef === 'US-1' ? { ref: 'US-1', stage: 'partial' } : null);
+  assert.deepEqual(await fetchJson(started.port, `/api/stories/US-1/completion${query}`), { available: true, completion: { ref: 'US-1', stage: 'partial' } });
+  assert.equal((await requestRaw(started.port, `/api/stories/US-2/completion${query}`)).status, 404);
+});
+
 test('serve with a gone --handoff-pid answers health while a heavy all-project list builds (GH-629)', { timeout: 120000 }, async (t?: any) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-heavy-'));
   const home = path.join(root, 'home');
