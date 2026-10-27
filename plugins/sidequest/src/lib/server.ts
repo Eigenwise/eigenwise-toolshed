@@ -434,6 +434,44 @@ function sendTicketDetail(res: any, slug: string, idOrRef: string) {
   sendJson(res, 200, { ticket: annotateReminders([Object.assign(ticket, { project: slug })])[0] });
 }
 
+type JsonReply = [number, Record<string, unknown>];
+
+function ticketCompletionReply(slug: string, idOrRef: string): JsonReply {
+  const view = store.completionPayload(slug, idOrRef);
+  return view ? [200, { completion: view }] : [404, { error: 'ticket not found' }];
+}
+
+// The story view lands with SQ-3963; a store without it answers available:false
+// so the dashboard says "story view not available" instead of guessing one.
+function storyCompletionReply(slug: string, idOrRef: string): JsonReply {
+  if (typeof store.storyCompletionPayload !== 'function') return [200, { available: false, completion: null }];
+  const view = store.storyCompletionPayload(slug, idOrRef);
+  return view ? [200, { available: true, completion: view }] : [404, { error: 'story not found' }];
+}
+
+const COMPLETION_READS: [RegExp, (slug: string, idOrRef: string) => JsonReply][] = [
+  [/^\/api\/tickets\/([^/]+)\/completion$/, ticketCompletionReply],
+  [/^\/api\/stories\/([^/]+)\/completion$/, storyCompletionReply],
+];
+
+// GET /api/tickets/:id/completion and /api/stories/:id/completion (?project=slug):
+// the completion view the dashboard panel renders, evidence paths already
+// limited to approved roots by completionView.
+function completionReply(pathname: string, project: unknown): JsonReply | null {
+  const route = COMPLETION_READS.map(([pattern, reply]) => ({ match: pattern.exec(pathname), reply })).find((entry) => entry.match);
+  if (!route) return null;
+  const slug = String(project ?? '');
+  if (!slug || slug === 'all') return [400, { error: 'project query param is required' }];
+  return route.reply(slug, route.match![1]!);
+}
+
+async function serveRead(pathname: string, query: Record<string, unknown>, res: any): Promise<boolean> {
+  const reply = completionReply(pathname, query.project);
+  if (!reply) return serveStatic(pathname, res);
+  sendJson(res, reply[0], reply[1]);
+  return true;
+}
+
 /* ------------------------------------------------------------------ *
  *  Routing
  * ------------------------------------------------------------------ */
@@ -1266,7 +1304,7 @@ async function handle(req?: any, res?: any) {
     return;
   }
 
-  if (req.method === 'GET' && await serveStatic(pathname, res)) return;
+  if (req.method === 'GET' && await serveRead(pathname, q, res)) return;
 
   sendJson(res, 404, { error: 'not found' });
 }

@@ -5,6 +5,7 @@
 	import StoryPicker from './StoryPicker.svelte';
 	import AttachmentPicker, { type PendingImage } from './AttachmentPicker.svelte';
 	import CommentThread from './CommentThread.svelte';
+	import CompletionPanel from './CompletionPanel.svelte';
 	import LinkEditor from './LinkEditor.svelte';
 	import ReminderEditor from './ReminderEditor.svelte';
 	import { renderMarkdown } from './markdown';
@@ -127,7 +128,7 @@
 					<label><span>Affected files</span><input aria-label="Affected files" value={(editingTicket?.files as string[] | undefined)?.join(', ') ?? files} onblur={(event) => autosave('files', split(event.currentTarget.value))} oninput={(event) => { if (!editingTicket) files = event.currentTarget.value; }} /></label>
 					<AttachmentPicker board={board} ticket={editingTicket ?? undefined} bind:pending={pendingImages} />
 				</div>
-				{#if editingTicket}<aside><ReminderEditor board={board} ticket={editingTicket} /><LinkEditor board={board} ticket={editingTicket} /><CommentThread board={board} ticket={editingTicket} /></aside>{/if}
+				{#if editingTicket}<aside><ReminderEditor board={board} ticket={editingTicket} /><LinkEditor board={board} ticket={editingTicket} /><CompletionPanel view={board.ticketCompletion?.ref === editingTicket.ref ? board.ticketCompletion : null} anchors={(editingTicket.files as string[] | undefined) ?? []} /><CommentThread board={board} ticket={editingTicket} /></aside>{/if}
 			</div>
 			{#if editingTicket}<footer class="editor-actions"><Button variant="danger" onclick={() => { board.deleteTicket(editingTicket); close(); }}>Delete ticket</Button><Button onclick={() => { board.archiveTicket(editingTicket); close(); }}>Archive ticket</Button></footer>{:else}<footer><Button onclick={close}>Cancel</Button><Button variant="primary" disabled={saving} onclick={create}>Create ticket</Button></footer>{/if}
 		</div>
