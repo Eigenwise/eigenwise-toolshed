@@ -42,7 +42,7 @@ export class PollingController {
       this.state.routingCatalog = routingCatalog;
       const snapshot: Snapshot = { projects: projects.projects, tickets: tickets.tickets, stories: stories.stories, categories: categories.categories, notifications, health };
       this.state.applySnapshot(snapshot);
-      await this.state.loadTicketDetail();
+      await Promise.all([this.state.loadTicketDetail(), this.state.loadTicketCompletion()]);
       if (this.state.view === 'archive') this.state.archivedTickets = (await this.state.api.tickets(this.state.selectedProject, true)).tickets;
     } catch (error) {
       this.state.offline = true;

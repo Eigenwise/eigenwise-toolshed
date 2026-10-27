@@ -3,11 +3,20 @@ import path from 'node:path';
 import type { VerificationResult } from './kernel/verification.js';
 import { runProcessVerification } from './ports/process.js';
 
+const { resolveSuite } = require('./suite-resolver.js');
+
 export interface IntegrationTestSelection {
   plugin: string;
   files: string[];
+  pluginRunnerFiles?: string[];
   excludedFiles?: string[];
 }
+
+// Tests importing claude-code only load inside the plugin's hooks-module runner; node --test fails
+// them at import with ERR_MODULE_NOT_FOUND (SQ-3940).
+const PLUGIN_RUNNER_SPECIFIER = /^claude-code(?:\/|$)/;
+const DEFAULT_PLUGIN_RUNNER = 'claude plugin test .';
+const PLUGIN_RUNNER_SPLIT = 'Tests that import claude-code or live under a hooks module root run through the plugin runner (its moduleTest command, else claude plugin test .), never node --test; without a runnable claude CLI they are recorded as unverified (or toolchain_missing) and do not fail delivery.';
 
 const MODULE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
 const STATIC_MODULE_SPECIFIER = /\b(?:import\s+(?:[^;'"()]*?\s+from\s*)?|export\s+[^;'"()]*?\s+from\s*|require\s*\(\s*)['"]([^'"\r\n]+)['"]/g;
@@ -34,12 +43,15 @@ function importedModule(importer: string, specifier: string, plugin: string): st
   if (!specifier.startsWith('.')) return undefined;
   const imported = path.resolve(path.dirname(importer), specifier);
   const source = sourceIdentity(imported, plugin);
-  return existingModule(source) ?? existingModule(imported);
+  return existingModule(source) ?? existingModule(imported) ?? existingModule(imported.replace(/\.([cm]?)js$/, '.$1ts'));
+}
+
+function moduleSpecifiers(file: string): string[] {
+  return Array.from(fs.readFileSync(file, 'utf8').matchAll(STATIC_MODULE_SPECIFIER), (match) => match[1]!);
 }
 
 function staticImports(file: string, plugin: string): string[] {
-  const imports = Array.from(fs.readFileSync(file, 'utf8').matchAll(STATIC_MODULE_SPECIFIER), (match) => match[1]!);
-  return imports.map((specifier) => importedModule(file, specifier, plugin)).filter((imported): imported is string => imported !== undefined);
+  return moduleSpecifiers(file).map((specifier) => importedModule(file, specifier, plugin)).filter((imported): imported is string => imported !== undefined);
 }
 
 function directoryFiles(directory: string): string[] {
@@ -55,6 +67,32 @@ function entryFiles(directory: string, entry: fs.Dirent): string[] {
 
 function importingTest(file: string): boolean {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file);
+}
+
+function hooksModuleRoots(plugin: string): string[] {
+  const hooks = path.join(plugin, 'hooks');
+  const manifest = path.join(hooks, 'hooks.json');
+  if (!fs.existsSync(manifest)) return [];
+  const modules: unknown = JSON.parse(fs.readFileSync(manifest, 'utf8')).modules;
+  if (!Array.isArray(modules)) return [];
+  const hooksIdentity = moduleIdentity(hooks);
+  return modules.filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => moduleIdentity(path.dirname(path.join(hooks, entry))))
+    .filter((root) => root === hooksIdentity || root.startsWith(hooksIdentity + '/'));
+}
+
+function pluginRunnerTest(file: string, moduleRoots: string[]): boolean {
+  const identity = moduleIdentity(file);
+  return moduleRoots.some((root) => identity.startsWith(root + '/')) || moduleSpecifiers(file).some((specifier) => PLUGIN_RUNNER_SPECIFIER.test(specifier));
+}
+
+function discoveredTests(plugin: string, moduleRoots: string[]): string[] {
+  const files = [path.join(plugin, 'test'), ...moduleRoots].flatMap(directoryFiles).filter(importingTest);
+  return Array.from(new Set(files.map((file) => path.resolve(file))));
+}
+
+function pluginRelative(plugin: string, files: string[]): string[] {
+  return files.map((file) => path.relative(plugin, file).replaceAll('\\', '/')).sort();
 }
 
 function importedGraph(tests: string[], plugin: string): Map<string, string[]> {
@@ -93,14 +131,18 @@ function addDependents(file: string, dependents: Map<string, string[]>, affected
 
 function pluginSelection(project: string, pluginName: string, changedPaths: string[]): IntegrationTestSelection {
   const plugin = path.join(project, 'plugins', pluginName);
-  const tests = directoryFiles(path.join(plugin, 'test')).filter(importingTest);
+  const moduleRoots = hooksModuleRoots(plugin);
+  const tests = discoveredTests(plugin, moduleRoots);
   const guidance = changedPaths.some(guidancePath) ? tests.filter((file) => /(?:^|[/\\])(?:agent-guidance|skill|compatibility)\.test\.[jt]s$/.test(file)) : [];
   const graph = importedGraph(tests, plugin);
   const changed = new Set(changedPaths.map((file) => sourceIdentity(path.resolve(project, file), plugin)));
   const affected = dependentModules(graph, changed);
+  const selected = tests.filter((file) => affected.has(moduleIdentity(file)) || guidance.includes(file));
+  const pluginRunnerFiles = selected.filter((file) => pluginRunnerTest(file, moduleRoots));
   return {
     plugin: `plugins/${pluginName}`,
-    files: tests.filter((file) => affected.has(moduleIdentity(file)) || guidance.includes(file)).map((file) => path.relative(plugin, file).replaceAll('\\', '/')).sort(),
+    files: pluginRelative(plugin, selected.filter((file) => !pluginRunnerFiles.includes(file))),
+    ...(pluginRunnerFiles.length ? { pluginRunnerFiles: pluginRelative(plugin, pluginRunnerFiles) } : {}),
   };
 }
 
@@ -109,7 +151,7 @@ export interface IntegrationTestBatch {
   files: string[];
   command: string;
   timeoutMilliseconds: number;
-  shape: 'selected-files' | 'test:full' | 'npm-test';
+  shape: 'selected-files' | 'test:full' | 'npm-test' | 'plugin-runner';
 }
 
 function quoteArgument(value: string): string {
@@ -139,7 +181,8 @@ function testScripts(project: string, plugin: string): Record<string, string> {
 
 function pluginTestFiles(project: string, plugin: string): string[] {
   const root = path.join(project, plugin);
-  return directoryFiles(path.join(root, 'test')).filter(importingTest).map((file) => path.relative(root, file).replaceAll('\\', '/')).sort();
+  const moduleRoots = hooksModuleRoots(root);
+  return pluginRelative(root, directoryFiles(path.join(root, 'test')).filter((file) => importingTest(file) && !pluginRunnerTest(file, moduleRoots)));
 }
 
 function testBatchCommand(scripts: Record<string, string>, files: string[], normalSuite: boolean): string {
@@ -148,7 +191,17 @@ function testBatchCommand(scripts: Record<string, string>, files: string[], norm
   return runner + ' --test-concurrency=1 ' + files.map((file) => quoteArgument(file.replaceAll('[', '[[]'))).join(' ');
 }
 
+function pluginRunnerBatch(project: string, selection: IntegrationTestSelection, timeoutMilliseconds: number): IntegrationTestBatch[] {
+  if (!selection.pluginRunnerFiles?.length) return [];
+  const command: string = resolveSuite(project, { name: path.basename(selection.plugin), dir: selection.plugin })?.moduleTest ?? DEFAULT_PLUGIN_RUNNER;
+  return [{ plugin: selection.plugin, files: selection.pluginRunnerFiles, command, timeoutMilliseconds, shape: 'plugin-runner' }];
+}
+
 function pluginTestBatch(project: string, selection: IntegrationTestSelection, patterns: string[], timeoutMilliseconds: number, fileThreshold: number): IntegrationTestBatch[] {
+  return [...nodeTestBatch(project, selection, patterns, timeoutMilliseconds, fileThreshold), ...pluginRunnerBatch(project, selection, timeoutMilliseconds)];
+}
+
+function nodeTestBatch(project: string, selection: IntegrationTestSelection, patterns: string[], timeoutMilliseconds: number, fileThreshold: number): IntegrationTestBatch[] {
   const files = selection.files.filter((file) => !performanceTest(file) && !pinnedTestFile(selection, file, patterns));
   if (!files.length) return [];
   const normalSuite = files.length > fileThreshold;
@@ -174,33 +227,75 @@ function selectionWithExclusions(project: string, selection: IntegrationTestSele
   return { ...selection, excludedFiles };
 }
 
-function executeImportBatches(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult[] {
-  if (pinned.status !== 'passed') return [];
-  const failures: VerificationResult[] = [];
-  for (const [index, batch] of batches.entries()) {
-    reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.files.join(', ')}`, { index: index + 1, count: batches.length });
-    const started = Date.now();
-    const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
-      cwd: path.join(project, batch.plugin),
-      timeoutMilliseconds: batch.timeoutMilliseconds,
-      logPath: pinned.logPath + '.import-' + index + '.log',
-      environment,
-    });
-    const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
-    if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk batch: ' + JSON.stringify(receipt) + '\n');
-    if (result.status !== 'passed') { failures.push(receipt); break; }
-  }
-  return failures;
+function runImportBatch(project: string, batch: IntegrationTestBatch, logPath: string, pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult {
+  const started = Date.now();
+  const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
+    cwd: path.join(project, batch.plugin),
+    timeoutMilliseconds: batch.timeoutMilliseconds,
+    logPath,
+    environment,
+  });
+  const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
+  if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk batch: ' + JSON.stringify(receipt) + '\n');
+  return receipt;
 }
 
-export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string } } {
+function executeImportBatches(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult[] {
+  if (pinned.status !== 'passed') return [];
+  for (const [index, batch] of batches.entries()) {
+    reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.files.join(', ')}`, { index: index + 1, count: batches.length });
+    const receipt = runImportBatch(project, batch, pinned.logPath + '.import-' + index + '.log', pinned, environment);
+    if (receipt.status !== 'passed') return [receipt];
+  }
+  return [];
+}
+
+export type PluginRunnerResult = { plugin: string; files: string[] } & (VerificationResult | { command: string; status: 'unverified'; evidence: string });
+
+function environmentPath(environment: NodeJS.ProcessEnv): string {
+  return Object.entries(environment).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? '';
+}
+
+function claudeCliAvailable(environment: NodeJS.ProcessEnv): boolean {
+  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  const candidates = environmentPath(environment).split(path.delimiter).filter(Boolean).flatMap((directory) => extensions.map((extension) => path.join(directory, 'claude' + extension)));
+  return candidates.some((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+}
+
+function executePluginRunner(project: string, batch: IntegrationTestBatch, index: number, pinned: VerificationResult, environment: NodeJS.ProcessEnv): PluginRunnerResult {
+  const target = { plugin: batch.plugin, files: batch.files };
+  if (!claudeCliAvailable(environment)) return { ...target, command: batch.command, status: 'unverified', evidence: 'The claude CLI is not on PATH, so these plugin-runner tests did not run here; CI runs them.' };
+  reportIntegrationProgress('plugin-runner tests', `${batch.plugin}/${batch.files.join(', ')}`);
+  return { ...target, ...runImportBatch(project, batch, pinned.logPath + '.plugin-runner-' + index + '.log', pinned, environment) };
+}
+
+const PLUGIN_RUNNER_NOT_FAILED = new Set(['passed', 'unverified', 'toolchain_missing']);
+
+function pluginRunnerFailed(result: PluginRunnerResult): result is PluginRunnerResult & VerificationResult {
+  return !PLUGIN_RUNNER_NOT_FAILED.has(result.status);
+}
+
+function executePluginRunners(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): PluginRunnerResult[] {
+  if (pinned.status !== 'passed') return [];
+  const results: PluginRunnerResult[] = [];
+  for (const [index, batch] of batches.entries()) {
+    const result = executePluginRunner(project, batch, index, pinned, environment);
+    results.push(result);
+    if (pluginRunnerFailed(result)) break;
+  }
+  return results;
+}
+
+export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; pluginRunnerResults: PluginRunnerResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string; pluginRunnerSplit: string } } {
   const started = Date.now();
   const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
   const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds, fileThreshold);
-  const failures = executeImportBatches(project, batches, pinned, environment);
-  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length, 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: 'Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.' };
-  if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches }) + '\n');
-  return { ...(failures[0] ?? pinned), integrationTests: selections, importingTestResults: failures, importingTestSummary };
+  const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== 'plugin-runner'), pinned, environment);
+  const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === 'plugin-runner'), pinned, environment);
+  const importingTestResults = [...failures, ...pluginRunnerResults.filter(pluginRunnerFailed)];
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: 'Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.', pluginRunnerSplit: PLUGIN_RUNNER_SPLIT };
+  if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches, pluginRunnerResults }) + '\n');
+  return { ...(importingTestResults[0] ?? pinned), integrationTests: selections, importingTestResults, pluginRunnerResults, importingTestSummary };
 }
 
 function guidancePath(file: string): boolean {

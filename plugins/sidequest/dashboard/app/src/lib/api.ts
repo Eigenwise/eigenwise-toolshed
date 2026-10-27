@@ -1,4 +1,4 @@
-import type { Category, Health, JsonRecord, NotificationPayload, Project, RoutingCatalog, RoutingPreview, RoutingProfile, Story, Ticket } from './types';
+import type { Category, CompletionView, Health, JsonRecord, NotificationPayload, Project, RoutingCatalog, RoutingPreview, RoutingProfile, Story, StoryCompletionRead, Ticket } from './types';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -51,6 +51,7 @@ export class ApiClient {
   stories(project: string = 'all') { return this.request<{ project: string; stories: Story[] }>('GET', `/api/stories${query({ project })}`); }
   createStory(body: JsonRecord) { return this.request<{ story: Story }>('POST', '/api/stories', { ...body, source: 'dashboard' }); }
   updateStory(id: string, project: string, body: JsonRecord) { return this.request<{ story: Story }>('PATCH', `/api/stories/${path(id)}${query({ project })}`, { ...body, source: 'dashboard' }); }
+  storyCompletion(id: string, project: string) { return this.request<StoryCompletionRead>('GET', `/api/stories/${path(id)}/completion${query({ project })}`); }
   deleteStory(id: string, project: string) { return this.request<JsonRecord>('DELETE', `/api/stories/${path(id)}${query({ project })}`); }
 
   categories(project: string = 'all', profile?: string) { return this.request<{ project: string; profile?: RoutingProfile; localChangeCount?: number; categories: Category[]; warnings: unknown[] }>('GET', `/api/categories${query({ project, profile })}`); }
@@ -66,6 +67,7 @@ export class ApiClient {
 
   tickets(project: string = 'all', archived = false) { return this.request<{ project: string; tickets: Ticket[] }>('GET', `/api/tickets${query({ project, archived: archived || undefined })}`); }
   ticket(id: string, project: string) { return this.request<{ ticket: Ticket }>('GET', `/api/tickets/${path(id)}${query({ project })}`); }
+  ticketCompletion(id: string, project: string) { return this.request<{ completion: CompletionView }>('GET', `/api/tickets/${path(id)}/completion${query({ project })}`); }
   createTicket(body: JsonRecord) { return this.request<{ ticket: Ticket }>('POST', '/api/tickets', { ...body, source: 'dashboard' }); }
   updateTicket(id: string, project: string, body: JsonRecord) { return this.request<{ ticket: Ticket }>('PATCH', `/api/tickets/${path(id)}${query({ project })}`, { ...body, source: 'dashboard' }); }
   uploadAttachments(id: string, project: string, imagesData: { name: string; base64: string }[]) { return this.updateTicket(id, project, { imagesData }); }

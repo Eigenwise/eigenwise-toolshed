@@ -38,7 +38,7 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 
 ## Choose your next workflow
 
-Toolshed includes these six plugins:
+Toolshed includes these seven plugins:
 
 - [Set up and maintain a workspace](./quartermaster/)
 - [Track and deliver owned work](./sidequest/)
@@ -46,6 +46,7 @@ Toolshed includes these six plugins:
 - [Keep a project map nearby](./codebase-mapper/)
 - [Load project rules when they apply](./live-rules/)
 - [View selected local usage](../observability/)
+- [Measure the code Claude writes](./quality-gate/)
 
 Quartermaster's updater covers every active Eigenwise Toolshed install in Claude Code's registry, at its recorded user, project, or local scope and project path. It can update an install in another project even when you invoke it from here. Third-party marketplaces are left alone.
 

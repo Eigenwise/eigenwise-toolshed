@@ -58,6 +58,8 @@ With a base, only selected files that differ from it or are untracked are parsed
 DUPLICATE? and CALLERS OPEN are informational reuse signals (also in --json signals).
 They use JS/TS/Python name regexes, never affect the verdict, and also run with --cc-only.
 --cc-only checks the complexity floor without running coverage; it cannot prove a full CRAP pass.
+--lcov-base <dir> (config lcovBase) resolves relative SF paths before translation; default project root.
+Absolute SF paths stay absolute; all source/map identity checks still apply.
 --lcov overrides both isolated command output and config lcov. Config lcov is a fallback
 behind fresh isolated command output, then coverage/lcov.info when unset.
 Without a command, existing LCOV requires a sibling <lcov>.sources.json SHA-256 map
@@ -70,6 +72,13 @@ $VAR, \${VAR} and %VAR% in the command expand before it runs, on every platform.
 Existing explicit or fallback output must be rewritten during the command. Missing or
 invalid selected output stays unverified; it never silently selects a stale fallback.
 Vitest projects need their own provider's LCOV; raw NODE_V8_COVERAGE misses vite-node modules.
+LCOV naming generated code is translated through a flat Source Map v3 with sourcesContent onto the
+original sources, for any language: the file's last sourceMappingURL (data: or relative), else <file>.map.
+Sources must be in the project and match disk; generated files and maps that existed before the command
+must be unchanged after it (existing LCOV: listed in <lcov>.sources.json); a tracked generated file must
+match its committed blob apart from a trailing sourceMappingURL line; every segment must be in bounds.
+Unmapped original lines stay UNVERIFIED. Refusals warn and keep the original record; receipts list
+sourceMapTranslations and sourceMapRefusals.
 Exit codes for crap: 0 passed/nothing to score/informational-only, 1 score failure, 2 coverage-dependent unverified/prerequisite.
 crap and measure receipts, including unverified runs, go to .claude/quality-gate/receipts/<head-sha>.json.
 --receipts-dir <path> overrides QUALITY_GATE_RECEIPTS_DIR for both commands (relative to cwd).
@@ -81,7 +90,7 @@ Bound passes retain the reason and boundVerdict=pass in changedMetrics; branch c
 `;
 
 function argumentsForCommand() {
-  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'coverage-command', 'coverage-timeout-ms', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'base', 'coverage', 'lcov', 'lcov-base', 'coverage-command', 'coverage-timeout-ms', 'complexity', 'ratchet', 'max', 'python-policy', 'since', 'bytes', 'receipts-dir'].map((name) => [name, { type: 'string' }]));
   Object.assign(options, Object.fromEntries(['cc-only', 'json', 'help'].map((name) => [name, { type: 'boolean' }])));
   options.source = { type: 'string', multiple: true };
   options['new-external-file'] = { type: 'string', multiple: true };
@@ -111,7 +120,7 @@ async function runMeasure(values, files) {
 
 async function capturedReport(values) {
   try {
-    return await crapReport({ ...values, ccOnly: values['cc-only'], coverageCommand: values['coverage-command'], coverageTimeoutMs: values['coverage-timeout-ms'], pythonPolicy: values['python-policy'] });
+    return await crapReport({ ...values, ccOnly: values['cc-only'], lcovBase: values['lcov-base'], coverageCommand: values['coverage-command'], coverageTimeoutMs: values['coverage-timeout-ms'], pythonPolicy: values['python-policy'] });
   } catch (error) {
     const unverified = [{ relativePath: '<gate>', line: 1, name: 'prerequisite', unverified: error.message }];
     return { root: projectRoot(values.project || process.cwd()), base: null, files: {}, metrics: [], changedMetrics: [], signals: [], unverified, failures: [], warnings: [], checked: 0, max: 6, exitCode: 2, verdict: 'unverified', ccOnly: Boolean(values['cc-only']) };

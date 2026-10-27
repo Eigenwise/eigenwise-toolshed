@@ -63,3 +63,39 @@ test('build:check reports generated output changed by the build', () => {
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+function builtScripts(fixture: string) {
+  const scripts = new Map<string, string>();
+  for (const directory of ['lib', 'bin', 'hooks']) {
+    const absolute = path.join(fixture, directory);
+    if (!fs.existsSync(absolute)) continue;
+    for (const file of fs.readdirSync(absolute, { recursive: true, encoding: 'utf8' })) {
+      if (file.endsWith('.js')) scripts.set(path.join(directory, file), fs.readFileSync(path.join(absolute, file), 'utf8'));
+    }
+  }
+  return scripts;
+}
+
+test('--sourcemap=external writes sibling maps with sourcesContent and leaves every .js byte-identical', () => {
+  const fixture = createFixture();
+  try {
+    const widgetSource = 'export function widget(value: number): number {\n  return value + 1;\n}\n';
+    fs.mkdirSync(path.join(fixture, 'src', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'src', 'lib', 'widget.ts'), widgetSource);
+    const plain = run(process.execPath, ['scripts/build.mjs'], fixture);
+    assert.equal(plain.status, 0, plain.stderr);
+    const committedScripts = builtScripts(fixture);
+    assert.ok(committedScripts.has(path.join('lib', 'widget.js')));
+
+    const mapped = run(process.execPath, ['scripts/build.mjs', '--sourcemap=external'], fixture);
+    assert.equal(mapped.status, 0, mapped.stderr);
+    assert.deepEqual(builtScripts(fixture), committedScripts);
+    for (const script of committedScripts.keys()) assert.ok(fs.existsSync(path.join(fixture, `${script}.map`)), `${script}.map`);
+    const map = JSON.parse(fs.readFileSync(path.join(fixture, 'lib', 'widget.js.map'), 'utf8'));
+    assert.equal(map.version, 3);
+    assert.deepEqual(map.sourcesContent, [widgetSource]);
+    assert.equal(path.resolve(fixture, 'lib', map.sources[0]), path.join(fixture, 'src', 'lib', 'widget.ts'));
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});

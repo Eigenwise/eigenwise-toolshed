@@ -805,15 +805,15 @@ test('dispatch lists what it adds beyond the ticket files and never adds a decla
     const goldenFragment = `.release/unreleased/${golden.ref}.md`;
     const preparedGolden = store.prepareDispatch(projectSlug, golden.ref, { sessionId: `board-added-golden-${Date.now()}` });
     assert.deepEqual(preparedGolden.ticket.dispatch.declaredFiles, ['tests/golden/fixture.dat', 'docs/', goldenFragment]);
-    assert.deepEqual(preparedGolden.ticket.dispatch.boardAddedFiles, ['docs/', goldenFragment]);
+    assert.deepEqual(preparedGolden.ticket.dispatch.addedWriteScope, ['docs/', goldenFragment]);
     const briefing = agentsync.renderTicketBriefing(store.getTicket(projectSlug, golden.ref), 'board-added-token', projectSlug, project);
-    assert.match(briefing, /Board-added scope \(board config alwaysInScope[^\n]*\n- docs\//);
+    assert.match(briefing, /Added write scope \(board config alwaysInScope[^\n]*\n- docs\//);
 
     const docsFragment = `.release/unreleased/${docsFile.ref}.md`;
     const preparedDocs = store.prepareDispatch(projectSlug, docsFile.ref, { sessionId: `board-added-docs-${Date.now()}` });
     assert.deepEqual(preparedDocs.ticket.dispatch.declaredFiles, ['docs/tools.md', docsFragment]);
-    assert.deepEqual(preparedDocs.ticket.dispatch.boardAddedFiles, [docsFragment]);
-    assert.doesNotMatch(agentsync.renderTicketBriefing(store.getTicket(projectSlug, docsFile.ref), 'docs-token', projectSlug, project), /Board-added scope/);
+    assert.deepEqual(preparedDocs.ticket.dispatch.addedWriteScope, [docsFragment]);
+    assert.doesNotMatch(agentsync.renderTicketBriefing(store.getTicket(projectSlug, docsFile.ref), 'docs-token', projectSlug, project), /Added write scope/);
   } finally {
     store.deleteTicket(projectSlug, golden.ref);
     store.deleteTicket(projectSlug, docsFile.ref);
@@ -846,7 +846,7 @@ test('GH-341: an unscoped write dispatch binds the whole tree beside docs/, says
     const prepared = store.prepareDispatch(projectSlug, unscoped.ref, { sessionId: `unscoped-isolated-${Date.now()}`, allowUnscoped: true });
     assert.equal(prepared.ticket.dispatch.sharedTree, false);
     assert.deepEqual(prepared.ticket.dispatch.declaredFiles, ['**', 'docs/']);
-    assert.deepEqual(prepared.ticket.dispatch.boardAddedFiles, ['docs/'], 'writeScope names the whole tree; boardAddedFiles keeps to real paths');
+    assert.deepEqual(prepared.ticket.dispatch.addedWriteScope, ['docs/'], 'writeScope names the whole tree; addedWriteScope keeps to real paths');
     assert.equal(prepared.ticket.dispatch.unscopedOverride.writeScope, 'write scope: unscoped (whole tree), always-in-scope: docs/');
     const executionScope = store.executionScope(projectSlug, prepared.ticket);
     assert.ok(require('../lib/commit-scope.js').isInScope('src/app.js', executionScope), `docs/ must not be the only scope, got ${executionScope.join(', ')}`);

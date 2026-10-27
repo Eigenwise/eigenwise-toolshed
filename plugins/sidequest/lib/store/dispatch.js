@@ -1920,8 +1920,8 @@ function createDispatch(dependencies) {
   function dispatchWriteScope(t, effectiveFiles, wholeTreeScope, artifactMode) {
     const writeScope = wholeTreeScope ? [WHOLE_TREE_SCOPE, ...effectiveFiles] : effectiveFiles;
     const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(writeScope, t.files, t.ref);
-    const boardAddedFiles = declaredFiles.filter((file) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
-    return { declaredFiles, boardAddedFiles };
+    const addedWriteScope = declaredFiles.filter((file) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
+    return { declaredFiles, addedWriteScope };
   }
   function workingTreeDirtyBaseline(dirtyBaselineCapture, workingTreeDelivery) {
     return workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
@@ -2229,7 +2229,7 @@ function createDispatch(dependencies) {
       workProvenance,
       ...checkoutPlacementFields(plan, preflight, opts),
       declaredFiles: plan.artifact.declaredFiles,
-      boardAddedFiles: plan.artifact.boardAddedFiles,
+      addedWriteScope: plan.artifact.addedWriteScope,
       ...continuationFields(plan.isolation.sharedTree, plan.releasedContinuation),
       ...integrationFields(t, plan),
       readonly: plan.isolation.readonly,

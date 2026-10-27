@@ -4,13 +4,16 @@ import { ApiClient } from '../app/src/lib/api';
 import type { Snapshot } from '../app/src/lib/types';
 
 const snapshot = (): Snapshot => ({
-  projects: [{ slug: 'alpha', name: 'Alpha' }],
+  projects: [{ slug: 'alpha', name: 'Alpha' }, { slug: 'beta', name: 'Beta' }],
   tickets: [
     { id: '1', ref: 'SQ-1', title: 'First', status: 'todo', priority: 'normal', order: 1, projectSlug: 'alpha' },
     { id: '2', ref: 'SQ-2', title: 'Urgent item', status: 'doing', priority: 'urgent', order: 2, projectSlug: 'alpha' },
     { id: '3', ref: 'SQ-3', title: 'Done', status: 'done', priority: 'low', order: 3, projectSlug: 'alpha' }
   ],
-  stories: [],
+  stories: [
+    { id: 'story-alpha', title: 'Alpha story', projectSlug: 'alpha' },
+    { id: 'story-beta', title: 'Beta story', projectSlug: 'beta' }
+  ],
   categories: [{ id: 'general', name: 'General' }],
   notifications: { notifications: [{ id: 'n1', kind: 'reminder' }, { id: 'n2', kind: 'comment' }, { id: 'n3', kind: 'question' }], unread: 3, unreadNeeds: 1 },
   health: { ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' }
@@ -30,6 +33,14 @@ describe('BoardState', () => {
     expect(state.unreadBuckets.needs.map((notification) => notification.id)).toEqual(['n1']);
     expect(state.unreadBuckets.activity.map((notification) => notification.id)).toEqual(['n2', 'n3']);
     expect(state.categoryGroups.enabled.map((category) => category.id)).toEqual(['general']);
+  });
+
+  it('filters stories by the selected project slug', () => {
+    const state = new BoardState();
+    state.applySnapshot(snapshot());
+    state.selectProject('alpha');
+
+    expect(state.scopedStories.map((story) => story.id)).toEqual(['story-alpha']);
   });
 
   it('filters tickets by assignee alongside the other board filters', () => {

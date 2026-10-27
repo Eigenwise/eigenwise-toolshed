@@ -23,6 +23,8 @@ desktop.ini
 # Node (only relevant if a plugin ever adds tooling)
 node_modules/
 npm-debug.log*
+# Source maps are measure-time sidecars for Quality Gate coverage translation; never commit them.
+plugins/*/**/*.js.map
 yarn-error.log*
 
 # Logs

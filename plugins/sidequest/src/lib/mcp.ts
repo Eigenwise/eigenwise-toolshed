@@ -84,7 +84,9 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 27900 for update.addFiles/removeFiles and scopeRequest.grant (GitHub #173): +535 bytes compacted, measured 25929 payload bytes on the merged tree. Keeps the 2.5KB reserve.
 // Merged 13 Oct: both raises apply (shared field schema plus addFiles/removeFiles/scopeRequest.grant); measured 26255 payload bytes on the merged tree. Keeps the 2.5KB reserve.
 // Raised from 29600 for board_config.integrationTestFileThreshold (SQ-3925): +61 bytes of schema structure, measured 27153 payload bytes on the composed wave tree. Keeps the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 29700;
+// Raised from 29700 for the completion read (SQ-3960): +255 bytes for one new tool with a one-sentence served
+// description, measured 27408 payload bytes. Keeps the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 30600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {

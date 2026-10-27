@@ -14,7 +14,7 @@ Toolshed packages those jobs as six independent Claude Code plugins. Use one, a 
 
 Sidequest makes it easy for every task recorded as a ticket to survive context compaction and new sessions. The task, instructions, status, and recorded discussion live on a local board, so Claude can pick the work up again after the chat context shrinks. Record decisions, progress, and next actions on the ticket to give the next session a useful starting point.
 
-## The six plugins
+## The seven plugins
 
 | Problem | Plugin | What it does |
 | --- | --- | --- |
@@ -22,7 +22,8 @@ Sidequest makes it easy for every task recorded as a ticket to survive context c
 | Project rules get forgotten or fill every context | [Live Rules](./plugins/live-rules) | Re-injects matching rules when they apply, so conditional guidance stays out of unrelated work. |
 | Tasks get lost when context compacts or a new session starts | [Sidequest](./plugins/sidequest) | Keeps every recorded task on a local board across context compaction and sessions, assigns ownership, dispatches independent work, and gates results on verification before integration. |
 | You want the models and subscriptions you already have in Claude Code | [Model Gateway](./plugins/model-gateway) | Adds supported ChatGPT/Codex and Grok subscription models to Claude Code's `/model` picker through a local gateway. |
-| You cannot tell where time and tokens go | [Observability](./plugins/observability) | Records selected session and tool metadata locally, with per-project opt-in and optional sinks. |
+| You want a number on the code Claude writes, not a vibe | [Quality Gate](./plugins/quality-gate) | Scores every new or complexity-raised function by cyclomatic complexity and measured coverage (CRAP) from LCOV any language can produce, and reports missing measurement as unverified instead of guessing. |
+| You cannot tell where time and tokens go | [Observability](./plugins/observability) | Records one metadata row per turn in a local JSONL ledger with per-project opt-in, and renders a self-contained local board. Nothing leaves the machine. |
 | Setup, updates, and missing capabilities keep pushing back | [Quartermaster](./plugins/quartermaster) | Recommends and installs plugins from any marketplace on the machine for setup, keeps active Toolshed installs current, checks health, and uses bounded session summaries to suggest one approved improvement at a time. |
 
 Each plugin has its own install path and guide. None requires the others. Sidequest can route across Claude models on its own; Model Gateway is only needed for its non-Claude routes. Observability is separate from the other plugins and remains opt-in per project.

@@ -14,6 +14,7 @@ import { projectDirectory, readSnapshot } from './snapshot.js'
 // while the decision reads every project's live store, so a missing row proves nothing.
 
 export const GUARDED_TOOLS = /^(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|SendMessage|mcp__plugin_sidequest_board__(dispatch|update|scopeRequest|remove|verdict))$/
+export const CLAIM_TOOLS = /^mcp__plugin_sidequest_board__(claim|next)$/
 const SHELL_TOOLS = /^(Bash|PowerShell)$/
 const WRITE_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 const CLI_DISPATCH = /\bsidequest(?:\.js)?["']?\s+dispatch\s+SQ-\d+\b/i
@@ -156,8 +157,12 @@ async function evidenceCallerDecision($: EngineInterface, e: { tool: string }, c
 }
 
 // The main-thread-only fields are refused from the call alone, so no engine failure can admit them.
+function subagentMainThreadDenial(e: { tool: string; agentId?: string }): string | null {
+  return e.agentId ? mainThreadMutationDenial(e.tool, toolArguments(e)) : null
+}
+
 async function guardedDecision($: EngineInterface, e: { tool: string; agentId?: string }): Promise<Decision> {
-  const denial = e.agentId ? mainThreadMutationDenial(e.tool, toolArguments(e)) : null
+  const denial = subagentMainThreadDenial(e)
   if (denial) return { deny: denial }
   try {
     return await callerDecision($, e, await callerOf($, e.agentId ?? ''))
@@ -185,4 +190,10 @@ export function registerExecutorAdmission(on: On): void {
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => applied(e, next, await admissionDecision($, e)))
 
   on('tool.call', { tool: GUARDED_TOOLS }, async ($, e, next) => applied(e, next, await guardedDecision($, e)))
+
+  // Every executor claims, so a claim never waits on an engine read or a decision process that could fail it closed.
+  on('tool.call', { tool: CLAIM_TOOLS }, async ($, e, next) => {
+    const denial = subagentMainThreadDenial(e)
+    return denial ? { deny: denial } : next(e)
+  })
 }

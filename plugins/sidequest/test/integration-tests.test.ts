@@ -238,3 +238,93 @@ test('import-walk file threshold is a validated board setting', (context) => {
   assert.throws(() => store.setBoardConfig(slug, { integrationTestFileThreshold: 0 }), /positive integer/);
   assert.throws(() => store.setBoardConfig(slug, { integrationTestFileThreshold: 1.5 }), /positive integer/);
 });
+
+// Spelled through a variable so the import walk never reads this file itself as a plugin-runner test.
+const runnerPackage = ['claude', 'code'].join('-');
+
+function pluginRunnerFixture(project: string): void {
+  writeFixture(project, {
+    'plugins/example/package.json': JSON.stringify({ scripts: { test: 'node --test test/*.test.js' } }),
+    'plugins/example/hooks/hooks.json': JSON.stringify({ modules: ['./register.ts'] }),
+    'plugins/example/hooks/register.ts': "export const register = true;",
+    'plugins/example/hooks/register.test.ts': "import { register } from './register.js';",
+    'plugins/example/lib/store.js': 'module.exports = true;',
+    'plugins/example/test/node.test.js': "require('../lib/store.js'); require('node:test')('node importing test', () => {});",
+    'plugins/example/test/module.test.ts': `import { expect, test } from '${runnerPackage}/testing'\nimport type { On } from '${runnerPackage}'\nimport '../lib/store.js'\nimport '../hooks/register.js'`,
+  });
+}
+
+function environmentWithPath(directories: string[]): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) if (key.toUpperCase() !== 'PATH' && key !== 'NODE_TEST_CONTEXT') environment[key] = value;
+  environment.PATH = directories.join(path.delimiter);
+  return environment;
+}
+
+function fakeClaude(directory: string, exitCode: number): void {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'claude'), `#!/bin/sh\necho fake plugin runner "$@"\nexit ${exitCode}\n`, { mode: 0o755 });
+  // Windows verifiers run under Git Bash when it exists and under Command Prompt otherwise.
+  if (process.platform === 'win32') fs.writeFileSync(path.join(directory, 'claude.cmd'), `@echo fake plugin runner %*\r\n@exit /b ${exitCode}\r\n`);
+}
+
+// SQ-3940: node --test cannot load a claude-code/testing import, so the gate rolled back correct hooks-module deliveries.
+test('plugin-runner tests leave the node batch and run through the plugin runner', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-runner-'));
+  context.after(() => fs.promises.rm(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+  pluginRunnerFixture(project);
+  const selections = selectIntegrationTests(project, ['plugins/example/lib/store.js']);
+  assert.deepEqual(selections, [{ plugin: 'plugins/example', files: ['test/node.test.js'], pluginRunnerFiles: ['test/module.test.ts'] }]);
+  const batches = integrationTestBatches(project, selections, 'node --version', 30_000);
+  assert.deepEqual(batches.map((batch) => [batch.shape, batch.files]), [['selected-files', ['test/node.test.js']], ['plugin-runner', ['test/module.test.ts']]]);
+  assert.ok(!batches[0]!.command.includes('module.test.ts'), 'node --test never receives a claude-code/testing file');
+  assert.equal(batches[1]!.command, 'claude plugin test .');
+  assert.deepEqual(selectIntegrationTests(project, ['plugins/example/hooks/register.ts']), [{ plugin: 'plugins/example', files: [], pluginRunnerFiles: ['hooks/register.test.ts', 'test/module.test.ts'] }]);
+
+  const fakeBin = path.join(project, 'fake-bin');
+  fakeClaude(fakeBin, 0);
+  const logPath = path.join(project, 'gate.log');
+  const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath };
+  const result = runImportingIntegrationTests(project, ['plugins/example/lib/store.js'], pinned, 30_000, environmentWithPath([fakeBin, path.dirname(process.execPath)]));
+  assert.equal(result.status, 'passed');
+  assert.deepEqual(result.pluginRunnerResults.map((receipt) => [receipt.plugin, receipt.files, receipt.command, receipt.status]), [['plugins/example', ['test/module.test.ts'], 'claude plugin test .', 'passed']]);
+  assert.match(fs.readFileSync(logPath + '.plugin-runner-0.log', 'utf8'), /fake plugin runner plugin test \./);
+  assert.match(fs.readFileSync(logPath + '.import-0.log', 'utf8'), /node importing test/);
+  assert.match(result.importingTestSummary.pluginRunnerSplit, /claude-code.*plugin runner/);
+  assert.equal(result.importingTestSummary.selectedFiles, 2);
+
+  fakeClaude(fakeBin, 3);
+  const failed = runImportingIntegrationTests(project, ['plugins/example/lib/store.js'], pinned, 30_000, environmentWithPath([fakeBin, path.dirname(process.execPath)]));
+  assert.equal(failed.status, 'failed_suite');
+  assert.equal(failed.importingTestResults.length, 1);
+  assert.equal(failed.importingTestResults[0]!.command, 'claude plugin test .');
+});
+
+test('without the claude CLI plugin-runner tests are recorded as unverified instead of failing', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-runner-missing-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  pluginRunnerFixture(project);
+  const emptyPath = path.join(project, 'no-claude');
+  fs.mkdirSync(emptyPath);
+  const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath: path.join(project, 'gate.log') };
+  const result = runImportingIntegrationTests(project, ['plugins/example/hooks/register.ts'], pinned, 30_000, environmentWithPath([emptyPath]));
+  assert.equal(result.status, 'passed');
+  assert.deepEqual(result.importingTestResults, []);
+  assert.deepEqual(result.pluginRunnerResults.map((receipt) => [receipt.files, receipt.status]), [[['hooks/register.test.ts', 'test/module.test.ts'], 'unverified']]);
+  assert.match(result.pluginRunnerResults[0]!.evidence, /claude CLI is not on PATH/);
+});
+
+test('a plugin that declares its own module runner gets it for tests under its hooks module root', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-runner-declared-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  writeFixture(project, {
+    'plugins/sidequest/package.json': JSON.stringify({ scripts: { test: 'node --test' } }),
+    'plugins/sidequest/hooks/hooks.json': JSON.stringify({ modules: ['./guards/register.ts'] }),
+    'plugins/sidequest/hooks/guards/git-guards.ts': 'export const guard = true;',
+    'plugins/sidequest/hooks/guards/git-guards.test.ts': "import { guard } from './git-guards.js';",
+    'plugins/sidequest/hooks/session-start.test.js': "require('./guards/git-guards.ts');",
+  });
+  const selections = selectIntegrationTests(project, ['plugins/sidequest/hooks/guards/git-guards.ts']);
+  assert.deepEqual(selections, [{ plugin: 'plugins/sidequest', files: [], pluginRunnerFiles: ['hooks/guards/git-guards.test.ts'] }]);
+  assert.deepEqual(integrationTestBatches(project, selections, 'node --version', 30_000).map((batch) => [batch.shape, batch.command]), [['plugin-runner', 'node scripts/test-guards-module.mjs']]);
+});

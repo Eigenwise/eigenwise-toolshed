@@ -1,5 +1,5 @@
 import { SvelteSet } from 'svelte/reactivity';
-import type { Snapshot, Ticket, Project, Story, Category, Notification, Scope, Status, JsonRecord, RoutingCatalog, RoutingPreview, RoutingProfile } from '../types';
+import type { Snapshot, Ticket, Project, Story, Category, Notification, Scope, Status, JsonRecord, RoutingCatalog, RoutingPreview, RoutingProfile, CompletionView, StoryCompletionRead } from '../types';
 import { ApiClient } from '../api';
 import type { PollingController } from './polling';
 
@@ -25,6 +25,9 @@ export class BoardState {
   archivedProjects = $state.raw<Project[]>([]);
   archivedTickets = $state.raw<Ticket[]>([]);
   ticketDetail = $state.raw<Ticket | null>(null);
+  ticketCompletion = $state.raw<CompletionView | null>(null);
+  storyCompletionId = $state<string | null>(null);
+  storyCompletion = $state.raw<StoryCompletionRead | null>(null);
   routingCatalog = $state.raw<RoutingCatalog>({});
   routingProfiles = $state.raw<RoutingProfile[]>([]);
   notifyPreferences = $state.raw<JsonRecord>({});
@@ -55,7 +58,7 @@ export class BoardState {
 
   currentProject = $derived(this.selectedProject === 'all' ? null : this.raw?.projects.find((project) => project.slug === this.selectedProject) ?? null);
   scopedTickets = $derived(this.raw?.tickets.filter((ticket) => this.selectedProject === 'all' || this.ticketProject(ticket) === this.selectedProject) ?? []);
-  scopedStories = $derived(this.raw?.stories.filter((story) => this.selectedProject === 'all' || story.project === this.selectedProject) ?? []);
+  scopedStories = $derived(this.raw?.stories.filter((story) => this.selectedProject === 'all' || story.projectSlug === this.selectedProject) ?? []);
   visibleTickets = $derived.by(() => this.scopedTickets.filter((ticket) => this.matches(ticket)));
   columns = $derived.by(() => Object.fromEntries(statusOrder.map((status) => [status, this.sortTickets(this.visibleTickets.filter((ticket) => ticket.status === status))])) as Record<Status, Ticket[]>);
   counts = $derived.by(() => ({ todo: this.columns.todo.length, doing: this.columns.doing.length, done: this.columns.done.length }));
@@ -114,7 +117,8 @@ export class BoardState {
   openTicket(ticket: Ticket) {
     this.openDialog = ticket.id;
     if (this.ticketDetail?.id !== ticket.id) this.ticketDetail = null;
-    return this.loadTicketDetail();
+    this.ticketCompletion = null;
+    return Promise.all([this.loadTicketDetail(), this.loadTicketCompletion()]);
   }
 
   showTicketDetail(ticket: Ticket) {
@@ -127,6 +131,27 @@ export class BoardState {
     if (!row) return;
     const detail = await this.findTicket(row.id, this.ticketProject(row));
     if (detail && this.openDialog === row.id) this.ticketDetail = detail;
+  }
+
+  async loadTicketCompletion() {
+    const row = this.openTicketRow();
+    if (!row) return;
+    const completion = await this.api.ticketCompletion(row.id, this.ticketProject(row)).then((read) => read.completion, () => null);
+    if (this.openDialog === row.id) this.ticketCompletion = completion;
+  }
+
+  // A server without the story read (SQ-3963) answers available:false or 404; both read as "not available".
+  async openStoryCompletion(story: Story) {
+    this.storyCompletionId = story.id;
+    this.storyCompletion = null;
+    const unavailable: StoryCompletionRead = { available: false, completion: null };
+    const read = await this.api.storyCompletion(story.id, String(story.projectSlug ?? story.project ?? this.selectedProject)).catch(() => unavailable);
+    if (this.storyCompletionId === story.id) this.storyCompletion = read;
+  }
+
+  closeStoryCompletion() {
+    this.storyCompletionId = null;
+    this.storyCompletion = null;
   }
 
   private openTicketRow() {

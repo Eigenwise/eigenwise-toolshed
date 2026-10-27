@@ -8,6 +8,7 @@
     "sidequest-settings.png": "Synthetic Sidequest settings dialog with routing and notification controls.",
     "sidequest-archive.png": "Synthetic archive view with nine tickets from three boards.",
     "sidequest-ticket-detail.png": "Synthetic ticket detail with a reminder, dependency link, and comment thread.",
+    "sidequest-ticket-completion.png": "Synthetic ticket Completion panel with Result, Checked, Still uncertain, and Your action.",
     "sidequest-ticket-links.png": "Synthetic ticket detail relationships with two populated links.",
     "sidequest-ticket-context.png": "Synthetic ticket context with labels, affected files, attachments, and comments.",
     "sidequest-stories.png": "Synthetic Sidequest story filter with primary stories.",

@@ -79,10 +79,15 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
     return Boolean(fs.statSync(candidate, { throwIfNoEntry: false })?.isFile());
   }
   const VERIFY_CWD_OUTSIDE_PROJECT = /^(?:[A-Za-z]:|\/)|(?:^|\/)\.\.(?:\/|$)/;
-  function normalizeVerifyCwd(value) {
-    const directory = String(value || "").trim().split(path.win32.sep).join("/").replace(/^(?:\.\/)+|\/+$/g, "");
+  function projectRelativeVerifyDirectory(directory, projectPath) {
+    if (projectPath && path.isAbsolute(directory)) return path.relative(projectPath, directory);
+    return directory;
+  }
+  function normalizeVerifyCwd(value, projectPath = "") {
+    const relativeDirectory = projectRelativeVerifyDirectory(String(value || "").trim().split(path.win32.sep).join("/"), projectPath);
+    const directory = relativeDirectory.split(path.win32.sep).join("/").replace(/^(?:\.\/)+|\/+$/g, "");
     if (VERIFY_CWD_OUTSIDE_PROJECT.test(directory)) {
-      throw new Error(`verifyCwd must be a directory relative to the project root that stays inside it; received ${JSON.stringify(String(value))}. Use a path such as plugins/app, or leave verifyCwd unset to run the verify command from the project root.`);
+      throw new Error(`omit verifyCwd to run from the project root. Otherwise, verifyCwd must be a directory relative to the project root that stays inside it; received ${JSON.stringify(String(value))}. An absolute directory inside the project is also accepted, such as the absolute path to plugins/app.`);
     }
     return directory === "." ? "" : directory;
   }

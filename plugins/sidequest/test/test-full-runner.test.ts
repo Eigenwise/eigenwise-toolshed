@@ -485,16 +485,19 @@ test('Windows termination errors cannot masquerade as child exit', { ...windowsO
   try {
     controller.abort();
     const result = await phase;
-    assert.equal(leaf.exited, false, 'the live child error was counted as exit');
     assert.match(result.cleanupError ?? '', /still alive/);
     assert.equal(result.unexpectedSignalErrorCode, 'EPERM');
-    assert.equal(result.terminationLatencyMilliseconds, null);
+    assert.equal(result.terminationLatencyMilliseconds, null, 'the live child error was counted as exit');
     assert.equal(result.status, null);
   } finally {
-    leaf.child.ref();
-    const exited = once(leaf.child, 'exit');
-    killLeaf('SIGKILL');
-    await exited;
+    // Settlement closes the owner's stdin, its exit request, so the owner can already have exited here.
+    // Awaiting that past exit leaves nothing on the event loop and node:test cancels the rest of the file (SQ-3667).
+    if (!leaf.exited) {
+      leaf.child.ref();
+      const exited = once(leaf.child, 'exit');
+      killLeaf('SIGKILL');
+      await exited;
+    }
   }
   assert.equal(leaf.exited, true, 'fixture cleanup completed before the retained child exit event');
 });

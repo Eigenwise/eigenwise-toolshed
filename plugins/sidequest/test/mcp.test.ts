@@ -424,7 +424,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['context_page', 'list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'commit', 'rework', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['context_page', 'list', 'completion', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'commit', 'rework', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -1444,7 +1444,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.match(comments.inputSchema.properties.since.description, /Comment id.*ISO timestamp/);
   const add = tools.find((tool: any) => tool.name === 'add');
   assert.match(add.inputSchema.properties.complexity.description, /why required/);
-  assert.equal(tools.find((tool: any) => tool.name === 'changes').description, 'Poll ticket changes.');
+  assert.equal(tools.find((tool: any) => tool.name === 'changes').description, 'Poll; view:catchup');
   assert.equal(tools.find((tool: any) => tool.name === 'ready').description, 'List ready ticket refs.');
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref', 'since']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
@@ -1767,13 +1767,14 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   const fullCategories = await callTool('category_list', { project, full: true });
   assert.equal(fullCategories.retrieval, undefined);
 
-  const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
+  store.setBoardConfig(project, { alwaysInScope: ['docs/'] });
+  const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0', files: ['fixture.ts'] });
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1300, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
-  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'worktreeBase', 'writeScope']);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['addedWriteScope', 'effort', 'ref', 'runsLabel', 'spawn', 'worktreeBase']);
+  assert.deepStrictEqual(dispatchPayload.addedWriteScope, ['docs/', '.release/unreleased/SQ-1.md']);
   assert.equal(dispatchPayload.worktreeBase, null);
-  assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
   assert.equal(dispatchPayload.token, undefined);
   assert.equal(dispatchPayload.agent, undefined);
   assert.equal(dispatchPayload.guidance, undefined);
