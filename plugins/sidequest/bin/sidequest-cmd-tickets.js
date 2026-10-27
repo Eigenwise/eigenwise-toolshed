@@ -288,6 +288,13 @@ async function cmdPulse(opts, positional) {
   if (!pulse) fail(`pulse: no ticket "${idOrRef}" in ${meta.name}`);
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + "\n");
 }
+async function cmdReleaseRecord(opts, positional) {
+  if (!positional[0]) fail("release-record: pass a ticket ref");
+  const { slug } = await resolveProject(opts);
+  const result = store.recordShippedRelease(slug, positional[0], { version: opts.version, plugins: opts.plugin ?? [], commit: opts.commit });
+  if (!result.ok) fail("release-record: ticket lock busy; retry after the concurrent mutation");
+  process.stdout.write(JSON.stringify(result) + "\n");
+}
 async function cmdCompletion(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("completion: pass a ticket or story ref, e.g. sidequest completion US-3");
@@ -397,4 +404,4 @@ async function cmdRm(opts, positional) {
   if (!store.deleteTicket(slug, ticket.id)) fail(`rm: could not delete "${ticket.ref}" from ${meta.name}`);
   console.log(`✓ removed ${ticket.ref} from ${meta.name}`);
 }
-module.exports = { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };
+module.exports = { cmdReleaseRecord, cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };

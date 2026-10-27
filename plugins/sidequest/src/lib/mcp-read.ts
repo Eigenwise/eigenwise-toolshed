@@ -256,7 +256,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'completion',
-    description: 'Ticket or story completion from lifecycle records. Stories aggregate child outcomes, blockers and evidence under 250 words; tickets use four sections under 200 words. text:true returns only the rendering.',
+    description: 'Ticket or story completion from lifecycle records; released requires a cut record. Stories aggregate outcomes under 250 words; tickets use four sections under 200 words. text:true returns only text.',
     inputSchema: {
       type: 'object',
       properties: {

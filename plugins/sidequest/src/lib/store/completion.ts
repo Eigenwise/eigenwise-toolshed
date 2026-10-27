@@ -87,12 +87,13 @@ export interface CompletionTicket {
   dispatch?: { workProvenance?: { kind?: string }; evidenceDirectory?: string } | null;
   comments?: { body?: string }[];
   completionSummary?: Partial<CompletionSummary> | null;
+  shipped?: Array<{ version: string; plugins: string[]; commit: string; deliveryCommit: string | null; at: string }>;
 }
 export interface CompletionContext {
   openBlockers?: string[];
   integrationProgress?: { state?: string; writerAlive?: boolean } | null;
   negativeControl?: { kind?: string; evidence?: string; captureId?: string } | null;
-  releaseRecord?: { version?: string; deliveryCommit?: string } | null;
+  releaseRecord?: { version?: string; deliveryCommit?: string | null } | null;
   roots?: { project?: string | null; verification?: string | null; evidence?: string | null };
 }
 
@@ -732,7 +733,7 @@ export function createCompletion(dependencies: CompletionDependencies) {
       openBlockers: openBlockers(slug, ticket),
       integrationProgress: readIntegrationProgress(integrationProgressPath(boardDirectory, ticket.ref)),
       negativeControl: negativeControlResult(controlHolder(ticket), [], candidateOf(ticket)),
-      releaseRecord: null,
+      releaseRecord: ticket.shipped?.slice().reverse().find((record) => record.deliveryCommit === deliveryFacts(ticket)?.commit) ?? null,
       roots: {
         project: readMeta(slug)?.path ?? null,
         verification: path.join(boardDirectory, 'verification'),

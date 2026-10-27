@@ -1,5 +1,6 @@
 'use strict';
 
+const { completionView } = require('./completion.js');
 const { externalReference, originRepository } = require('../external-refs');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, submittedCandidateAttempt, submittedSourceIdentity } = require('../kernel/review-binding');
 
@@ -1696,11 +1697,44 @@ function archiveAllDone(slug?: any, opts?: any) {
 function listArchived(slug?: any) {
   return queryTickets(String(slug || ''), { archived: true });
 }
+interface ShippedReleaseInput { version: string; plugins: string[]; commit: string }
+
+function validateShippedRelease(input: ShippedReleaseInput): void {
+  if (!/^v\d+\.\d+\.\d+$/.test(input.version)) throw new Error('release-record: version must be vX.Y.Z');
+  if (!/^[a-f0-9]{40}$/i.test(input.commit)) throw new Error('release-record: commit must be a full release commit hash');
+  if (!Array.isArray(input.plugins)) throw new Error('release-record: plugins must be an array');
+  if (input.plugins.some((plugin: string) => !/^[a-z0-9-]+@\d+\.\d+\.\d+$/.test(plugin))) throw new Error('release-record: plugins must name plugin@X.Y.Z');
+}
+
+function recordShippedRelease(slug: string, idOrRef: string, input: ShippedReleaseInput) {
+  validateShippedRelease(input);
+  const found = getTicket(slug, idOrRef);
+  if (!found) throw new Error('release-record: ticket not found');
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (ticket?.status !== 'done') throw new Error('release-record: ticket must be done');
+    const shipped = ticket.shipped ?? [];
+    const existing = shipped.find((record: { version: string }) => record.version === input.version);
+    if (existing) return { ok: true, recorded: false, record: existing };
+    const record = {
+      version: input.version,
+      plugins: [...new Set(input.plugins)].sort(),
+      commit: input.commit.toLowerCase(),
+      deliveryCommit: completionView(ticket, {}).facts.delivery?.commit ?? null,
+      at: new Date().toISOString(),
+    };
+    ticket.shipped = [...shipped, record];
+    ticket.updatedAt = record.at;
+    putTicket(slug, ticket);
+    return { ok: true, recorded: true, record };
+  });
+}
+
 function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { recordShippedRelease, DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };
