@@ -94,7 +94,7 @@
   },
   {
     "name": "completion",
-    "description": "Ticket stage, blocker, facts and evidence from lifecycle records.",
+    "description": "Ticket or story completion from lifecycle records.",
     "inputSchema": {
       "type": "object",
       "properties": {

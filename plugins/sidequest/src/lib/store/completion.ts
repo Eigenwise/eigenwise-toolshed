@@ -537,7 +537,123 @@ export function completionText(view: CompletionView): string {
   return sections.map(([label, body, limit]) => label + escapeCompletionText(clampWords(body, limit))).join('\n');
 }
 
+
+export interface CompletionStory {
+  id: string;
+  ref: string;
+  title: string;
+  decisionLog?: StoryDecision[];
+  archivedDecisionLog?: StoryDecision[];
+}
+interface StoryDecision { kind: string; text: string; ref?: string | null; seq: number }
+export interface StoryCompletionView {
+  ref: string;
+  title: string;
+  stage: CompletionStage | 'partial';
+  blocker: CompletionBlocker | null;
+  children: CompletionView[];
+  integrated: string[];
+  notYet: Array<{ ref: string; stage: CompletionStage }>;
+  uncertainties: string[];
+  decisions: { count: number; latest: string | null };
+  text: string;
+}
+
+function childDelivered(child: CompletionView): boolean {
+  return ['integrated', 'released'].includes(child.stage);
+}
+
+function storyStage(children: CompletionView[]): StoryCompletionView['stage'] {
+  if (!children.length) return 'proposed';
+  if (children.every((child) => child.stage === 'released')) return 'released';
+  if (children.every(childDelivered)) return 'integrated';
+  return activeStoryStage(children);
+}
+
+function activeStoryStage(children: CompletionView[]): StoryCompletionView['stage'] {
+  if (children.some((child) => child.stage === 'running')) return 'running';
+  if (children.some(childDelivered)) return 'partial';
+  if (children.some((child) => child.stage === 'rejected')) return 'partial';
+  return pendingStoryStage(children);
+}
+
+function pendingStoryStage(children: CompletionView[]): StoryCompletionView['stage'] {
+  if (children.some((child) => child.stage === 'blocked')) return 'blocked';
+  if (children.some((child) => ['submitted', 'integrating'].includes(child.stage))) return 'running';
+  return 'proposed';
+}
+
+function storyDecisions(story: CompletionStory): StoryCompletionView['decisions'] {
+  const entries = [...(story.archivedDecisionLog ?? []), ...(story.decisionLog ?? [])];
+  const decisions = entries.filter((entry) => entry.kind === 'DECISION' && Boolean(entry.ref || /\bSQ-\d+\b/.test(entry.text)));
+  decisions.sort((first, second) => first.seq - second.seq);
+  const latest = decisions.at(-1);
+  return { count: decisions.length, latest: latest ? firstSentence(latest.text) : null };
+}
+
+function firstSentence(value: string): string {
+  return value.split(/(?<=[.!?])\s/)[0] ?? '';
+}
+
+function storyChecked(children: CompletionView[]): string {
+  const captured = children.filter((child) => child.facts.verify?.status === 'passed' && child.facts.verify.kinds.includes('captured-command')).length;
+  const qualities = new Map<QualityStatus, number>();
+  for (const child of children) qualities.set(child.facts.quality.status, (qualities.get(child.facts.quality.status) ?? 0) + 1);
+  const labels = [...qualities].map(([status, count]) => count + ' quality ' + QUALITY_WORDING[status]);
+  return captured + ' of ' + children.length + ' verified by captured command; ' + labels.join('; ') + '.';
+}
+
+function storyAction(view: StoryCompletionView): string {
+  const userBlocker = view.children.find((child) => child.blocker?.actor === 'user')?.blocker;
+  if (userBlocker) return userBlocker.nextAction;
+  if (!view.children.length) return 'Define the story scope before starting.';
+  if (view.children.every((child) => Boolean(child.blocker) || TERMINAL_STAGES.has(child.stage))) return 'No action needed.';
+  return 'Check completion <ref> for children whose next step is not recorded.';
+}
+
+function childResult(child: CompletionView): string {
+  const result = child.summary?.stale ? '' : child.summary?.result;
+  return child.ref + ': ' + firstSentence(result || deliveryLine(child.facts.delivery!));
+}
+
+function storyCompletionText(view: StoryCompletionView): string {
+  const results = view.children.filter(childDelivered).map(childResult).join(' ');
+  const pending = view.notYet.map((child) => child.ref + ' (' + child.stage + ')').join(', ');
+  const sections = [
+    'Result: ' + clampWords(view.title + '. ' + results, 55),
+    'Not yet: ' + clampWords(pending || 'none.', 35),
+    'Checked: ' + clampWords(storyChecked(view.children), 45),
+    'Still uncertain: ' + clampWords(view.uncertainties.join('\n') || 'Nothing flagged by the records.', 50),
+    'Your action: ' + clampWords(storyAction(view), 30),
+    'Decisions: ' + clampWords(view.decisions.count + '; ' + (view.decisions.latest ?? 'none recorded.'), 18),
+    'Details: completion <ref>',
+  ];
+  return sections.map(escapeCompletionText).join('\n');
+}
+
+function storyBlocker(children: CompletionView[]): CompletionBlocker | null {
+  const user = children.find((child) => child.blocker?.actor === 'user');
+  const blocked = user ?? children.find((child) => child.blocker);
+  return blocked?.blocker ?? null;
+}
+
+export function storyCompletionView(story: CompletionStory, children: CompletionView[]): StoryCompletionView {
+  const doubts = children.flatMap((child) => DOUBTS.map((doubt) => doubt(child))).filter((value): value is string => Boolean(value));
+  const uncertainties = [...new Set(doubts)].slice(0, 6);
+  const view: StoryCompletionView = {
+    ref: story.ref, title: story.title, stage: storyStage(children),
+    blocker: storyBlocker(children),
+    children, integrated: children.filter(childDelivered).map((child) => child.ref),
+    notYet: children.filter((child) => !childDelivered(child)).map((child) => ({ ref: child.ref, stage: child.stage })),
+    uncertainties, decisions: storyDecisions(story), text: '',
+  };
+  view.text = storyCompletionText(view);
+  return view;
+}
+
 interface CompletionDependencies {
+  getStory: (slug: string, idOrRef: string) => CompletionStory | null;
+  listTickets: (slug: string) => Array<CompletionTicket & { storyId?: string; archived?: boolean }>;
   getTicket: (slug: string, idOrRef: string) => CompletionTicket | null;
   openBlockers: (slug: string, ticket: CompletionTicket) => string[];
   negativeControlResult: (ticket: CompletionTicket) => { kind?: string };
@@ -573,5 +689,12 @@ export function createCompletion(dependencies: CompletionDependencies) {
     return ticket ? completionView(ticket, completionContext(slug, ticket)) : null;
   }
 
-  return { completionPayload };
+  function storyCompletionPayload(slug: string, idOrRef: string): StoryCompletionView | null {
+    const story = dependencies.getStory(slug, idOrRef);
+    if (!story) return null;
+    const children = dependencies.listTickets(slug).filter((ticket) => ticket.storyId === story.id && !ticket.archived);
+    return storyCompletionView(story, children.map((ticket) => completionView(ticket, completionContext(slug, ticket))));
+  }
+
+  return { completionPayload, storyCompletionPayload };
 }

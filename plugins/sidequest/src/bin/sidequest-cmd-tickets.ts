@@ -325,15 +325,17 @@ async function cmdPulse(opts: any, positional: any) {
 
 async function cmdCompletion(opts: any, positional: any) {
   const idOrRef = positional[0];
-  if (!idOrRef) fail('completion: pass a ticket id or ref, e.g. sidequest completion SQ-3');
+  if (!idOrRef) fail('completion: pass a ticket or story ref, e.g. sidequest completion US-3');
   if (typeof opts.text === 'string') fail(`completion: --text takes no value (text is the default output) but swallowed "${opts.text}". Put --text last or drop it.`);
   const { slug, meta } = await resolveProject(opts);
-  const view = store.completionPayload(slug, idOrRef);
-  if (!view) fail(`completion: no ticket "${idOrRef}" in ${meta.name}`);
+  const view = /^(US-|st_)/i.test(idOrRef)
+    ? store.storyCompletionPayload(slug, idOrRef)
+    : store.completionPayload(slug, idOrRef);
+  if (!view) fail(`completion: no ticket or story "${idOrRef}" in ${meta.name}`);
   process.stdout.write(completionOutput(slug, view, opts.json) + '\n');
 }
 
-function completionOutput(slug: string, view: CompletionView, json?: boolean) {
+function completionOutput(slug: string, view: { text: string }, json?: boolean) {
   return json ? JSON.stringify(Object.assign({ project: slug }, view), null, 2) : view.text;
 }
 

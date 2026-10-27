@@ -208,7 +208,7 @@ test('evidence paths outside the approved roots are dropped', () => {
   assert.ok(!view.facts.verify.kinds.includes('real-flow'), 'a changed test is never real-flow');
 });
 
-test('the MCP completion read returns the view, the text form, and a named story refusal', async () => {
+test('the MCP completion read returns ticket and story views and text', async () => {
   const { slug } = board('mcp');
   const ticket = ticketWith(slug, 'MCP read', { status: 'doing', submission: submission() });
   const view = await callTool('completion', { project: slug, ref: ticket.ref });
@@ -217,9 +217,10 @@ test('the MCP completion read returns the view, the text form, and a named story
   const rendered = await callTool('completion', { project: slug, ref: ticket.ref, text: true });
   assert.deepEqual(Object.keys(rendered).sort(), ['project', 'ref', 'stage', 'text']);
   assert.equal(rendered.text, view.text);
-  const story = await callTool('completion', { project: slug, story: 'US-1' });
-  assert.equal(story.reason, 'not_supported');
-  assert.match(story.message, /SQ-3963/);
+  const createdStory = store.createStory(slug, { title: 'Empty story' });
+  const story = await callTool('completion', { project: slug, story: createdStory.ref });
+  assert.equal(story.stage, 'proposed');
+  assert.equal(story.ref, createdStory.ref);
 });
 
 test('the CLI completion command prints the text by default and the view with --json', () => {

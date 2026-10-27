@@ -44,6 +44,12 @@ When an executor hands back a clean committed checkpoint in a retained worktree,
 
 A repair linked to a rejected candidate restores it with `git merge --no-ff`, preserving its commit ancestry. Byte-identical inherited tests are recorded as `inherited-unchanged` on submission and need no new negative-control markers; changed tests still need their controls. Provisioning never links a scoped plugin's dependencies to the registered checkout, because `npm ci` empties `node_modules` through such a link. When configured worktree setup leaves no `node_modules` for a scoped plugin, provisioning records an install deferral, and the briefing tells the executor to run `npm ci --prefix plugins/<name> --ignore-scripts --no-audit --no-fund` before work. The WorktreeCreate hook never runs these plugin installs itself. Configured `link` dependency paths are unlinked before a gate checkout is removed, since `git worktree remove` on Windows deletes through a junction. Bounded verification needs no resource slot unless board configuration declares one, and any declared slot comes through the board.
 
+## Read the overall story outcome
+
+Use `sidequest completion US-3` (or the `completion` MCP read with `story: "US-3"`) for one account of the non-archived children. Add `--json` for stages, child references, blockers and evidence counts. The text stays under 250 words and names Result, Checked, Still uncertain and Your action.
+
+A story reads integrated only when every child has a delivery record, and released only when every child has a release record. Mixed delivery reads partial; blocked and rejected children remain visible in Not yet. A live child claim reads running. Captured-command and quality counts keep missing evidence visible. Read `completion SQ-3` for a child's details. Ticket-linked story decisions appear as a count and the latest first sentence.
+
 ## Retrying delivery
 
 Each integration retry starts a fresh delivery record. Top-level fields describe the current attempt; earlier records are kept in `submission.integration.attempts[]`, including the failure reason, delivery head, rollback and completion time. `pulse` and CLI JSON include the attempt list. Plain CLI integration output prints earlier attempts too. A successful retry keeps the failed attempt's details in that history rather than beside the successful result.
