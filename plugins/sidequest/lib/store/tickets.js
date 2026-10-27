@@ -264,7 +264,7 @@ function createTickets(dependencies) {
       executorVerifyKind,
       executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact"),
       executorVerify,
-      executorVerifyCwd: normalizeVerifyCwd(fields.executorVerifyCwd),
+      executorVerifyCwd: normalizeVerifyCwd(fields.executorVerifyCwd, readMeta(slug)?.path),
       assets,
       comments: [],
       // [{ id, by, body, kind: 'comment', at }]
@@ -1143,7 +1143,7 @@ function createTickets(dependencies) {
     const filesPatch = patchedFileScope(ticket, patch);
     return filesPatch !== void 0 && !sameFiles(ticket.files, filesPatch);
   }
-  function activeClaimCloseoutUpdateRefusal(ticket, patch, options = {}) {
+  function activeClaimCloseoutUpdateRefusal(ticket, patch, options = {}, projectPath = "") {
     if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
     const changedFields = [
       ...patchChangesFiles(ticket, patch) ? ["files"] : [],
@@ -1154,7 +1154,7 @@ function createTickets(dependencies) {
       ...patch.executorVerify !== void 0 && patch.executorVerify !== ticket.executorVerify ? ["verify"] : [],
       ...patch.executorVerifyKind !== void 0 && patch.executorVerifyKind !== ticket.executorVerifyKind ? ["verifyKind"] : [],
       ...patch.executorAttestationArtifact !== void 0 && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ["attestationArtifact"] : [],
-      ...patch.executorVerifyCwd !== void 0 && normalizeVerifyCwd(patch.executorVerifyCwd) !== (ticket.executorVerifyCwd || "") ? ["verifyCwd"] : []
+      ...patch.executorVerifyCwd !== void 0 && normalizeVerifyCwd(patch.executorVerifyCwd, projectPath) !== (ticket.executorVerifyCwd || "") ? ["verifyCwd"] : []
     ];
     if (!changedFields.length) return null;
     const caller = String(patch.by || "").trim();
@@ -1202,7 +1202,7 @@ function createTickets(dependencies) {
       throw new Error("generic ticket patch cannot set, change, or clear reviewTarget; pass the review target transition separately");
     }
     const apply = (t) => {
-      const closeoutUpdateRefusal = activeClaimCloseoutUpdateRefusal(t, patch, options);
+      const closeoutUpdateRefusal = activeClaimCloseoutUpdateRefusal(t, patch, options, readMeta(slug)?.path);
       if (closeoutUpdateRefusal) throw new Error(closeoutUpdateRefusal);
       const nextStatus = patch.status == null ? null : requireStatus(patch.status);
       const doneRefusal = nextStatus === "done" ? updateDoneRefusal(t) : null;
@@ -1266,7 +1266,7 @@ function createTickets(dependencies) {
       const nextVerifyKind = patch.executorVerifyKind === void 0 ? t.executorVerifyKind : patch.executorVerifyKind;
       const nextAttestationArtifact = patch.executorAttestationArtifact === void 0 ? t.executorAttestationArtifact : patch.executorAttestationArtifact;
       const nextVerify = patch.executorVerify === void 0 ? t.executorVerify : patch.executorVerify;
-      if (patch.executorVerifyCwd !== void 0) t.executorVerifyCwd = normalizeVerifyCwd(patch.executorVerifyCwd);
+      if (patch.executorVerifyCwd !== void 0) t.executorVerifyCwd = normalizeVerifyCwd(patch.executorVerifyCwd, readMeta(slug)?.path);
       if (patch.executorVerify !== void 0 || patch.executorVerifyKind !== void 0 || patch.executorAttestationArtifact !== void 0 || patch.executorVerifyCwd !== void 0) {
         requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
         const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, "executor verify command");

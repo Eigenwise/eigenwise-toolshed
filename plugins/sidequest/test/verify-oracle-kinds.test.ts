@@ -177,18 +177,27 @@ test('verifyCwd normalizes a project-relative directory, refuses one that leaves
   fs.writeFileSync(path.join(project, 'packages', 'app', 'package.json'), JSON.stringify({ scripts: { check: 'node -e 0' } }));
   const slug = store.ensureProject(project, 'verify cwd').slug;
 
+  assert.doesNotThrow(() => store.normalizeVerifyCwd(project, project));
+  assert.equal(store.normalizeVerifyCwd(project, project), '');
   for (const outside of ['../sibling', 'C:/elsewhere', '/abs', 'packages\\..\\..']) {
-    assert.throws(() => store.normalizeVerifyCwd(outside), /verifyCwd must be a directory relative to the project root/);
+    assert.throws(() => store.normalizeVerifyCwd(outside), /omit verifyCwd to run from the project root.*stays inside it/);
   }
   assert.equal(store.normalizeVerifyCwd('.\\packages\\app\\'), 'packages/app');
   assert.equal(store.normalizeVerifyCwd('.'), '');
+  assert.equal(store.normalizeVerifyCwd(path.join(project, 'packages', 'app'), project), 'packages/app');
+  assert.throws(() => store.normalizeVerifyCwd(path.join(project, '..', 'sibling'), project), /omit verifyCwd to run from the project root/);
+
+  const root = store.createTicket(slug, { title: 'absolute root', executorVerify: 'node -e 0', executorVerifyCwd: project });
+  assert.equal(root.executorVerifyCwd, '');
 
   assert.throws(
     () => store.createTicket(slug, { title: 'root npm script', executorVerify: 'npm run check' }),
     /requires package\.json/,
   );
-  const nested = store.createTicket(slug, { title: 'nested npm script', executorVerify: 'npm run check', executorVerifyCwd: './packages/app' });
+  const nested = store.createTicket(slug, { title: 'nested npm script', executorVerify: 'npm run check', executorVerifyCwd: path.join(project, 'packages', 'app') });
   assert.equal(nested.executorVerifyCwd, 'packages/app');
+  assert.equal(store.updateTicket(slug, root.ref, { executorVerifyCwd: path.join(project, 'packages', 'app') }).executorVerifyCwd, 'packages/app');
+  assert.equal(store.updateTicket(slug, root.ref, { executorVerifyCwd: project }).executorVerifyCwd, '');
   assert.throws(() => store.updateTicket(slug, nested.ref, { executorVerifyCwd: '../outside' }), /verifyCwd must be/);
   assert.throws(() => store.updateTicket(slug, nested.ref, { executorVerifyCwd: '' }), /requires package\.json/);
 
