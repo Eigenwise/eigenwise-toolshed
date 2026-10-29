@@ -1155,6 +1155,9 @@
           "type": "string",
           "maxLength": 4000
         },
+        "worktree": {
+          "type": "string"
+        },
         "session": {
           "type": "string"
         }

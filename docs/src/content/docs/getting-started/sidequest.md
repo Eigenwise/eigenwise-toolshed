@@ -487,6 +487,8 @@ Executors run inside your Claude Code process, so a dev stack or watcher an exec
 
 A ticket with `workingTreeDelivery` runs in the board's registered checkout, never in a linked worktree. Dispatch's `worktree` argument only names a resumed executor's checkout during live-claim recovery, so passing it anywhere else is refused up front instead of producing a lease the executor can't write through. To deliver from a worktree, drop `workingTreeDelivery` and let the ticket run isolated and submit a commit.
 
+`done` checks the diff of the checkout the dispatch recorded, which for a shared-tree or `workingTreeDelivery` dispatch is the registered checkout. When that diff is empty, the refusal says which tree it read and, if the dispatch recorded a different worktree, names that one too. If the work really did land in another worktree of the same repository, `done` takes a `worktree` argument: the board diffs that tree from the dispatch base instead, as long as the base is in its history, and a working-tree completion records the worktree so integration can find the deliverable.
+
 ## Read-only reports
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.

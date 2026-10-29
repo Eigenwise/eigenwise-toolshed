@@ -36,6 +36,79 @@ function fixture() {
   return { project, slug, git, create, write, close };
 }
 
+function linkedWorktree(git: (argumentsList: string[]) => Buffer) {
+  const worktree = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closeout-linked-')), 'linked');
+  git(['worktree', 'add', '--quiet', '--detach', worktree]);
+  return worktree;
+}
+
+function recordDispatchWorktree(slug: string, reference: string, worktree: string) {
+  const ticket = store.getTicket(slug, reference);
+  ticket.dispatch.worktree = worktree;
+  const database = require('../lib/db.js');
+  database.putRow(database.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: 0, ord: ticket.order, claim_by: ticket.claim.by, data: ticket,
+  });
+}
+
+function sameDirectory(left: string, right: string) {
+  return fs.realpathSync.native(left).toLowerCase() === fs.realpathSync.native(right).toLowerCase();
+}
+
+test('working-tree delivery done in a linked worktree names both trees, then completes when done names it', () => {
+  const { project, slug, git, create, close } = fixture();
+  const current = create('current.md');
+  const linked = linkedWorktree(git);
+  const owner = `${path.basename(project)}-current.md`;
+  const closeIn = (worktree: string) => store.completeTicket(slug, current, owner, { source: 'mcp', verify: 'Read the document.', worktree });
+  const cleanLinked = closeIn(linked);
+  assert.equal(cleanLinked.reason, 'working_tree_delivery_empty');
+  assert.doesNotMatch(cleanLinked.message, /The board diffed/);
+  fs.writeFileSync(path.join(linked, 'current.md'), 'Linked');
+  recordDispatchWorktree(slug, current, linked);
+  const refused = close(current, 'current.md');
+  assert.equal(refused.reason, 'working_tree_delivery_empty');
+  assert.ok(refused.message.includes(`The board diffed ${store.readMeta(slug).path}; your work is in ${linked}`), refused.message);
+  assert.match(refused.message, /clear that flag or submit a commit from the worktree; or repeat done with worktree:/);
+  const result = closeIn(linked);
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.ticket.completion.purpose, 'working-tree');
+  assert.deepEqual(result.ticket.completion.workingTree.changedPaths, ['current.md']);
+  assert.ok(sameDirectory(result.ticket.completion.workingTree.worktree, linked));
+});
+
+test('an empty registered-checkout diff points a shared-tree executor at done worktree, which then diffs that tree', () => {
+  const { project, slug, git, create } = fixture();
+  const current = create('current.md', { workingTreeDelivery: false });
+  const linked = linkedWorktree(git);
+  fs.writeFileSync(path.join(linked, 'current.md'), 'Linked');
+  const refused = store.completionTreeCheck(slug, store.getTicket(slug, current));
+  assert.equal(refused.reason, 'empty_declared_scope');
+  assert.ok(refused.message.includes(`The board diffed ${store.readMeta(slug).path}; no other worktree was read`), refused.message);
+  assert.match(refused.message, /repeat done with worktree:/);
+  const named = store.completeTicket(slug, current, `${path.basename(project)}-current.md`, { source: 'mcp', verify: 'Read the document.', worktree: linked });
+  assert.equal(named.reason, 'submission_required', named.message);
+});
+
+test('done refuses a worktree outside the project or without the dispatch base', () => {
+  const { project, slug, git, create } = fixture();
+  const current = create('current.md');
+  const owner = `${path.basename(project)}-current.md`;
+  const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closeout-foreign-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: foreign, windowsHide: true });
+  const outside = store.completeTicket(slug, current, owner, { source: 'mcp', verify: 'Read the document.', worktree: foreign });
+  assert.equal(outside.reason, 'completion_worktree_unavailable');
+  assert.match(outside.message, /is not a worktree of the registered project/);
+  const unrelated = linkedWorktree(git);
+  execFileSync('git', ['checkout', '--quiet', '--orphan', 'unrelated'], { cwd: unrelated, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'unrelated'], { cwd: unrelated, windowsHide: true });
+  const baseless = store.completeTicket(slug, current, owner, { source: 'mcp', verify: 'Read the document.', worktree: unrelated });
+  assert.equal(baseless.reason, 'completion_worktree_unavailable');
+  assert.match(baseless.message, /the dispatch base [0-9a-f]{40} is not in the history of/);
+  assert.equal(store.getTicket(slug, current).status, 'doing');
+});
+
 test('late working-tree declaration includes already dirty declared paths and preserves its baseline on retry', () => {
   const { slug, create, write, close } = fixture();
   const current = create('current.md', { workingTreeDelivery: false });
