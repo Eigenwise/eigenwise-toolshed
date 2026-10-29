@@ -231,6 +231,8 @@ test('SQ-3999: a genuinely changed passing guard keeps its agent-reported reason
 });
 
 test('SQ-3999: unaffected notes need a reason and the claim holder as author', () => {
+  const accepted = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: the assertion is unchanged']);
+  assert.equal(accepted.kind, 'failed');
   const missingReason = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: ']);
   assert.equal(missingReason.kind, 'capture_tests_uncovered');
   const wrongAuthor = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: passes on both trees'], 'other-holder');
