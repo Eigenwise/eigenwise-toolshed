@@ -8,6 +8,34 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.617.0 (2026-10-29)
+
+### sidequest 6.7.0 → 6.8.0
+
+#### Features
+
+- Working-tree deliveries refuse commit and submit and name done; board_config workingTreeDeliveryCategories stamps the flag at add time (SQ-3948)
+
+#### Fixes
+
+- integrate records a delivery that landed on a pull request branch with deliveryBranch and pullRequests, gating it in that branch's checkout and showing it as git:<branch> (SQ-3946)
+- done names the tree its empty-diff refusal read and can diff the worktree the work was done in (SQ-3947)
+- Refuse a subagent's CLI direct claim, and a direct claim's --session that isn't the shell's own (SQ-3954)
+- Tickets carry acceptance examples the briefing asks executors to demonstrate, and the completion view shows each one as real-flow, visual, stale, failed or not demonstrated from demonstrations.json (SQ-3966)
+- Record prepared release versions on delivered tickets (SQ-3969)
+  Release preparation records the marketplace version, plugin versions and release commit on done tickets. Completion only reports released when that record matches the current delivery. Missing boards warn without blocking the cut.
+- Keep control captures separate from resumed verification (SQ-3975)
+  Executor guidance now teaches captured negative controls and identifies plain markers as agent-reported. Resumed checkpoints retain ordinary verification results when a newer control capture exists.
+- Accept factual failed verification evidence before scoped edits (SQ-3982)
+  Claim holders can record failed_suite, failed_check, toolchain_missing, could_not_run, and timeout verification evidence on a clean declared scope. Successful completion still requires scoped work or an explicit no-op declaration.
+- Preserve test names in LCOV captures (SQ-3983)
+  The LCOV coverage runner now logs spec test output alongside its LCOV report. Its concurrency and timeout can be configured with environment variables.
+- Split suite selection into package-script and direct-test decisions (SQ-3984)
+  Split suite resolution into smaller decisions while preserving npm script precedence, fallback commands, module runners, and Windows shards. Cover plugins with no runnable suite.
+- Allow safe Git chains that create their target directory first (SQ-3985)
+- Wait for a ticket lock file Windows is still deleting instead of refusing busy at once (SQ-3986)
+- Apply working-tree delivery declarations to live shared-checkout dispatches (SQ-3987)
+
 ## v3.616.0 (2026-10-27)
 
 ### quality-gate 1.3.3 → 1.4.0
