@@ -649,7 +649,7 @@ const tools = [
   },
   {
     name: "done",
-    description: "Finish with a report. A dispatched executor with no commit, no dirty declared path, and no pending submission may close without a fake submission. Repository changes require commit and submit. Commandless working-tree delivery requires typed verify evidence.",
+    description: "Finish with a report. A dispatched executor with no commit, no dirty declared path, and no pending submission may close without a fake submission. Repository changes require commit and submit. Commandless working-tree delivery requires typed verify evidence. The completion check diffs the recorded checkout (the registered one for shared-tree dispatches); pass worktree when the work is in another worktree of this project.",
     inputSchema: {
       type: "object",
       properties: {
@@ -661,6 +661,7 @@ const tools = [
         summary: COMPLETION_SUMMARY_SCHEMA,
         body: { type: "string", description: "Final report stored as the completion comment; non-behavior frozen work records negativeControl: not_required(reason), while new behavior requires the claim-holder assertion-failure marker." },
         verify: { type: "string", maxLength: 4e3, description: "Typed evidence for active commandless working-tree delivery, and for a clean externalDeliverable:true closeout on a ticket without a pinned command. Command or suite delivery still requires its matching verify-capture." },
+        worktree: { type: "string", description: "Worktree of this project the work was done in, diffed from the dispatch base; refused completion_worktree_unavailable outside this repository or without that base." },
         session: { type: "string" }
       },
       required: ["ref", "by", "body"]
@@ -671,7 +672,7 @@ const tools = [
       const body = requiredFinalReport(args, "done");
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel("done", args.model, ticket);
-      const opts = { summary: args.summary, source: "mcp", model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
+      const opts = { summary: args.summary, source: "mcp", model, effort: args.effort, body, verify: args.verify, worktree: args.worktree, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
       if (!res.ok && ["submission_required", "empty_declared_scope"].includes(res.reason)) {
         const noOp = provenNoOpCloseout(slug, res.ticket, args.verify);

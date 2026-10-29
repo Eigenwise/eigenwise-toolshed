@@ -718,6 +718,8 @@ const {
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
+  completionWorkspace,
+  diffedCheckoutGuidance,
   activeSharedTreeClaim,
   dispatchIdentityAmbiguous,
   dispatchCanBindRuntimeIdentity,
@@ -1367,12 +1369,12 @@ function workspaceHead(delta) {
     return null;
   }
 }
-function completionWorkFacts(slug, ticket) {
+function completionWorkFacts(slug, ticket, workspace) {
   const state = dispatchState(ticket);
   const declaredFiles = completionScope(slug, ticket);
   const eligible = [Boolean(state), state?.readonly !== true || Boolean(state?.workProvenance), state?.nonRepoOutput !== true, declaredFiles.length > 0];
   if (!eligible.every(Boolean)) return { ok: true, applicable: false };
-  const delta = dispatchDelta(slug, ticket);
+  const delta = dispatchDelta(slug, ticket, workspace);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
   const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed, ...mergeResolvedPaths(delta.workspace)])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
   try {
@@ -1382,12 +1384,12 @@ function completionWorkFacts(slug, ticket) {
     return { ok: false, reason: "work_provenance_mismatch", message: error instanceof Error ? error.message : String(error) };
   }
 }
-function emptyScopeCompletion(ticket, declaredFiles) {
+function emptyScopeCompletion(slug, ticket, declaredFiles, delta) {
   return {
     ok: false,
     reason: "empty_declared_scope",
     declaredFiles,
-    message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. A claim holder may record factual failed_suite, failed_check, toolchain_missing, could_not_run, or timeout verification evidence before editing, but a successful completion, submit, or done still needs scoped work. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check>: <evidence>.`
+    message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. A claim holder may record factual failed_suite, failed_check, toolchain_missing, could_not_run, or timeout verification evidence before editing, but a successful completion, submit, or done still needs scoped work. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check>: <evidence>.${diffedCheckoutGuidance(slug, ticket, delta?.workspace?.root)}`
   };
 }
 function isBehaviorSourcePath(file) {
@@ -1412,11 +1414,11 @@ function ownedControlCheck(slug, ticket, delta, ownedPaths) {
   return ["failed", "waived"].includes(control.kind) ? { ok: true, negativeControl: control.kind, inheritedTests } : negativeControlRefusal(ticket, control);
 }
 function completionTreeCheck(slug, ticket, opts) {
-  const facts = completionWorkFacts(slug, ticket);
+  const facts = completionWorkFacts(slug, ticket, opts?.workspace);
   if (!facts.ok) return facts;
   if (!facts.applicable) return facts;
   const emptyWithoutDeclaration = [!facts.changedPaths.length, opts?.explicitNoOp !== true].every(Boolean);
-  if ([emptyWithoutDeclaration, facts.provenance?.kind !== "inherited-read-only"].every(Boolean)) return emptyScopeCompletion(ticket, facts.declaredFiles);
+  if ([emptyWithoutDeclaration, facts.provenance?.kind !== "inherited-read-only"].every(Boolean)) return emptyScopeCompletion(slug, ticket, facts.declaredFiles, facts.delta);
   const control = ownedControlCheck(slug, ticket, facts.delta, facts.ownedPaths);
   if (!control.ok) return control;
   return {
@@ -2767,14 +2769,22 @@ function evidenceDoneReportRefusal(request, facts) {
 }
 function executorDoneRefusal(request, facts) {
   if (!facts.executorDone) return null;
-  const delta = facts.active ? reviewedCompletionDelta(request.slug, facts) : NO_COMPLETION_DELTA;
+  const delta = facts.active ? completionDeltaCheck(request, facts) : NO_COMPLETION_DELTA;
   if ("refusal" in delta) return delta.refusal;
   return deliveryCloseoutRefusal(request, facts, delta.completionDelta) || scopeCloseoutRefusal(request, facts, delta);
 }
-function reviewedCompletionDelta(slug, facts) {
+function completionDeltaCheck(request, facts) {
+  const requested = String(request.opts.worktree || "").trim();
+  if (!requested) return reviewedCompletionDelta(request.slug, facts, null);
+  const resolved = completionWorkspace(request.slug, facts.t, requested);
+  if (!resolved.ok) return { refusal: Object.assign({ ticket: facts.t }, resolved) };
+  request.completionWorkspace = resolved.workspace;
+  return reviewedCompletionDelta(request.slug, facts, resolved.workspace);
+}
+function reviewedCompletionDelta(slug, facts, workspace) {
   const reviewTree = reviewCandidateTreeRefusal(slug, facts.t);
   if (reviewTree) return { refusal: Object.assign({ ticket: facts.t }, reviewTree) };
-  return scopedCompletionDelta(slug, facts, dispatchDelta(slug, facts.t));
+  return scopedCompletionDelta(slug, facts, dispatchDelta(slug, facts.t, workspace));
 }
 function scopedCompletionDelta(slug, facts, completionDelta) {
   if (!completionDelta.ok || facts.activeArtifactDispatch) return { completionDelta, sharedTreeCommittedScope: false };
@@ -2812,7 +2822,7 @@ function artifactScopeRefusal(slug, facts) {
 }
 function workingTreeDeliveryRefusal(request, facts, completionDelta) {
   if (!facts.activeWorkingTreeDelivery) return null;
-  const delivery = inspectedWorkingTreeDelivery(request.slug, facts.t, completionDelta);
+  const delivery = inspectedWorkingTreeDelivery(request.slug, facts.t, completionDelta, request.completionWorkspace);
   if (!delivery.ok) return Object.assign({ ticket: facts.t }, delivery);
   const verification = workingTreeVerification(facts.t, delivery.candidate, request.opts.verify);
   if (!verification.ok) return Object.assign({ ticket: facts.t }, verification);
@@ -2823,14 +2833,18 @@ function workingTreeDeliveryRefusal(request, facts, completionDelta) {
     workingTree: {
       candidate: delivery.candidate,
       changedPaths: delivery.changedPaths,
-      verification: verification.verification
+      verification: verification.verification,
+      ...deliveredFromWorktree(request.completionWorkspace)
     }
   };
   return null;
 }
-function inspectedWorkingTreeDelivery(slug, t, completionDelta) {
+function deliveredFromWorktree(workspace) {
+  return workspace ? { worktree: workspace.root } : {};
+}
+function inspectedWorkingTreeDelivery(slug, t, completionDelta, workspace) {
   try {
-    return workingTreeDeliveryCloseout(slug, t, completionDelta);
+    return workingTreeDeliveryCloseout(slug, t, completionDelta, workspace?.root);
   } catch (error) {
     return { ok: false, reason: "working_tree_delivery_unavailable", ticket: t, message: `${t.ref} cannot inspect its working-tree deliverable: ${error?.message || error}` };
   }
@@ -2877,7 +2891,7 @@ function submissionRequired(t) {
 }
 function completionTreeRefusal(request, facts, completionDelta, unusedReviewScope) {
   if (!facts.active) return null;
-  const completion = completionTreeCheck(request.slug, facts.t, { explicitNoOp: request.opts.cleanDeclaredScope === true || unusedReviewScope });
+  const completion = completionTreeCheck(request.slug, facts.t, { explicitNoOp: request.opts.cleanDeclaredScope === true || unusedReviewScope, workspace: request.completionWorkspace });
   if (!completion.ok) return Object.assign({ ticket: facts.t }, completion);
   return deltaUnavailableRefusal(facts, completionDelta);
 }
@@ -3301,17 +3315,17 @@ function siblingWorkingTreeDeliveryWarnings(slug, ticket) {
   }
   return warnings;
 }
-function hasPreparedWorkingTreeBaseline(dispatch2) {
-  return Array.isArray(dispatch2?.workingTreeDirtyBaseline) && !dispatch2?.workingTreeDirtyBaselineLate;
+function preparedBaselineApplies(dispatch2, root) {
+  return !root && Array.isArray(dispatch2?.workingTreeDirtyBaseline) && !dispatch2?.workingTreeDirtyBaselineLate;
 }
-function workingTreeDeliveryCandidate(slug, ticket) {
+function workingTreeDeliveryCandidate(slug, ticket, root) {
   const dispatch2 = dispatchState(ticket);
   const declaredFiles = commitScope.ticketCommitScope(dispatch2?.declaredFiles, dispatch2?.declaredFiles, ticket?.ref);
-  const baselineRecorded = hasPreparedWorkingTreeBaseline(dispatch2);
+  const baselineRecorded = preparedBaselineApplies(dispatch2, root);
   if (dispatch2?.workingTreeDelivery !== true || !declaredFiles.length) return null;
   const baselineEntries = baselineRecorded ? dispatch2.workingTreeDirtyBaseline : [];
   const baseline = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
-  const current = artifactWorkingState(slug, { allowLarge: !baselineRecorded });
+  const current = artifactWorkingState(slug, { allowLarge: !baselineRecorded, root });
   const currentByPath = new Map(current.map((entry) => [dirtyPathKey(entry.path), entry]));
   const changed = /* @__PURE__ */ new Map();
   for (const entry of baselineEntries) {
@@ -3331,17 +3345,17 @@ function workingTreeDeliveryCandidate(slug, ticket) {
     changedPaths: paths
   };
 }
-function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
+function workingTreeDeliveryCloseout(slug, ticket, completionDelta, root) {
   const dispatch2 = dispatchState(ticket);
   const warnings = siblingWorkingTreeDeliveryWarnings(slug, ticket);
-  const candidate = workingTreeDeliveryCandidate(slug, ticket);
+  const candidate = workingTreeDeliveryCandidate(slug, ticket, root);
   if (!candidate) return { ok: false, reason: "working_tree_delivery_unavailable", message: `${ticket.ref} cannot inspect its pinned working-tree deliverable. Release it and dispatch again.` };
   const declaredFiles = commitScope.ticketCommitScope(dispatch2.declaredFiles, dispatch2.declaredFiles, ticket.ref);
-  const current = artifactWorkingState(slug, { allowLarge: !hasPreparedWorkingTreeBaseline(dispatch2) });
+  const current = artifactWorkingState(slug, { allowLarge: !preparedBaselineApplies(dispatch2, root), root });
   const ignoredDirtyPaths = current.filter((entry) => !commitScope.isInScope(entry.path, declaredFiles)).map((entry) => entry.path).sort();
   const committed = completionDelta?.ok ? completionDelta.committed.filter((file) => commitScope.isInScope(file, declaredFiles)) : [];
   if (committed.length) return { ok: false, reason: "working_tree_commit_forbidden", message: `${ticket.ref} declares a working-tree deliverable, but committed declared paths: ${committed.join(", ")}. Preserve the shared checkout and hand the committed paths back to the parent for a submitted delivery.` };
-  if (!candidate.changedPaths.length) return { ok: false, reason: "working_tree_delivery_empty", message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };
+  if (!candidate.changedPaths.length) return { ok: false, reason: "working_tree_delivery_empty", message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.${diffedCheckoutGuidance(slug, ticket, root)}` };
   return { ok: true, ...candidate, ignoredDirtyPaths, warnings };
 }
 function missingWorkingTreeDeliveryGuidance(ticket) {

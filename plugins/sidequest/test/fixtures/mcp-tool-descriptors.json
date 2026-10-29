@@ -1094,7 +1094,7 @@
   },
   {
     "name": "done",
-    "description": "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
+    "description": "Finish; external/working-tree: pinned command needs capture; commandless needs verify; worktree: diff work done outside the recorded checkout.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1154,6 +1154,9 @@
         "verify": {
           "type": "string",
           "maxLength": 4000
+        },
+        "worktree": {
+          "type": "string"
         },
         "session": {
           "type": "string"
