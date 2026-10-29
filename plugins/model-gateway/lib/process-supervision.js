@@ -12,13 +12,23 @@ const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const { controlRequestHeaders } = require('./control-auth.js');
 const PROCESS_STOP_TIMEOUT_MS = 3000;
 
+// A credential is for the host it was sent to: a redirect to another host (a release
+// asset's CDN, for instance) must not carry the Authorization header along.
+function redirectRequest(from, location, headers) {
+  const target = new URL(location, from);
+  if (target.host === new URL(from).host) return { url: target.href, headers };
+  const kept = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'authorization'));
+  return { url: target.href, headers: kept };
+}
+
 function fetchUrl(url, { timeout = 15000, headers = {}, agent } = {}) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https:') ? https : http;
     const req = mod.get(url, { agent, headers: { 'user-agent': 'model-gateway', ...headers } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return resolve(fetchUrl(res.headers.location, { timeout, headers, agent }));
+        const next = redirectRequest(url, res.headers.location, headers);
+        return resolve(fetchUrl(next.url, { timeout, headers: next.headers, agent }));
       }
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));

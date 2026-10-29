@@ -40,6 +40,7 @@ const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { localRequestAllowed, authenticatedControlRequest, controlRequestHeaders, ensureControlToken } = require('./control-auth.js');
 const { downloadVerifiedArchive } = require('./release-verification.js');
+const { fetchLatestRelease } = require('./github-release.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const {
@@ -430,10 +431,9 @@ async function setup({ preserveWiring = false } = {}) {
   const ext = WIN ? 'zip' : 'tar.gz';
   const assetName = `claude-code-proxy-${plat}-${arch}.${ext}`;
 
-  log(`fetching latest release of ${REPO}...`);
-  const rel = await fetchUrl(`https://api.github.com/repos/${REPO}/releases/latest`);
-  if (rel.status !== 200) die(`GitHub API returned ${rel.status}`);
-  const release = JSON.parse(rel.body.toString());
+  let release;
+  try { release = await fetchLatestRelease(REPO, { fetchUrl, log }); }
+  catch (error) { die(error.message); }
   let archive;
   try { archive = await downloadVerifiedArchive(release, assetName, { fetchUrl, log }); }
   catch (error) { die(error.message); }
