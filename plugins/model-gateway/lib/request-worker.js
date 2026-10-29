@@ -13,8 +13,11 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { CONTROL_HEADER, authenticatedControlRequest, ensureControlToken } = require('./control-auth.js');
-const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
+const { createGatewayUsageEmitter, createAggregateUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
+const antigravity = require('./antigravity-contract.js');
+const antigravityRequest = require('./antigravity-request.js');
+const { createDiscoveryTracker } = require('./antigravity-discovery.js');
 const { fetchUrl } = require('./process-supervision.js');
 const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
@@ -206,6 +209,7 @@ function servingVersionIsCurrentOrNewer(servingVersion, installedVersion) {
 }
 
 function displayName(id, backend = 'codex') {
+  if (backend === 'antigravity') return antigravity.displayName(id);
   if (backend === 'grok') return id.replace(/^grok-/, 'Grok ').replace(/-/g, ' ');
   return id.replace(/^gpt-/, 'GPT-').replace(/\[1m\]$/, '') + ' (Codex)';
 }
@@ -231,12 +235,16 @@ function routableCodexIds(ids) {
   return routable.length ? routable : null;
 }
 
-async function proxyCodexIds() {
+async function proxyModelIds() {
   try {
     const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
     if (response.status !== 200) return null;
-    return (JSON.parse(response.body.toString()).data || []).map((model) => model.id).filter((id) => /^gpt-/.test(id));
+    return listedProxyIds(JSON.parse(response.body.toString()).data);
   } catch { return null; }
+}
+
+function listedProxyIds(data) {
+  return Array.isArray(data) ? data.map((model) => model?.id).filter((id) => typeof id === 'string') : [];
 }
 
 function isGrokBackendModel(model) {
@@ -250,9 +258,10 @@ function localModelsFileIds() {
 // Only a list the proxy answered is a real catalog. models.json and the
 // built-in list stand in while the proxy is unreachable, which is routine for a
 // shim the supervisor starts alongside its proxy (GH-297).
-async function advertisedCodexCatalog() {
-  const proxyIds = routableCodexIds(await proxyCodexIds());
+function advertisedCodexCatalog(remoteIds, antigravitySnapshot) {
+  const proxyIds = routableCodexIds(remoteIds);
   if (proxyIds) return { ids: proxyIds, source: 'proxy' };
+  if (remoteIds !== null && antigravitySnapshot.authoritative) return { ids: [], source: 'proxy' };
   const localIds = routableCodexIds(localModelsFileIds());
   if (localIds) return { ids: localIds, source: 'models.json' };
   return { ids: DEFAULT_MODELS, source: 'fallback' };
@@ -631,6 +640,12 @@ class DispatchSessionRouteCache {
     this.load();
   }
 
+  peek(requestIdentity) {
+    const entry = this.routes.get(requestIdentity);
+    if (!entry || this.now() - entry.lastUsedAt >= this.ttlMs) return null;
+    return { model: entry.model, effort: entry.effort, ticket: entry.ticket };
+  }
+
   get(requestIdentity) {
     if (!requestIdentity) return null;
     const entry = this.routes.get(requestIdentity);
@@ -660,17 +675,19 @@ class DispatchSessionRouteCache {
 
   load() {
     if (!this.cachePath) return;
-    try {
-      const stored = JSON.parse(fs.readFileSync(this.cachePath, 'utf8'));
-      if (!stored || stored.version !== 1 || !Array.isArray(stored.routes)) return;
-      for (const entry of stored.routes) {
-        const [key, route] = Array.isArray(entry) ? entry : [];
-        if (typeof key !== 'string' || !Number.isFinite(route?.lastUsedAt) || !validDispatchRoute(route)) continue;
-        this.routes.set(key, { model: route.model, effort: route.effort, ticket: route.ticket ?? null, lastUsedAt: route.lastUsedAt });
-      }
-      this.prune(this.now());
-      this.persist();
-    } catch {}
+    const entries = storedDispatchEntries(this.cachePath);
+    if (!entries) return;
+    for (const entry of entries) this.loadEntry(entry);
+    this.prune(this.now());
+    // Keep poisoned reserved targets visible to the handled request guard, but
+    // never rewrite their file merely by starting a worker.
+    if (![...this.routes.values()].some((route) => antigravity.isReservedModel(route.model))) this.persist();
+  }
+
+  loadEntry(entry) {
+    const [key, route] = Array.isArray(entry) ? entry : [];
+    if (!validStoredDispatchRoute(key, route)) return;
+    this.routes.set(key, { model: route.model, effort: route.effort, ticket: route.ticket ?? null, lastUsedAt: route.lastUsedAt });
   }
 
   prune(now) {
@@ -687,6 +704,18 @@ class DispatchSessionRouteCache {
       writeFileAtomically(this.cachePath, JSON.stringify({ version: 1, routes: [...this.routes] }) + '\n', { mode: 0o600 });
     } catch {}
   }
+}
+
+function storedDispatchEntries(file) {
+  try {
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return stored?.version === 1 && Array.isArray(stored.routes) ? stored.routes : null;
+  } catch { return null; }
+}
+
+function validStoredDispatchRoute(key, route) {
+  if (typeof key !== 'string' || !Number.isFinite(route?.lastUsedAt)) return false;
+  return antigravity.isReservedModel(route?.model) || validDispatchRoute(route);
 }
 
 function validDispatchRoute(route) {
@@ -912,7 +941,7 @@ function routeStatus(statusCode, override) {
   return 'ok';
 }
 
-const ROUTE_BACKENDS = new Set(['codex', 'anthropic']);
+const ROUTE_BACKENDS = new Set(['codex', 'anthropic', 'antigravity']);
 const ROUTE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const ROUTE_VIAS = new Set(['direct', 'dispatch', 'dispatch-cached']);
 const COMPACT_TERMINAL_CODES = new Set(['message_stop']);
@@ -1101,20 +1130,26 @@ function listenOnUnixSocket(server, socketPath, onBindFailure) {
   server.listen(socketPath);
 }
 
+function warnShellOnlyWorker(settingsWiring) {
+  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring?.file) {
+    console.error('model-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through local .claude/settings.local.json or global settings so background sessions stay metered');
+  }
+}
+
 function runWorker() {
   const controlToken = ensureControlToken();
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
     source: 'fallback',
-    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
+    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)),
   };
   const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
+  const antigravityDiscovery = createDiscoveryTracker({ port: PROXY_PORT, file: path.join(STATE, 'antigravity-discovery.json') });
   const dispatchRoutes = new DispatchSessionRouteCache({ cachePath: DISPATCH_ROUTE_CACHE_PATH });
   const usageEmitter = createGatewayUsageEmitter();
+  const aggregateEmitter = createAggregateUsageEmitter();
   const settingsWiring = wiredMode();
-  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring) {
-    console.error('model-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through local .claude/settings.local.json or global settings so background sessions stay metered');
-  }
+  warnShellOnlyWorker(settingsWiring);
   const sentrySessions = new Map();
   const sentryModels = new Map();
   // hostsDetected drives the DNS-bypass decision below regardless of whether
@@ -1328,39 +1363,42 @@ function runWorker() {
   }
 
   function logAdvertisedSentryPolicies() {
-    for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
-      const sentryPolicy = effectiveSentryPolicy(policy);
-      if (!sentryPolicy) {
-        console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none`);
-        continue;
-      }
-      console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=${sentryPolicy.compactTrigger} source=${sentryPolicy.source}`);
+    const policies = modelCache.data.map((model) => resolveGatewayModelPolicy(model.id)).filter(Boolean);
+    const unique = new Map(policies.map((policy) => [policy.backendId, policy]));
+    for (const policy of unique.values()) logSentryPolicy(policy);
+  }
+
+  function logSentryPolicy(policy) {
+    const sentryPolicy = effectiveSentryPolicy(policy);
+    if (!sentryPolicy) {
+      console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none`);
+      return;
     }
+    console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=${sentryPolicy.compactTrigger} source=${sentryPolicy.source}`);
+  }
+
+  function legacyModelRows(ids) {
+    const grokModels = grokBackend.grokModelsFromCache();
+    const advertisedGrokModels = grokModels.length ? grokModels : DEFAULT_GROK_MODELS;
+    return [
+      ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)).filter(Boolean),
+      ...advertisedGrokModels.filter(isGrokBackendModel).map((model) => gatewayModel(model.id, 'grok')),
+    ];
+  }
+
+  function persistDiscoveryCache() {
+    if (modelCache.source !== 'proxy') return;
+    try { syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null }); }
+    catch (error) { console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`); }
   }
 
   async function refreshModels({ logSentryPolicies = false } = {}) {
-    const { ids, source } = await advertisedCodexCatalog();
-    const grokModels = grokBackend.grokModelsFromCache();
-    const advertisedGrokModels = grokModels.length ? grokModels : DEFAULT_GROK_MODELS;
-    modelCache = {
-      // A stand-in list is never persisted; the next refresh tick retries the proxy.
-      source,
-      data: [
-        ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])]
-          .map((id) => gatewayModel(id))
-          .filter(Boolean),
-        ...advertisedGrokModels
-          .filter(isGrokBackendModel)
-          .map((model) => gatewayModel(model.id, 'grok')),
-      ],
-    };
+    const remoteIds = await proxyModelIds();
+    const snapshot = await antigravityDiscovery.observe(remoteIds || []);
+    const { ids, source } = advertisedCodexCatalog(remoteIds, snapshot);
+    modelCache = { source, data: [...legacyModelRows(ids), ...snapshot.models.map((id) => gatewayModel(id, 'antigravity'))] };
     if (logSentryPolicies) logAdvertisedSentryPolicies();
-    if (source !== 'proxy') return;
-    try {
-      syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
-    } catch (error) {
-      console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
-    }
+    persistDiscoveryCache();
   }
   refreshModels({ logSentryPolicies: true });
   // A refresh reads cache files synchronously, and one per stale request let a burst of
@@ -2118,319 +2156,293 @@ function runWorker() {
     request.end(body);
   }
 
-  function handleRequest(req, res) {
-    const pathOnly = req.url.split('?')[0];
+  function sendJson(res, status, value) {
+    const body = JSON.stringify(value);
+    res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+  }
 
-    if (req.method === 'POST' && pathOnly === '/drain') {
-      if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compatState.port80Bound && req.socket.localPort === COMPAT_PORT)) {
-        res.writeHead(403);
-        return res.end();
-      }
-      draining = true;
-      res.once('finish', () => setImmediate(beginDrain));
-      res.writeHead(202, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, draining, activeRequests }));
-      return;
+  function handleDrain(req, res) {
+    const compat = compatState.port80Bound && req.socket.localPort === COMPAT_PORT;
+    if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compat)) {
+      res.writeHead(403); res.end(); return;
     }
+    draining = true;
+    res.once('finish', () => setImmediate(beginDrain));
+    sendJson(res, 202, { ok: true, draining, activeRequests });
+  }
 
-    if (draining && pathOnly !== '/healthz') {
-      res.writeHead(503, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'model-gateway shim is restarting; retry this request shortly' } }));
+  function workerHealth() {
+    const health = { ok: true, version: PLUGIN_VERSION, models: modelCache.data.length, catalog: modelCache.source,
+      served: counters, draining, activeRequests, compat: { ...compatState },
+      compaction: { streamGuard: COMPACT_STREAM_GUARD, retries: COMPACT_STREAM_RETRIES, maxBufferedBytes: COMPACT_STREAM_MAX_BYTES },
+      usage: { enabled: usageEmitter.enabled, endpoint: usageEmitter.endpoint, maxResponseBytes: usageEmitter.maxResponseBytes, settingsLevelBaseUrl: !!settingsWiring?.file } };
+    return { ...health, codexReadiness: healthzCodexReadiness(latestProxyAndAuthCheck(), health) };
+  }
+
+  function sendWorkerHealth(res) {
+    // The supervisor adds its own fields, so leave framing to HTTP rather than
+    // attaching a worker-only content length to a rewritten health body.
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(workerHealth()));
+  }
+
+  function handleSpecialRequest(req, res, pathOnly) {
+    if (pathOnly === '/healthz') { sendWorkerHealth(res); return true; }
+    if (req.method === 'POST' && pathOnly === '/drain') { handleDrain(req, res); return true; }
+    if (draining) {
+      sendJson(res, 503, { type: 'error', error: { type: 'api_error', message: 'model-gateway shim is restarting; retry this request shortly' } });
+      return true;
     }
+    return false;
+  }
 
-    if (pathOnly !== '/healthz') trackInFlight(res);
-
-    if (pathOnly === '/healthz') {
-      const health = {
-        ok: true,
-        version: PLUGIN_VERSION,
-        models: modelCache.data.length,
-        catalog: modelCache.source,
-        served: counters,
-        draining,
-        activeRequests,
-        compat: { ...compatState },
-        compaction: {
-          streamGuard: COMPACT_STREAM_GUARD,
-          retries: COMPACT_STREAM_RETRIES,
-          maxBufferedBytes: COMPACT_STREAM_MAX_BYTES,
-        },
-        usage: {
-          enabled: usageEmitter.enabled,
-          endpoint: usageEmitter.endpoint,
-          maxResponseBytes: usageEmitter.maxResponseBytes,
-          settingsLevelBaseUrl: !!settingsWiring,
-        },
-      };
-      res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ...health, codexReadiness: healthzCodexReadiness(latestProxyAndAuthCheck(), health) }));
-    }
-
+  function handleDiscovery(req, res, pathOnly) {
     if (req.method === 'GET' && pathOnly === '/v1/models') {
       counters.models++;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ data: modelCache.data, has_more: false }));
+      sendJson(res, 200, { data: modelCache.data, has_more: false });
+      return true;
     }
+    return false;
+  }
 
-    if (req.method === 'HEAD') { res.writeHead(200); return res.end(); }
+  function requestEffort(parsed) {
+    return typeof parsed?.output_config?.effort === 'string' ? parsed.output_config.effort : null;
+  }
 
-    // buffer the body so we can route on the model field; forward original
-    // bytes untouched on the Anthropic path (prompt caching keys on them)
-    const routeTelemetry = createRouteTelemetry(req);
-    req.once('aborted', () => routeTelemetry.cancel());
-    // res 'close' already covers a connection dropped mid-response, and res is
-    // per-request. Never register this on res.socket: keep-alive shares one
-    // socket across every request on the connection, so each registration
-    // outlives its request and retains the telemetry closure until the client
-    // finally disconnects.
-    res.once('close', () => routeTelemetry.cancel());
+  function routeDescription(advertisedModel, effectiveModel, backend, effort, via = 'direct') {
+    return { selectedModel: advertisedModel, effectiveModel, backend, effort, fallback: false, via };
+  }
+
+  function refuseThread(context, requestedBase, backend) {
+    const refusal = context.pathOnly === '/v1/messages' && statelessBackendThreadRefusal(context.parsed);
+    if (!refusal) return false;
+    const effective = requestedBase === 'auto' ? null : requestedBase;
+    const via = requestedBase === 'auto' ? 'dispatch' : 'direct';
+    context.telemetry.setRoute(routeDescription(context.parsed.model, effective, backend, requestEffort(context.parsed), via));
+    context.telemetry.finish(400, 'thread_unsupported');
+    sendJson(context.res, 400, refusal);
+    return true;
+  }
+
+  function inheritedDispatch(identity) {
+    const route = dispatchRoutes.get(identity?.parentKey);
+    if (!route) return null;
+    dispatchRoutes.set(identity?.key, route);
+    return { route, via: 'dispatch-inherited', inheritedFrom: identity.parentAgentId };
+  }
+
+  function cachedDispatch(identity) {
+    const route = dispatchRoutes.get(identity?.key);
+    return route ? { route, via: 'dispatch-cached' } : inheritedDispatch(identity);
+  }
+
+  function selectDispatch(markers, identity) {
+    if (markers.length === 0) return cachedDispatch(identity);
+    if (markers.length !== 1) return null;
+    dispatchRoutes.set(identity?.key, markers[0]);
+    return { route: markers[0], via: 'dispatch' };
+  }
+
+  function refuseUnboundDispatch(context, identity, markersLength) {
+    context.telemetry.setRoute(routeDescription(context.parsed.model, null, 'codex', null, 'dispatch'));
+    context.telemetry.finish(400, 'invalid_route');
+    requestRouteLog(context.req, 'codex', context.parsed.model, context.pathOnly, 'dispatch-unbound', null, identity, markersLength);
+    sendJson(context.res, 400, { type: 'error', error: { type: 'invalid_request_error',
+      message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=... effort=... ticket=...] marker in the conversation; redispatch the ticket' } });
+  }
+
+  function resolveDispatch(context, requestedBase) {
+    if (requestedBase !== 'auto') return { route: null, via: null, identity: null, markersLength: null, inheritedFrom: null };
+    const markers = dispatchRouteMarkersFromMessages(context.parsed.messages);
+    const identity = dispatchRequestIdentity(context.req, context.parsed);
+    const selected = selectDispatch(markers, identity);
+    if (!selected) { refuseUnboundDispatch(context, identity, markers.length); return null; }
+    return { ...selected, identity, markersLength: markers.length };
+  }
+
+  function refuseReservedDispatch(context) {
+    if (codexBaseFromId(context.parsed?.model) !== 'auto') return false;
+    const markers = dispatchRouteMarkersFromMessages(context.parsed.messages);
+    const identity = dispatchRequestIdentity(context.req, context.parsed);
+    const refusal = antigravityRequest.dispatchRefusal(context.parsed, { markers, identity, cache: dispatchRoutes });
+    if (!refusal) return false;
+    context.telemetry.setRoute(routeDescription(context.parsed.model, null, 'antigravity', null, 'dispatch'));
+    context.telemetry.finish(400, 'invalid_route');
+    antigravityRequest.sendRefusal(context.res, 400, refusal);
+    return true;
+  }
+
+  function schemaRefusalMessage(error) {
+    const known = error instanceof ToolSchemaCompatibilityError ? error : null;
+    const name = known?.toolName || '<unnamed tool>';
+    const pointer = known?.pointer || '/tools';
+    const reason = known?.reasonCode || 'schema-classifier-failure';
+    return `model-gateway: Codex tool schema compatibility refused tool ${name} at ${pointer}; reason=${reason}. Nothing was forwarded or rerouted.`;
+  }
+
+  function schemaRefusal(context, error, advertisedModel, dispatch) {
+    context.telemetry.setRoute(routeDescription(advertisedModel, context.parsed.model, 'codex', requestEffort(context.parsed), dispatch.via || 'direct'));
+    context.telemetry.finish(400, 'invalid_tool_schema');
+    sendJson(context.res, 400, { type: 'error', error: { type: 'invalid_request_error', message: schemaRefusalMessage(error) } });
+  }
+
+  function adaptTools(context, advertisedModel, dispatch) {
+    resolveCodexDeferredTools(context.parsed);
+    try { context.parsed.tools = adaptCodexToolSchemas(context.parsed.tools); return true; }
+    catch (error) { schemaRefusal(context, error, advertisedModel, dispatch); return false; }
+  }
+
+  function selectEffectiveCodex(context, requestedBase, dispatch) {
+    const target = dispatch.route ? dispatch.route.model : requestedBase;
+    if (antigravity.isReservedModel(target)) {
+      antigravityRequest.sendRefusal(context.res, 400, antigravity.LEGACY_REFUSAL); return false;
+    }
+    context.parsed.model = target;
+    if (dispatch.route?.effort) context.parsed.output_config = { ...context.parsed.output_config, effort: dispatch.route.effort };
+    return true;
+  }
+
+  function removePlanTools(parsed, keep) {
+    if (!keep && Array.isArray(parsed.tools)) parsed.tools = parsed.tools.filter((tool) => !PLAN_TOOLS.includes(tool?.name));
+  }
+
+  function codexUsageRoute(context, advertisedModel, dispatch) {
+    return { requestedModel: advertisedModel, effectiveModel: context.parsed.model, backend: 'codex', effort: requestEffort(context.parsed),
+      via: dispatch.via || 'direct', ticketRef: dispatch.via === 'dispatch-inherited' ? null : dispatch.route?.ticket || null };
+  }
+
+  function codexUsage(context, advertisedModel, dispatch, body) {
+    if (context.pathOnly !== '/v1/messages') return null;
+    if (!usageEmitter.enabled && !context.telemetry.enabled) return null;
+    return usageEmitter.start({ payload: context.parsed, requestBodyBytes: Buffer.byteLength(body), requestHeaders: context.req.headers,
+      route: codexUsageRoute(context, advertisedModel, dispatch) });
+  }
+
+  function compactGuardFor(context) {
+    if (!COMPACT_STREAM_GUARD || context.pathOnly !== '/v1/messages' || !isCompactionRequest(context.parsed)) return null;
+    return { attempts: 0, headWritten: false, observedUsage: compactUsageSnapshot() };
+  }
+
+  function sendCodex(context, advertisedModel, dispatch, keepPlanTools) {
+    const { req, res, parsed, pathOnly, telemetry } = context;
+    counters.codex++;
+    const effort = requestEffort(parsed);
+    requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatch.via, effort, dispatch.identity, dispatch.markersLength, dispatch.inheritedFrom);
+    telemetry.setRoute(routeDescription(advertisedModel, parsed.model, 'codex', effort, dispatch.via || 'direct'));
+    const sessionId = sentrySessionId(req);
+    if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId, parsed.model)) { telemetry.finish(413); return; }
+    const body = JSON.stringify(parsed);
+    recordRequestBodyHighWater(requestSessionId(req), Buffer.byteLength(body));
+    forward(req, res, `http://127.0.0.1:${PROXY_PORT}`, body, AUTH_HEADERS, true, !keepPlanTools, sessionId,
+      advertisedModel, parsed.model, telemetry, codexUsage(context, advertisedModel, dispatch, body), 0, compactGuardFor(context));
+  }
+
+  function routeCodex(context, requestedBase) {
+    const advertisedModel = context.parsed.model;
+    if (refuseThread(context, requestedBase, 'codex')) return;
+    const dispatch = resolveDispatch(context, requestedBase);
+    if (!dispatch || !selectEffectiveCodex(context, requestedBase, dispatch)) return;
+    if (!adaptTools(context, advertisedModel, dispatch)) return;
+    const keepPlanTools = process.env.CODEX_GATEWAY_KEEP_PLAN_TOOLS === '1';
+    removePlanTools(context.parsed, keepPlanTools);
+    sendCodex(context, advertisedModel, dispatch, keepPlanTools);
+  }
+
+  function grokModelForPicker(model) {
+    const pickerId = model.slice(GROK_PREFIX.length).replace(/\[1m\]$/, '');
+    const cached = grokBackend.grokModelIdsFromCache();
+    return grokBackend.grokModelFromPicker(pickerId, cached.length ? cached : DEFAULT_GROK_MODELS);
+  }
+
+  function grokUsage(context, model) {
+    if (!usageEmitter.enabled) return null;
+    return usageEmitter.start({ payload: context.parsed, requestBodyBytes: context.raw.length, requestHeaders: context.req.headers,
+      route: { requestedModel: context.parsed.model, effectiveModel: model, backend: 'grok', effort: requestEffort(context.parsed), via: 'direct' } });
+  }
+
+  function routeGrok(context) {
+    const { req, res, parsed, raw, pathOnly, telemetry } = context;
+    const model = grokModelForPicker(parsed.model);
+    if (refuseThread(context, model, 'grok')) return;
+    counters.grok++;
+    requestRouteLog(req, 'grok', model, pathOnly, 'direct', requestEffort(parsed));
+    telemetry.setRoute(routeDescription(parsed.model, model, 'grok', requestEffort(parsed)));
+    const sessionId = sentrySessionId(req);
+    if (fireContextSentry(res, sessionId, model)) { telemetry.finish(413); return; }
+    recordRequestBodyHighWater(requestSessionId(req), raw.length);
+    forwardGrok(req, res, parsed, model, parsed.model, sessionId, telemetry, grokUsage(context, model));
+  }
+
+  function anthropicUsage(context) {
+    if (context.pathOnly !== '/v1/messages' || !usageEmitter.enabled || !context.parsed) return null;
+    return usageEmitter.start({ payload: context.parsed, requestBodyBytes: context.raw?.length || 0, requestHeaders: context.req.headers,
+      route: { requestedModel: context.parsed.model, effectiveModel: context.parsed.model, backend: 'anthropic', effort: requestEffort(context.parsed), via: 'direct' } });
+  }
+
+  function routeAnthropic(context) {
+    const { req, res, raw, pathOnly, telemetry } = context;
+    const model = typeof context.parsed?.model === 'string' ? context.parsed.model : null;
+    assertAnthropicPassthroughSentryIsDisabled(model);
+    counters.anthropic++;
+    requestRouteLog(req, 'anthropic', model, pathOnly);
+    telemetry.setRoute(routeDescription(model, model, 'anthropic', requestEffort(context.parsed)));
+    recordRequestBodyHighWater(requestSessionId(req), raw?.length || 0);
+    forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, null, telemetry, anthropicUsage(context));
+  }
+
+  function routeLegacy(context) {
+    if (!context.pathOnly.startsWith('/v1/messages')) return routeAnthropic(context);
+    try {
+      const base = codexBaseFromId(context.parsed?.model);
+      if (base) return routeCodex(context, base);
+      if (context.parsed?.model?.startsWith(GROK_PREFIX)) return routeGrok(context);
+    } catch { /* Preserve legacy non-AGY passthrough behavior. */ }
+    routeAnthropic(context);
+  }
+
+  function admittedAntigravity(context, model, bytes) {
+    counters.antigravity = (counters.antigravity || 0) + 1;
+    requestRouteLog(context.req, 'antigravity', model, context.pathOnly, 'direct');
+    recordRequestBodyHighWater(requestSessionId(context.req), bytes);
+  }
+
+  function antigravityUsage(context, payload, target, bytes) {
+    if (context.pathOnly !== '/v1/messages' || !aggregateEmitter.enabled) return null;
+    return aggregateEmitter.start({ requestBodyBytes: bytes, requestHeaders: context.req.headers,
+      route: { requestedModel: payload.model, effectiveModel: target } });
+  }
+
+  function handleBufferedRequest(req, res, pathOnly, telemetry, raw) {
+    const parsed = antigravityRequest.parsePayload(raw);
+    const context = { req, res, raw, parsed, pathOnly, telemetry };
+    if (antigravity.isReservedModel(parsed?.model)) {
+      void antigravityRequest.handleDirect(req, res, raw, parsed, { port: PROXY_PORT, routeTelemetry: telemetry,
+        onAdmitted: (model, bytes) => admittedAntigravity(context, model, bytes),
+        startUsage: (payload, target, bytes) => antigravityUsage(context, payload, target, bytes) });
+      return;
+    }
+    if (req.method === 'HEAD') { res.writeHead(200); res.end(); return; }
+    // These handled guards are deliberately OUTSIDE the catch-to-Anthropic path.
+    if (refuseReservedDispatch(context)) return;
+    routeLegacy(context);
+  }
+
+  function collectRequest(req, res, pathOnly) {
+    const telemetry = createRouteTelemetry(req);
+    req.once('aborted', () => telemetry.cancel());
+    res.once('close', () => { if (!res.writableFinished) telemetry.cancel(); });
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      const raw = chunks.length ? Buffer.concat(chunks) : null;
-      let requestedModel = null;
-      let requestedEffort = null;
-      let parsedPayload = null;
-      if (raw && pathOnly.startsWith('/v1/messages')) {
-        try {
-          const parsed = JSON.parse(raw.toString());
-          parsedPayload = parsed;
-          requestedModel = typeof parsed.model === 'string' ? parsed.model : null;
-          requestedEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
-          const requestedBase = codexBaseFromId(parsed.model);
-          if (requestedBase) {
-            const advertisedModel = parsed.model;
-            const threadRefusal = pathOnly === '/v1/messages' && statelessBackendThreadRefusal(parsed);
-            if (threadRefusal) {
-              const body = JSON.stringify(threadRefusal);
-              routeTelemetry.setRoute({
-                selectedModel: advertisedModel,
-                effectiveModel: requestedBase === 'auto' ? null : requestedBase,
-                backend: 'codex',
-                effort: requestedEffort,
-                fallback: false,
-                via: requestedBase === 'auto' ? 'dispatch' : 'direct',
-              });
-              routeTelemetry.finish(400, 'thread_unsupported');
-              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-              return res.end(body);
-            }
-            let dispatchRoute = null;
-            let dispatchVia = null;
-            let dispatchIdentity = null;
-            let dispatchMarkersLength = null;
-            let dispatchInheritedFromAgentId = null;
-            if (requestedBase === 'auto') {
-              const markers = dispatchRouteMarkersFromMessages(parsed.messages);
-              dispatchMarkersLength = markers.length;
-              dispatchIdentity = dispatchRequestIdentity(req, parsed);
-              if (markers.length === 1) {
-                dispatchRoute = markers[0];
-                dispatchRoutes.set(dispatchIdentity?.key, dispatchRoute);
-                dispatchVia = 'dispatch';
-              } else if (markers.length === 0) {
-                dispatchRoute = dispatchRoutes.get(dispatchIdentity?.key);
-                if (dispatchRoute) {
-                  dispatchVia = 'dispatch-cached';
-                } else {
-                  dispatchRoute = dispatchRoutes.get(dispatchIdentity?.parentKey);
-                  if (dispatchRoute) {
-                    dispatchRoutes.set(dispatchIdentity?.key, dispatchRoute);
-                    dispatchInheritedFromAgentId = dispatchIdentity.parentAgentId;
-                    dispatchVia = 'dispatch-inherited';
-                  }
-                }
-              }
-              if (!dispatchRoute) {
-                const body = JSON.stringify({
-                  type: 'error',
-                  error: {
-                    type: 'invalid_request_error',
-                    message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=... effort=... ticket=...] marker in the conversation; redispatch the ticket',
-                  },
-                });
-                routeTelemetry.setRoute({
-                  selectedModel: advertisedModel,
-                  effectiveModel: null,
-                  backend: 'codex',
-                  effort: null,
-                  fallback: false,
-                  via: 'dispatch',
-                });
-                routeTelemetry.finish(400, 'invalid_route');
-                requestRouteLog(req, 'codex', advertisedModel, pathOnly, 'dispatch-unbound', null, dispatchIdentity, dispatchMarkersLength);
-                res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-                return res.end(body);
-              }
-            }
-            // Accept legacy typed ids from pre-0.4.2 sessions even though new
-            // discovery rows are unsuffixed.
-            parsed.model = dispatchRoute ? dispatchRoute.model : requestedBase;
-            if (dispatchRoute && dispatchRoute.effort) {
-              parsed.output_config = { ...(parsed.output_config || {}), effort: dispatchRoute.effort };
-            }
-            resolveCodexDeferredTools(parsed);
-            try {
-              parsed.tools = adaptCodexToolSchemas(parsed.tools);
-            } catch (error) {
-              const compatibilityError = error instanceof ToolSchemaCompatibilityError ? error : null;
-              const toolName = compatibilityError?.toolName || '<unnamed tool>';
-              const pointer = compatibilityError?.pointer || '/tools';
-              const reasonCode = compatibilityError?.reasonCode || 'schema-classifier-failure';
-              const body = JSON.stringify({
-                type: 'error',
-                error: {
-                  type: 'invalid_request_error',
-                  message: `model-gateway: Codex tool schema compatibility refused tool ${toolName} at ${pointer}; reason=${reasonCode}. Nothing was forwarded or rerouted.`,
-                },
-              });
-              routeTelemetry.setRoute({
-                selectedModel: advertisedModel,
-                effectiveModel: parsed.model,
-                backend: 'codex',
-                effort: typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort,
-                fallback: false,
-                via: dispatchVia || 'direct',
-              });
-              routeTelemetry.finish(400, 'invalid_tool_schema');
-              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-              return res.end(body);
-            }
-            // Non-Claude models call the plan-mode tools spuriously, and an
-            // approved ExitPlanMode downgrades the session's permission mode
-            // to acceptEdits instead of restoring it (anthropics/claude-code
-            // #39973). Hide those tools from Codex models; Claude models are
-            // untouched. Escape hatch: CODEX_GATEWAY_KEEP_PLAN_TOOLS=1.
-            const keepPlanTools = process.env.CODEX_GATEWAY_KEEP_PLAN_TOOLS === '1';
-            if (Array.isArray(parsed.tools) && !keepPlanTools) {
-              parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
-            }
-            counters.codex++;
-            const effectiveEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort,
-              dispatchIdentity, dispatchMarkersLength, dispatchInheritedFromAgentId);
-            routeTelemetry.setRoute({
-              selectedModel: advertisedModel,
-              effectiveModel: parsed.model,
-              backend: 'codex',
-              effort: effectiveEffort,
-              fallback: false,
-              via: dispatchVia || 'direct',
-            });
-            const requestBodySessionId = requestSessionId(req);
-            const sessionId = sentrySessionId(req);
-            if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId, parsed.model)) {
-              routeTelemetry.finish(413);
-              return;
-            }
-            const forwardedBody = JSON.stringify(parsed);
-            recordRequestBodyHighWater(requestBodySessionId, Buffer.byteLength(forwardedBody));
-            const usageCapture = pathOnly === '/v1/messages' && (usageEmitter.enabled || routeTelemetry.enabled)
-              ? usageEmitter.start({
-                payload: parsed,
-                requestBodyBytes: Buffer.byteLength(forwardedBody),
-                requestHeaders: req.headers,
-                route: {
-                  requestedModel: advertisedModel,
-                  effectiveModel: parsed.model,
-                  backend: 'codex',
-                  effort: effectiveEffort,
-                  via: dispatchVia || 'direct',
-                  ticketRef: dispatchVia === 'dispatch-inherited' ? null : dispatchRoute?.ticket || null,
-                },
-              })
-              : null;
-            const compactGuard = COMPACT_STREAM_GUARD && pathOnly === '/v1/messages' && isCompactionRequest(parsed)
-              ? { attempts: 0, headWritten: false, observedUsage: compactUsageSnapshot() }
-              : null;
-            // claude.ai credentials never leave this machine toward the proxy
-            return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, parsed.model, routeTelemetry,
-              usageCapture, 0, compactGuard);
-          }
-        } catch { /* not JSON; fall through to passthrough */ }
-      }
-      if (raw && pathOnly.startsWith('/v1/messages')) {
-        try {
-          const parsed = JSON.parse(raw.toString());
-          if (typeof parsed.model === 'string' && parsed.model.startsWith(GROK_PREFIX)) {
-            const advertisedModel = parsed.model;
-            const pickerId = parsed.model.slice(GROK_PREFIX.length).replace(/\[1m\]$/, '');
-            const cachedGrokModels = grokBackend.grokModelIdsFromCache();
-            const model = grokBackend.grokModelFromPicker(pickerId, cachedGrokModels.length ? cachedGrokModels : DEFAULT_GROK_MODELS);
-            const effort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
-            const threadRefusal = pathOnly === '/v1/messages' && statelessBackendThreadRefusal(parsed);
-            if (threadRefusal) {
-              const body = JSON.stringify(threadRefusal);
-              routeTelemetry.setRoute({
-                selectedModel: advertisedModel,
-                effectiveModel: model,
-                backend: 'grok',
-                effort,
-                fallback: false,
-                via: 'direct',
-              });
-              routeTelemetry.finish(400, 'thread_unsupported');
-              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-              return res.end(body);
-            }
-            counters.grok = (counters.grok || 0) + 1;
-            requestRouteLog(req, 'grok', model, pathOnly, 'direct', effort);
-            routeTelemetry.setRoute({
-              selectedModel: advertisedModel,
-              effectiveModel: model,
-              backend: 'grok',
-              effort,
-              fallback: false,
-              via: 'direct',
-            });
-            const sessionId = sentrySessionId(req);
-            if (fireContextSentry(res, sessionId, model)) {
-              routeTelemetry.finish(413);
-              return;
-            }
-            recordRequestBodyHighWater(requestSessionId(req), raw.length);
-            const usageCapture = usageEmitter.enabled
-              ? usageEmitter.start({
-                payload: parsed,
-                requestBodyBytes: raw.length,
-                requestHeaders: req.headers,
-                route: { requestedModel: advertisedModel, effectiveModel: model, backend: 'grok', effort, via: 'direct' },
-              })
-              : null;
-            return forwardGrok(req, res, parsed, model, advertisedModel, sessionId, routeTelemetry, usageCapture);
-          }
-        } catch { /* not JSON; fall through to passthrough */ }
-      }
-      assertAnthropicPassthroughSentryIsDisabled(requestedModel);
-      counters.anthropic++;
-      requestRouteLog(req, 'anthropic', requestedModel, pathOnly);
-      routeTelemetry.setRoute({
-        selectedModel: requestedModel,
-        effectiveModel: requestedModel,
-        backend: 'anthropic',
-        effort: requestedEffort,
-        fallback: false,
-        via: 'direct',
-      });
-      const requestBodyBytes = raw?.length || 0;
-      recordRequestBodyHighWater(requestSessionId(req), requestBodyBytes);
-      const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled && parsedPayload
-        ? usageEmitter.start({
-          payload: parsedPayload,
-          requestBodyBytes,
-          requestHeaders: req.headers,
-          route: {
-            requestedModel,
-            effectiveModel: requestedModel,
-            backend: 'anthropic',
-            effort: requestedEffort,
-            via: 'direct',
-          },
-        })
-        : null;
-      forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, null, routeTelemetry, usageCapture);
-    });
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => handleBufferedRequest(req, res, pathOnly, telemetry, chunks.length ? Buffer.concat(chunks) : null));
+  }
+
+  function handleRequest(req, res) {
+    const pathOnly = req.url.split('?')[0];
+    if (handleSpecialRequest(req, res, pathOnly)) return;
+    trackInFlight(res);
+    if (handleDiscovery(req, res, pathOnly)) return;
+    collectRequest(req, res, pathOnly);
   }
 
   function makeServer() {

@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { startCountingProxy, startGateway, spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
+const { server, waitFor } = require('./fixtures/antigravity.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
@@ -66,6 +67,55 @@ async function waitForShim(port) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error('shim did not start');
+}
+
+async function waitForProxyCatalog(port, timeoutMs = 5000) {
+  let observed = { catalog: 'unobserved', models: null };
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await waitFor(async () => {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: controller.signal });
+      assert.equal(response.status, 200);
+      observed = await response.json();
+      return observed.catalog === 'proxy';
+    }, timeoutMs);
+  } catch (cause) {
+    throw new Error(`proxy catalog did not refresh (last source=${observed.catalog}, models=${observed.models})`, { cause });
+  } finally {
+    clearTimeout(deadline);
+    controller.abort();
+  }
+}
+
+for (const phase of ['headers', 'body']) {
+  test(`proxy catalog readiness aborts a stalled ${phase} response within its deadline`, { timeout: 5000 }, async (t) => {
+    let arrived = false;
+    let closed = false;
+    let forced = false;
+    const proxy = await server(t, (_req, res) => {
+      arrived = true;
+      res.once('close', () => { closed = true; });
+      if (phase === 'body') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.flushHeaders();
+      }
+    });
+    const safety = setTimeout(() => { forced = true; proxy.server.closeAllConnections(); }, 2000);
+    try {
+      await assert.rejects(waitForProxyCatalog(proxy.port, 500), (error) => {
+        assert.match(error.message, /proxy catalog did not refresh.*last source=unobserved/);
+        assert.equal(['TimeoutError', 'AbortError'].includes(error.cause.name), true, 'the request deadline, not forced server cleanup, cancels the request');
+        return true;
+      });
+      assert.equal(arrived, true, 'the owned server received the stalled readiness request');
+      assert.equal(forced, false, 'the outer cleanup failsafe must not satisfy the readiness deadline');
+      await waitFor(() => closed);
+    } finally {
+      clearTimeout(safety);
+      proxy.server.closeAllConnections();
+    }
+  });
 }
 
 async function waitForStartupPolicyLines(output, expectedCount) {
@@ -176,6 +226,7 @@ test('Codex discovery advertises client 1M aliases and forwards backend base ids
   });
   t.after(() => child.kill());
   await waitForShim(shimPort);
+  await waitForProxyCatalog(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
@@ -295,10 +346,14 @@ test('Codex sentry logs a startup policy line for every advertised model row', a
     });
   });
   await waitForShim(shimPort);
+  await waitForProxyCatalog(shimPort);
 
-  const { MODEL_WINDOW_POLICY } = require(RUNTIME);
-  const startupPolicyLines = await waitForStartupPolicyLines(output, Object.values(MODEL_WINDOW_POLICY).length);
-  for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
+  const { resolveGatewayModelPolicy } = require(RUNTIME);
+  const advertised = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body).data;
+  const policies = advertised.map((model) => resolveGatewayModelPolicy(model.id));
+  const startupPolicyLines = await waitForStartupPolicyLines(output, policies.length);
+  assert.equal(startupPolicyLines.some((line) => line.includes('antigravity')), false, 'unconfirmed provider policies are not advertised');
+  for (const policy of policies) {
     const matchingLines = startupPolicyLines.filter((line) => line.includes(`id=${policy.backendId} `));
     assert.equal(matchingLines.length, 1, `expected one startup sentry policy line for ${policy.backendId}, got ${matchingLines.length}`);
     if (policy.sentry === 'none') {
@@ -338,6 +393,7 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
   });
   t.after(() => child.kill());
   await waitForShim(shimPort);
+  await waitForProxyCatalog(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
