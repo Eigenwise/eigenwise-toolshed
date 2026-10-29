@@ -17,9 +17,9 @@ function fixture() {
   git(['init', '-b', 'main', '--quiet']);
   git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture']);
   const { slug } = store.ensureProject(project);
-  const create = (file: string) => {
+  const create = (file: string, externalDeliverable = false) => {
     const ticket = store.createTicket(slug, {
-      title: `Deliver ${file}`, category: 'closeout-write', files: [file], workingTreeDelivery: true,
+      title: `Deliver ${file}`, category: 'closeout-write', files: [file], workingTreeDelivery: !externalDeliverable, externalDeliverable,
       executorVerifyKind: 'document', executorVerify: 'Read the document.', source: 'mcp',
     });
     const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: path.basename(project) });
@@ -193,3 +193,33 @@ test('manual squash delivery with partial quality gaps files debt without the ca
     fs.rmSync(gateHome, { recursive: true, force: true });
   }
 });
+
+for (const status of ['failed_suite', 'failed_check', 'toolchain_missing', 'could_not_run', 'timeout']) {
+  test('clean external deliverable accepts factual ' + status + ' evidence without granting completion', () => {
+    const { project, slug, create } = fixture();
+    const reference = create('external.md', true);
+    const owner = path.basename(project) + '-external.md';
+    const body = '[sidequest:verify-complete] ' + status + ': focused check did not succeed before editing.';
+    const recorded = store.addComment(slug, reference, { by: owner, body, source: 'mcp' });
+    assert.equal(recorded.ok, true, JSON.stringify(recorded));
+    assert.equal(recorded.comment.body, body);
+    assert.equal(store.getTicket(slug, reference).status, 'doing');
+    assert.equal(store.claimMaySubmit(store.getTicket(slug, reference)), false);
+    const wrongAuthor = store.addComment(slug, reference, { by: 'another-worker', body, source: 'mcp' });
+    assert.equal(wrongAuthor.reason, 'empty_declared_scope');
+  });
+}
+
+for (const status of ['passed', 'manual', 'attestation', 'skipped']) {
+  test('clean external deliverable still refuses ' + status + ' completion', () => {
+    const { project, slug, create } = fixture();
+    const reference = create('external.md', true);
+    const refused = store.addComment(slug, reference, {
+      by: path.basename(project) + '-external.md',
+      body: '[sidequest:verify-complete] ' + status + ': no scoped changes.', source: 'mcp',
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'empty_declared_scope');
+    assert.match(refused.message, /factual failed_suite, failed_check, toolchain_missing, could_not_run, or timeout verification evidence/);
+  });
+}
