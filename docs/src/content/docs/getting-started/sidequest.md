@@ -82,7 +82,22 @@ Use `sidequest completion US-3` (or the `completion` MCP read with `story: "US-3
 
 A story reads integrated only when every child has a delivery record, and released only when every child has a release record. Mixed delivery reads partial; blocked and rejected children remain visible in Not yet. A live child claim reads running. Captured-command and quality counts keep missing evidence visible. Read `completion SQ-3` for a child's details. Ticket-linked story decisions appear as a count and the latest first sentence.
 
-For a substantial behavior change, attach acceptance examples before dispatch: `add` or `update` with `acceptance: [{ scenario, expected, kind }]`, where kind is `main` or `boundary` (at most 8 examples, 300 characters per field; `[]` clears them, and a claim holder can't change them mid-claim). The briefing lists them and asks the executor to demonstrate each one on the real surface, then record the result in `demonstrations.json` in the ticket's board evidence directory, one entry per example with observed, matches, environment, candidate commit, fixture and an artifact beside the file. `completion SQ-3` reads that record: a matching entry for the current candidate shows as `real-flow` evidence (or `visual` for a screenshot), an entry for an older commit reads stale, a mismatch reads FAILED and asks you to review it, and anything missing, partial, or pointing outside the evidence directory stays under Still uncertain as not demonstrated.
+## Attach acceptance examples
+
+For a substantial behavior change, give the ticket a few concrete examples before dispatch: `add` or `update` with `acceptance: [{ scenario, expected, kind }]`. `kind` is `main` or `boundary`. You get at most 8 examples, 300 characters per field, `[]` clears them, and a claim holder can't change them mid-claim.
+
+The briefing lists the examples and asks the executor to demonstrate each one on the real surface (an API or CLI call is enough unless appearance matters), against its final committed candidate. It records the results in `demonstrations.json` in the ticket's board evidence directory, one entry per example: observed, matches, environment, candidate commit, fixture, and an artifact (log or screenshot) beside the file.
+
+`completion SQ-3` reads that file and says how each example stands:
+
+- A matching entry for the current candidate shows as `real-flow` evidence, or `visual` for a screenshot (appearance only, not proof of behavior).
+- An entry for an older commit reads stale.
+- Anything missing, partial, or pointing outside the evidence directory stays under Still uncertain as **not demonstrated**.
+- A mismatch reads **FAILED**.
+
+A failed or missing demonstration goes back to the agent: the executor repairs and demonstrates again, or releases with the record intact, and a rejected candidate is repaired through a fresh dispatch. There is no Accept click that turns a failure into a pass. Your part is reading the view.
+
+How the view is built is in the maintained codebase map under `.claude/.codebase-info/`.
 
 ## Retrying delivery
 
