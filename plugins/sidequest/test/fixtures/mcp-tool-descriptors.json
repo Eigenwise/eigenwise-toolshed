@@ -2699,6 +2699,12 @@
             "type": "string"
           }
         },
+        "workingTreeDeliveryCategories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "worktreeSetup": {
           "type": [
             "string",

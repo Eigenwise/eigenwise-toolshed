@@ -1892,7 +1892,7 @@ function createDispatch(dependencies) {
   function sharedTreeScopeRefusal(t, isolation, effectiveFiles) {
     if (isolation.wholeTreeScope && isolation.sharedTree) return unscopedSharedTreeRefusal(t.ref, effectiveFiles);
     if (t.workingTreeDelivery === true && !isolation.sharedTree) {
-      return `prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`;
+      return `prepare dispatch: ${t.ref} declares workingTreeDelivery:true, so it must run in the shared checkout and close with done. Re-dispatch with sharedTree:true, or update workingTreeDelivery:false so it runs isolated and submits a commit.`;
     }
     return null;
   }

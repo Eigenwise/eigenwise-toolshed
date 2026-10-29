@@ -5855,6 +5855,46 @@ test('MCP update refuses live isolated working-tree delivery without changing th
   assert.notEqual(store.getTicket(project, ticket.ref).dispatch.workingTreeDelivery, true);
 });
 
+test('MCP commit and submit refuse a live working-tree delivery and name done', async () => {
+  const repository = committedRepo('sq-mcp-working-tree-refusal-');
+  const project = store.ensureProject(repository).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Uncommitted docs handoff', category: 'general', files: ['guide.md'], workingTreeDelivery: true,
+    executorVerifyKind: 'command', executorVerify: 'node -e "process.exit(0)"',
+  });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true, sessionId: MCP_SESSION_ID });
+  const by = 'mcp-working-tree-refusal-worker';
+  assert.equal(store.claimTicket(project, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: MCP_SESSION_ID }).ok, true);
+  fs.writeFileSync(path.join(repository, 'guide.md'), '# Guide\n');
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
+
+  const commit = await callTool('commit', { project, ref: ticket.ref, by, message: 'Hand back committed', worktree: repository });
+  assert.equal(commit.ok, false);
+  assert.equal(commit.reason, 'working_tree_delivery_uses_done');
+  assert.match(commit.message, /^commit: refused .*workingTreeDelivery:true.*run the pinned verify-capture wrapper, then close with done\.$/);
+  assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(), head);
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' }).trim(), '?? guide.md');
+
+  const submit = await callTool('submit', { project, ref: ticket.ref, by, commit: head, worktree: repository, body: 'Final report.' });
+  assert.equal(submit.ok, false);
+  assert.equal(submit.reason, 'working_tree_delivery_uses_done');
+  assert.match(submit.message, /^submit: refused .*close with done\.$/);
+  assert.equal(store.getTicket(project, ticket.ref).claim.by, by);
+});
+
+test('MCP dispatch of a working-tree delivery with sharedTree:false refuses and names the flag', async () => {
+  const repository = committedRepo('sq-mcp-working-tree-dispatch-');
+  const project = store.ensureProject(repository).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Isolated working-tree dispatch', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['guide.md'], workingTreeDelivery: true,
+    executorVerifyKind: 'command', executorVerify: 'node -e "process.exit(0)"',
+  });
+  const refused = await callToolRaw('dispatch', { project, ref: ticket.ref, sharedTree: false });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /declares workingTreeDelivery:true, so it must run in the shared checkout and close with done\. Re-dispatch with sharedTree:true/);
+  assert.equal(store.getTicket(project, ticket.ref).dispatch, undefined);
+});
+
 test('MCP update working-tree delivery names pinned command capture and leaves future declarations for preparation', async () => {
   const repository = committedRepo('sq-mcp-working-tree-command-');
   const project = store.ensureProject(repository).slug;

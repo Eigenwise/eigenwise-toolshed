@@ -215,6 +215,22 @@ function persistWithReviewBinding(slug: any, ticket: any, requested: any) {
   return bound;
 }
 
+// SQ-3948: a board that always hands one category back uncommitted declares it once in board_config
+// workingTreeDeliveryCategories; an explicit workingTreeDelivery on the ticket still wins.
+function requestedWorkingTreeDelivery(slug: string, fields: { workingTreeDelivery?: boolean; category?: unknown }): boolean {
+  if (fields.workingTreeDelivery !== undefined) return fields.workingTreeDelivery === true;
+  return boardWorkingTreeDeliveryCategories(slug).includes(categoryId(fields.category));
+}
+
+function boardWorkingTreeDeliveryCategories(slug: string): unknown[] {
+  const configured: unknown = readMeta(slug)?.workingTreeDeliveryCategories;
+  return Array.isArray(configured) ? configured : [];
+}
+
+function categoryId(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   fields = fields || {};
   if (Object.hasOwn(fields, 'reviewTarget')) {
@@ -274,7 +290,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     contracts: boundedContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
-    workingTreeDelivery: fields.workingTreeDelivery === true,
+    workingTreeDelivery: requestedWorkingTreeDelivery(slug, fields),
     externalDeliverable: fields.externalDeliverable === true,
     ...acceptanceField(fields.acceptance),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),

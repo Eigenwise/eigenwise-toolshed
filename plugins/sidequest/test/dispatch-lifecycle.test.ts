@@ -3195,7 +3195,7 @@ test('a working-tree deliverable refuses an isolated dispatch and prepares nothi
   const ticket = store.createTicket(slug, { title: 'working-tree deliverable isolation fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], workingTreeDelivery: true, source: 'test' });
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { sessionId: `working-tree-isolated-${Date.now()}`, sharedTree: false }),
-    /declares a working-tree deliverable and must run in the shared checkout\. Re-dispatch with sharedTree:true\./,
+    /declares workingTreeDelivery:true, so it must run in the shared checkout and close with done\. Re-dispatch with sharedTree:true, or update workingTreeDelivery:false/,
   );
   assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
 });
