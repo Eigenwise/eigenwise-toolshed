@@ -3960,6 +3960,22 @@ function missingWorkingTreeDeliveryGuidance(ticket: { ref: string; workingTreeDe
   return ` ${ticket.ref} declares workingTreeDelivery:true, but this dispatch was prepared without it. The orchestrator can run update workingTreeDelivery:true to apply it to a live shared-checkout dispatch, or release and redispatch.`;
 }
 
+type WorkingTreeDeliveryTicket = { ref: string; dispatch?: { workingTreeDelivery?: boolean; terminalAt?: string | null; verificationRequirement?: { command?: string } } };
+
+// SQ-3948: an executor told "hand back uncommitted" by the ticket and "submit needs a commit" by the schema
+// resolves the conflict by committing, so both tools refuse a live working-tree delivery and name done.
+function workingTreeDeliveryCommitRefusal(ticket: WorkingTreeDeliveryTicket, tool: 'commit' | 'submit') {
+  const state = dispatchState(ticket);
+  if (state?.workingTreeDelivery !== true || state.terminalAt) return null;
+  const verification = state.verificationRequirement?.command ? 'run the pinned verify-capture wrapper' : 'pass explicit done.verify evidence';
+  return {
+    ok: false,
+    reason: 'working_tree_delivery_uses_done',
+    ticket,
+    message: `${tool}: refused ${ticket.ref}; this dispatch declares workingTreeDelivery:true, so its deliverable is the uncommitted working tree and commit and submit are refused. Leave the declared paths uncommitted, ${verification}, then close with done.`,
+  };
+}
+
 function externalDeliverableCloseout(slug?: any, ticket?: any, verify?: any) {
   if (ticket?.externalDeliverable !== true) {
     return {
@@ -4827,6 +4843,9 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
 const summaryCloseout = createSummaryCloseout({ getTicket, putTicket, addComment, withTicketLock });
 
 function submitTicket(slug: string, ref: string, by: string, opts: Parameters<typeof submitTicketWithoutSummary>[3] = {}) {
+  const ticket = getTicket(slug, ref);
+  const workingTreeRefusal = ticket && workingTreeDeliveryCommitRefusal(ticket, 'submit');
+  if (workingTreeRefusal) return workingTreeRefusal;
   return summaryCloseout(slug, ref, by, opts, 'submit', () => submitTicketWithoutSummary(slug, ref, by, opts));
 }
 
@@ -5038,6 +5057,7 @@ module.exports = {
   releaseTicket,
   completeTicket,
   workingTreeDeliveryCandidate,
+  workingTreeDeliveryCommitRefusal,
   externalDeliverableCloseout,
   completeTicketAsControlPlane,
   missingReleaseFragment,

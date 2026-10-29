@@ -143,6 +143,44 @@ test('outside dirt cannot replace an empty own deliverable', () => {
   assert.equal(result.reason, 'working_tree_delivery_empty');
 });
 
+test('submit refuses a live working-tree delivery, names done, and leaves the claim to close with done', () => {
+  const { project, slug, create, write, close } = fixture();
+  const current = create('current.md');
+  write('current.md', 'Current');
+  const owner = `${path.basename(project)}-current.md`;
+  const refused = store.submitTicket(slug, current, owner, { commit: 'abcdef1', worktree: project, verify: 'Read the document.' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'working_tree_delivery_uses_done');
+  assert.match(refused.message, /^submit: refused .*workingTreeDelivery:true.*pass explicit done\.verify evidence, then close with done\.$/);
+  assert.equal(store.getTicket(slug, current).claim.by, owner);
+  assert.equal(store.getTicket(slug, current).submission, undefined);
+  assert.equal(close(current, 'current.md').ok, true);
+});
+
+test('commit refusal names the pinned capture for a command working-tree delivery and stops once the dispatch is terminal', () => {
+  const { slug, create } = fixture();
+  const current = create('current.md');
+  const ticket = store.getTicket(slug, current);
+  const commandTicket = { ...ticket, dispatch: { ...ticket.dispatch, verificationRequirement: { kind: 'command', command: 'npm test' } } };
+  assert.match(store.workingTreeDeliveryCommitRefusal(commandTicket, 'commit').message, /^commit: refused .*run the pinned verify-capture wrapper, then close with done\.$/);
+  assert.equal(store.workingTreeDeliveryCommitRefusal({ ...ticket, dispatch: { ...ticket.dispatch, terminalAt: new Date().toISOString() } }, 'commit'), null);
+  assert.equal(store.workingTreeDeliveryCommitRefusal({ ...ticket, dispatch: { ...ticket.dispatch, workingTreeDelivery: false } }, 'submit'), null);
+});
+
+test('board workingTreeDeliveryCategories stamps new tickets in a listed category at add time', () => {
+  const { slug } = fixture();
+  const configured = store.setBoardConfig(slug, { workingTreeDeliveryCategories: [' Closeout-Write ', 'closeout-write', ''] });
+  assert.deepEqual(configured.config.workingTreeDeliveryCategories, ['closeout-write']);
+  const fields = { files: ['docs.md'], executorVerifyKind: 'document', executorVerify: 'Read the document.', source: 'mcp' };
+  assert.equal(store.createTicket(slug, { ...fields, title: 'Listed category', category: 'closeout-write' }).workingTreeDelivery, true);
+  assert.equal(store.createTicket(slug, { ...fields, title: 'Explicit opt-out', category: 'closeout-write', workingTreeDelivery: false }).workingTreeDelivery, false);
+  assert.equal(store.createTicket(slug, { ...fields, title: 'Unlisted category', category: 'general' }).workingTreeDelivery, false);
+  assert.equal(store.createTicket(slug, { ...fields, title: 'No category' }).workingTreeDelivery, false);
+  assert.throws(() => store.setBoardConfig(slug, { workingTreeDeliveryCategories: 'closeout-write' }), /must be an array of category ids/);
+  assert.deepEqual(store.setBoardConfig(slug, { workingTreeDeliveryCategories: null }).config.workingTreeDeliveryCategories, []);
+  assert.equal(store.createTicket(slug, { ...fields, title: 'Cleared default', category: 'closeout-write' }).workingTreeDelivery, false);
+});
+
 
 test('manual delivery records both commits of a reachable submitted range', () => {
   const { slug, git, write } = fixture();

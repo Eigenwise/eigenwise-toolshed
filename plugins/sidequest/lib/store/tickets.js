@@ -216,6 +216,17 @@ function createTickets(dependencies) {
     queueEventNotification(slug, getTicket(slug, sourceTicket.id), "status", ticket.lastEventSource || "cli");
     return bound;
   }
+  function requestedWorkingTreeDelivery(slug, fields) {
+    if (fields.workingTreeDelivery !== void 0) return fields.workingTreeDelivery === true;
+    return boardWorkingTreeDeliveryCategories(slug).includes(categoryId(fields.category));
+  }
+  function boardWorkingTreeDeliveryCategories(slug) {
+    const configured = readMeta(slug)?.workingTreeDeliveryCategories;
+    return Array.isArray(configured) ? configured : [];
+  }
+  function categoryId(value) {
+    return typeof value === "string" ? value.trim().toLowerCase() : "";
+  }
   function createTicket(slug, fields, reviewTarget) {
     fields = fields || {};
     if (Object.hasOwn(fields, "reviewTarget")) {
@@ -276,7 +287,7 @@ function createTickets(dependencies) {
       // declared contract edges, for parallel-wave planning
       contractWaiver: !!fields.contractWaiver,
       readonlyOverride: requestedReadonlyOverride(fields),
-      workingTreeDelivery: fields.workingTreeDelivery === true,
+      workingTreeDelivery: requestedWorkingTreeDelivery(slug, fields),
       externalDeliverable: fields.externalDeliverable === true,
       ...acceptanceField(fields.acceptance),
       executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors"),

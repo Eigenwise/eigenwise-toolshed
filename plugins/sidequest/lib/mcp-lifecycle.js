@@ -358,6 +358,8 @@ function unlinkedIsolatedCommit(ticket, root) {
   return !location.ok || !location.linked;
 }
 function commitWorktreeRefusal(slug, ticket, root) {
+  const workingTreeRefusal = store.workingTreeDeliveryCommitRefusal(ticket, "commit");
+  if (workingTreeRefusal) return workingTreeRefusal;
   if (unlinkedIsolatedCommit(ticket, root)) {
     return {
       reason: "worktree_isolation",

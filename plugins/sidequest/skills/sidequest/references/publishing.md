@@ -299,6 +299,26 @@ retrying. Read the outcome there instead of waiting on node processes.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane accepts each original changed path when it appears in the repair's recorded delivery or has byte-identical content at the delivered head. Byte-identical omitted paths need no replacement evidence and are recorded as `supersededBy.identicalPaths`. Manual closure of a reachable candidate records its full submitted range, including earlier commits. Supersession preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. An unintegrated repair or unreviewed divergent content leaves the original submission parked; `lineage_paths_missing` names omitted paths and identifies the byte-identical ones.
 
+### A deliverable that stays uncommitted
+
+When a ticket's contract is "hand back uncommitted", declare `workingTreeDelivery:true` on `add` or
+`update` instead of saying it in prose. An executor follows the tools, so prose alone loses to a
+`submit` that asks for a commit. With the flag, nothing reaches `integrate`:
+
+- Dispatch with `sharedTree:true`. An isolated dispatch refuses before preparing anything and names
+  the flag.
+- The briefing tells the executor to leave the declared paths uncommitted and close with `done`.
+  `commit` and `submit` both refuse the live dispatch with `working_tree_delivery_uses_done`, naming
+  `done`.
+- `done` needs the pinned verify-capture over the working tree (command or suite), or explicit
+  `done.verify` evidence for commandless kinds. Your own normal commit, review, and push process takes
+  it from there.
+
+A board that always hands one category back this way sets it once:
+`board_config workingTreeDeliveryCategories: ["docs-writing"]`. Every ticket added in a listed category
+afterwards starts with `workingTreeDelivery:true`; an explicit `workingTreeDelivery:false` on `add`
+still wins, and existing tickets are not changed. Pass `[]` or `null` to clear the list.
+
 ## Integration mode: where delivery happens versus what proves a candidate landed
 
 `auto` (the default) picks `remote` mode whenever an `origin` remote exists and `local` otherwise;

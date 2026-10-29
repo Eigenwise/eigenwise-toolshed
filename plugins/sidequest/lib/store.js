@@ -3348,6 +3348,17 @@ function missingWorkingTreeDeliveryGuidance(ticket) {
   if (ticket.workingTreeDelivery !== true || ticket.dispatch?.workingTreeDelivery === true) return "";
   return ` ${ticket.ref} declares workingTreeDelivery:true, but this dispatch was prepared without it. The orchestrator can run update workingTreeDelivery:true to apply it to a live shared-checkout dispatch, or release and redispatch.`;
 }
+function workingTreeDeliveryCommitRefusal(ticket, tool) {
+  const state = dispatchState(ticket);
+  if (state?.workingTreeDelivery !== true || state.terminalAt) return null;
+  const verification = state.verificationRequirement?.command ? "run the pinned verify-capture wrapper" : "pass explicit done.verify evidence";
+  return {
+    ok: false,
+    reason: "working_tree_delivery_uses_done",
+    ticket,
+    message: `${tool}: refused ${ticket.ref}; this dispatch declares workingTreeDelivery:true, so its deliverable is the uncommitted working tree and commit and submit are refused. Leave the declared paths uncommitted, ${verification}, then close with done.`
+  };
+}
 function externalDeliverableCloseout(slug, ticket, verify) {
   if (ticket?.externalDeliverable !== true) {
     return {
@@ -4057,6 +4068,9 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
 });
 const summaryCloseout = createSummaryCloseout({ getTicket, putTicket, addComment, withTicketLock });
 function submitTicket(slug, ref, by, opts = {}) {
+  const ticket = getTicket(slug, ref);
+  const workingTreeRefusal = ticket && workingTreeDeliveryCommitRefusal(ticket, "submit");
+  if (workingTreeRefusal) return workingTreeRefusal;
   return summaryCloseout(slug, ref, by, opts, "submit", () => submitTicketWithoutSummary(slug, ref, by, opts));
 }
 function completeTicket(slug, ref, by, opts = {}) {
@@ -4265,6 +4279,7 @@ module.exports = {
   releaseTicket,
   completeTicket,
   workingTreeDeliveryCandidate,
+  workingTreeDeliveryCommitRefusal,
   externalDeliverableCloseout,
   completeTicketAsControlPlane,
   missingReleaseFragment,

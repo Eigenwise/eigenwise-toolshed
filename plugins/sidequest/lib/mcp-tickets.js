@@ -186,7 +186,7 @@ const tools = [
       properties: {
         project: PROJECT_PROP,
         ...TICKET_FIELD_PROPS,
-        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence." },
+        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits: dispatch needs sharedTree:true, commit and submit refuse, and the executor closes with done. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence. Omitted, it defaults to true when board_config workingTreeDeliveryCategories lists the category." },
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         storyId: { type: "string", description: "A story ref (US-n) or the story id story returns (st_...) to file this ticket into." },
         dependsOn: { type: "array", items: { type: "string" }, description: "Refs this ticket depends on. Recorded as depends-on links to the new ticket in this same call, so a dependent ticket needs no follow-up link call." },
@@ -279,7 +279,7 @@ const tools = [
         addFiles: ADD_FILES_PROP,
         removeFiles: REMOVE_FILES_PROP,
         by: { type: "string", description: "Human-readable update label. It cannot authorize closeout fields on a live claim." },
-        workingTreeDelivery: { type: "boolean", description: "Orchestrator-only declaration for a shared-checkout deliverable that forbids commits. true applies to an open sharedTree dispatch, recording a late dirty baseline; isolated dispatches refuse and must submit a commit. Without an open dispatch it applies at the next prepare. done requires pinned-command verify-capture, or explicit done.verify evidence for commandless kinds." },
+        workingTreeDelivery: { type: "boolean", description: "Orchestrator-only declaration for a shared-checkout deliverable that forbids commits. true applies to an open sharedTree dispatch, recording a late dirty baseline; isolated dispatches refuse and must submit a commit. Without an open dispatch it applies at the next prepare. commit and submit refuse a working-tree dispatch; done requires pinned-command verify-capture, or explicit done.verify evidence for commandless kinds." },
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         storyId: { anyOf: [{ type: "string" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },

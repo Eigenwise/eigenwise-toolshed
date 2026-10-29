@@ -1224,6 +1224,7 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
   }), 'shared-token', undefined, root);
   const sharedCommand = commandLine(shared);
   assert.match(shared, /Run it only over a clean worktree/);
+  assert.match(shared, /Move it to the final committed candidate/);
   assert.doesNotMatch(sharedCommand, /--worktree/);
   // GH-373: the wrapper loads the pinned command from the ticket, so the briefing carries no blob to retype.
   assert.match(sharedCommand, /verify-capture\.js" --project "[^"]+" --ticket "SQ-1200" in the FOREGROUND/);
@@ -1519,6 +1520,10 @@ test('working-tree briefings split capture and typed-evidence closeout', () => {
   assert.match(command, /returned as ignoredDirtyPaths, never a scope refusal/);
   assert.match(command, /warning naming the sibling, without refusing your closeout/);
   assert.match(command, /Your own committed paths, empty deliverable, or failed candidate verification still refuse/);
+  assert.match(command, /declares workingTreeDelivery:true: leave the declared paths uncommitted, because the board refuses commit and submit for it and it closes only with done/);
+  assert.match(command, /Run it over the final working tree with your declared paths left uncommitted: .* done refuses prose or a retyped command/);
+  assert.doesNotMatch(command, /Run it only over a clean worktree/);
+  assert.doesNotMatch(command, /Move it to the final committed candidate/);
   assert.doesNotMatch(command, /done --verify "<typed evidence>"/);
 
   const document = agentsync.renderTicketBriefing({
