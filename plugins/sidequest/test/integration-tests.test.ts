@@ -3,7 +3,36 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { integrationTestBatches, runImportingIntegrationTests, selectIntegrationTests } from '../src/lib/integration-tests.js';
+import { integrationCaptureEnvironment, phaseBudgetResult, integrationTestBatches, runImportingIntegrationTests, selectIntegrationTests } from '../src/lib/integration-tests.js';
+import { pathToFileURL } from 'node:url';
+import type { VerificationResult } from '../src/lib/kernel/verification.js';
+
+test('two live captures stretch the integration full-suite phase budget and dead records do not count', async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-live-captures-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  writeFixture(directory, {
+    [`running-captures/000000000000001-${process.pid}-first.json`]: '{}',
+    [`running-captures/000000000000002-${process.pid}-second.json`]: '{}',
+    'running-captures/000000000000003-2147483647-dead.json': '{}',
+    'running-captures/invalid.json': '{}',
+  });
+  const environment = integrationCaptureEnvironment(directory, { SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: '0' });
+  assert.equal(environment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT, '2');
+  assert.equal(environment.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT, '0');
+  const runner = await import(pathToFileURL(path.join(__dirname, '../scripts/test-full.mjs')).href) as { calculateTestPhaseTimeoutMilliseconds(concurrency: number, captures?: number): number };
+  assert.equal(runner.calculateTestPhaseTimeoutMilliseconds(8, Number(environment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT)), 2_400_000);
+  assert.equal(runner.calculateTestPhaseTimeoutMilliseconds(8), 1_200_000);
+  fs.rmSync(path.join(directory, 'running-captures'), { recursive: true });
+  assert.equal(integrationCaptureEnvironment(directory, {}).SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT, '0');
+});
+
+test('integration timeout identifies phase budget exhaustion separately from failing assertions', () => {
+  const result: VerificationResult = { kind: 'command', status: 'failed_suite', command: 'npm run test:full', evidence: 'exit 1', failureIdentities: ['exit:1'], outputTail: 'Sidequest functional tests exceeded their 1200000ms phase budget at concurrency 8' };
+  assert.deepEqual(phaseBudgetResult(result).failureIdentities, ['exit:1', 'phase_budget_exceeded']);
+  assert.match(phaseBudgetResult(result).evidence, /Phase budget failure/);
+  const assertionFailure = { ...result, outputTail: 'not ok 1 - expected true' };
+  assert.equal(phaseBudgetResult(assertionFailure), assertionFailure);
+});
 
 test('integration test batches honour the board deadline and exclude pinned files', (context) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-batches-'));

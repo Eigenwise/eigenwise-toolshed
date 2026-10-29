@@ -26,7 +26,7 @@ async function runConfiguredCapture(command, cwd, target, environment) {
   const store = require("./store.js");
   const project = target ? captureProject(target) : null;
   const timeoutMilliseconds = project ? store.boardConfig(project.slug).integrationVerifyTimeoutMs : store.normalizeIntegrationVerifyTimeoutMs();
-  const capture = await runVerifyCapture(command, cwd, timeoutMilliseconds, environment, captureLogPath(target));
+  const capture = await runOrdinaryCapture(command, cwd, timeoutMilliseconds, environment, captureLogPath(target), project);
   if (capture.status !== "timeout") return capture;
   const reason = "integrationVerifyTimeoutMs=" + timeoutMilliseconds + "ms. " + capture.reason;
   return Object.freeze({ ...capture, evidence: reason, reason });
@@ -43,6 +43,24 @@ async function runVerifyCapture(command, cwd = process.cwd(), timeoutMillisecond
     exitCode: result.exitCode ?? null,
     ...result.status === "passed" ? {} : { reason: result.evidence }
   });
+}
+function liveVerificationCaptureCount(boardDirectory) {
+  const directory = path.join(boardDirectory, "running-captures");
+  if (!fs.existsSync(directory)) return 0;
+  return fs.readdirSync(directory).filter(waiterProcessIsAlive).length;
+}
+async function runOrdinaryCapture(command, cwd, timeoutMilliseconds, environment, logPath, project) {
+  if (!project || isFullSuiteCommand(command)) return runVerifyCapture(command, cwd, timeoutMilliseconds, environment, logPath);
+  const store = require("./store.js");
+  const directory = path.join(store.projectDir(project.slug), "running-captures");
+  fs.mkdirSync(directory, { recursive: true });
+  const record = path.join(directory, `${Date.now().toString().padStart(15, "0")}-${process.pid}-${randomUUID()}.json`);
+  fs.writeFileSync(record, JSON.stringify({ pid: process.pid, command, startedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+  try {
+    return await runVerifyCapture(command, cwd, timeoutMilliseconds, environment, logPath);
+  } finally {
+    fs.rmSync(record, { force: true });
+  }
 }
 function isFullSuiteCommand(command) {
   return /(?:^|[\s&;()])npm(?:\.cmd|\.exe)?\s+(?:(?:--(?:prefix|workspace)|-w)(?:=|\s+)(?:"[^"]+"|'[^']+'|[^\s&;|()]+)\s+|(?:--workspaces|-ws)\s+)*run\s+(?:test:full|quality:crap)(?:\s|$)/.test(command);
@@ -713,5 +731,5 @@ async function main() {
   reportControl(recorded);
   process.exitCode = captureSucceeded(capture, recorded, args.includes("--control")) ? 0 : 2;
 }
-module.exports = { runVerifyCapture, runCapturedVerification, captureCommand, failingTestNames, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { liveVerificationCaptureCount, runOrdinaryCapture, runVerifyCapture, runCapturedVerification, captureCommand, failingTestNames, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 if (require.main === module) void main();

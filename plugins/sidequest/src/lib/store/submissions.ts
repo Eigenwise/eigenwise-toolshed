@@ -19,7 +19,7 @@ const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require
 const { stillSpawnsInsideItsWrite } = require('../db');
 import type { VerificationRequirement, VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
-import { beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
+import { integrationCaptureEnvironment, phaseBudgetResult, beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
@@ -1080,7 +1080,11 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const participants = opts?.qualityTickets || [ticket];
   const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
   const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
-  const runWithQuality = (environment: NodeJS.ProcessEnv) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+  const runWithQuality = (environment: NodeJS.ProcessEnv) => {
+    const captureEnvironment = integrationCaptureEnvironment(projectDir(slug), environment);
+    const result = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
+    return { ...phaseBudgetResult(result), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
+  };
   return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
 }
 
