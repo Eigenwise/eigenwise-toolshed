@@ -1037,31 +1037,26 @@ function sourceAt(root: string, revision: string | null, file: string) {
   }
 }
 
-function revisionHasFile(root: string, revision: string, file: string) {
-  try {
-    gitOutput(root, ['cat-file', '-e', `${revision}:${file}`]);
-    return true;
-  } catch (_: any) {
-    return false;
-  }
-}
-
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 // One piece of the candidate's own work: a commit's diff from its parent, the working tree's diff
 // from `from` (to is null), or a merge, which made only the lines its combined diff marks as its own.
 type OwnChange = { from: string; to: string | null } | { merge: string };
 
-// A test file absent at `from` is new, so every test it defines belongs to this change.
-function fileTestNames(root: string, change: { from: string; to: string | null }, file: string) {
-  let diff = '';
-  try {
-    diff = gitOutput(root, ['diff', '--no-ext-diff', '--unified=0', ...[change.from, change.to].filter(Boolean) as string[], '--', file]);
-  } catch (_: any) {
-    return [];
+function testBodySignatures(source: string) {
+  const groups = new Map<string, string[]>();
+  for (const body of inheritedTestBodies(source)) {
+    const bytes = groups.get(body.name) || [];
+    bytes.push(body.bytes);
+    groups.set(body.name, bytes);
   }
-  const source = sourceAt(root, change.to, file);
-  return revisionHasFile(root, change.from, file) ? diffTestNames(source, diff) : testDefinitions(source).map((entry) => entry.name);
+  return new Map([...groups].map(([name, bytes]) => [name, JSON.stringify(bytes.sort())]));
+}
+
+function fileTestNames(root: string, change: { from: string; to: string | null }, file: string) {
+  const previous = testBodySignatures(sourceAt(root, change.from, file));
+  return [...testBodySignatures(sourceAt(root, change.to, file))]
+    .filter(([name, bytes]) => previous.get(name) !== bytes).map(([name]) => name);
 }
 
 function mergeDiff(root: string, merge: string, file: string) {
@@ -1165,12 +1160,33 @@ function negativeControlChanges(slug: any, ticket: any, delta: any, changedPaths
 
 type InheritedTestClassification = { classification: 'inherited-unchanged'; sourceRef: string; candidate: string; tests: string[] };
 
+function testCallTokens(source: string) {
+  return [...source.matchAll(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/(?:\\.|[^/\n\\])+\/[dgimsuvy]*|[()]/g)]
+    .filter((token) => /^[()]$/.test(token[0]));
+}
+
+function testCallEnd(source: string): number {
+  const tokens = testCallTokens(source);
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    depth += token[0] === '(' ? 1 : -1;
+    if (depth === 0 && !/^\s*\(/.test(source.slice(token.index! + 1))) return token.index! + 1;
+  }
+  return source.length;
+}
+
+function normalizedTestBody(source: string): string {
+  const end = /^\s*(?:async\s+)?def\s/.test(source) ? source.length : testCallEnd(source);
+  return source.slice(0, end).replace(/\r\n/g, '\n').trim();
+}
+
 function inheritedTestBodies(source: string) {
   const lines = source.split(/(?<=\n)/);
   const definitions = testDefinitions(source, true);
   return definitions.map((entry, index) => ({
     name: entry.name,
-    bytes: lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1]!.line - 1 : lines.length).join(''),
+    bytes: normalizedTestBody(lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1]!.line - 1 : lines.length).join('')),
   }));
 }
 
@@ -1313,8 +1329,9 @@ function parseNegativeControlMarker(markerLine: string): NegativeControlMarker {
   };
 }
 
-type ControlCaptureRecord = { id?: string; control?: boolean; controlOutcome?: string; failingTests?: unknown; candidate?: { value?: string } };
+type ControlCaptureRecord = { worktree?: string; id?: string; control?: boolean; controlOutcome?: string; failingTests?: unknown; candidate?: { value?: string } };
 type CapturedControlFacts = { capture: ControlCaptureRecord | undefined; candidate: string | null };
+type ControlTicket = { files?: string[]; verificationCaptures?: unknown; dispatch?: { baseCommit?: string } };
 type MarkerComment = { by?: unknown; body?: unknown };
 type NegativeControlOutcome = { kind: string; evidence?: string; captureId?: string; tests?: string[]; markerLines?: string[]; markerLine?: string; detail?: string; by?: string };
 
@@ -1329,7 +1346,7 @@ const CAPTURED_CONTROL_CHECKS: Array<[string, (facts: CapturedControlFacts) => b
   ['capture_candidate_mismatch', (facts) => !facts.candidate || facts.capture?.candidate?.value !== facts.candidate],
 ];
 
-function ticketControlCaptures(ticket: { verificationCaptures?: unknown }): ControlCaptureRecord[] {
+function ticketControlCaptures(ticket: ControlTicket): ControlCaptureRecord[] {
   return Array.isArray(ticket?.verificationCaptures) ? ticket.verificationCaptures : [];
 }
 
@@ -1343,12 +1360,52 @@ function uncoveredControlTests(failingTests: unknown, expectedTestNames: string[
 
 // SQ-3965: the marker is the claim holder's own prose, so it only reads as captured when the
 // capture it names is a recorded control run that failed named tests on the candidate's commit.
-function capturedControlResult(ticket: { verificationCaptures?: unknown }, captureId: string, expectedTestNames: string[], candidate: string | null) {
+function capturedControlResult(ticket: ControlTicket, captureId: string, expectedTestNames: string[], candidate: string | null, comments: MarkerComment[]) {
   const facts: CapturedControlFacts = { capture: ticketControlCaptures(ticket).find((capture) => capture?.id === captureId), candidate: candidate ? candidate.toLowerCase() : null };
   const refused = CAPTURED_CONTROL_CHECKS.find(([, fails]) => fails(facts));
   if (refused) return { kind: refused[0], captureId };
-  const uncovered = uncoveredControlTests(facts.capture?.failingTests, expectedTestNames);
-  return uncovered.length ? { kind: 'capture_tests_uncovered', tests: uncovered, captureId } : { kind: 'failed', evidence: 'captured', captureId };
+  const unaffectedTests = capturedUnaffectedTests(comments, facts.capture!, ticket.dispatch?.baseCommit, ticket.files);
+  const unaffectedNames = new Set(unaffectedTests.map((entry) => entry.name));
+  const uncovered = uncoveredControlTests(facts.capture?.failingTests, expectedTestNames).filter((name) => !unaffectedNames.has(name));
+  if (uncovered.length) return { kind: 'capture_tests_uncovered', tests: uncovered, captureId };
+  return capturedFailureEvidence(captureId, unaffectedTests);
+}
+
+type UnaffectedTest = { name: string; reason: string; classification: string };
+
+function capturedFailureEvidence(captureId: string, unaffectedTests: UnaffectedTest[]) {
+  return { kind: 'failed', evidence: 'captured', captureId, ...(unaffectedTests.length ? { unaffectedTests } : {}) };
+}
+
+function unaffectedTestNotes(comments: MarkerComment[]) {
+  return comments.flatMap((comment) => String(comment.body || '').split(/\r?\n/)).flatMap((line) => {
+    const note = line.trim().match(/^\[sidequest:negative-control-test\]\s+unaffected\s+(.+?)(?::\s+|\s+because\s+)(.+)$/i);
+    if (!note) return [];
+    const name = note[1]!;
+    const reason = note[2]!.trim();
+    if (!reason) return [];
+    return [{ name, reason }];
+  });
+}
+
+function capturedUnaffectedTests(comments: MarkerComment[], capture: ControlCaptureRecord, base?: string, files: string[] = []) {
+  const notes = unaffectedTestNotes(comments);
+  if (!notes.length) return [];
+  const identical = identicalCaptureTests(capture, base, files);
+  return notes.map((note) => ({ ...note, classification: identical.has(note.name) ? 'unaffected_verified_identical' : 'unaffected_agent_reported' }));
+}
+
+function identicalCaptureTests(capture: ControlCaptureRecord, base: string | undefined, scope: string[]): Set<string> {
+  if (!base || !capture.worktree || !capture.candidate?.value) return new Set();
+  try {
+    const root = capture.worktree;
+    const candidate = capture.candidate.value;
+    const files = listedPaths(root, ['ls-tree', '-r', '--name-only', '-z', candidate]).filter(isTestSidePath).filter((file) => commitScope.isInScope(file, scope));
+    const previous = uniqueInheritedTestBodies(root, base, files);
+    return new Set([...uniqueInheritedTestBodies(root, candidate, files)].filter(([name, body]) => previous.get(name)?.file === body.file && previous.get(name)?.bytes === body.bytes).map(([name]) => name));
+  } catch {
+    return new Set();
+  }
 }
 
 function markerCaptureId(markerLine: string): string {
@@ -1380,11 +1437,11 @@ function plainMarkerResult(markerLine: string, claimHolderComments: MarkerCommen
     : { kind: 'failed', evidence: 'agent-reported' };
 }
 
-function claimHolderMarkerResult(ticket: { verificationCaptures?: unknown }, markerLine: string, claimHolderComments: MarkerComment[], expectedTestNames: string[], candidate: string | null): NegativeControlOutcome {
+function claimHolderMarkerResult(ticket: ControlTicket, markerLine: string, claimHolderComments: MarkerComment[], expectedTestNames: string[], candidate: string | null): NegativeControlOutcome {
   const waiverReason = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/)?.[1]?.trim();
   if (waiverReason) return waiverReason.length >= 20 ? { kind: 'waived', evidence: 'waived' } : { kind: 'short_waiver' };
   const captureId = markerCaptureId(markerLine);
-  return captureId ? capturedControlResult(ticket, captureId, expectedTestNames, candidate) : plainMarkerResult(markerLine, claimHolderComments, expectedTestNames);
+  return captureId ? capturedControlResult(ticket, captureId, expectedTestNames, candidate, claimHolderComments) : plainMarkerResult(markerLine, claimHolderComments, expectedTestNames);
 }
 
 // A malformed marker that still carries a real failed=<n> count named a genuine attempt gone

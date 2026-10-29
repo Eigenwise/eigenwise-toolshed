@@ -17,9 +17,10 @@ const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyD
 const worktrees = require('../worktrees.js');
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require('./composition-admission.js');
 const { stillSpawnsInsideItsWrite } = require('../db');
-import type { VerificationRequirement, VerificationResult } from '../kernel/verification.js';
+import type { VerificationRequirement as PinnedVerificationRequirement, VerificationResult } from '../kernel/verification.js';
+type VerificationRequirement = PinnedVerificationRequirement & Readonly<{ verifyCwd?: string }>;
 import type { CandidateInvalidation } from '../kernel/wave.js';
-import { beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
+import { integrationCaptureEnvironment, phaseBudgetResult, beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
@@ -1080,7 +1081,11 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const participants = opts?.qualityTickets || [ticket];
   const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
   const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
-  const runWithQuality = (environment: NodeJS.ProcessEnv) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+  const runWithQuality = (environment: NodeJS.ProcessEnv) => {
+    const captureEnvironment = integrationCaptureEnvironment(projectDir(slug), environment);
+    const result = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
+    return { ...phaseBudgetResult(result), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
+  };
   return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
 }
 
@@ -4322,7 +4327,10 @@ function waveVerifierMismatchMessage(tickets: any[], requirements: any[]) {
 }
 
 function waveVerificationRequirement(tickets: any[]) {
-  const requirements = tickets.map(deliveryVerificationRequirement);
+  const requirements = tickets.map((ticket) => {
+    const requirement = deliveryVerificationRequirement(ticket);
+    return { ...requirement, verifyCwd: verifyCwdForRequirement(requirement, ticket.executorVerifyCwd) };
+  });
   const first = requirements[0];
   if (!first) return { ok: false, reason: 'wave_verification_required', message: 'Wave assembly requires a pinned project verification requirement.' };
   const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
@@ -4335,7 +4343,7 @@ function waveVerificationRequirement(tickets: any[]) {
 }
 
 function sameWaveVerifier(left: VerificationRequirement, right: VerificationRequirement) {
-  return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment;
+  return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment && left.verifyCwd === right.verifyCwd;
 }
 
 // Participants that pin the same verifier share one run on the composed tree (SQ-2463).
@@ -4515,15 +4523,24 @@ function verifyWaveGateCheckout(slug: any, waveId: string, requirements: Verific
   return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
 }
 
+function verifyWaveCommand(slug: string, waveId: string, requirement: VerificationRequirement, checkoutRoot: string, index: number): VerificationResult & { cwd: string } {
+  const cwd = path.resolve(checkoutRoot, requirement.verifyCwd || '.');
+  if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+    return { kind: requirement.kind, status: 'could_not_run', command: requirement.command, cwd,
+      evidence: `verify_cwd_missing: ${cwd}`, failureIdentities: [`verify_cwd_missing: ${cwd}`] };
+  }
+  return { ...runProcessVerification(requirement, {
+    cwd,
+    timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
+    logPath: integrationVerifyLogPath(slug, { ref: waveId + '-' + index }),
+    outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+  }), cwd };
+}
+
 function verifyWaveCommands(slug: string, waveId: string, requirements: VerificationRequirement[], checkout: { cwd: string; tree: string | null }) {
   const results = requirements.map((requirement, index): VerificationResult => {
     reportIntegrationProgress('wave gate', requirement.command);
-    const verification = runProcessVerification(requirement, {
-      cwd: checkout.cwd,
-      timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
-      logPath: integrationVerifyLogPath(slug, { ref: waveId + '-' + index }),
-      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
-    });
+    const verification = verifyWaveCommand(slug, waveId, requirement, checkout.cwd, index);
     return checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification;
   });
   const result = results.find((verification) => !verificationAccepted(verification)) || results[0];

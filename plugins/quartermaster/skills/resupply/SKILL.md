@@ -60,6 +60,20 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mine --project "${CLAUDE_PROJE
 Default window is 30 days / 40 sessions. Add `--all-projects` only if the user asks for a global
 pass (much slower). Everything below reads from this one output.
 
+The `sidequest` field adds read-only lifecycle friction from the local Sidequest database
+(`SIDEQUEST_HOME/sidequest.db`, otherwise `~/.claude/sidequest/sidequest.db`). It uses the same day
+window, independently of the transcript session cap, and the current project unless `--all-projects`
+was requested. Missing databases contribute no candidates. An `unavailable` field means the source
+could not be read, not that the board had no friction.
+
+Read `sidequest.candidates` alongside setup friction in step 4d: verifier amendments per ticket,
+failed and timed-out verification captures, checkpoint or budget releases, and rejected submissions.
+The aggregate excludes negative-control captures, deduplicates capture ids and executor attempts,
+and reports its retained-history and sample limits. It does not estimate durations. Treat each count
+as candidate evidence for the existing proposal shape, tied to the user's purpose, never as a work
+order or a reason to write to the board. Check rejected fingerprints before proposing; keep approval
+per item and propose nothing when no concrete improvement follows from the evidence.
+
 ### 2. Read what the work was for
 
 The aggregate tells you this directly, so do not open with an interview. Each entry in `sessions`

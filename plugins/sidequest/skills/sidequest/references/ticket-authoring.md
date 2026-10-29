@@ -92,6 +92,12 @@ the feature was not delegated. Do not dispatch a third local patch against the s
 
 ## Work kind and completion oracle
 
+`dispatch.workProvenance` is a main-thread-only object with required `kind` (the enum below)
+and `sources` (an array of at most 20 source objects). Each source requires nonblank `ref` and
+`preparedAt`, plus `commit` (exactly 40 lowercase hexadecimal characters); optional `captureId`
+is a nonblank string. Unknown fields are refused on the declaration and its sources. The served
+descriptor keeps the kind enum; the store validates the complete shape and native ownership.
+
 The author pins `verifyKind` and `verify` before dispatch: `suite` or `command` for executable regressions, `typecheck` with a typechecker command for annotation work, or `schema` or `document` for their evidence contracts. Dispatch freezes that oracle. The main thread also freezes `workProvenance.kind`: `new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only`, `fixture-only` or `builds-on`. Successful completion records `negativeControl: not_required(<reason>)` for the non-behavior kinds; `builds-on` declares lineage only, so its control follows the undeclared rule. With no frozen kind, changed source under changed tests still requires a control; declare annotation/refactor intent before dispatch instead of asking the executor to infer it.
 
 New behavior requires the existing claim-holder marker: `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion`, plus `[sidequest:negative-control-test] failed <test name>` (or `unaffected <test name> because <reason>`) for each changed named test. Keep the tests importable on the reverted source, then restore the change and run the pinned oracle. Import/collection failures and failed verifier captures do not satisfy a control. The existing `waived <reason of at least 20 characters>` marker remains available when a control cannot run.

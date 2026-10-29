@@ -53,11 +53,12 @@ export function calculateTestConcurrency(availableParallelism) {
   return Math.min(maximumTestConcurrency, Math.max(minimumTestConcurrency, availableParallelism));
 }
 
-export function calculateTestPhaseTimeoutMilliseconds(testConcurrency) {
+export function calculateTestPhaseTimeoutMilliseconds(testConcurrency, liveVerifyCaptures = 0) {
   const concurrencyScale = maximumTestConcurrency / testConcurrency;
+  const captureScale = 1 + Math.max(0, Math.floor(Number(liveVerifyCaptures) || 0));
   return Math.min(
     maximumTestPhaseTimeoutMilliseconds,
-    Math.ceil(baselineTestPhaseTimeoutMilliseconds * concurrencyScale),
+    Math.ceil(baselineTestPhaseTimeoutMilliseconds * concurrencyScale * captureScale),
   );
 }
 
@@ -101,7 +102,7 @@ function siblingFullSuiteCaptureCount() {
 
 const availableParallelism = os.availableParallelism();
 const testConcurrency = calculateTestConcurrency(availableParallelism);
-const testPhaseTimeoutMilliseconds = calculateTestPhaseTimeoutMilliseconds(testConcurrency);
+const testPhaseTimeoutMilliseconds = calculateTestPhaseTimeoutMilliseconds(testConcurrency, process.env.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT);
 const testPhaseWarningMilliseconds = testPhaseTimeoutMilliseconds * 0.75;
 const siblingFullSuiteCaptures = siblingFullSuiteCaptureCount();
 // Benchmarks live behind `npm run test:perf`. Without this exclusion the glob

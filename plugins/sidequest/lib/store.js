@@ -1035,24 +1035,19 @@ function sourceAt(root, revision, file) {
     return "";
   }
 }
-function revisionHasFile(root, revision, file) {
-  try {
-    gitOutput(root, ["cat-file", "-e", `${revision}:${file}`]);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-function fileTestNames(root, change, file) {
-  let diff = "";
-  try {
-    diff = gitOutput(root, ["diff", "--no-ext-diff", "--unified=0", ...[change.from, change.to].filter(Boolean), "--", file]);
-  } catch (_) {
-    return [];
+function testBodySignatures(source) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const body of inheritedTestBodies(source)) {
+    const bytes = groups.get(body.name) || [];
+    bytes.push(body.bytes);
+    groups.set(body.name, bytes);
   }
-  const source = sourceAt(root, change.to, file);
-  return revisionHasFile(root, change.from, file) ? diffTestNames(source, diff) : testDefinitions(source).map((entry) => entry.name);
+  return new Map([...groups].map(([name, bytes]) => [name, JSON.stringify(bytes.sort())]));
+}
+function fileTestNames(root, change, file) {
+  const previous = testBodySignatures(sourceAt(root, change.from, file));
+  return [...testBodySignatures(sourceAt(root, change.to, file))].filter(([name, bytes]) => previous.get(name) !== bytes).map(([name]) => name);
 }
 function mergeDiff(root, merge, file) {
   return gitOutput(root, ["diff-tree", "--cc", "--unified=0", "--no-commit-id", merge, "--", file]);
@@ -1118,12 +1113,29 @@ function negativeControlChanges(slug, ticket, delta, changedPaths) {
   const inheritedNames = new Set(inheritedTests.flatMap((entry) => entry.tests));
   return { ...own, testNames: own.testNames.filter((name) => !inheritedNames.has(name)), inheritedTests };
 }
+function testCallTokens(source) {
+  return [...source.matchAll(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/(?:\\.|[^/\n\\])+\/[dgimsuvy]*|[()]/g)].filter((token) => /^[()]$/.test(token[0]));
+}
+function testCallEnd(source) {
+  const tokens = testCallTokens(source);
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    depth += token[0] === "(" ? 1 : -1;
+    if (depth === 0 && !/^\s*\(/.test(source.slice(token.index + 1))) return token.index + 1;
+  }
+  return source.length;
+}
+function normalizedTestBody(source) {
+  const end = /^\s*(?:async\s+)?def\s/.test(source) ? source.length : testCallEnd(source);
+  return source.slice(0, end).replace(/\r\n/g, "\n").trim();
+}
 function inheritedTestBodies(source) {
   const lines = source.split(/(?<=\n)/);
   const definitions = testDefinitions(source, true);
   return definitions.map((entry, index) => ({
     name: entry.name,
-    bytes: lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1].line - 1 : lines.length).join("")
+    bytes: normalizedTestBody(lines.slice(entry.line - 1, definitions[index + 1]?.line ? definitions[index + 1].line - 1 : lines.length).join(""))
   }));
 }
 function uniqueInheritedTestBodies(root, revision, files) {
@@ -1234,12 +1246,46 @@ function uncoveredControlTests(failingTests, expectedTestNames) {
     return !reportedNames.some((reportedName) => negativeControlTestNameMatches(normalizedExpectedName, reportedName));
   });
 }
-function capturedControlResult(ticket, captureId, expectedTestNames, candidate) {
+function capturedControlResult(ticket, captureId, expectedTestNames, candidate, comments) {
   const facts = { capture: ticketControlCaptures(ticket).find((capture) => capture?.id === captureId), candidate: candidate ? candidate.toLowerCase() : null };
   const refused = CAPTURED_CONTROL_CHECKS.find(([, fails]) => fails(facts));
   if (refused) return { kind: refused[0], captureId };
-  const uncovered = uncoveredControlTests(facts.capture?.failingTests, expectedTestNames);
-  return uncovered.length ? { kind: "capture_tests_uncovered", tests: uncovered, captureId } : { kind: "failed", evidence: "captured", captureId };
+  const unaffectedTests = capturedUnaffectedTests(comments, facts.capture, ticket.dispatch?.baseCommit, ticket.files);
+  const unaffectedNames = new Set(unaffectedTests.map((entry) => entry.name));
+  const uncovered = uncoveredControlTests(facts.capture?.failingTests, expectedTestNames).filter((name) => !unaffectedNames.has(name));
+  if (uncovered.length) return { kind: "capture_tests_uncovered", tests: uncovered, captureId };
+  return capturedFailureEvidence(captureId, unaffectedTests);
+}
+function capturedFailureEvidence(captureId, unaffectedTests) {
+  return { kind: "failed", evidence: "captured", captureId, ...unaffectedTests.length ? { unaffectedTests } : {} };
+}
+function unaffectedTestNotes(comments) {
+  return comments.flatMap((comment) => String(comment.body || "").split(/\r?\n/)).flatMap((line) => {
+    const note = line.trim().match(/^\[sidequest:negative-control-test\]\s+unaffected\s+(.+?)(?::\s+|\s+because\s+)(.+)$/i);
+    if (!note) return [];
+    const name = note[1];
+    const reason = note[2].trim();
+    if (!reason) return [];
+    return [{ name, reason }];
+  });
+}
+function capturedUnaffectedTests(comments, capture, base, files = []) {
+  const notes = unaffectedTestNotes(comments);
+  if (!notes.length) return [];
+  const identical = identicalCaptureTests(capture, base, files);
+  return notes.map((note) => ({ ...note, classification: identical.has(note.name) ? "unaffected_verified_identical" : "unaffected_agent_reported" }));
+}
+function identicalCaptureTests(capture, base, scope) {
+  if (!base || !capture.worktree || !capture.candidate?.value) return /* @__PURE__ */ new Set();
+  try {
+    const root = capture.worktree;
+    const candidate = capture.candidate.value;
+    const files = listedPaths(root, ["ls-tree", "-r", "--name-only", "-z", candidate]).filter(isTestSidePath).filter((file) => commitScope.isInScope(file, scope));
+    const previous = uniqueInheritedTestBodies(root, base, files);
+    return new Set([...uniqueInheritedTestBodies(root, candidate, files)].filter(([name, body]) => previous.get(name)?.file === body.file && previous.get(name)?.bytes === body.bytes).map(([name]) => name));
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
 }
 function markerCaptureId(markerLine) {
   return markerLine.match(/^\[sidequest:negative-control\]\s+capture=([A-Za-z0-9-]+)/)?.[1] ?? "";
@@ -1268,7 +1314,7 @@ function claimHolderMarkerResult(ticket, markerLine, claimHolderComments, expect
   const waiverReason = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/)?.[1]?.trim();
   if (waiverReason) return waiverReason.length >= 20 ? { kind: "waived", evidence: "waived" } : { kind: "short_waiver" };
   const captureId = markerCaptureId(markerLine);
-  return captureId ? capturedControlResult(ticket, captureId, expectedTestNames, candidate) : plainMarkerResult(markerLine, claimHolderComments, expectedTestNames);
+  return captureId ? capturedControlResult(ticket, captureId, expectedTestNames, candidate, claimHolderComments) : plainMarkerResult(markerLine, claimHolderComments, expectedTestNames);
 }
 function unparsedMarkerIsAttempt(markerLine) {
   return /^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine);

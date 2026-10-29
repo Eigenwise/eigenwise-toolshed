@@ -103,6 +103,52 @@ test('SQ-3911: disjoint regions of one shared document integrate as singletons',
   assert.match(fs.readFileSync(path.join(repository, 'shared.txt'), 'utf8'), /^changed top[\s\S]*changed bottom\n$/);
 });
 
+function setWaveCommandFixture(slug: string, ref: string, verifyCwd: string): void {
+  const ticket = store.getTicket(slug, ref);
+  const command = 'node -e "require(\'node:assert\').equal(require(\'node:fs\').readFileSync(\'directory.txt\', \'utf8\'), \'ready\')"';
+  ticket.executorVerifyCwd = verifyCwd;
+  ticket.dispatch.verificationRequirement = { kind: 'command', command, evidenceContract: command };
+  const database = require('../lib/db.js');
+  database.putRow(database.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status, archived: 0,
+    ord: ticket.order, claim_by: null, data: ticket,
+  });
+}
+
+for (const missingDirectory of [false, true]) {
+  test(`SQ-3994: wave verifiers use participant directories and record cwd (missing=${missingDirectory})`, () => {
+    const { repository, slug } = branchOverlapProject();
+    git(repository, ['checkout', 'story-a']);
+    fs.mkdirSync(path.join(repository, 'first'));
+    fs.writeFileSync(path.join(repository, 'first', 'directory.txt'), 'ready');
+    if (!missingDirectory) {
+      fs.mkdirSync(path.join(repository, 'second'));
+      fs.writeFileSync(path.join(repository, 'second', 'directory.txt'), 'ready');
+    }
+    git(repository, ['add', '.']);
+    git(repository, ['commit', '-m', 'verification directories']);
+    const first = submitBranchOverlapCandidate(repository, slug, 'story-a', 'first-worker', 'changed top\n1\n2\n3\n4\n5\n6\n7\n8\n9\nbottom\n');
+    const second = submitBranchOverlapCandidate(repository, slug, 'story-a', 'second-worker', 'top\n1\n2\n3\n4\n5\n6\n7\n8\n9\nchanged bottom\n');
+    setWaveCommandFixture(slug, first, 'first');
+    setWaveCommandFixture(slug, second, 'second');
+    const assembled = store.assembleSubmissionWave(slug, [first, second]);
+    const results = assembled.gate.verification.results;
+    assert.equal(results.length, 2, 'identical commands in different directories both run');
+    assert.equal(results[0].status, 'passed', JSON.stringify(assembled));
+    assert.equal(path.basename(results[0].cwd), 'first');
+    assert.equal(path.basename(results[1].cwd), 'second');
+    assert.equal(path.dirname(results[0].cwd), path.dirname(results[1].cwd));
+    if (missingDirectory) {
+      assert.equal(results[1].status, 'could_not_run');
+      assert.equal(results[1].evidence, `verify_cwd_missing: ${results[1].cwd}`);
+      assert.deepEqual(results[1].failureIdentities, [`verify_cwd_missing: ${results[1].cwd}`]);
+    } else {
+      assert.equal(assembled.ok, true, JSON.stringify(assembled));
+      assert.equal(results[1].status, 'passed');
+    }
+  });
+}
+
 type CandidateOptions = Readonly<{
   baseline?: Baseline;
   verification?: VerificationResult;

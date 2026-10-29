@@ -410,8 +410,32 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
 };
 
+function compactOrchestratorContracts(name: string, properties: Record<string, unknown>): void {
+  if (name === 'update') {
+    const admission = TOOL_BY_NAME.get('update')!.inputSchema.properties.admitComposition;
+    properties.admitComposition = {
+      type: 'object', description: 'Main-only; shape: skills/sidequest/references/invocation-contracts.md, update.admitComposition.',
+      properties: {
+        authority: admission.properties.authority,
+        historicalCheckout: admission.properties.historicalCheckout,
+        expected: { type: 'object', properties: { sources: { type: 'array', items: { type: 'object', properties: {
+          reviewOutcome: admission.properties.expected.properties.sources.items.properties.reviewOutcome,
+        } } } } },
+      },
+    };
+  }
+  if (name === 'dispatch') {
+    const provenance = TOOL_BY_NAME.get('dispatch')!.inputSchema.properties.workProvenance;
+    properties.workProvenance = {
+      type: 'object', description: 'Main-only; shape: skills/sidequest/references/ticket-authoring.md, Work kind and completion oracle.',
+      properties: { kind: provenance.properties.kind },
+    };
+  }
+}
+
 function toolDescriptor(tool: ToolDefinition) {
   const inputSchema = compactSchema(tool.inputSchema);
+  compactOrchestratorContracts(tool.name, inputSchema.properties);
   for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
     inputSchema.properties[property].description = description;
   }

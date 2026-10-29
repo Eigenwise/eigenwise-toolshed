@@ -716,18 +716,7 @@
         },
         "admitComposition": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "authority",
-            "historicalCheckout",
-            "by",
-            "evidence",
-            "candidate",
-            "base",
-            "ownCommits",
-            "ownPaths",
-            "sources"
-          ],
+          "description": "Main-only; shape: skills/sidequest/references/invocation-contracts.md, update.admitComposition.",
           "properties": {
             "authority": {
               "const": "main-attestation"
@@ -735,111 +724,14 @@
             "historicalCheckout": {
               "const": false
             },
-            "by": {
-              "type": "string",
-              "minLength": 1
-            },
-            "evidence": {
-              "type": "string",
-              "minLength": 1
-            },
-            "candidate": {
-              "type": "string",
-              "pattern": "^[a-f0-9]{40}$"
-            },
-            "base": {
-              "type": "string",
-              "pattern": "^[a-f0-9]{40}$"
-            },
-            "ownCommits": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "pattern": "^[a-f0-9]{40}$"
-              },
-              "uniqueItems": true
-            },
-            "ownPaths": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            },
-            "sources": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "ref",
-                  "commit",
-                  "submittedAt"
-                ],
-                "properties": {
-                  "ref": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "commit": {
-                    "type": "string",
-                    "pattern": "^[a-f0-9]{40}$"
-                  },
-                  "submittedAt": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                }
-              },
-              "minItems": 1,
-              "maxItems": 20
-            },
             "expected": {
               "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "attemptCount",
-                "releasedAt",
-                "preparedAt",
-                "sources"
-              ],
               "properties": {
-                "attemptCount": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "releasedAt": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "preparedAt": {
-                  "type": "string",
-                  "minLength": 1
-                },
                 "sources": {
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                      "ref",
-                      "reviewTicketId",
-                      "reviewOutcome",
-                      "correctedAt",
-                      "snapshot"
-                    ],
                     "properties": {
-                      "ref": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "reviewTicketId": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      },
                       "reviewOutcome": {
                         "enum": [
                           "planned",
@@ -848,21 +740,9 @@
                           "inconclusive",
                           null
                         ]
-                      },
-                      "correctedAt": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      },
-                      "snapshot": {
-                        "type": "string",
-                        "minLength": 1
                       }
                     }
-                  },
-                  "minItems": 1,
-                  "maxItems": 20
+                  }
                 }
               }
             }
@@ -2075,11 +1955,7 @@
         },
         "workProvenance": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "sources"
-          ],
+          "description": "Main-only; shape: skills/sidequest/references/ticket-authoring.md, Work kind and completion oracle.",
           "properties": {
             "kind": {
               "enum": [
@@ -2091,37 +1967,6 @@
                 "fixture-only",
                 "builds-on"
               ]
-            },
-            "sources": {
-              "type": "array",
-              "maxItems": 20,
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "ref",
-                  "preparedAt",
-                  "commit"
-                ],
-                "properties": {
-                  "ref": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "preparedAt": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "commit": {
-                    "type": "string",
-                    "pattern": "^[a-f0-9]{40}$"
-                  },
-                  "captureId": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                }
-              }
             }
           }
         },
