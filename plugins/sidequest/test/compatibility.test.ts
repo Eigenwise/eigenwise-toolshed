@@ -194,7 +194,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal((byName.get('done')?.inputSchema.properties?.verify as any)?.maxLength, 4000);
   // SQ-3947: work done outside the recorded checkout has a way to be seen by the completion check.
   assert.equal(byName.get('done')?.inputSchema.properties?.worktree?.type, 'string');
-  assert.match(byName.get('done')?.description ?? '', /worktree: diff work done outside the recorded checkout/);
+  assert.match(String(byName.get('done')?.description), /worktree: diff work done outside the recorded checkout/);
   assert.match(byName.get('integrate')?.description ?? '', /pinned deliveryMethod/);
   assert.match(byName.get('integrate')?.description ?? '', /reviewed interaction/);
   // SQ-3946: the only route for a delivery waiting on an open pull request, so a caller must see it is there.
