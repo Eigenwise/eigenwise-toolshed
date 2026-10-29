@@ -96,7 +96,7 @@ test('done refuses a worktree outside the project or without the dispatch base',
   const current = create('current.md');
   const owner = `${path.basename(project)}-current.md`;
   const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closeout-foreign-'));
-  execFileSync('git', ['init', '--quiet'], { cwd: foreign, windowsHide: true });
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: foreign, windowsHide: true });
   const outside = store.completeTicket(slug, current, owner, { source: 'mcp', verify: 'Read the document.', worktree: foreign });
   assert.equal(outside.reason, 'completion_worktree_unavailable');
   assert.match(outside.message, /is not a worktree of the registered project/);
