@@ -162,7 +162,7 @@ test('full-gate receipts preserve the live capture count and phase budget failur
   context.after(() => fs.rmSync(project, { recursive: true, force: true }));
   manyTestFixture(project, { 'test:full': 'node full.cjs' });
   writeFixture(project, { 'plugins/example/full.cjs': "console.log('live=' + process.env.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT); console.error('Sidequest functional tests exceeded their 1200000ms phase budget at concurrency 8'); process.exit(1);" });
-  const environment = { ...process.env, SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT: '2' };
+  const environment: NodeJS.ProcessEnv = { ...process.env, SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT: '2' };
   delete environment.NODE_TEST_CONTEXT;
   const logPath = path.join(project, 'gate.log');
   const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath };
