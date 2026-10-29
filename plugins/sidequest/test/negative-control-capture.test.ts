@@ -44,7 +44,9 @@ git(['config', 'user.name', 'Sidequest Test']);
 git(['config', 'user.email', 'sidequest-test@example.invalid']);
 writeFixture('check.js', CHECK_SCRIPT);
 writeFixture('lib/fixture.js', 'module.exports = 1;\n');
-writeFixture('test/fixture.test.js', 'module.exports = 1;\n');
+const FIXTURE_DEFINITION = 'test';
+const UNCHANGED_TEST = `${FIXTURE_DEFINITION}('unchanged fixture guard', () => { assert.equal(')', ')'); });\n`;
+writeFixture('test/fixture.test.js', UNCHANGED_TEST + `${FIXTURE_DEFINITION}('passing fixture guard', () => { assert.ok(true); });\n`);
 git(['add', '.']);
 git(['commit', '-m', 'base']);
 
@@ -74,7 +76,7 @@ function createClaimedCandidate() {
   }).ok, true);
   const definition = 'test';
   writeFixture('lib/fixture.js', 'module.exports = 2;\n');
-  writeFixture('test/fixture.test.js', `${definition}('${CHANGED_TEST_NAME}', () => {});\n`);
+  writeFixture('test/fixture.test.js', UNCHANGED_TEST + `${definition}('passing fixture guard', () => { assert.equal(1, 1); });\n` + `${definition}('${CHANGED_TEST_NAME}', () => {});\n`);
   git(['add', '.']);
   git(['commit', '-m', 'candidate']);
   return ticket;
@@ -106,6 +108,7 @@ function postMarker(ref: string, body: string) {
 }
 
 function verifyComplete(ref: string) {
+  postMarker(ref, '[sidequest:negative-control-test] unaffected passing fixture guard: the guard checks unchanged output');
   return store.addComment(slug, ref, { by: CLAIM_HOLDER, body: '[sidequest:verify-complete] passed: node check.js passed on the candidate.', source: 'mcp' });
 }
 
@@ -199,4 +202,39 @@ test('failing test names come from TAP and spec lines, skipping TODO directives 
     '✖ adds two numbers (0.5ms)',
   ].join('\n');
   assert.deepEqual(failingTestNames(output), ['adds two numbers', 'nested # hash case', 'spec style failure']);
+});
+
+function controlWithNotes(notes: string[], author = CLAIM_HOLDER) {
+  const current = store.getTicket(slug, ticket.ref);
+  return store.negativeControlResult({
+    ...current,
+    comments: [{ by: CLAIM_HOLDER, body: `[sidequest:negative-control] capture=${failingControl.captureId}` },
+      { by: author, body: notes.join('\n') }],
+  }, [CHANGED_TEST_NAME, 'unchanged fixture guard'], git(['rev-parse', 'HEAD']));
+}
+
+test('SQ-3999: a captured control records an identical unaffected test with its reason', () => {
+  const result = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: existing assertion passes on both trees']);
+  assert.equal(result.kind, 'failed');
+  assert.equal(result.evidence, 'captured');
+  assert.deepEqual(result.unaffectedTests, [{ name: 'unchanged fixture guard', reason: 'existing assertion passes on both trees', classification: 'unaffected_verified_identical' }]);
+});
+
+test('SQ-3999: a genuinely changed passing guard keeps its agent-reported reason alongside captured failures', () => {
+  const current = store.getTicket(slug, ticket.ref);
+  const result = store.negativeControlResult({ ...current, comments: [
+    { by: CLAIM_HOLDER, body: `[sidequest:negative-control] capture=${failingControl.captureId}\n[sidequest:negative-control-test] unaffected passing fixture guard because the changed guard checks unchanged output` },
+  ] }, [CHANGED_TEST_NAME, 'passing fixture guard'], git(['rev-parse', 'HEAD']));
+  assert.equal(result.kind, 'failed');
+  assert.equal(result.evidence, 'captured');
+  assert.deepEqual(result.unaffectedTests, [{ name: 'passing fixture guard', reason: 'the changed guard checks unchanged output', classification: 'unaffected_agent_reported' }]);
+});
+
+test('SQ-3999: unaffected notes need a reason and the claim holder as author', () => {
+  const accepted = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: the assertion is unchanged']);
+  assert.equal(accepted.kind, 'failed');
+  const missingReason = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: ']);
+  assert.equal(missingReason.kind, 'capture_tests_uncovered');
+  const wrongAuthor = controlWithNotes(['[sidequest:negative-control-test] unaffected unchanged fixture guard: passes on both trees'], 'other-holder');
+  assert.equal(wrongAuthor.kind, 'capture_tests_uncovered');
 });
