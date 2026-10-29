@@ -3611,7 +3611,10 @@ ${parts.join("\n\n")}` });
     return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(", ")}) only need to agree on kind; executable requirements run each pinned command on the composed tree. ${manualCandidateDeliveryGuidance()}`;
   }
   function waveVerificationRequirement(tickets) {
-    const requirements = tickets.map(deliveryVerificationRequirement);
+    const requirements = tickets.map((ticket) => {
+      const requirement = deliveryVerificationRequirement(ticket);
+      return { ...requirement, verifyCwd: verifyCwdForRequirement(requirement, ticket.executorVerifyCwd) };
+    });
     const first = requirements[0];
     if (!first) return { ok: false, reason: "wave_verification_required", message: "Wave assembly requires a pinned project verification requirement." };
     const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
@@ -3623,7 +3626,7 @@ ${parts.join("\n\n")}` });
     return { ok: true, requirement: first, requirements: distinctWaveVerifiers(requirements) };
   }
   function sameWaveVerifier(left, right) {
-    return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment;
+    return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment && left.verifyCwd === right.verifyCwd;
   }
   function distinctWaveVerifiers(requirements) {
     return requirements.filter((requirement, index) => requirements.findIndex((other) => sameWaveVerifier(other, requirement)) === index);
@@ -3769,15 +3772,29 @@ ${parts.join("\n\n")}` });
     }
     return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
   }
+  function verifyWaveCommand(slug, waveId, requirement, checkoutRoot, index) {
+    const cwd = path.resolve(checkoutRoot, requirement.verifyCwd || ".");
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      return {
+        kind: requirement.kind,
+        status: "could_not_run",
+        command: requirement.command,
+        cwd,
+        evidence: `verify_cwd_missing: ${cwd}`,
+        failureIdentities: [`verify_cwd_missing: ${cwd}`]
+      };
+    }
+    return { ...runProcessVerification(requirement, {
+      cwd,
+      timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
+      logPath: integrationVerifyLogPath(slug, { ref: waveId + "-" + index }),
+      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+    }), cwd };
+  }
   function verifyWaveCommands(slug, waveId, requirements, checkout) {
     const results = requirements.map((requirement, index) => {
       (0, import_integration_tests.reportIntegrationProgress)("wave gate", requirement.command);
-      const verification = runProcessVerification(requirement, {
-        cwd: checkout.cwd,
-        timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
-        logPath: integrationVerifyLogPath(slug, { ref: waveId + "-" + index }),
-        outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
-      });
+      const verification = verifyWaveCommand(slug, waveId, requirement, checkout.cwd, index);
       return checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification;
     });
     const result = results.find((verification) => !verificationAccepted(verification)) || results[0];
