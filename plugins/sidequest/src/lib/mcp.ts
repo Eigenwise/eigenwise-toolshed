@@ -91,7 +91,9 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 31200 for integrate deliveryBranch, pullRequests and worktree (SQ-3946), the only route that records a
 // delivery waiting on an open pull request: +232 bytes with the served deliveryBranch contract, measured 28924 payload
 // bytes. Keeps the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 31500;
+// Raised from 31500 when SQ-3947 (done worktree) and SQ-3948 (board_config workingTreeDeliveryCategories) composed:
+// each fit alone, together headroom fell to 2472 bytes. SQ-4002 moves prose out of tools/list so this stops recurring.
+const MCP_TOOLS_LIST_MAX_BYTES = 31600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
