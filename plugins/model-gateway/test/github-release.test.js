@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { githubToken, fetchLatestRelease } = require('../lib/github-release.js');
-const { fetchUrl } = require('../lib/process-supervision.js');
+const { fetchUrl, redirectRequest } = require('../lib/process-supervision.js');
 
 const API = 'https://api.github.com/repos/raine/claude-code-proxy/releases/latest';
 const noGh = () => ({ status: 1, stdout: '' });
@@ -74,6 +74,16 @@ test('fetchLatestRelease reports which token source was refused, never the token
     fetchLatestRelease('raine/claude-code-proxy', { fetchUrl: async () => ({ status: 401, body: Buffer.alloc(0) }), env: { GITHUB_TOKEN: 'ghp_secret' }, run: noGh }),
     (error) => error.message.includes('GitHub API returned 401') && error.message.includes('GITHUB_TOKEN') && !error.message.includes('ghp_secret'),
   );
+});
+
+test('redirectRequest drops authorization on an https to http downgrade of the same host', () => {
+  const headers = { authorization: 'Bearer secret', accept: 'x' };
+  const downgrade = redirectRequest('https://api.github.com/a', 'http://api.github.com/b', headers);
+  assert.equal(downgrade.url, 'http://api.github.com/b');
+  assert.deepEqual(downgrade.headers, { accept: 'x' });
+  const same = redirectRequest('https://api.github.com/a', '/b', headers);
+  assert.equal(same.url, 'https://api.github.com/b');
+  assert.equal(same.headers.authorization, 'Bearer secret');
 });
 
 async function listen(handler) {
