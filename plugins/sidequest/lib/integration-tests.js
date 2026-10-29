@@ -31,10 +31,12 @@ __export(integration_tests_exports, {
   beginIntegrationProgress: () => beginIntegrationProgress,
   deliveryOutcomeState: () => deliveryOutcomeState,
   finishIntegrationProgress: () => finishIntegrationProgress,
+  integrationCaptureEnvironment: () => integrationCaptureEnvironment,
   integrationProgressPath: () => integrationProgressPath,
   integrationProgressSummary: () => integrationProgressSummary,
   integrationTestBatches: () => integrationTestBatches,
   onIntegrationProgress: () => onIntegrationProgress,
+  phaseBudgetResult: () => phaseBudgetResult,
   readIntegrationProgress: () => readIntegrationProgress,
   reportIntegrationProgress: () => reportIntegrationProgress,
   runImportingIntegrationTests: () => runImportingIntegrationTests,
@@ -216,6 +218,14 @@ function selectionWithExclusions(project, selection) {
   const excludedFiles = pluginTestFiles(project, selection.plugin).filter(performanceTest);
   return { ...selection, excludedFiles };
 }
+function integrationCaptureEnvironment(boardDirectory, environment) {
+  const { liveVerificationCaptureCount } = require("./verify-capture.js");
+  return { ...environment, SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT: String(liveVerificationCaptureCount(boardDirectory)) };
+}
+function phaseBudgetResult(result) {
+  if (!/Sidequest .* tests exceeded their \d+ms phase budget/.test(result.outputTail ?? "")) return result;
+  return { ...result, evidence: "Phase budget failure. " + result.evidence, failureIdentities: [...result.failureIdentities ?? [], "phase_budget_exceeded"] };
+}
 function runImportBatch(project, batch, logPath, pinned, environment) {
   const started = Date.now();
   const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing tests pass on the merged tree" }, {
@@ -224,7 +234,7 @@ function runImportBatch(project, batch, logPath, pinned, environment) {
     logPath,
     environment
   });
-  const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
+  const receipt = { ...phaseBudgetResult(result), liveVerifyCaptureCount: Number(environment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT || 0), batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
   if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk batch: " + JSON.stringify(receipt) + "\n");
   return receipt;
 }
@@ -392,10 +402,12 @@ function readIntegrationProgress(file) {
   beginIntegrationProgress,
   deliveryOutcomeState,
   finishIntegrationProgress,
+  integrationCaptureEnvironment,
   integrationProgressPath,
   integrationProgressSummary,
   integrationTestBatches,
   onIntegrationProgress,
+  phaseBudgetResult,
   readIntegrationProgress,
   reportIntegrationProgress,
   runImportingIntegrationTests,

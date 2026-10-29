@@ -864,7 +864,11 @@ ${JSON.stringify(quality.unverified)}`,
     const participants = opts?.qualityTickets || [ticket];
     const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
     const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
-    const runWithQuality = (environment) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+    const runWithQuality = (environment) => {
+      const captureEnvironment = (0, import_integration_tests.integrationCaptureEnvironment)(projectDir(slug), environment);
+      const result = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
+      return { ...(0, import_integration_tests.phaseBudgetResult)(result), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
+    };
     return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
   }
   function verificationFailureComment(verify) {
