@@ -225,12 +225,42 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(acceptance?.items?.properties?.scenario?.maxLength, 300);
   assert.deepEqual(acceptance?.items?.properties?.kind?.enum, ['main', 'boundary']);
 
+  // This is a per-session context-cost budget, not a measured MCP host limit.
+  // 5705ab77b introduced the 2,500-byte growth reserve; b1f81ec8d raised the cap
+  // to 31,500 for delivery fields. Neither records a host byte ceiling.
   const payload = JSON.stringify(descriptors);
   const payloadBytes = Buffer.byteLength(payload, 'utf8');
   const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
   assert.equal(`${JSON.stringify(descriptors, null, 2)}\n`, fs.readFileSync(MCP_DESCRIPTOR_GOLDEN, 'utf8'));
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
   assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
+});
+
+test('MCP orchestrator contracts retain enums and full runtime schemas while saving 1500 bytes', () => {
+  const server: {
+    TOOLS: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+    toolDescriptors(): Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+  } = require('../lib/mcp.js');
+  const served = new Map(server.toolDescriptors().map(tool => [tool.name, tool.inputSchema.properties]));
+  const authored = new Map(server.TOOLS.map(tool => [tool.name, tool.inputSchema.properties]));
+  const admission = served.get('update')!.admitComposition;
+  const provenance = served.get('dispatch')!.workProvenance;
+  assert.deepEqual(admission, {
+    type: 'object', description: 'Main-only; shape: skills/sidequest/references/invocation-contracts.md, update.admitComposition.',
+    properties: {
+      authority: { const: 'main-attestation' }, historicalCheckout: { const: false },
+      expected: { type: 'object', properties: { sources: { type: 'array', items: { type: 'object', properties: {
+        reviewOutcome: { enum: ['planned', 'accepted', 'rejected', 'inconclusive', null] },
+      } } } } },
+    },
+  });
+  assert.deepEqual(provenance, {
+    type: 'object', description: 'Main-only; shape: skills/sidequest/references/ticket-authoring.md, Work kind and completion oracle.',
+    properties: { kind: { enum: ['new-behavior', 'behavior-preserving-refactor', 'inherited-read-only', 'docs', 'type-annotation-only', 'fixture-only', 'builds-on'] } },
+  });
+  assert.notDeepEqual(admission, authored.get('update')!.admitComposition, 'runtime admission schema stays complete');
+  assert.notDeepEqual(provenance, authored.get('dispatch')!.workProvenance, 'runtime provenance schema stays complete');
+  assert.ok(Buffer.byteLength(JSON.stringify(server.toolDescriptors()), 'utf8') <= 29028 - 1500);
 });
 
 test('refusal payloads name the serving build within the result budget', () => {
