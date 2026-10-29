@@ -44,28 +44,37 @@ function includeModuleTests(pluginDirectory: string, suite: ResolvedSuite): Reso
   return { ...suite, moduleTest: MODULE_TEST_COMMANDS.get(suite.plugin) ?? 'claude plugin test .' };
 }
 
-function resolveSuite(repoRoot: string, plugin: any) {
-  const pluginDir = path.join(repoRoot, plugin.dir);
-  const packageJson = readJson(path.join(pluginDir, 'package.json'));
-  const pluginManifest = readJson(path.join(pluginDir, '.claude-plugin', 'plugin.json'));
+type SuitePlugin = { name: string; dir: string };
+
+function packageScriptSuite(plugin: SuitePlugin, scripts?: Record<string, unknown>): ResolvedSuite | null {
   for (const script of ['test:full', 'test']) {
-    if (packageJson.scripts?.[script]) {
-      return includeModuleTests(pluginDir, {
+    if (scripts?.[script]) {
+      return {
         plugin: plugin.name,
         cwd: plugin.dir,
         setup: 'npm ci',
         command: script === 'test' ? 'npm test' : `npm run ${script}`,
-      });
+      };
     }
   }
-
-  const testDir = path.join(pluginDir, 'test');
-  if (existsSync(testDir) && readdirSync(testDir).some((name: string) => name.endsWith('.test.js'))) {
-    const timeout = declaredSuiteTimeout(pluginManifest);
-    return includeModuleTests(pluginDir, { plugin: plugin.name, cwd: plugin.dir, setup: null, command: `node --test --test-timeout=${timeout} "test/*.test.js"` });
-  }
-
   return null;
+}
+
+function directTestSuite(pluginDirectory: string, plugin: SuitePlugin, pluginManifest: { suiteTimeout?: unknown }): ResolvedSuite | null {
+  const testDirectory = path.join(pluginDirectory, 'test');
+  if (existsSync(testDirectory) && readdirSync(testDirectory).some((name: string) => name.endsWith('.test.js'))) {
+    const timeout = declaredSuiteTimeout(pluginManifest);
+    return { plugin: plugin.name, cwd: plugin.dir, setup: null, command: `node --test --test-timeout=${timeout} "test/*.test.js"` };
+  }
+  return null;
+}
+
+function resolveSuite(repoRoot: string, plugin: SuitePlugin): ResolvedSuite | null {
+  const pluginDirectory = path.join(repoRoot, plugin.dir);
+  const packageJson = readJson(path.join(pluginDirectory, 'package.json'));
+  const pluginManifest = readJson(path.join(pluginDirectory, '.claude-plugin', 'plugin.json'));
+  const suite = packageScriptSuite(plugin, packageJson.scripts) ?? directTestSuite(pluginDirectory, plugin, pluginManifest);
+  return suite ? includeModuleTests(pluginDirectory, suite) : null;
 }
 
 function createSuiteResolver(repoRoot: string) {
