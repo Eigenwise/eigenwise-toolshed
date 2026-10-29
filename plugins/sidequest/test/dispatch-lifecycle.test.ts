@@ -3195,7 +3195,7 @@ test('a working-tree deliverable refuses an isolated dispatch and prepares nothi
   const ticket = store.createTicket(slug, { title: 'working-tree deliverable isolation fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], workingTreeDelivery: true, source: 'test' });
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { sessionId: `working-tree-isolated-${Date.now()}`, sharedTree: false }),
-    /declares a working-tree deliverable and must run in the shared checkout\. Re-dispatch with sharedTree:true\./,
+    /declares workingTreeDelivery:true, so it must run in the shared checkout and close with done\. Re-dispatch with sharedTree:true, or update workingTreeDelivery:false/,
   );
   assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
 });
@@ -3238,7 +3238,8 @@ test('a released checkpoint dispatched into the shared tree records why its reta
   }
 });
 
-test('released handbacks carry registered native worktrees into continuation dispatches', () => {
+for (const verificationStatus of ['passed', 'failed_suite']) {
+test(`released handbacks retain ${verificationStatus} verification before a later control capture`, () => {
   const ticket = store.createTicket(slug, { title: 'continuation checkpoint fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], executorVerify: 'node --version', source: 'test' });
   const sessionId = `continuation-${Date.now()}`;
   const agentId = `continuation-${Date.now()}`;
@@ -3272,10 +3273,17 @@ test('released handbacks carry registered native worktrees into continuation dis
     // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
     assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'continuation-worker', commit: checkpoint }).ok, true);
     const capture = store.recordVerificationCapture(slug, ticket.ref, {
-      command: 'node --version', status: 'failed_suite', candidate: { source: 'git', value: checkpoint },
+      command: 'node --version', status: verificationStatus, candidate: { source: 'git', value: checkpoint },
       completedAt: new Date().toISOString(), cleanWorktree: true, worktree, logPath: path.join(SIDEQUEST_HOME, 'resume-verification.log'),
     });
     assert.equal(capture.ok, true);
+    const control = store.recordVerificationCapture(slug, ticket.ref, {
+      command: 'node --version', status: 'failed_suite', candidate: { source: 'git', value: checkpoint },
+      completedAt: new Date().toISOString(), cleanWorktree: false, worktree, control: true,
+      exitCode: 1, failingTests: ['checkpoint regression'], dirtyPaths: ['tracked.js'],
+    });
+    assert.equal(control.ok, true);
+    assert.equal(control.capture.control, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
       status: 'todo',
       source: 'test',
@@ -3312,7 +3320,8 @@ test('released handbacks carry registered native worktrees into continuation dis
     assert.ok(briefing.indexOf('## Resume') < briefing.indexOf('## Dispatch, claim'));
     assert.ok(briefing.includes(`Checkpoint commit: ${checkpoint}`));
     assert.match(briefing, /Handback reason: Continue verification in another executor\./);
-    assert.match(briefing, /Last verification result: failed_suite/);
+    assert.ok(briefing.includes(`Last verification result: ${verificationStatus}`));
+    assert.notEqual(continuation.verification.id, control.capture.id);
     assert.ok(briefing.includes(`Verification log: ${capture.capture.logPath}`));
     assert.ok(briefing.includes(`Description:\n${continued.ticket.description || '(No additional description was recorded.)'}`));
     assert.match(briefing, /first run the pinned verifier/);
@@ -3370,6 +3379,8 @@ test('released handbacks carry registered native worktrees into continuation dis
     execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
   }
 });
+
+}
 
 test('continuation refuses a same-path replacement linked checkout', () => {
   const ticket = createFixture('continuation replacement fixture');

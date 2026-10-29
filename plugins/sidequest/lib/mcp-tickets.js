@@ -61,6 +61,7 @@ const {
   cleanupClosedTicketWorktree,
   claimHeldLive
 } = require("./mcp-shared");
+const { ACCEPTANCE_SCHEMA } = require("./store/completion.js");
 function liveClaimRemovalRefusal(ticket, force) {
   if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
   return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
@@ -122,6 +123,16 @@ function liveVerificationAmendment(ticket) {
     message: `Verification was amended for ${ticket.ref}. The live dispatch now requires ${amendment.newCommand || "<none>"}; it previously required ${amendment.oldCommand || "<none>"}.`
   };
 }
+function liveWorkingTreeDeliveryAmendment(requested, ticket) {
+  if (requested !== true) return {};
+  const dispatch = ticket.dispatch;
+  if (!dispatch?.workingTreeDelivery || dispatch.terminalAt) return {};
+  const requirement = dispatch.verificationRequirement?.command ? "a current verify-capture of the pinned command" : "explicit done.verify evidence for the pinned commandless requirement";
+  return { workingTreeDeliveryAmendment: {
+    status: "applied_to_live_dispatch",
+    message: `Working-tree delivery applies to the live dispatch for ${ticket.ref}. Leave declared edits uncommitted; done now requires ${requirement}.`
+  } };
+}
 function recordedSubmissionVerificationAmendmentRefusal(ticket) {
   const terminalSubmission = ticket.dispatch?.terminalAt || ticket.dispatch?.attempts?.some((attempt) => attempt?.outcome === "submitted" && attempt.terminalAt);
   if (!ticket.submission || !terminalSubmission) return null;
@@ -163,7 +174,8 @@ const TICKET_FIELD_PROPS = {
   verifyCwd: VERIFY_CWD_PROP,
   verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS },
   attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
-  reviewTarget: REVIEW_TARGET_PROP
+  reviewTarget: REVIEW_TARGET_PROP,
+  acceptance: ACCEPTANCE_SCHEMA
 };
 const tools = [
   {
@@ -174,7 +186,7 @@ const tools = [
       properties: {
         project: PROJECT_PROP,
         ...TICKET_FIELD_PROPS,
-        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence." },
+        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits: dispatch needs sharedTree:true, commit and submit refuse, and the executor closes with done. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence. Omitted, it defaults to true when board_config workingTreeDeliveryCategories lists the category." },
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         storyId: { type: "string", description: "A story ref (US-n) or the story id story returns (st_...) to file this ticket into." },
         dependsOn: { type: "array", items: { type: "string" }, description: "Refs this ticket depends on. Recorded as depends-on links to the new ticket in this same call, so a dependent ticket needs no follow-up link call." },
@@ -229,6 +241,7 @@ const tools = [
         readonly: args.readonly,
         workingTreeDelivery: args.workingTreeDelivery,
         externalDeliverable: args.externalDeliverable,
+        acceptance: args.acceptance,
         executorAnchors: args.anchors,
         executorVerifyKind: args.verifyKind,
         executorAttestationArtifact: args.attestationArtifact,
@@ -255,7 +268,7 @@ const tools = [
   },
   {
     name: "update",
-    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. A control-plane verifier amendment updates the live dispatch requirement and records the old and new command on the ticket. A terminal recorded submission keeps its verifier sealed: update refuses its amendment, and groomClose verificationSupersession records the distinct delivered replacement after it passes. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. A control-plane workingTreeDelivery:true declaration applies to an open shared-checkout dispatch and refuses an isolated dispatch; without an open dispatch it applies at the next prepare. A control-plane verifier amendment updates the live dispatch requirement and records the old and new command on the ticket. A terminal recorded submission keeps its verifier sealed: update refuses its amendment, and groomClose verificationSupersession records the distinct delivered replacement after it passes. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: "object",
       properties: {
@@ -266,7 +279,7 @@ const tools = [
         addFiles: ADD_FILES_PROP,
         removeFiles: REMOVE_FILES_PROP,
         by: { type: "string", description: "Human-readable update label. It cannot authorize closeout fields on a live claim." },
-        workingTreeDelivery: { type: "boolean", description: "Orchestrator-only live-claim declaration for a shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths." },
+        workingTreeDelivery: { type: "boolean", description: "Orchestrator-only declaration for a shared-checkout deliverable that forbids commits. true applies to an open sharedTree dispatch, recording a late dirty baseline; isolated dispatches refuse and must submit a commit. Without an open dispatch it applies at the next prepare. commit and submit refuse a working-tree dispatch; done requires pinned-command verify-capture, or explicit done.verify evidence for commandless kinds." },
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
         storyId: { anyOf: [{ type: "string" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
@@ -314,7 +327,7 @@ const tools = [
       const verificationAmendmentRefusal = verificationWasAmended ? recordedSubmissionVerificationAmendmentRefusal(existing) : null;
       if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch = { source: "mcp", by: String(args.by || "").trim() || null };
-      for (const k of ["title", "description", "priority", "status", "highStakes", "labels", "refs", "files", "addFiles", "removeFiles", "complexity"]) {
+      for (const k of ["title", "description", "priority", "status", "highStakes", "labels", "refs", "files", "addFiles", "removeFiles", "complexity", "acceptance"]) {
         if (args[k] !== void 0) patch[k] = args[k];
       }
       if (args.produces !== void 0 || args.changes !== void 0 || args.consumes !== void 0) {
@@ -361,6 +374,7 @@ const tools = [
       return mutationAck(slug, { ok: true, ticket: t }, Object.assign(
         presentedWarnings.length ? { warnings: presentedWarnings } : {},
         verificationAmendment ? { verificationAmendment } : {},
+        liveWorkingTreeDeliveryAmendment(args.workingTreeDelivery, t),
         sameBasenameSiblingDetails(slug, t, meta.path, "update")
       ));
     }

@@ -86,7 +86,14 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 29600 for board_config.integrationTestFileThreshold (SQ-3925): +61 bytes of schema structure, measured 27153 payload bytes on the composed wave tree. Keeps the 2.5KB reserve.
 // Raised from 29700 for the completion read (SQ-3960): +255 bytes for one new tool with a one-sentence served
 // description, measured 27408 payload bytes. Keeps the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 30600;
+// Raised from 30600 for add/update acceptance (SQ-3966): +594 bytes, the bounded item schema on both tools since
+// compactSchema strips its description, measured 28660 payload bytes. Keeps the 2.5KB reserve.
+// Raised from 31200 for integrate deliveryBranch, pullRequests and worktree (SQ-3946), the only route that records a
+// delivery waiting on an open pull request: +232 bytes with the served deliveryBranch contract, measured 28924 payload
+// bytes. Keeps the 2.5KB reserve.
+// Raised from 31500 when SQ-3947 (done worktree) and SQ-3948 (board_config workingTreeDeliveryCategories) composed:
+// each fit alone, together headroom fell to 2472 bytes. SQ-4002 moves prose out of tools/list so this stops recurring.
+const MCP_TOOLS_LIST_MAX_BYTES = 31600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -384,6 +391,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
     deliveryRevision: DELIVERY_REVISION_CONTRACT,
     resolvedPaths: RESOLVED_PATHS_CONTRACT,
+    deliveryBranch: 'Non-target branch whose tip holds deliveryCommit, e.g. an open PR.',
   },
   groomClose: {
     deliveryCommit: 'Prepared integration target.',

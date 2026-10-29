@@ -3,6 +3,17 @@
 type TicketLockKey = { slug: string; id: string };
 type BusyTicketLock = { ok: false; reason: 'busy' };
 const LOCK_HELD_ELSEWHERE = Symbol('lock held elsewhere');
+const LOCK_BEING_DELETED = Symbol('lock being deleted');
+const LOCK_RETRY_MS = 10;
+// Windows answers these while a released lock file is still delete-pending because a reader holds it open.
+const TRANSIENT_LOCK_FILE_ERRORS = ['EACCES', 'EBUSY', 'EPERM'];
+
+// An exclusive create that met a lock file mid-deletion used to fail outright, and withTicketFileLocks
+// reported that as `busy` after a few milliseconds instead of waiting its turn (SQ-3986, GH-406 on Windows CI).
+function lockFileConflict(error?: any): symbol | false {
+  if (error?.code === 'EEXIST') return LOCK_HELD_ELSEWHERE;
+  return TRANSIENT_LOCK_FILE_ERRORS.includes(error?.code) ? LOCK_BEING_DELETED : false;
+}
 
 // The whole lock file: {pid, token} plus whatever the holder recorded (a delivery lock names its
 // ticket, pinned commit, command, log and start time, SQ-3425). Unreadable or malformed reads as null.
@@ -80,15 +91,20 @@ function createLocks(dependencies: any) {
   function acquireLock(lockPath?: any, options: any = {}) {
     refuseUnderGuardedWrite(`waiting on lock file ${path.basename(String(lockPath))}`);
     const STALE_LOCK_MS = 30000;
-    const RETRY_MS = 10;
-    const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
+    const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / LOCK_RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const created = createLockFile(lockPath, ownerToken, options.holder);
-      if (created !== LOCK_HELD_ELSEWHERE) return created;
-      if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
+      if (typeof created !== 'symbol') return created;
+      waitForLockTurn(lockPath, created);
     }
     return false;
+  }
+
+  // A file still being deleted is never reclaimed: its owner record is unreadable, so it reads as stale, and
+  // reclaiming it skips the wait and spins the whole attempt budget in a few milliseconds.
+  function waitForLockTurn(lockPath: string, conflict: symbol): void {
+    if (conflict === LOCK_BEING_DELETED || !removeReclaimableLock(lockPath)) busyWait(LOCK_RETRY_MS);
   }
 
   function createLockFile(lockPath: string, ownerToken: string, holder?: object) {
@@ -96,7 +112,7 @@ function createLocks(dependencies: any) {
     try {
       fd = fs.openSync(lockPath, 'wx');
     } catch (error: any) {
-      return error?.code === 'EEXIST' ? LOCK_HELD_ELSEWHERE : false;
+      return lockFileConflict(error);
     }
     if (!writeLockOwner(lockPath, fd, ownerToken, holder)) return false;
     return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
@@ -145,7 +161,7 @@ function createLocks(dependencies: any) {
         fs.unlinkSync(lockPath);
         return { ok: true };
       } catch (error: any) {
-        if (!error || !['EACCES', 'EBUSY', 'EPERM'].includes(error.code)) return { ok: false, reason: 'lock_owner_lost' };
+        if (!error || !TRANSIENT_LOCK_FILE_ERRORS.includes(error.code)) return { ok: false, reason: 'lock_owner_lost' };
         busyWait(RETRY_MS);
       }
     }

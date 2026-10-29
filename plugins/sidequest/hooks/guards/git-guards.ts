@@ -3,7 +3,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { SnapshotRow } from './context-guards.js'
 import {
-  branchName, destructiveMatch, destructiveMatches, gitInvocations, invocationDirectory, isTagRef, pushesEverything, samePath, shellTokens, tagAction,
+  branchName, destructiveMatch, destructiveMatches, gitInvocations, invocationDirectory, isTagRef, plannedDirectory, pushesEverything, samePath, shellTokens, tagAction,
 } from './git-command.js'
 import type { GitInvocation } from './git-command.js'
 import { withoutHereDocBodies } from './heredocs.js'
@@ -86,8 +86,17 @@ function isolatedMutationRefusal(root: string): string {
   return `sidequest: refusing a mutating git command against the shared checkout (${root}) from an isolated worktree. The shared checkout means the project's registered root and every other executor's worktree; a clone you created under your ticket's verification directory or scratchpad is not it and stays writable. Read-only git commands such as log, diff, show, rev-parse, and ls-files are allowed for review; make repository changes only in the assigned worktree.`
 }
 
+async function plannedDestructiveDenial($: EngineInterface, shell: Shell, index: number, dashC: string | null, label: string): Promise<string | null> {
+  const directory = invocationDirectory(shell.command, index, dashC, shell.cwd, shell.host)
+  if (await $.fs.exists(directory)) return null
+  if (!plannedDirectory(shell.command, index, directory, shell.cwd, shell.host)) return null
+  return `sidequest: refusing ${label} in directory ${directory} before it exists. Run the creating command separately so the checkout can be checked first.`
+}
+
 async function dirtyCheckoutDenial($: EngineInterface, shell: Shell): Promise<string | null> {
   for (const destructive of destructiveMatches(shell.command)) {
+    const plannedDenial = await plannedDestructiveDenial($, shell, destructive.index, destructive.dashC, destructive.label)
+    if (plannedDenial) return plannedDenial
     const { root } = await repoAt($, shell, destructive.index, destructive.dashC)
     if (!(await registeredRoot($, root, shell.host))) continue
     const dirty = (await git($, root, ['status', '--porcelain'])).split(/\r?\n/).filter(Boolean)
@@ -188,22 +197,68 @@ async function publicationLabel($: EngineInterface, shell: Shell, invocation: Gi
   return published ? `a push to the published branch (${published})` : null
 }
 
-async function publicationDenial($: EngineInterface, shell: Shell): Promise<string | null> {
-  for (const invocation of gitInvocations(shell.command).filter(publicationVerb)) {
-    const repo = await repoAt($, shell, invocation.index, invocation.dashC)
-    if (!(await $.fs.exists(repo.root))) return `sidequest: directory ${repo.root} does not exist (yet). This blocks the entire shell invocation, including earlier directory-creating segments. Next step: run the ${invocation.subcommand} as a separate command after the directory exists.`
-    const label = await publicationLabel($, shell, invocation, repo.root)
-    if (label && !(await publishLockHeld($, shell, repo))) return publicationRefusal(label, repo.root)
+function missingDirectoryRefusal(directory: string, subcommand: string): string {
+  return `sidequest: directory ${directory} does not exist (yet). Create it in an earlier call, then run the ${subcommand} as a separate command after the directory exists.`
+}
+
+function unknownPublicationLabel(invocation: GitInvocation): string | null {
+  if (invocation.subcommand === 'tag') return 'manual git tag'
+  const tokens = shellTokens(invocation.args)
+  const positional = tokens.filter((token) => !token.startsWith('-'))
+  const specs = positional.length > 1 ? positional.slice(1) : []
+  return wholesalePush(tokens, specs) || pushPublishes(specs, 'main', 'main', '') ? 'a push to the published branch (main)' : null
+}
+
+async function publicationRepoDenial($: EngineInterface, shell: Shell, invocation: GitInvocation, repo: Repo): Promise<string | null> {
+  const label = await publicationLabel($, shell, invocation, repo.root)
+  return label && !(await publishLockHeld($, shell, repo)) ? publicationRefusal(label, repo.root) : null
+}
+
+async function plannedPublicationDenial($: EngineInterface, shell: Shell, invocation: GitInvocation, directory: string): Promise<string | null> {
+  const created = plannedDirectory(shell.command, invocation.index, directory, shell.cwd, shell.host)
+  if (!created) return missingDirectoryRefusal(directory, invocation.subcommand)
+  if (!created.source) {
+    const label = unknownPublicationLabel(invocation)
+    return label ? publicationRefusal(label, directory) : null
+  }
+  const repo = await repoAt($, { ...shell, command: '', cwd: created.source }, 0, null)
+  return publicationRepoDenial($, shell, invocation, repo)
+}
+
+async function missingChangedDirectoryDenial($: EngineInterface, shell: Shell): Promise<string | null> {
+  for (const invocation of gitInvocations(shell.command)) {
+    if (invocation.dashC) continue
+    const directory = invocationDirectory(shell.command, invocation.index, null, shell.cwd, shell.host)
+    if (await $.fs.exists(directory)) continue
+    if (!plannedDirectory(shell.command, invocation.index, directory, shell.cwd, shell.host)) return missingDirectoryRefusal(directory, invocation.subcommand)
   }
   return null
 }
 
-// Text first: no git process starts unless the command names a destructive or publishing invocation.
+async function publicationDenial($: EngineInterface, shell: Shell): Promise<string | null> {
+  for (const invocation of gitInvocations(shell.command).filter(publicationVerb)) {
+    const repo = await repoAt($, shell, invocation.index, invocation.dashC)
+    if (!(await $.fs.exists(repo.root))) {
+      const denial = await plannedPublicationDenial($, shell, invocation, repo.root)
+      if (denial) return denial
+      continue
+    }
+    const denial = await publicationRepoDenial($, shell, invocation, repo)
+    if (denial) return denial
+  }
+  return null
+}
+
+function needsRepositoryCheck(command: string): boolean {
+  return Boolean(destructiveMatch(command)) || gitInvocations(command).some(publicationVerb) || /(?:^|[\n;&|])\s*cd\s/.test(command)
+}
+
+// Read-only commands only need a directory check when the shell changes directory first.
 export async function destructiveGitDenial($: EngineInterface, rawCommand: string): Promise<string | null> {
   const command = withoutHereDocBodies(rawCommand)
-  if (!destructiveMatch(command) && !gitInvocations(command).some(publicationVerb)) return null
+  if (!needsRepositoryCheck(command)) return null
   const shell = await shellOf($, command)
-  return (await publicationDenial($, shell)) ?? (await dirtyCheckoutDenial($, shell))
+  return (await missingChangedDirectoryDenial($, shell)) ?? (await publicationDenial($, shell)) ?? (await dirtyCheckoutDenial($, shell))
 }
 
 async function agentWorktree($: EngineInterface, shell: Shell, root: string, project: string): Promise<boolean> {

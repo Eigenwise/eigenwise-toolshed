@@ -28,6 +28,7 @@ local until --push.
 --prepare is the entry for a protected publish branch: it builds the window on a release branch cut
 from --base-branch, creates no tags, and never touches the publish branch. The promotion PR carries
 it to the publish branch, and scripts/release/finalize.mjs tags the merged commit.
+Done fragment tickets receive a best-effort Sidequest release record; board failures warn and continue.
 
 Without --prepare the cut publishes directly: it atomically pairs the verified release commit with
 the marketplace tag, then pushes the plugin tags separately. That path needs an unprotected publish
@@ -225,6 +226,24 @@ function assertReleaseIntact(git, plan, commit, { tags = true } = {}) {
       throw new Error(`tag ${tag} points at ${target ?? 'nothing'} instead of the verified release commit ${commit}; nothing was published`);
     }
   }
+}
+
+function writeFragmentReleaseRecord(repoRoot, fragment, plan, commit) {
+  const versions = new Map(plan.plugins.map((plugin) => [plugin.name, plugin.to]));
+  const plugins = fragment.plugins.flatMap((plugin) => ['--plugin', plugin.name + '@' + versions.get(plugin.name)]);
+  try {
+    return spawnSync(process.execPath, [
+      path.join(repoRoot, 'plugins/sidequest/bin/sidequest.js'), 'release-record', fragment.ref,
+      '--project', repoRoot, '--version', plan.tag, '--commit', commit, ...plugins,
+    ], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, timeout: 15000 }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function recordPreparedRelease(repoRoot, plan, commit, log) {
+  const missing = plan.selected.filter((fragment) => !writeFragmentReleaseRecord(repoRoot, fragment, plan, commit));
+  if (missing.length) log('Warning: release records unavailable for ' + missing.map((fragment) => fragment.ref).join(', ') + '; release preparation continues.');
 }
 
 /**
@@ -492,6 +511,7 @@ export async function cut(options = {}) {
         else if (ci?.status === 'overridden') log(`Test CI on ${remote}/${windowBranch} (${ci.commit}) was overridden: ${ci.reason}`);
         const promotion = promotionCommands({ remote, releaseBranch: preparedBranchName, publishBranch, tag: plan.tag, pushed });
         for (const command of promotion) log(`  ${command}`);
+        recordPreparedRelease(repoRoot, plan, commit, log);
         return {
           status: 'prepared', plan, commit, message, pushed, releaseBranch: preparedBranchName,
           baseBranch: windowBranch, branchPush, pushCommands: promotion, touched, consumed, ci,

@@ -269,7 +269,7 @@ function createClaims(dependencies: any) {
   function verificationCompletionCheck(slug: string, ticket: { claim?: { by?: string } }, comment: { body?: string; by?: string }) {
     const event = verificationComment(comment.body);
     if (event?.kind !== 'complete') return { ok: true };
-    if ([ticket?.claim?.by === comment.by, ['failed_suite', 'could_not_run'].includes(String(event.status))].every(Boolean)) return { ok: true };
+    if ([ticket?.claim?.by === comment.by, ['failed_suite', 'failed_check', 'toolchain_missing', 'could_not_run', 'timeout'].includes(String(event.status))].every(Boolean)) return { ok: true };
     const completion = completionTreeCheck(slug, ticket, { explicitNoOp: event.noOp });
     if (completion.negativeControl?.startsWith('not_required(')) {
       comment.body += '\nnegativeControl: ' + completion.negativeControl;

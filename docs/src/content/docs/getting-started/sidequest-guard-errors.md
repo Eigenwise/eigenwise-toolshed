@@ -7,7 +7,9 @@ Sidequest checks each Git command in a compound shell invocation. A leading `cd 
 
 The usual safety rules still apply. A reset that would discard dirty shared-checkout work is refused. Publication commands still require the current session's publish lock when they target the published branch. A refusal blocks the entire shell invocation, including earlier segments.
 
-If a push or tag targets a directory that does not exist yet, the guard names the missing directory and refuses before starting Git. Run the directory-creating command first, then run the push or tag as a separate command after the directory exists. This applies to chains starting with `git worktree add`, `git clone`, or `mkdir`, too.
+A chain such as `git worktree add ../feature feature && cd ../feature && git push -u origin feature` can create its directory before using it. The guard recognizes literal targets from `git worktree add`, `git clone <url> <directory>`, and `mkdir [-p] <directory>`. A future worktree uses its parent repository's publication rules and lock. Clone and mkdir targets have unknown repository facts, so feature pushes can proceed, while tags and published-branch pushes still need a lock. Destructive operations in any future directory are refused until the directory exists and can be checked.
+
+If a `cd`, push, or tag targets a missing directory without a recognized earlier creator, the refusal names the directory. Create it in an earlier call, then retry.
 
 When a directory expression cannot be resolved safely, such as `cd "$TARGET"`, the refusal names the command segment it could not parse. Use a literal directory path so the guard can check the repository that Git will use.
 

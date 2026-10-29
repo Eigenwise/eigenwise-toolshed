@@ -1,6 +1,7 @@
 "use strict";
 const { referenceHeader } = require("./external-refs");
 const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs } = require("./experiment-refs");
+const { DEMONSTRATIONS_FILE } = require("./store/completion.js");
 "use strict";
 const fs = require("fs");
 const os = require("os");
@@ -375,7 +376,7 @@ function ticketCloseout(ticket) {
     const requirement = ticket.dispatch.verificationRequirement || {};
     const verificationCloseout = requirement.command ? "Run the pinned verify-capture wrapper so it records the final working-tree candidate. done.verify cannot replace that capture." : `Pass explicit --verify evidence for the pinned ${requirement.kind || "custom"} requirement; blank or invalid evidence refuses and retains the claim.`;
     const doneVerify = requirement.command ? "" : ' --verify "<typed evidence>"';
-    return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Closeout attributes only your declared paths and your own release fragment. Outside-scope dirty paths are recorded on completion and returned as ignoredDirtyPaths, never a scope refusal. Eligible completed sibling candidate drift is recorded and returned as a warning naming the sibling, without refusing your closeout. Preserve other work and report drift to the existing parent for verification or grooming; never revert, absorb, or commit it. Your own committed paths, empty deliverable, or failed candidate verification still refuse. Do not commit or submit. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
+    return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Pre-existing dirty or staged paths were recorded at dispatch; leave them untouched and continue with the declared scope. Closeout attributes only your declared paths and your own release fragment. Outside-scope dirty paths are recorded on completion and returned as ignoredDirtyPaths, never a scope refusal. Eligible completed sibling candidate drift is recorded and returned as a warning naming the sibling, without refusing your closeout. Preserve other work and report drift to the existing parent for verification or grooming; never revert, absorb, or commit it. Your own committed paths, empty deliverable, or failed candidate verification still refuse. This ticket declares workingTreeDelivery:true: leave the declared paths uncommitted, because the board refuses commit and submit for it and it closes only with done. Closeout diffs the registered checkout; if the work had to go in another worktree of this project, pass that root as done worktree, or ask the orchestrator to clear workingTreeDelivery so you submit a commit from it. After the final declared-scope edit, ${verificationCloseout} Then close with done${doneVerify} --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
   }
   if (ticket?.dispatch?.readonly === true) {
     return readOnlyCloseout(ticket, resolved.runsModel, effort);
@@ -777,6 +778,21 @@ function deferredDependencySetup(ticket) {
   return commands.length ? `First step after claiming and confirming the worktree: run these deferred dependency installs in the worktree before any tests or source work:
 ${commands.map((command) => `\`${command}\``).join("\n")}` : "";
 }
+function deliversWorkingTree(ticket) {
+  return ticket.dispatch?.workingTreeDelivery === true;
+}
+function retainedCandidateRefGuidance(ticket) {
+  if (deliversWorkingTree(ticket)) return "";
+  return `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`;
+}
+const COMMITTED_CAPTURE_IDENTITY = "Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record.";
+const WORKING_TREE_CAPTURE_IDENTITY = "Run it over the final working tree with your declared paths left uncommitted: a successful wrapper run records that working-tree candidate against this ticket, and done refuses prose or a retyped command without that matching record.";
+function pinnedVerifierGuidance(ticket, project, requirement) {
+  if (requirement.environment === "shared") return "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log.";
+  if (!requirement.command) return "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.";
+  const captureIdentity = deliversWorkingTree(ticket) ? WORKING_TREE_CAPTURE_IDENTITY : COMMITTED_CAPTURE_IDENTITY;
+  return "Run it through " + capturedVerifyCommand(requirement.command, ticket.ref, project, verifyCaptureWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. " + captureIdentity + " A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.";
+}
 function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
@@ -790,7 +806,6 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
   ].join("\n");
   const { requirement, prefix } = executorVerificationRequirement(ticket.dispatch?.verificationRequirement, ticket.lifecycleAttempt?.verificationRequirement, ticket.executorVerifyKind, ticket.executorVerify, ticket.executorAttestationArtifact);
   const verify = executorVerifierDescription(requirement, prefix, ticket.executorAttestationArtifact);
-  const verifierCommand = requirement.command;
   const evidenceGuidance = ticketEvidenceGuidance(ticket);
   const highStakes = highStakesVerificationGuidance(ticket?.highStakes);
   const boundReview = boundReviewGuidance(ticket);
@@ -804,12 +819,12 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     readOnlyScratchSpace,
     worktreeSync,
     ticketIsolationContract(ticket, project)?.join("\n\n"),
-    `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`,
+    retainedCandidateRefGuidance(ticket),
     "Verification concurrency: bounded runs need no resource slot unless board configuration declares one; the board grants any declared slot, never a chat handoff.",
     "When isolated worktrees cannot import the coverage gate, the orchestrator captures coverage in the main checkout. Report that standing measurement boundary without retrying the import.",
     verify,
     executorVerificationDirectoryGuidance(verifyCwdForRequirement(requirement, ticket.executorVerifyCwd)),
-    requirement.environment === "shared" ? "Pinned verifier is environment-bound: do not run it here. After you submit, the orchestrator's lane runs it in the shared checkout against your merged commit. A failure comes back as Pending rework with the log." : verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, verifyCaptureWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
+    pinnedVerifierGuidance(ticket, project, requirement),
     evidenceGuidance,
     `Lifecycle reference: ${TEMPLATE_PATH} (Execution survival, board transport, and upstream-defect reporting). Follow the lifecycle rules already loaded in your executor definition.`,
     `Verification reference: ${path.join(__dirname, "..", "skills", "verify-discipline", "SKILL.md")}.`,
@@ -904,6 +919,22 @@ function ticketAnchorsPacket(ticket) {
   return ticket.executorAnchors ? [`Anchors:
 ${ticket.executorAnchors}`] : [];
 }
+function demonstrationInstructions(directory) {
+  return `Demonstrate each example on the real surface in the authorized local or test environment, against your final committed candidate. API or CLI evidence is enough for a backend change; use a browser only when appearance matters. Record one entry per example in ${directory}, a JSON array of { scenario, expected, observed, matches, environment, candidate, fixture, artifact, kind }: scenario copied exactly, matches true only when observed equals expected, candidate the commit you demonstrated (a later commit marks the entry stale), fixture where the data came from, artifact the log or screenshot path beside the file, kind "visual" for a screenshot and otherwise "real-flow". Screenshots prove appearance only, and a narrated tour is not execution proof. When observed differs from expected, record it with matches false, then repair and demonstrate again or release with the record intact. Never run destructive tests, send external messages, take financial actions or change access to complete a demonstration.`;
+}
+function demonstrationsPath(ticket) {
+  const evidenceDirectory = String(ticket.dispatch?.evidenceDirectory || "").trim();
+  return evidenceDirectory ? path.join(evidenceDirectory, DEMONSTRATIONS_FILE) : `${DEMONSTRATIONS_FILE} in this ticket's board evidence directory`;
+}
+function acceptanceExamplesPacket(ticket) {
+  const examples = Array.isArray(ticket.acceptance) ? ticket.acceptance : [];
+  if (!examples.length) return [];
+  const listed = examples.map((example, index) => `${index + 1}. [${example.kind}] ${example.scenario}
+   Expected: ${example.expected}`);
+  return [`Acceptance examples:
+${listed.join("\n")}
+${demonstrationInstructions(demonstrationsPath(ticket))}`];
+}
 function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation) {
   return [
     "## This ticket",
@@ -913,6 +944,7 @@ function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocu
     ...referenceHeader(ticket.externalRefs),
     `Description:
 ${ticket.description || "(No additional description was recorded.)"}`,
+    ...acceptanceExamplesPacket(ticket),
     "Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.",
     `Category contract:
 Category: ${category.id || ticket.categoryId || "(Unclassified)"}

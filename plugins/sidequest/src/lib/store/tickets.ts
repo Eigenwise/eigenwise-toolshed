@@ -1,13 +1,35 @@
 'use strict';
 
+const { completionView } = require('./completion.js');
 const { externalReference, originRepository } = require('../external-refs');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, submittedCandidateAttempt, submittedSourceIdentity } = require('../kernel/review-binding');
+const { acceptanceExamplesInput } = require('./completion.js');
+
+function acceptanceField(value: unknown) {
+  if (value === undefined || value === null) return {};
+  const acceptance = acceptanceExamplesInput(value);
+  return acceptance.length ? { acceptance } : {};
+}
+
+function applyAcceptancePatch(ticket: { acceptance?: unknown }, patch: { acceptance?: unknown }) {
+  if (patch.acceptance === undefined) return;
+  delete ticket.acceptance;
+  Object.assign(ticket, acceptanceField(patch.acceptance));
+}
+
+// The completion view reports undemonstrated examples, so a claim holder must not be able to
+// shrink the list it is measured against.
+function acceptanceCloseoutChange(ticket: { acceptance?: unknown }, patch: { acceptance?: unknown }): string[] {
+  if (patch.acceptance === undefined) return [];
+  const next = acceptanceField(patch.acceptance).acceptance;
+  return JSON.stringify(next) === JSON.stringify(ticket.acceptance) ? [] : ['acceptance'];
+}
 
 function createTickets(dependencies: any) {
   const {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
-    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, syncLiveDispatchVerification, effectiveScope, execFileSync, executorText, fs,
+    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, syncLiveDispatchVerification, syncLiveWorkingTreeDelivery, effectiveScope, execFileSync, executorText, fs,
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyCwd, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
@@ -193,6 +215,22 @@ function persistWithReviewBinding(slug: any, ticket: any, requested: any) {
   return bound;
 }
 
+// SQ-3948: a board that always hands one category back uncommitted declares it once in board_config
+// workingTreeDeliveryCategories; an explicit workingTreeDelivery on the ticket still wins.
+function requestedWorkingTreeDelivery(slug: string, fields: { workingTreeDelivery?: boolean; category?: unknown }): boolean {
+  if (fields.workingTreeDelivery !== undefined) return fields.workingTreeDelivery === true;
+  return boardWorkingTreeDeliveryCategories(slug).includes(categoryId(fields.category));
+}
+
+function boardWorkingTreeDeliveryCategories(slug: string): unknown[] {
+  const configured: unknown = readMeta(slug)?.workingTreeDeliveryCategories;
+  return Array.isArray(configured) ? configured : [];
+}
+
+function categoryId(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   fields = fields || {};
   if (Object.hasOwn(fields, 'reviewTarget')) {
@@ -252,8 +290,9 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     contracts: boundedContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
-    workingTreeDelivery: fields.workingTreeDelivery === true,
+    workingTreeDelivery: requestedWorkingTreeDelivery(slug, fields),
     externalDeliverable: fields.externalDeliverable === true,
+    ...acceptanceField(fields.acceptance),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
     executorVerifyKind,
     executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact'),
@@ -1354,14 +1393,20 @@ function patchChangesFiles(ticket?: any, patch?: any) {
   return filesPatch !== undefined && !sameFiles(ticket.files, filesPatch);
 }
 
+function applyWorkingTreeDeliveryDeclaration(slug: string, ticket: { ref: string; workingTreeDelivery?: boolean }, requested: boolean) {
+  if (requested === true) syncLiveWorkingTreeDelivery(slug, ticket);
+  ticket.workingTreeDelivery = requested === true;
+}
+
 function activeClaimCloseoutUpdateRefusal(ticket?: any, patch?: any, options: UpdateTicketOptions = {}, projectPath = '') {
   if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
   const changedFields = [
     ...(patchChangesFiles(ticket, patch) ? ['files'] : []),
     ...(patch.status !== undefined && String(patch.status).trim().toLowerCase() !== ticket.status ? ['status'] : []),
     ...((patch.readonly !== undefined || patch.readonlyOverride !== undefined) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ['readonly'] : []),
-    ...(patch.workingTreeDelivery !== undefined && (patch.workingTreeDelivery === true) !== (ticket.workingTreeDelivery === true) ? ['workingTreeDelivery'] : []),
+    ...(patch.workingTreeDelivery !== undefined ? ['workingTreeDelivery'] : []),
     ...(patch.externalDeliverable !== undefined && (patch.externalDeliverable === true) !== (ticket.externalDeliverable === true) ? ['externalDeliverable'] : []),
+    ...acceptanceCloseoutChange(ticket, patch),
     ...(patch.executorVerify !== undefined && patch.executorVerify !== ticket.executorVerify ? ['verify'] : []),
     ...(patch.executorVerifyKind !== undefined && patch.executorVerifyKind !== ticket.executorVerifyKind ? ['verifyKind'] : []),
     ...(patch.executorAttestationArtifact !== undefined && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ['attestationArtifact'] : []),
@@ -1437,6 +1482,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     // addFiles/removeFiles throws here rather than after a title has been assigned.
     const filesPatch = patchedFileScope(t, patch);
     patchExternalRefs(slug, t, patch);
+    applyAcceptancePatch(t, patch);
     // After the closeout refusal, so a claim holder still hears to use scopeRequest and
     // only a control-plane caller that may change a live claim's scope meets this guard.
     if (patch.files !== undefined) assertLiveClaimReplace(t, normalizeFiles(patch.files));
@@ -1478,7 +1524,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     if (patch.contracts !== undefined) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
-    if (patch.workingTreeDelivery !== undefined) t.workingTreeDelivery = patch.workingTreeDelivery === true;
+    if (patch.workingTreeDelivery !== undefined) applyWorkingTreeDeliveryDeclaration(slug, t, patch.workingTreeDelivery);
     if (patch.externalDeliverable !== undefined) t.externalDeliverable = patch.externalDeliverable === true;
     if (patch.category !== undefined || patch.readonly !== undefined || patch.readonlyOverride !== undefined) {
       t.files = boundedFiles(t.files, {
@@ -1696,11 +1742,44 @@ function archiveAllDone(slug?: any, opts?: any) {
 function listArchived(slug?: any) {
   return queryTickets(String(slug || ''), { archived: true });
 }
+interface ShippedReleaseInput { version: string; plugins: string[]; commit: string }
+
+function validateShippedRelease(input: ShippedReleaseInput): void {
+  if (!/^v\d+\.\d+\.\d+$/.test(input.version)) throw new Error('release-record: version must be vX.Y.Z');
+  if (!/^[a-f0-9]{40}$/i.test(input.commit)) throw new Error('release-record: commit must be a full release commit hash');
+  if (!Array.isArray(input.plugins)) throw new Error('release-record: plugins must be an array');
+  if (input.plugins.some((plugin: string) => !/^[a-z0-9-]+@\d+\.\d+\.\d+$/.test(plugin))) throw new Error('release-record: plugins must name plugin@X.Y.Z');
+}
+
+function recordShippedRelease(slug: string, idOrRef: string, input: ShippedReleaseInput) {
+  validateShippedRelease(input);
+  const found = getTicket(slug, idOrRef);
+  if (!found) throw new Error('release-record: ticket not found');
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (ticket?.status !== 'done') throw new Error('release-record: ticket must be done');
+    const shipped = ticket.shipped ?? [];
+    const existing = shipped.find((record: { version: string }) => record.version === input.version);
+    if (existing) return { ok: true, recorded: false, record: existing };
+    const record = {
+      version: input.version,
+      plugins: [...new Set(input.plugins)].sort(),
+      commit: input.commit.toLowerCase(),
+      deliveryCommit: completionView(ticket, {}).facts.delivery?.commit ?? null,
+      at: new Date().toISOString(),
+    };
+    ticket.shipped = [...shipped, record];
+    ticket.updatedAt = record.at;
+    putTicket(slug, ticket);
+    return { ok: true, recorded: true, record };
+  });
+}
+
 function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { recordShippedRelease, DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };

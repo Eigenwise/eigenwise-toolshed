@@ -67,7 +67,7 @@ execFileSync('git', ['commit', '--quiet', '-m', 'add tracked fixture'], { cwd: P
 
 const mcp = require('../lib/mcp.js') as { handleRequest(request: UnknownRecord): Promise<unknown> };
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
-const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
+const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ, CLAUDE_CODE_SESSION_ID: 'telemetry-control-session' });
 const { callTool } = makeMcpCaller(mcp);
 let ref: string;
 const OBSERVATION_WAIT_TIMEOUT_MS = 10_000;
@@ -78,7 +78,6 @@ test('seed telemetry fixture', () => {
   assert.strictEqual(runCli([
     'claim', ref, '--by', 'telemetry-worker', '--direct',
     '--reason', 'The telemetry fixture requires a local direct claim.',
-    '--session', 'telemetry-control-session',
   ]).status, 0);
   assert.strictEqual(runCli(['comment', ref, '--by', 'telemetry-worker', '-m', 'a recent telemetry note']).status, 0);
 });

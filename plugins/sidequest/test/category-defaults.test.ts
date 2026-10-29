@@ -19,6 +19,18 @@ test('seeded categories match the checked-in global category snapshot', () => {
   assert.equal(ROUTING_PROFILE_SEED_REVISION, 10);
 });
 
+test('verification categories name demonstrations.json as the deliverable and keep review for named uncertainty', () => {
+  const byId = new Map((DEFAULT_CATEGORIES as any[]).map((category) => [category.id, category]));
+  const shape = '{ scenario, expected, observed, matches, environment, candidate, fixture, artifact';
+  for (const id of ['behavior-verification', 'visual-evaluation']) {
+    assert.ok(byId.get(id).contract.includes('demonstrations.json in the ticket\'s board evidence directory'), id);
+    assert.ok(byId.get(id).contract.includes(shape), id);
+  }
+  assert.match(byId.get('behavior-verification').contract, /Request independent review only for a named uncertainty\./);
+  assert.match(byId.get('visual-evaluation').contract, /kind "visual" entry/);
+  assert.match(byId.get('visual-evaluation').contract, /never edit files/);
+});
+
 test('seeded Sol fallbacks name GPT-6.1 Sol and stored rows still on a retired Sol move to it', () => {
   const coding = starterRoutingProfilesFor([{ slug: 'codex-gpt-6-1-sol', provider: 'codex' }]).find((profile) => profile.id === 'coding')!;
   for (const [id, effort] of [['experiment', 'high'], ['coding.hard', 'medium'], ['spike-investigation', 'medium']] as const) {

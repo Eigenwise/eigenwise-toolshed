@@ -1,5 +1,12 @@
 "use strict";
 const LOCK_HELD_ELSEWHERE = /* @__PURE__ */ Symbol("lock held elsewhere");
+const LOCK_BEING_DELETED = /* @__PURE__ */ Symbol("lock being deleted");
+const LOCK_RETRY_MS = 10;
+const TRANSIENT_LOCK_FILE_ERRORS = ["EACCES", "EBUSY", "EPERM"];
+function lockFileConflict(error) {
+  if (error?.code === "EEXIST") return LOCK_HELD_ELSEWHERE;
+  return TRANSIENT_LOCK_FILE_ERRORS.includes(error?.code) ? LOCK_BEING_DELETED : false;
+}
 function readLockHolder(fs, lockPath) {
   try {
     const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8").trim());
@@ -61,22 +68,24 @@ function createLocks(dependencies) {
   function acquireLock(lockPath, options = {}) {
     refuseUnderGuardedWrite(`waiting on lock file ${path.basename(String(lockPath))}`);
     const STALE_LOCK_MS = 3e4;
-    const RETRY_MS = 10;
-    const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
+    const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / LOCK_RETRY_MS;
     const ownerToken = newLockOwnerToken();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const created = createLockFile(lockPath, ownerToken, options.holder);
-      if (created !== LOCK_HELD_ELSEWHERE) return created;
-      if (!removeReclaimableLock(lockPath)) busyWait(RETRY_MS);
+      if (typeof created !== "symbol") return created;
+      waitForLockTurn(lockPath, created);
     }
     return false;
+  }
+  function waitForLockTurn(lockPath, conflict) {
+    if (conflict === LOCK_BEING_DELETED || !removeReclaimableLock(lockPath)) busyWait(LOCK_RETRY_MS);
   }
   function createLockFile(lockPath, ownerToken, holder) {
     let fd;
     try {
       fd = fs.openSync(lockPath, "wx");
     } catch (error) {
-      return error?.code === "EEXIST" ? LOCK_HELD_ELSEWHERE : false;
+      return lockFileConflict(error);
     }
     if (!writeLockOwner(lockPath, fd, ownerToken, holder)) return false;
     return { token: ownerToken, refresh: () => refreshLock(lockPath, ownerToken) };
@@ -121,7 +130,7 @@ function createLocks(dependencies) {
         fs.unlinkSync(lockPath);
         return { ok: true };
       } catch (error) {
-        if (!error || !["EACCES", "EBUSY", "EPERM"].includes(error.code)) return { ok: false, reason: "lock_owner_lost" };
+        if (!error || !TRANSIENT_LOCK_FILE_ERRORS.includes(error.code)) return { ok: false, reason: "lock_owner_lost" };
         busyWait(RETRY_MS);
       }
     }

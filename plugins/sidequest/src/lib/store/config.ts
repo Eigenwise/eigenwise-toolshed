@@ -231,6 +231,13 @@ function normalizeAutoApproveScope(value?: any) {
   return normalized;
 }
 
+function normalizeWorkingTreeDeliveryCategories(value: unknown): string[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error('workingTreeDeliveryCategories must be an array of category ids.');
+  const categories = value.map((entry) => String(entry ?? '').trim().toLowerCase()).filter(Boolean);
+  return [...new Set(categories)];
+}
+
 function normalizeWorktreeSetup(value?: any) {
   if (value == null || String(value).trim() === '') return null;
   const setup = String(value);
@@ -426,6 +433,7 @@ function boardConfig(slug?: any) {
     worktreeRecoveryRetentionAgeHours: normalizeWorktreeRecoveryRetentionAgeHours(meta.worktreeRecoveryRetentionAgeHours),
     autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
     autoApproveScope: normalizeAutoApproveScope(meta.autoApproveScope),
+    workingTreeDeliveryCategories: normalizeWorkingTreeDeliveryCategories(meta.workingTreeDeliveryCategories),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     worktreeDependencyPaths: normalizeWorktreeDependencyPaths(meta.worktreeDependencyPaths),
     profile: {
@@ -478,6 +486,7 @@ const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any, repository?: string
   worktreeRecoveryRetentionAgeHours: normalizeWorktreeRecoveryRetentionAgeHours,
   autoApproveTestScope: normalizeAutoApproveTestScope,
   autoApproveScope: normalizeAutoApproveScope,
+  workingTreeDeliveryCategories: normalizeWorkingTreeDeliveryCategories,
   worktreeSetup: normalizeWorktreeSetup,
   worktreeDependencyPaths: normalizeWorktreeDependencyPaths,
 };
