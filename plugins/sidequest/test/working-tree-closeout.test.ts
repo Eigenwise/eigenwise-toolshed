@@ -17,9 +17,9 @@ function fixture() {
   git(['init', '-b', 'main', '--quiet']);
   git(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture']);
   const { slug } = store.ensureProject(project);
-  const create = (file: string, externalDeliverable = false) => {
+  const create = (file: string, { workingTreeDelivery = true, externalDeliverable = false } = {}) => {
     const ticket = store.createTicket(slug, {
-      title: `Deliver ${file}`, category: 'closeout-write', files: [file], workingTreeDelivery: !externalDeliverable, externalDeliverable,
+      title: `Deliver ${file}`, category: 'closeout-write', files: [file], workingTreeDelivery, externalDeliverable,
       executorVerifyKind: 'document', executorVerify: 'Read the document.', source: 'mcp',
     });
     const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: path.basename(project) });
@@ -35,6 +35,47 @@ function fixture() {
   const close = (reference: string, owner: string) => store.completeTicket(slug, reference, `${path.basename(project)}-${owner}`, { source: 'mcp', verify: 'Read the document.' });
   return { project, slug, git, create, write, close };
 }
+
+test('late working-tree declaration includes already dirty declared paths and preserves its baseline on retry', () => {
+  const { slug, create, write, close } = fixture();
+  const current = create('current.md', { workingTreeDelivery: false });
+  write('current.md', 'Already edited');
+  const refused = close(current, 'current.md');
+  assert.equal(refused.reason, 'submission_required');
+  assert.match(refused.message, /Commit and submit verified changes/);
+  const updated = store.updateTicket(slug, current, { workingTreeDelivery: true, by: 'orchestrator' }, undefined, { allowLiveClaimCloseoutUpdate: true });
+  assert.equal(updated.dispatch.workingTreeDelivery, true);
+  assert.equal(updated.dispatch.workingTreeDirtyBaselineLate, true);
+  assert.deepEqual(updated.dispatch.workingTreeDirtyBaseline.map((entry: { path: string }) => entry.path), ['current.md']);
+  const repeated = store.updateTicket(slug, current, { workingTreeDelivery: true, by: 'orchestrator' }, undefined, { allowLiveClaimCloseoutUpdate: true });
+  assert.equal(repeated.dispatch.workingTreeDeliveryAmendedAt, updated.dispatch.workingTreeDeliveryAmendedAt);
+  const result = close(current, 'current.md');
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.ticket.completion.purpose, 'working-tree');
+  assert.deepEqual(result.ticket.completion.workingTree.changedPaths, ['current.md']);
+});
+
+test('stale working-tree declaration guides both external-deliverable refusal paths', () => {
+  const { slug, create, write, close } = fixture();
+  const current = create('current.md', { workingTreeDelivery: false });
+  write('current.md', 'Already edited');
+  const ticket = { ...store.getTicket(slug, current), workingTreeDelivery: true };
+  const database = require('../lib/db.js');
+  database.putRow(database.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: 0, ord: ticket.order, claim_by: ticket.claim.by, data: ticket,
+  });
+  const doneRefusal = close(current, 'current.md');
+  assert.equal(doneRefusal.reason, 'submission_required');
+  assert.match(doneRefusal.message, /update workingTreeDelivery:true/);
+  for (const externalDeliverable of [false, true]) {
+    const refusal = store.externalDeliverableCloseout(slug, { ...ticket, externalDeliverable }, 'Read the document.');
+    assert.equal(refusal.reason, externalDeliverable ? 'external_deliverable_scope_dirty' : 'external_deliverable_not_declared');
+    assert.match(refusal.message, /declares workingTreeDelivery:true, but this dispatch was prepared without it/);
+    assert.match(refusal.message, /update workingTreeDelivery:true/);
+    assert.match(refusal.message, /release and redispatch/);
+  }
+});
 
 test('sibling and parent dirt are ignored, returned, and persisted without touching their bytes', () => {
   const { project, slug, create, write, close } = fixture();
@@ -197,7 +238,7 @@ test('manual squash delivery with partial quality gaps files debt without the ca
 for (const status of ['failed_suite', 'failed_check', 'toolchain_missing', 'could_not_run', 'timeout']) {
   test('clean external deliverable accepts factual ' + status + ' evidence without granting completion', () => {
     const { project, slug, create } = fixture();
-    const reference = create('external.md', true);
+    const reference = create('external.md', { workingTreeDelivery: false, externalDeliverable: true });
     const owner = path.basename(project) + '-external.md';
     const body = '[sidequest:verify-complete] ' + status + ': focused check did not succeed before editing.';
     const recorded = store.addComment(slug, reference, { by: owner, body, source: 'mcp' });
@@ -213,7 +254,7 @@ for (const status of ['failed_suite', 'failed_check', 'toolchain_missing', 'coul
 for (const status of ['passed', 'manual', 'attestation', 'skipped']) {
   test('clean external deliverable still refuses ' + status + ' completion', () => {
     const { project, slug, create } = fixture();
-    const reference = create('external.md', true);
+    const reference = create('external.md', { workingTreeDelivery: false, externalDeliverable: true });
     const refused = store.addComment(slug, reference, {
       by: path.basename(project) + '-external.md',
       body: '[sidequest:verify-complete] ' + status + ': no scoped changes.', source: 'mcp',

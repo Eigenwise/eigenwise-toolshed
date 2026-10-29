@@ -599,6 +599,7 @@ const {
   worktreeIsolationWarning,
   prepareDispatch,
   syncLiveDispatchVerification,
+  syncLiveWorkingTreeDelivery,
   retirePreparedCompatibilityStaleAttempt,
   preparedCompatibilityHasProvenMismatch,
   preparedCompatibilityWarning,
@@ -1713,6 +1714,7 @@ const {
   dispatchState,
   dispatchVerifyCommandError,
   syncLiveDispatchVerification,
+  syncLiveWorkingTreeDelivery,
   effectiveScope,
   execFileSync,
   executorText,
@@ -3374,7 +3376,7 @@ function submissionRequired(t: ReleaseTicket) {
   return {
     ok: false,
     reason: 'submission_required',
-    message: `${t.ref} has repository changes. Commit and submit verified changes. A dispatched executor with no commit, no dirty declared path, and no pending submission may close with done carrying its report. Working-tree deliverables retain their declared paths and verification requirements.`,
+    message: `${t.ref} has repository changes. Commit and submit verified changes. A dispatched executor with no commit, no dirty declared path, and no pending submission may close with done carrying its report. Working-tree deliverables retain their declared paths and verification requirements.${missingWorkingTreeDeliveryGuidance(t)}`,
     ticket: t,
   };
 }
@@ -3905,10 +3907,14 @@ function siblingWorkingTreeDeliveryWarnings(slug: string, ticket: ReleaseTicket)
   return warnings;
 }
 
+function hasPreparedWorkingTreeBaseline(dispatch: { workingTreeDirtyBaseline?: unknown; workingTreeDirtyBaselineLate?: boolean } | null): boolean {
+  return Array.isArray(dispatch?.workingTreeDirtyBaseline) && !dispatch?.workingTreeDirtyBaselineLate;
+}
+
 function workingTreeDeliveryCandidate(slug: string, ticket: ReleaseTicket): WorkingTreeDeliveryCandidate | null {
   const dispatch = dispatchState(ticket);
   const declaredFiles = commitScope.ticketCommitScope(dispatch?.declaredFiles, dispatch?.declaredFiles, ticket?.ref);
-  const baselineRecorded = Array.isArray(dispatch?.workingTreeDirtyBaseline);
+  const baselineRecorded = hasPreparedWorkingTreeBaseline(dispatch);
   if (dispatch?.workingTreeDelivery !== true || !declaredFiles.length) return null;
   const baselineEntries: readonly { path: string; identity: string }[] = baselineRecorded ? dispatch.workingTreeDirtyBaseline : [];
   const baseline = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
@@ -3939,7 +3945,7 @@ function workingTreeDeliveryCloseout(slug: string, ticket: ReleaseTicket, comple
   const candidate = workingTreeDeliveryCandidate(slug, ticket);
   if (!candidate) return { ok: false, reason: 'working_tree_delivery_unavailable', message: `${ticket.ref} cannot inspect its pinned working-tree deliverable. Release it and dispatch again.` };
   const declaredFiles = commitScope.ticketCommitScope(dispatch.declaredFiles, dispatch.declaredFiles, ticket.ref);
-  const current = artifactWorkingState(slug, { allowLarge: !Array.isArray(dispatch.workingTreeDirtyBaseline) });
+  const current = artifactWorkingState(slug, { allowLarge: !hasPreparedWorkingTreeBaseline(dispatch) });
   const ignoredDirtyPaths = current.filter((entry: { path: string }) => !commitScope.isInScope(entry.path, declaredFiles)).map((entry: { path: string }) => entry.path).sort();
   const committed = completionDelta?.ok
     ? completionDelta.committed.filter((file: string) => commitScope.isInScope(file, declaredFiles))
@@ -3949,12 +3955,17 @@ function workingTreeDeliveryCloseout(slug: string, ticket: ReleaseTicket, comple
   return { ok: true, ...candidate, ignoredDirtyPaths, warnings };
 }
 
+function missingWorkingTreeDeliveryGuidance(ticket: { ref: string; workingTreeDelivery?: boolean; dispatch?: { workingTreeDelivery?: boolean } }): string {
+  if (ticket.workingTreeDelivery !== true || ticket.dispatch?.workingTreeDelivery === true) return '';
+  return ` ${ticket.ref} declares workingTreeDelivery:true, but this dispatch was prepared without it. The orchestrator can run update workingTreeDelivery:true to apply it to a live shared-checkout dispatch, or release and redispatch.`;
+}
+
 function externalDeliverableCloseout(slug?: any, ticket?: any, verify?: any) {
   if (ticket?.externalDeliverable !== true) {
     return {
       ok: false,
       reason: 'external_deliverable_not_declared',
-      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can repeat done: a pinned command requires a current verify-capture; a commandless requirement needs explicit done --verify evidence.`,
+      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can repeat done: a pinned command requires a current verify-capture; a commandless requirement needs explicit done --verify evidence.${missingWorkingTreeDeliveryGuidance(ticket)}`,
     };
   }
   const workspace = dispatchWorkspace(slug, ticket);
@@ -3967,7 +3978,7 @@ function externalDeliverableCloseout(slug?: any, ticket?: any, verify?: any) {
       pending.working.length ? `uncommitted ${pending.working.join(', ')}` : null,
       pending.committed.length ? `committed but not submitted ${pending.committed.join(', ')}` : null,
     ].filter(Boolean).join('; ');
-    return { ok: false, reason: 'external_deliverable_scope_dirty', message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion. ${landedWithoutSubmissionGuidance(ticket.ref)}` };
+    return { ok: false, reason: 'external_deliverable_scope_dirty', message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion. ${landedWithoutSubmissionGuidance(ticket.ref)}${missingWorkingTreeDeliveryGuidance(ticket)}` };
   }
   let revision: string;
   try {
