@@ -56,6 +56,29 @@ test('module suites preserve normal commands and select the module runner', (con
   assert.equal(resolveSuite(fixture.root, fixture.plugin).moduleTest, undefined);
 });
 
+test('plugins without matching test files or npm test scripts have no suite', (context) => {
+  const fixture = makePlugin();
+  context.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+  const pluginDirectory = path.join(fixture.root, fixture.plugin.dir);
+  rmSync(path.join(pluginDirectory, 'test', 'example.test.js'));
+  writeFileSync(path.join(pluginDirectory, 'test', 'readme.txt'), 'not a test');
+  writeFileSync(path.join(pluginDirectory, 'package.json'), JSON.stringify({ scripts: { build: 'node build.js' } }));
+  assert.equal(resolveSuite(fixture.root, fixture.plugin), null);
+  rmSync(path.join(pluginDirectory, 'test'), { recursive: true });
+  assert.equal(resolveSuite(fixture.root, fixture.plugin), null);
+});
+
+test('test:full takes precedence over test and direct test files', (context) => {
+  const fixture = makePlugin();
+  context.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+  writeFileSync(path.join(fixture.root, fixture.plugin.dir, 'package.json'), JSON.stringify({
+    scripts: { 'test:full': 'node full.js', test: 'node test.js' },
+  }));
+  assert.deepEqual(resolveSuite(fixture.root, fixture.plugin), {
+    plugin: 'example', cwd: 'plugins/example', setup: 'npm ci', command: 'npm run test:full',
+  });
+});
+
 test('only Sidequest suites declare three Windows shards independently of module tests', (context) => {
   const fixture = makePlugin();
   context.after(() => rmSync(fixture.root, { recursive: true, force: true }));
