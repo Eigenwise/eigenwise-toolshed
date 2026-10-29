@@ -12,13 +12,24 @@ const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const { controlRequestHeaders } = require('./control-auth.js');
 const PROCESS_STOP_TIMEOUT_MS = 3000;
 
+// A credential is for the origin it was sent to: a redirect to another host (a release
+// asset's CDN, for instance) or a downgrade from https to http must not carry the
+// Authorization header along.
+function redirectRequest(from, location, headers) {
+  const target = new URL(location, from);
+  if (target.origin === new URL(from).origin) return { url: target.href, headers };
+  const kept = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'authorization'));
+  return { url: target.href, headers: kept };
+}
+
 function fetchUrl(url, { timeout = 15000, headers = {}, agent } = {}) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https:') ? https : http;
     const req = mod.get(url, { agent, headers: { 'user-agent': 'model-gateway', ...headers } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return resolve(fetchUrl(res.headers.location, { timeout, headers, agent }));
+        const next = redirectRequest(url, res.headers.location, headers);
+        return resolve(fetchUrl(next.url, { timeout, headers: next.headers, agent }));
       }
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -1182,6 +1193,6 @@ function createProxyRecovery({
 module.exports = {
   commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, gatewayInstallRootFromCommand, installBelongsToThisPlugin, isConfirmedOrphan, isDescendantOfAsync, killPid, killPidAsync, listeningPidsFromNetstat, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   probeTimeoutMs, probeWorkerIdentity, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
-  proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, signalOrphanWorker, spawnDetached,
+  proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, redirectRequest, removePid, restartWorkerWithDrain, shimHealthy, signalOrphanWorker, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopProcessAsync, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };
