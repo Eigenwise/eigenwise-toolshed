@@ -143,8 +143,9 @@ const twoTestBaseline = [
   '',
 ];
 
-function claimAgainstTwoTestBaseline(by: string) {
-  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), twoTestBaseline.join('\n'));
+function claimAgainstTwoTestBaseline(by: string, trailingNewline = true) {
+  const source = twoTestBaseline.join('\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), trailingNewline ? source : source.trimEnd());
   git(['add', 'test/fixture.test.js']);
   git(['commit', '--allow-empty', '-m', `two-test baseline for ${by}`]);
   const ticket = createClaimedMixedChangeTicket(by);
@@ -196,4 +197,36 @@ test('GH-547: a comment added inside an existing test body still charges that te
   assert.equal(refusal.reason, 'negative_control_test_required');
   assert.match(refusal.message, new RegExp(secondExistingTest));
   assert.doesNotMatch(refusal.message, new RegExp(firstExistingTest));
+});
+
+function appendedTestRefusal(by: string, changeExisting: boolean) {
+  const ticket = claimAgainstTwoTestBaseline(by, false);
+  const baseline = twoTestBaseline.join('\n');
+  const candidate = changeExisting ? baseline.replace('assert.ok(true)', 'assert.ok(false)') : baseline;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), candidate + [
+    '',
+    `${definition}('appended test B', () => { assert.ok(true); });`,
+    `${definition}('appended test C', () => { assert.ok(true); });`,
+    '',
+  ].join('\n'));
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  return verifyComplete(ticket.ref, by);
+}
+
+test('SQ-3999: appending B and C leaves byte-identical A outside the changed tests', () => {
+  const refusal = appendedTestRefusal('sq3999-append', false);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, /appended test B/);
+  assert.match(refusal.message, /appended test C/);
+  assert.doesNotMatch(refusal.message, new RegExp(firstExistingTest));
+  assert.doesNotMatch(refusal.message, new RegExp(secondExistingTest));
+});
+
+test('SQ-3999: changing A while appending B and C requires all three controls', () => {
+  const refusal = appendedTestRefusal('sq3999-change-and-append', true);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(firstExistingTest));
+  assert.match(refusal.message, /appended test B/);
+  assert.match(refusal.message, /appended test C/);
+  assert.doesNotMatch(refusal.message, new RegExp(secondExistingTest));
 });
