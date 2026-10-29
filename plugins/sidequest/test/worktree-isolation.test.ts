@@ -3415,6 +3415,51 @@ test('GH-406: concurrent WorktreeCreate hooks of one message each bind a free re
   }
 });
 
+// Windows CI reported `worktree lease refused creation: busy` 10.5s into this race. A released lock file stays
+// delete-pending while a reader holds it, and the exclusive create there fails EPERM, not EEXIST (SQ-3986).
+test('SQ-3986: a ticket lock file still being deleted is waited on, not reported busy', () => {
+  const { createLocks } = require('../lib/store/locks.js');
+  const lockDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq3986-locks-'));
+  let deletePendingOpens = 3;
+  const deletePendingFs = { ...fs, openSync: (target: string, flags: string) => {
+    if (flags === 'wx' && deletePendingOpens > 0) {
+      deletePendingOpens -= 1;
+      throw Object.assign(new Error(`EPERM: operation not permitted, open '${target}'`), { code: 'EPERM' });
+    }
+    return fs.openSync(target, flags);
+  } };
+  try {
+    const locks = createLocks({ fs: deletePendingFs, path, ticketsDir: () => lockDirectory, transaction: (callback: () => unknown) => callback() });
+    const result = locks.withTicketFileLocks([{ slug: 'sq3986', id: 'SQ-1' }], () => ({ ok: true }));
+    assert.deepEqual(result, { ok: true }, 'the lock is taken once the deleting file is gone');
+    assert.equal(deletePendingOpens, 0, 'every delete-pending open was retried');
+  } finally {
+    fs.rmSync(lockDirectory, { recursive: true, force: true });
+  }
+});
+
+test('SQ-3986: concurrent WorktreeCreate hooks wait out a held ticket lock and still each bind a free reservation', async () => {
+  const { createLocks } = require('../lib/store/locks.js');
+  const boardLocks = createLocks({ fs, path, ticketsDir: (project: string) => path.join(store.projectDir(project), 'tickets'), transaction: (callback: () => unknown) => callback() });
+  const wave = sq3139CrossedWave('sq3986held', ['one', 'two', 'three']);
+  const heldPath = boardLocks.ticketLockPath(slug, store.getTicket(slug, wave.first.ref).id);
+  const held = boardLocks.acquireLock(heldPath);
+  assert.ok(held, 'the test holds the first reservation\'s ticket lock');
+  let timedRelease: { ok: boolean } | null = null;
+  const release = setTimeout(() => { timedRelease = boardLocks.releaseLock(heldPath, held); }, 1500);
+  try {
+    const results = await createWorktreesConcurrently(wave.sessionId, wave.runtimes.map(runtime => runtime.name));
+    assert.deepEqual(timedRelease, { ok: true }, 'no hook took or reclaimed the held lock before the test let it go');
+    assert.deepEqual(results.filter(result => !result.ok), [], 'no sibling gives up on a lock another process holds');
+    const bound = wave.runtimes.map(runtime => wave.recorded(runtime).worktree).sort();
+    assert.deepEqual(bound, wave.runtimes.map(runtime => worktrees.canonicalPath(runtime.path)).sort(), 'every checkout holds exactly one reservation');
+  } finally {
+    clearTimeout(release);
+    boardLocks.releaseLock(heldPath, held);
+    wave.cleanup();
+  }
+});
+
 test('GH-406: a concurrent sibling creation that fails leaves the live siblings their own checkouts', async () => {
   const wave = sq3139CrossedWave('gh406fail', ['one', 'two', 'three']);
   const failed = wave.first;
