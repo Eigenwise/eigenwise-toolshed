@@ -7,7 +7,7 @@
 
 The first run installs the parser; nothing to do by hand. Node 22.5+ and npm are required. Quality Gate keeps TypeScript 7 in the plugin, with a shared installation lock and a 180-second deadline. `quality-gate provision` installs only the parser, or exits 0 when it is present. Offline or missing npm exits 2 with `npm install --prefix <plugin root>` as the remedy.
 
-Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. No config is required. Without LCOV at `coverage/lcov.info`, `crap` checks complexity only and prints a coverage setup notice. Explicit LCOV and coverage commands still require authentic measured coverage.
+Quality Gate owns AST complexity, stable function identities and per-function CRAP scoring. No config is required. Without LCOV at `coverage/lcov.info`, `crap` checks complexity only and prints a coverage setup notice. Explicit LCOV and coverage commands still require authentic measured coverage. Sidequest's `coverage:lcov` runner logs spec test output alongside LCOV and accepts `COVERAGE_LCOV_TIMEOUT_MS` (default `300000`) and `COVERAGE_LCOV_CONCURRENCY` (default `2`).
 
 `--source <path>` narrows configured or default sources for one run without changing config. Repeat it for multiple files or directories, relative to the measured project root, for example `crap --project <root> --source src/changed.py --source src/other.py --cc-only`. Config exclusions still apply; selectors cannot widen configured sources.
 

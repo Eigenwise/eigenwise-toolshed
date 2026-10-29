@@ -13,7 +13,7 @@ function boardMcpSessionId() {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 31200;
+const MCP_TOOLS_LIST_MAX_BYTES = 31600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -308,7 +308,8 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   integrate: {
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
     deliveryRevision: DELIVERY_REVISION_CONTRACT,
-    resolvedPaths: RESOLVED_PATHS_CONTRACT
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+    deliveryBranch: "Non-target branch whose tip holds deliveryCommit, e.g. an open PR."
   },
   groomClose: {
     deliveryCommit: "Prepared integration target.",

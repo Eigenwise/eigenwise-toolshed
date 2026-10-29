@@ -2187,3 +2187,101 @@ test('GH-643: with no verifier at all, integrate refuses unverified and delivers
   assert.match(stored.completion.reason, /Verification waived by release-manager: board has no verifier yet/);
   assert.notEqual(head(fixture.repo, 'refs/heads/main'), before);
 });
+
+// SQ-3946: a project that ships stacked PRs lands the candidate on a ticket branch and merges it into the
+// integration branch days later, so the commit is never at the integration tip while the ticket waits.
+function offTargetDeliveryFixture(label: string) {
+  const fixture = makeRepo(label);
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'delivery waiting on an open pull request',
+    category: 'codebase-exploration',
+    description: 'A candidate that landed on a ticket branch whose pull request has not merged yet.',
+    files: ['feature.txt'],
+  });
+  // Only the pull request branch carries pr-review.txt, so a passing gate proves it ran in that checkout.
+  submitFixture(slug, ticket, fixture, nodeVerify("process.exit(require('fs').existsSync('pr-review.txt') ? 0 : 1)"));
+  const pullRequestBranch = 'ticket/pr-11049';
+  const pullRequestCheckout = path.join(fixture.repo, '.claude', 'worktrees', 'pr-11049');
+  git(['worktree', 'add', '-b', pullRequestBranch, pullRequestCheckout, fixture.submitted], fixture.repo);
+  const pullRequestTip = commitFile(pullRequestCheckout, 'pr-review.txt', 'review follow-up\n');
+  return { fixture, slug, ticket, pullRequestBranch, pullRequestCheckout, pullRequestTip };
+}
+
+test('SQ-3946: integrate records a delivery on a pull request branch, closes it, and pulse reads git:<branch>', async () => {
+  const { fixture, slug, ticket, pullRequestBranch, pullRequestCheckout, pullRequestTip } = offTargetDeliveryFixture('sq3946-pr');
+  const mainBefore = head(fixture.repo, 'refs/heads/main');
+  const pullRequestUrl = 'https://github.com/example/stacked/pull/11049';
+
+  const defaultForm = toolPayload(await mcp.handleRequest(toolCall(1, 'integrate', {
+    project: fixture.repo,
+    ref: ticket.ref,
+    by: 'orchestrator',
+    reason: 'landed on the pull request branch',
+    deliveryCommit: fixture.submitted,
+    deliveryMethod: 'manual',
+    worktree: pullRequestCheckout,
+  })));
+  assert.equal(defaultForm.ok, false);
+  assert.equal(defaultForm.reason, 'branch_not_checked_out', 'the default form still demands the integration tip');
+  assert.match(defaultForm.message, /deliveryBranch:"<branch>" and pullRequests/, 'the refusal names the branch form');
+
+  const delivered = toolPayload(await mcp.handleRequest(toolCall(2, 'integrate', {
+    project: fixture.repo,
+    ref: ticket.ref,
+    by: 'orchestrator',
+    reason: 'landed on the pull request branch',
+    deliveryCommit: fixture.submitted,
+    deliveryMethod: 'manual',
+    deliveryBranch: pullRequestBranch,
+    pullRequests: [pullRequestUrl],
+  })));
+  assert.equal(delivered.ok, true, JSON.stringify(delivered));
+
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'done');
+  const integration = stored.submission.integration;
+  assert.equal(integration.verify.status, 'passed', 'the pinned verifier ran in the pull request checkout');
+  assert.equal(integration.targetBranch, 'main');
+  assert.equal(integration.deliveryBranch, pullRequestBranch);
+  assert.deepEqual(integration.deliveryRefs, [{ kind: 'pr', url: pullRequestUrl }]);
+  assert.equal(integration.deliveryIdentity.deliveryBranch, pullRequestBranch);
+  assert.equal(integration.resultingHead, pullRequestTip);
+  assert.equal(head(fixture.repo, 'refs/heads/main'), mainBefore, 'the integration branch never moves');
+
+  const pulse = toolPayload(await mcp.handleRequest(toolCall(3, 'pulse', { project: fixture.repo, ref: ticket.ref, full: true })));
+  assert.equal(pulse.submission.integration.deliveryRevision.source, `git:${pullRequestBranch}`);
+  assert.equal(pulse.submission.integration.deliveryRevision.value, pullRequestTip);
+});
+
+test('SQ-3946: an off-target delivery refuses a bad branch, stray pull requests, a stale checkout and an unreachable commit', () => {
+  const { fixture, slug, ticket, pullRequestBranch, pullRequestCheckout } = offTargetDeliveryFixture('sq3946-refusals');
+  git(['branch', 'ticket/without-candidate', 'main'], fixture.repo);
+  const unrelatedCheckout = path.join(fixture.repo, '.claude', 'worktrees', 'unrelated');
+  git(['worktree', 'add', '-b', 'ticket/unrelated', unrelatedCheckout, 'main'], fixture.repo);
+  const target = store.integrationTarget(slug);
+  const record = (extra: Record<string, unknown>) => store.recordDeliveredSubmission(slug, ticket.ref, {
+    target,
+    deliveryCommit: fixture.submitted,
+    reason: 'off-target refusal fixture',
+    ...extra,
+  });
+  const cases: Array<[Record<string, unknown>, string, RegExp]> = [
+    [{ deliveryBranch: 'main' }, 'delivery_branch_is_target', /omit deliveryBranch/],
+    [{ deliveryBranch: 'bad..name' }, 'invalid_delivery_branch', /not a valid Git branch name/],
+    [{ pullRequests: ['https://github.com/example/stacked/pull/1'] }, 'delivery_branch_required', /needs deliveryBranch/],
+    [{ deliveryBranch: pullRequestBranch, pullRequests: ['#11049'] }, 'invalid_pull_request', /http\(s\) URL/],
+    [{ deliveryBranch: pullRequestBranch, worktree: unrelatedCheckout }, 'branch_not_checked_out', /on ticket\/unrelated, not at the ticket\/pr-11049 tip/],
+    [{ deliveryBranch: 'ticket/without-candidate' }, 'delivery_not_reachable', /not reachable from ticket\/without-candidate/],
+  ];
+  for (const [extra, reason, message] of cases) {
+    const refused = record(extra);
+    assert.equal(refused.ok, false, JSON.stringify(extra));
+    assert.equal(refused.reason, reason, JSON.stringify(extra));
+    assert.match(refused.message, message);
+  }
+  const parked = store.getTicket(slug, ticket.ref);
+  assert.equal(parked.submission.commit, fixture.submitted, 'every refusal leaves the candidate pending');
+  assert.equal(parked.submission.integration, undefined);
+  assert.ok(fs.existsSync(pullRequestCheckout));
+});

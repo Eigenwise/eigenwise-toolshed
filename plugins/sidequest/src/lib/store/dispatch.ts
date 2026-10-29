@@ -144,6 +144,21 @@ function createDispatch(dependencies: any) {
     return recordVerificationAmendment(ticket, amendment, previousRequirement, nextRequirement);
   }
 
+  function syncLiveWorkingTreeDelivery(slug: string, ticket: { ref: string }) {
+    const state = dispatchState(ticket);
+    if (!state || state.terminalAt) return;
+    if (state.sharedTree !== true) {
+      throw new Error(`working_tree_delivery_requires_shared_tree: ${ticket.ref} runs in an isolated worktree and must submit a commit. workingTreeDelivery only applies to shared-checkout dispatches.`);
+    }
+    if (state.workingTreeDelivery === true) return;
+    deliveryVerification(slug, { ...ticket, workingTreeDelivery: true }, true, state.declaredFiles);
+    const capture = captureDirtyBaseline(slug);
+    state.workingTreeDelivery = true;
+    state.workingTreeDirtyBaseline = capture.baseline;
+    state.workingTreeDirtyBaselineLate = true;
+    state.workingTreeDeliveryAmendedAt = new Date().toISOString();
+  }
+
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
 const DISPATCH_TOKEN_GROUP_SIZE = 4;
@@ -508,11 +523,17 @@ function artifactIndexStates(root: string, files: string[]) {
   return indexStates;
 }
 
+// The registered checkout, unless a completion names the worktree its work was done in (SQ-3947).
+function workingStateRoot(slug?: any, options?: any): string {
+  const root = options?.root || readMeta(slug)?.path;
+  if (!root) throw new Error('the board project path is unavailable');
+  return root;
+}
+
 function artifactWorkingState(slug?: any, options?: any) {
-  const meta = readMeta(slug);
-  if (!meta || !meta.path) throw new Error('the board project path is unavailable');
+  const root = workingStateRoot(slug, options);
   const output = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
-    cwd: meta.path,
+    cwd: root,
     encoding: 'utf8',
     windowsHide: true,
   });
@@ -532,14 +553,14 @@ function artifactWorkingState(slug?: any, options?: any) {
   if (options?.allowLarge !== true && states.length > ARTIFACT_BASELINE_MAX_PATHS) {
     throw new DirtyBaselinePathCapError(states.length);
   }
-  const indexStates = artifactIndexStates(meta.path, states.map((entry) => entry.file));
+  const indexStates = artifactIndexStates(root, states.map((entry) => entry.file));
   return states
     .map((entry) => {
       const identity = crypto.createHash('sha256')
         .update(JSON.stringify({
           status: entry.status,
           index: indexStates.get(dirtyPathKey(entry.file)) || '',
-          worktree: artifactPathIdentity(meta.path, entry.file),
+          worktree: artifactPathIdentity(root, entry.file),
         }))
         .digest('hex');
       return { path: entry.file, identity };
@@ -2441,7 +2462,7 @@ function assertCompositionCheckout(t: StoredRecord, isolation: DispatchIsolation
 function sharedTreeScopeRefusal(t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: readonly string[]): string | null {
   if (isolation.wholeTreeScope && isolation.sharedTree) return unscopedSharedTreeRefusal(t.ref, effectiveFiles);
   if (t.workingTreeDelivery === true && !isolation.sharedTree) {
-    return `prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`;
+    return `prepare dispatch: ${t.ref} declares workingTreeDelivery:true, so it must run in the shared checkout and close with done. Re-dispatch with sharedTree:true, or update workingTreeDelivery:false so it runs isolated and submits a commit.`;
   }
   return null;
 }
@@ -4198,18 +4219,27 @@ function dispatchWorkspace(slug?: any, ticket?: any) {
   return base ? { root, base } : null;
 }
 
-function dispatchDelta(slug?: any, ticket?: any) {
-  const state = dispatchState(ticket);
-  const projectPath = readMeta(slug)?.path || null;
+function recordedDeltaWorkspace(slug?: any, ticket?: any, state?: any) {
+  const projectPath = readMeta(slug)?.path;
   const sharedTreeWithoutCommit = state && state.sharedTree !== false && projectPath
     ? { root: projectPath, base: null }
     : null;
-  const workspace = dispatchWorkspace(slug, ticket) || sharedTreeWithoutCommit;
+  return dispatchWorkspace(slug, ticket) || sharedTreeWithoutCommit;
+}
+
+// A shared-tree baseline describes the registered checkout, so any other tree reports every dirty path as its own.
+function deltaWorkingState(slug?: any, state?: any, workspace?: any, namedByCompletion?: boolean) {
+  return state?.sharedTree !== false && !namedByCompletion
+    ? postDispatchWorkingState(slug, state)
+    : { working: commitScope.workingPaths(workspace.root), preExisting: [], baselineRecorded: false };
+}
+
+function dispatchDelta(slug?: any, ticket?: any, completionWorkspace?: { root: string; base: string } | null) {
+  const state = dispatchState(ticket);
+  const workspace = completionWorkspace || recordedDeltaWorkspace(slug, ticket, state);
   if (!workspace) return { ok: false, reason: 'workspace_unavailable' };
   try {
-    const workingState = state?.sharedTree !== false
-      ? postDispatchWorkingState(slug, state)
-      : { working: commitScope.workingPaths(workspace.root), preExisting: [], baselineRecorded: false };
+    const workingState = deltaWorkingState(slug, state, workspace, Boolean(completionWorkspace));
     let head: string | null = null;
     try {
       head = execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
@@ -4245,6 +4275,64 @@ function dispatchDelta(slug?: any, ticket?: any) {
   } catch (error: any) {
     return { ok: false, reason: 'git_error', message: error?.message || String(error) };
   }
+}
+
+// done may name the checkout its work was done in, because the board otherwise diffs only the dispatch's recorded
+// workspace, which for a shared-tree dispatch is the registered checkout (SQ-3947). The named tree must belong to
+// this project's repository and hold the dispatch base, or a diff from that base would describe another history.
+function completionWorkspace(slug?: any, ticket?: any, requested?: any) {
+  const projectPath = readMeta(slug)?.path;
+  const root = checkoutOfRepository(requested, projectPath);
+  if (!root) return completionWorktreeRefusal(ticket, `${requested} is not a worktree of the registered project at ${projectPath}`);
+  const base = String(dispatchState(ticket)?.baseCommit || '').trim();
+  if (!commitInHistory(root, base)) return completionWorktreeRefusal(ticket, `the dispatch base ${base || '(none recorded)'} is not in the history of ${root}`);
+  return { ok: true, workspace: { root, base } };
+}
+
+function checkoutOfRepository(candidate?: any, projectPath?: any) {
+  try {
+    const root = canonicalPath(gitOutput(path.resolve(String(projectPath), String(candidate)), ['rev-parse', '--show-toplevel']));
+    return repositoryIdentity(root) === repositoryIdentity(projectPath) ? root : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function commitInHistory(root: string, commit: string) {
+  if (!commit) return false;
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', commit, 'HEAD'], { cwd: root, windowsHide: true, stdio: 'ignore' });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function completionWorktreeRefusal(ticket?: any, detail?: string) {
+  return {
+    ok: false,
+    reason: 'completion_worktree_unavailable',
+    message: `${ticket.ref} done refused: ${detail}. Pass worktree as the root of the worktree this dispatch's work was done in, or omit it so the board diffs the dispatch's recorded checkout.`,
+  };
+}
+
+// An empty diff only proves an empty scope in the tree the work was done in. A bare empty-diff refusal from the
+// registered checkout, or from a tree other than the one the dispatch recorded, reads as a dead end (SQ-3947).
+function diffedCheckoutGuidance(slug?: any, ticket?: any, diffedRoot?: any) {
+  const registered = readMeta(slug)?.path;
+  const diffed = diffedRoot || registered;
+  const recorded = recordedWorktreeElsewhere(ticket, diffed);
+  if (!recorded && !sameCheckout(diffed, registered)) return '';
+  return ` The board diffed ${diffed}; ${recorded ? `your work is in ${recorded}` : 'no other worktree was read'}. A workingTreeDelivery ticket delivers in the registered checkout ${registered}, so clear that flag or submit a commit from the worktree; or repeat done with worktree:<the worktree root> so the completion check diffs the tree the work was done in.`;
+}
+
+function recordedWorktreeElsewhere(ticket?: any, diffed?: any) {
+  const recorded = String(dispatchState(ticket)?.worktree || '').trim();
+  return recorded && !sameCheckout(recorded, diffed) ? recorded : '';
+}
+
+function sameCheckout(left?: any, right?: any) {
+  return worktreeIdentityKey(left) === worktreeIdentityKey(right);
 }
 
 // The runtime hooks all match on a session id that is stored verbatim inside the ticket record, so
@@ -5486,6 +5574,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     worktreeIsolationWarning,
     prepareDispatch,
     syncLiveDispatchVerification,
+    syncLiveWorkingTreeDelivery,
     readDispatchBriefing,
     recoverLiveClaimDispatch,
     recordReleaseObservedCheckout,
@@ -5511,6 +5600,8 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
+    completionWorkspace,
+    diffedCheckoutGuidance,
     activeSharedTreeClaim,
     dispatchIdentityAmbiguous,
     dispatchCanBindRuntimeIdentity,

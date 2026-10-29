@@ -177,15 +177,45 @@ test('missing publication directories are refused before git starts, while statu
   expect(runs).toEqual([])
 })
 
-test('directory-creating chains get an explicit split-command publication refusal', async ($, on) => {
+for (const creation of [
+  'git worktree add C:/missing feature',
+  'git worktree add -b feature C:/missing origin/main',
+  'git -C C:/proj worktree add --detach C:/missing origin/main',
+  'git clone https://example.invalid/repo.git C:/missing',
+  'mkdir C:/missing',
+  'mkdir -p C:/missing',
+]) {
+  test(`SQ-3985: ${creation} admits a feature push into its future directory`, async ($, on) => {
+    await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT], integrationBranch: 'dev' })
+    expect(await bash($, `${creation} && cd C:/missing && git push -u origin feature`)).toMatchObject({ text: 'ran' })
+    expect(await bash($, `${creation} && git -C C:/missing push -u origin feature`)).toMatchObject({ text: 'ran' })
+  })
+
+  test(`SQ-3985: ${creation} still refuses destructive writes and publication without a lock`, async ($, on) => {
+    await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT], integrationBranch: 'dev' })
+    expect(Reflect.get(await bash($, `${creation} && cd C:/missing && git reset --hard`), 'deny')).toContain('refusing git reset --hard')
+    expect(Reflect.get(await bash($, `${creation} && cd C:/missing && git push origin main`), 'deny')).toContain('publish lock')
+    expect(Reflect.get(await bash($, `${creation} && cd C:/missing && git tag v1.0.0`), 'deny')).toContain('publish lock')
+  })
+}
+
+test('SQ-3985: missing cd without an earlier creator names the directory and recovery', async ($, on) => {
   const runs = await world(on, { cwd: PROJECT, repos: [projectRepo] })
-  for (const creation of ['git worktree add -b feature C:/missing origin/main', 'git clone https://example.invalid/repo.git C:/missing', 'mkdir C:/missing']) {
-    const reason = Reflect.get(await bash($, `${creation} && git -C C:/missing push -u origin feature`), 'deny')
+  for (const prefix of ['', 'echo "mkdir C:/missing" && ', 'mkdir C:/different && ']) {
+    const reason = Reflect.get(await bash($, `${prefix}cd C:/missing && git status`), 'deny')
     expect(reason).toContain('directory C:\\missing does not exist (yet)')
-    expect(reason).toContain('run the push as a separate command after the directory exists')
-    expect(reason).not.toContain('posix_spawn')
+    expect(reason).toContain('Create it in an earlier call')
   }
   expect(runs).toEqual([])
+})
+
+test('SQ-3985: relative creators use their own cwd and worktree publication uses the parent lock', async ($, on) => {
+  await world(on, { cwd: PROJECT, repos: [projectRepo], integrationBranch: 'dev', files: {
+    [`${PROJECT}\\.git\\sidequest-publish.lock`]: JSON.stringify({ sessionId: SESSION, repo: PROJECT }),
+  } })
+  expect(await bash($, 'git worktree add "../new checkout" feature && cd "../new checkout" && git push origin main')).toMatchObject({ text: 'ran' })
+  expect(await bash($, 'mkdir "../new checkout" && cd "../new checkout" && git push origin feature')).toMatchObject({ text: 'ran' })
+  expect(Reflect.get(await bash($, 'mkdir "../new checkout" && cd "../new checkout" && git push --tags'), 'deny')).toContain('publish lock')
 })
 
 test('the publish lock admits its own session and repo, and a Git Bash /c/ path resolves to the locked repo', async ($, on) => {

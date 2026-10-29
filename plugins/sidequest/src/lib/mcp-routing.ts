@@ -1,6 +1,6 @@
 'use strict';
 
-const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'investigationDataRoots', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationQuality', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'integrationTestFileThreshold', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths']);
+const BOARD_CONFIG_PATCH_KEYS = new Set(['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'investigationDataRoots', 'readOnlyDeniedTools', 'deniedTools', 'generatedPairs', 'integrationMode', 'integrationQuality', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'integrationTestFileThreshold', 'worktreeIsolation', 'verifyEnvironment', 'worktreeBase', 'notIntegratedSalvageAgeHours', 'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'workingTreeDeliveryCategories', 'worktreeSetup', 'worktreeDependencyPaths']);
 // These settings read null as "leave it alone"; the others hand null to their normalizer (worktreeSetup: null clears the command).
 const BOARD_CONFIG_NULL_LEAVES_ALONE = new Set(['alwaysInScope', 'integrationMode', 'integrationQuality', 'integrationBranch', 'delivery', 'integrationVerifyTimeoutMs', 'verifyEnvironment']);
 
@@ -450,6 +450,7 @@ const tools: ToolDefinition[] = [
         githubSync: { type: 'string', enum: ['off', 'comment', 'close'], description: 'Default off. Enabling authorizes GitHub comments on delivery and published releases; close also authorizes closing linked issues after publication. Requires existing user/team authority and gh authentication.' },
         autoApproveTestScope: { type: 'boolean', description: 'Auto-approve reachable test directories (default true).' },
         autoApproveScope: { type: 'array', items: { type: 'string' }, description: 'Repo-relative auto-approved globs.' },
+        workingTreeDeliveryCategories: { type: 'array', items: { type: 'string' }, description: 'Category ids whose new tickets default to workingTreeDelivery:true at add time; an explicit add flag wins. Replaces the list; null or [] clears.' },
         worktreeSetup: { type: ['string', 'null'], description: 'One-line command Sidequest runs after creating an isolated worktree; null clears it.' },
         worktreeDependencyPaths: {
           type: 'array',

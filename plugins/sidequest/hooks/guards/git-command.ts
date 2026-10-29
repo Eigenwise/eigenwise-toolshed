@@ -93,6 +93,39 @@ export function invocationDirectory(command: string, index: number, dashC: strin
   return dashC ? shellPath(base, directoryChangeTarget(dashC), machine) : base;
 }
 
+export type PlannedDirectory = { source: string | null };
+
+function gitCreatedDirectory(invocation: GitInvocation): string | null {
+  const worktree = new RegExp(String.raw`^\s*add\s+(?:(?:(?:-b|-B|--orphan|--reason)\s+${WORD}|--detach|--force|-f|--lock)\s+)*(${WORD})(?:\s|$)`);
+  if (invocation.subcommand === 'worktree') return worktree.exec(invocation.args)?.[1] ?? null;
+  if (invocation.subcommand !== 'clone') return null;
+  return new RegExp(String.raw`^\s*${WORD}\s+(${WORD})\s*$`).exec(invocation.args)?.[1] ?? null;
+}
+
+function plannedGitDirectory(command: string, index: number, directory: string, cwd: string, machine: Machine): PlannedDirectory | null {
+  for (const invocation of gitInvocations(command.slice(0, index))) {
+    const target = gitCreatedDirectory(invocation);
+    if (!target) continue;
+    const source = invocationDirectory(command, invocation.index, invocation.dashC, cwd, machine);
+    if (samePath(shellPath(source, unquote(target), machine), directory, machine)) {
+      return { source: invocation.subcommand === 'worktree' ? source : null };
+    }
+  }
+  return null;
+}
+
+export function plannedDirectory(command: string, index: number, directory: string, cwd: string, machine: Machine): PlannedDirectory | null {
+  const created = plannedGitDirectory(command, index, directory, cwd, machine);
+  if (created) return created;
+  const mkdir = new RegExp(String.raw`(?:^|[\n;&|])\s*mkdir\s+(?:-p\s+)?(${WORD})\s*(?=$|[\n;&|])`, 'g');
+  for (const match of command.slice(0, index).matchAll(mkdir)) {
+    if (quotedAt(command, match.index)) continue;
+    const base = invocationDirectory(command, match.index, null, cwd, machine);
+    if (samePath(shellPath(base, unquote(match[1]!), machine), directory, machine)) return { source: null };
+  }
+  return null;
+}
+
 export function samePath(left: string, right: string, machine: Machine): boolean {
   const normalize = (value: string) => {
     const resolved = resolveAbsolute(gitBashPath(value, machine), machine);

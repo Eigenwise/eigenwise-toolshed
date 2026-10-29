@@ -192,8 +192,14 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('done')?.description ?? '', /pinned command needs capture; commandless needs verify/);
   assert.match(byName.get('done')?.description ?? '', /commandless needs verify/);
   assert.equal((byName.get('done')?.inputSchema.properties?.verify as any)?.maxLength, 4000);
+  // SQ-3947: the empty-diff refusal tells an executor to repeat done with worktree, so the argument must be there.
+  assert.equal(byName.get('done')?.inputSchema.properties?.worktree?.type, 'string');
   assert.match(byName.get('integrate')?.description ?? '', /pinned deliveryMethod/);
   assert.match(byName.get('integrate')?.description ?? '', /reviewed interaction/);
+  // SQ-3946: the only route for a delivery waiting on an open pull request, so a caller must see it is there.
+  assert.match(String(byName.get('integrate')?.description), /off-target deliveryBranch/);
+  assert.match(String(byName.get('integrate')?.inputSchema.properties?.deliveryBranch?.description), /tip holds deliveryCommit/);
+  assert.equal(byName.get('integrate')?.inputSchema.properties?.pullRequests?.type, 'array');
   assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryCommit?.description ?? '', /Prepared integration target/);
   assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
   assert.match(byName.get('integrate')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);

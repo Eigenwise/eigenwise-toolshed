@@ -29,7 +29,7 @@ function createTickets(dependencies: any) {
   const {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
-    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, syncLiveDispatchVerification, effectiveScope, execFileSync, executorText, fs,
+    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, syncLiveDispatchVerification, syncLiveWorkingTreeDelivery, effectiveScope, execFileSync, executorText, fs,
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyCwd, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
@@ -215,6 +215,22 @@ function persistWithReviewBinding(slug: any, ticket: any, requested: any) {
   return bound;
 }
 
+// SQ-3948: a board that always hands one category back uncommitted declares it once in board_config
+// workingTreeDeliveryCategories; an explicit workingTreeDelivery on the ticket still wins.
+function requestedWorkingTreeDelivery(slug: string, fields: { workingTreeDelivery?: boolean; category?: unknown }): boolean {
+  if (fields.workingTreeDelivery !== undefined) return fields.workingTreeDelivery === true;
+  return boardWorkingTreeDeliveryCategories(slug).includes(categoryId(fields.category));
+}
+
+function boardWorkingTreeDeliveryCategories(slug: string): unknown[] {
+  const configured: unknown = readMeta(slug)?.workingTreeDeliveryCategories;
+  return Array.isArray(configured) ? configured : [];
+}
+
+function categoryId(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   fields = fields || {};
   if (Object.hasOwn(fields, 'reviewTarget')) {
@@ -274,7 +290,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     contracts: boundedContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
-    workingTreeDelivery: fields.workingTreeDelivery === true,
+    workingTreeDelivery: requestedWorkingTreeDelivery(slug, fields),
     externalDeliverable: fields.externalDeliverable === true,
     ...acceptanceField(fields.acceptance),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
@@ -1377,13 +1393,18 @@ function patchChangesFiles(ticket?: any, patch?: any) {
   return filesPatch !== undefined && !sameFiles(ticket.files, filesPatch);
 }
 
+function applyWorkingTreeDeliveryDeclaration(slug: string, ticket: { ref: string; workingTreeDelivery?: boolean }, requested: boolean) {
+  if (requested === true) syncLiveWorkingTreeDelivery(slug, ticket);
+  ticket.workingTreeDelivery = requested === true;
+}
+
 function activeClaimCloseoutUpdateRefusal(ticket?: any, patch?: any, options: UpdateTicketOptions = {}, projectPath = '') {
   if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
   const changedFields = [
     ...(patchChangesFiles(ticket, patch) ? ['files'] : []),
     ...(patch.status !== undefined && String(patch.status).trim().toLowerCase() !== ticket.status ? ['status'] : []),
     ...((patch.readonly !== undefined || patch.readonlyOverride !== undefined) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ['readonly'] : []),
-    ...(patch.workingTreeDelivery !== undefined && (patch.workingTreeDelivery === true) !== (ticket.workingTreeDelivery === true) ? ['workingTreeDelivery'] : []),
+    ...(patch.workingTreeDelivery !== undefined ? ['workingTreeDelivery'] : []),
     ...(patch.externalDeliverable !== undefined && (patch.externalDeliverable === true) !== (ticket.externalDeliverable === true) ? ['externalDeliverable'] : []),
     ...acceptanceCloseoutChange(ticket, patch),
     ...(patch.executorVerify !== undefined && patch.executorVerify !== ticket.executorVerify ? ['verify'] : []),
@@ -1503,7 +1524,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     if (patch.contracts !== undefined) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
-    if (patch.workingTreeDelivery !== undefined) t.workingTreeDelivery = patch.workingTreeDelivery === true;
+    if (patch.workingTreeDelivery !== undefined) applyWorkingTreeDeliveryDeclaration(slug, t, patch.workingTreeDelivery);
     if (patch.externalDeliverable !== undefined) t.externalDeliverable = patch.externalDeliverable === true;
     if (patch.category !== undefined || patch.readonly !== undefined || patch.readonlyOverride !== undefined) {
       t.files = boundedFiles(t.files, {

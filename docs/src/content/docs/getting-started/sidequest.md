@@ -82,7 +82,22 @@ Use `sidequest completion US-3` (or the `completion` MCP read with `story: "US-3
 
 A story reads integrated only when every child has a delivery record, and released only when every child has a release record. Mixed delivery reads partial; blocked and rejected children remain visible in Not yet. A live child claim reads running. Captured-command and quality counts keep missing evidence visible. Read `completion SQ-3` for a child's details. Ticket-linked story decisions appear as a count and the latest first sentence.
 
-For a substantial behavior change, attach acceptance examples before dispatch: `add` or `update` with `acceptance: [{ scenario, expected, kind }]`, where kind is `main` or `boundary` (at most 8 examples, 300 characters per field; `[]` clears them, and a claim holder can't change them mid-claim). The briefing lists them and asks the executor to demonstrate each one on the real surface, then record the result in `demonstrations.json` in the ticket's board evidence directory, one entry per example with observed, matches, environment, candidate commit, fixture and an artifact beside the file. `completion SQ-3` reads that record: a matching entry for the current candidate shows as `real-flow` evidence (or `visual` for a screenshot), an entry for an older commit reads stale, a mismatch reads FAILED and asks you to review it, and anything missing, partial, or pointing outside the evidence directory stays under Still uncertain as not demonstrated.
+## Attach acceptance examples
+
+For a substantial behavior change, give the ticket a few concrete examples before dispatch: `add` or `update` with `acceptance: [{ scenario, expected, kind }]`. `kind` is `main` or `boundary`. You get at most 8 examples, 300 characters per field, `[]` clears them, and a claim holder can't change them mid-claim.
+
+The briefing lists the examples and asks the executor to demonstrate each one on the real surface (an API or CLI call is enough unless appearance matters), against its final committed candidate. It records the results in `demonstrations.json` in the ticket's board evidence directory, one entry per example: observed, matches, environment, candidate commit, fixture, and an artifact (log or screenshot) beside the file.
+
+`completion SQ-3` reads that file and says how each example stands:
+
+- A matching entry for the current candidate shows as `real-flow` evidence, or `visual` for a screenshot (appearance only, not proof of behavior).
+- An entry for an older commit reads stale.
+- Anything missing, partial, or pointing outside the evidence directory stays under Still uncertain as **not demonstrated**.
+- A mismatch reads **FAILED**.
+
+A failed or missing demonstration goes back to the agent: the executor repairs and demonstrates again, or releases with the record intact, and a rejected candidate is repaired through a fresh dispatch. There is no Accept click that turns a failure into a pass. Your part is reading the view.
+
+How the view is built is in the maintained codebase map under `.claude/.codebase-info/`.
 
 ## Retrying delivery
 
@@ -155,6 +170,8 @@ Delivery still runs its real pinned verifier. After delivery, Claude runs one co
 gate per wave before versioning, including a singleton. A changed tree after rebase needs a fresh gate.
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
+
+A claim holder can record factual verification failures before making scoped edits, including on external-deliverable tickets. The accepted failure outcomes are `failed_suite`, `failed_check`, `toolchain_missing`, `could_not_run`, and `timeout`. These comments leave the ticket open and do not authorize submission. Successful completion still needs scoped work or an explicit no-op declaration.
 
 Integration only reports a passed check when a command really ran, with its exit code and log. A ticket
 dispatched before it had a check runs the check recorded on it later. A ticket with no check at all is
@@ -470,6 +487,8 @@ Executors run inside your Claude Code process, so a dev stack or watcher an exec
 
 A ticket with `workingTreeDelivery` runs in the board's registered checkout, never in a linked worktree. Dispatch's `worktree` argument only names a resumed executor's checkout during live-claim recovery, so passing it anywhere else is refused up front instead of producing a lease the executor can't write through. To deliver from a worktree, drop `workingTreeDelivery` and let the ticket run isolated and submit a commit.
 
+`done` checks the diff of the checkout the dispatch recorded, which for a shared-tree or `workingTreeDelivery` dispatch is the registered checkout. When that diff is empty, the refusal says which tree it read and, if the dispatch recorded a different worktree, names that one too. If the work really did land in another worktree of the same repository, `done` takes a `worktree` argument: the board diffs that tree from the dispatch base instead, as long as the base is in its history, and a working-tree completion records the worktree so integration can find the deliverable.
+
 ## Read-only reports
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
@@ -577,7 +596,7 @@ A worked example:
 
 **External deliverables.** Declare `externalDeliverable: true` when filing with `add`, or set it through `update`. Both `pulse` and the executor briefing show the declaration. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`, with the artifact matching `attestationArtifact` exactly. A refusal shows the expected and received first segments in the same form.
 
-**A ticket contract forbids commits.** Ask Claude to declare working-tree delivery before dispatch. Command and suite requirements close after the matching final capture. Commandless document, link, schema, custom, manual, and attestation requirements close with explicit typed evidence. The declared edits stay uncommitted and unpushed in the shared checkout for your normal team handoff. Ticket closure records that handoff; it does not replace your project's commit, review, or push process. A sibling's active allocation is ignored only when both dispatches record the same nonempty preparing session, their claims overlap, and their scopes are disjoint. Before dirty-path classification, Sidequest validates every eligible completed sibling's recorded candidate against its recorded paths and current content. A mismatch stops closeout, so preserve the shared-tree work and hand it back to the existing parent for verification or grooming. Do not revert it or expand scope to absorb it.
+**A ticket contract forbids commits.** Ask Claude to declare working-tree delivery before dispatch. If a board always hands one category back uncommitted (docs, say), list it once in `board_config workingTreeDeliveryCategories` and every new ticket in that category starts with the flag set. The executor is told to close with `done`, and `commit` and `submit` refuse it. If a shared-checkout dispatch is already live, the orchestrator can set `workingTreeDelivery:true` through `update`; the response confirms it applies to the live dispatch, including declared files already edited. A live isolated-worktree dispatch refuses that amendment and must submit a commit. Command and suite requirements close after the matching final capture. Commandless document, link, schema, custom, manual, and attestation requirements close with explicit typed evidence. The declared edits stay uncommitted and unpushed in the shared checkout for your normal team handoff. Ticket closure records that handoff; it does not replace your project's commit, review, or push process. A sibling's active allocation is ignored only when both dispatches record the same nonempty preparing session, their claims overlap, and their scopes are disjoint. Before dirty-path classification, Sidequest validates every eligible completed sibling's recorded candidate against its recorded paths and current content. A mismatch stops closeout, so preserve the shared-tree work and hand it back to the existing parent for verification or grooming. Do not revert it or expand scope to absorb it.
 
 **A POSIX verify command fails on Windows.** Ask Claude to inspect the recorded verification result and the shell it used. On Windows a verify command runs through Git for Windows `sh.exe` when it's installed, unless it names an unquoted backslash path like `cd C:\repo\app` or `cd plugins\app`: `sh.exe` would strip those backslashes, so that command runs through Command Prompt instead, verbatim. The capture records which shell ran. Forward-slash paths and quoted backslash paths (`"C:\tools\node.exe" -e "..."`) stay on `sh.exe`, which keeps backslashes inside quotes. Command Prompt's `cd` doesn't switch drives, so a verifier on another drive should use `verifyCwd` instead of a `cd`.
 
@@ -618,6 +637,8 @@ A worked example:
 **A submitted candidate never landed, and its prepared integration branch was deleted.** Ask Claude to close it with `groomClose`, `abandonSubmission: true`, and the reason it was discarded. Sidequest checks the current board integration target, falling back to the remote default branch if that target is unavailable. If the candidate is reachable there, closure refuses and names the ref. Otherwise it records abandonment. Delivery still requires the original frozen target to resolve.
 
 **A candidate landed through a squash merge, and closing it says it never landed.** A squash gives the work a new commit, so the candidate itself is never an ancestor of the target. Ask Claude to record the squash commit as the delivery: a `groomClose` with that commit as `deliveryCommit`. It records when the squash carries exactly the candidate's changes, whether the candidate was one commit or several. A squash that also carries another ticket's changes still refuses. Leave that ticket open rather than closing it with `abandonSubmission`, which records work that shipped as never landed.
+
+**The work sits in an open pull request, and recording it refuses `branch_not_checked_out`.** If your project lands each ticket on its own branch and merges the PR after review, the commit isn't on the integration branch yet, so the default record refuses. Ask Claude to record it on the branch it's actually on: an `integrate` with `deliveryCommit`, `deliveryBranch` set to that branch and `pullRequests` set to the PR URL. Check the branch out in a worktree of the project first (or pass that worktree as `worktree`); the pinned check runs there, the ticket closes, and the record shows `git:<branch>` plus the PR link. Nothing about the integration branch is checked or moved.
 
 **`integrate` refuses `branch_not_checked_out` after you switched branches.** Dispatch records the integration branch it saw. If you fast-forwarded another branch to it (say main to develop) and stayed there, delivery now goes onto the branch you have checked out, because it contains the recorded one. To deliver onto the checked-out branch on purpose, pass `integrationBranch` (CLI `--integration-branch`). A checkout that neither matches nor descends from the recorded branch still refuses, and the refusal names both branches.
 
