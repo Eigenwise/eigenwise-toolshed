@@ -156,6 +156,8 @@ gate per wave before versioning, including a singleton. A changed tree after reb
 Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
+A claim holder can record factual verification failures before making scoped edits, including on external-deliverable tickets. The accepted failure outcomes are `failed_suite`, `failed_check`, `toolchain_missing`, `could_not_run`, and `timeout`. These comments leave the ticket open and do not authorize submission. Successful completion still needs scoped work or an explicit no-op declaration.
+
 Integration only reports a passed check when a command really ran, with its exit code and log. A ticket
 dispatched before it had a check runs the check recorded on it later. A ticket with no check at all is
 refused as unverified ("no project verifier and no pinned verify") until you give it one, or until you
