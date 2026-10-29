@@ -194,6 +194,10 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal((byName.get('done')?.inputSchema.properties?.verify as any)?.maxLength, 4000);
   assert.match(byName.get('integrate')?.description ?? '', /pinned deliveryMethod/);
   assert.match(byName.get('integrate')?.description ?? '', /reviewed interaction/);
+  // SQ-3946: the only route for a delivery waiting on an open pull request, so a caller must see it is there.
+  assert.match(String(byName.get('integrate')?.description), /off-target deliveryBranch/);
+  assert.match(String(byName.get('integrate')?.inputSchema.properties?.deliveryBranch?.description), /tip holds deliveryCommit/);
+  assert.equal(byName.get('integrate')?.inputSchema.properties?.pullRequests?.type, 'array');
   assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryCommit?.description ?? '', /Prepared integration target/);
   assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
   assert.match(byName.get('integrate')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
