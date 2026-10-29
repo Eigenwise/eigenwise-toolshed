@@ -1722,7 +1722,7 @@
   },
   {
     "name": "integrate",
-    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod or deliveryRevision; reviewed interaction.",
+    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod or deliveryRevision; reviewed interaction; off-target deliveryBranch.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1777,6 +1777,19 @@
           "type": "string"
         },
         "integrationBranch": {
+          "type": "string"
+        },
+        "deliveryBranch": {
+          "type": "string",
+          "description": "Non-target branch whose tip holds deliveryCommit, e.g. an open PR."
+        },
+        "pullRequests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "worktree": {
           "type": "string"
         },
         "skipVerify": {

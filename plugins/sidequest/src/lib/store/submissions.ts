@@ -1369,6 +1369,7 @@ type DeliveryTicket = {
     integration: {
       deliveredAt?: string;
       targetBranch?: string;
+      deliveryBranch?: string;
       resultingHead?: string;
       sourceRevision?: { source: string; value: string };
     };
@@ -1394,6 +1395,10 @@ function persistSubmissionIntegration(slug: string, ticket: DeliveryTicket, reso
   queueEventNotification(slug, ticket, 'status', 'integration');
 }
 
+function deliveredBranch(integration: DeliveryTicket['submission']['integration']) {
+  return integration.deliveryBranch || integration.targetBranch;
+}
+
 function emitDeliveryExternalRefs(slug: string, ticket: DeliveryTicket) {
   const integration = ticket.submission.integration;
   const revision = integration.sourceRevision;
@@ -1403,7 +1408,7 @@ function emitDeliveryExternalRefs(slug: string, ticket: DeliveryTicket) {
     kind: 'delivered',
     mode: boardConfig(slug).githubSync,
     cwd: readMeta(slug).path,
-    branch: integration.targetBranch || boardConfig(slug).integrationBranch,
+    branch: deliveredBranch(integration) || boardConfig(slug).integrationBranch,
     sha,
     onFailure: (body: string) => {
       ticket.comments.push(createComment({ by: 'github-sync', kind: 'comment', source: 'integration', body }));
@@ -2197,7 +2202,7 @@ function resolveDeliveryWorktree(registeredRepo: string, requestedWorktree: stri
 function recordedDeliveryNotAtTipMessage(targetBranch: string, currentBranch: string, givenWorktree: string) {
   const checkedOut = currentBranch || 'detached HEAD';
   const where = givenWorktree ? `the worktree given (${givenWorktree})` : 'this checkout';
-  return `${targetBranch} must be checked out before recording an external delivery; ${where} is on ${checkedOut}, not at the ${targetBranch} tip. Check out the observed ${targetBranch} tip (the branch itself, or a detached checkout of its current tip, which may be later than deliveryCommit), or give such a worktree via worktree:"<path>" (CLI: --worktree <path>).`;
+  return `${targetBranch} must be checked out before recording an external delivery; ${where} is on ${checkedOut}, not at the ${targetBranch} tip. Check out the observed ${targetBranch} tip (the branch itself, or a detached checkout of its current tip, which may be later than deliveryCommit), or give such a worktree via worktree:"<path>" (CLI: --worktree <path>). When the delivery landed on another branch instead, such as one waiting on an open pull request, record it there with integrate deliveryBranch:"<branch>" and pullRequests:["<url>"].`;
 }
 
 function refTipEquals(repo: string, ref: string, commit: string): boolean {
@@ -2207,6 +2212,81 @@ function refTipEquals(repo: string, ref: string, commit: string): boolean {
     // A target ref this checkout has never fetched is simply not the tip; it must not fail the delivery.
     return false;
   }
+}
+
+type PullRequestReference = { kind: 'pr'; url: string };
+type DeliveryBranchRequest = { ok: true; branch: string; offTarget: boolean; refs: PullRequestReference[] };
+type DeliveryCheckout = { repo: string; currentBranch: string; resultingHead: string; givenWorktree: string };
+
+function deliveryRequestRefusal(ticket: any, reason: string, detail: string) {
+  return { ok: false as const, reason, ticket, message: `${ticket.ref} delivery refused: ${detail}` };
+}
+
+function pullRequestReferences(values: unknown): PullRequestReference[] | null {
+  const urls = Array.isArray(values) ? values.map((value) => String(value).trim()) : [];
+  return urls.every((url) => /^https?:\/\/\S+$/i.test(url)) ? urls.map((url) => ({ kind: 'pr' as const, url })) : null;
+}
+
+// The integration target stays the ticket's recorded branch; an off-target delivery only
+// names where the commit actually sits until its pull request merges, so the target itself
+// is refused here rather than read as a second spelling of the default form.
+function namedOffTargetDelivery(ticket: any, requestedBranch: string, targetBranch: string, refs: PullRequestReference[]) {
+  let branch: string;
+  try {
+    branch = normalizeIntegrationBranch(requestedBranch);
+  } catch (_) {
+    return deliveryRequestRefusal(ticket, 'invalid_delivery_branch', `deliveryBranch ${JSON.stringify(requestedBranch)} is not a valid Git branch name.`);
+  }
+  if (branch === targetBranch) {
+    return deliveryRequestRefusal(ticket, 'delivery_branch_is_target', `deliveryBranch ${branch} is the recorded integration branch; omit deliveryBranch to record a delivery on it.`);
+  }
+  const request: DeliveryBranchRequest = { ok: true, branch, offTarget: true, refs };
+  return request;
+}
+
+function deliveryBranchRequest(ticket: any, opts: any, targetBranch: string) {
+  const refs = pullRequestReferences(opts.pullRequests);
+  if (!refs) return deliveryRequestRefusal(ticket, 'invalid_pull_request', 'pullRequests takes the http(s) URL of each pull request.');
+  const requestedBranch = String(opts.deliveryBranch || '').trim();
+  if (!requestedBranch) {
+    const targetRequest: DeliveryBranchRequest = { ok: true, branch: targetBranch, offTarget: false, refs };
+    return refs.length ? deliveryRequestRefusal(ticket, 'delivery_branch_required', 'pullRequests records an off-target delivery, so it needs deliveryBranch.') : targetRequest;
+  }
+  return namedOffTargetDelivery(ticket, requestedBranch, targetBranch, refs);
+}
+
+function targetDeliveryRevisionSource(checkout: DeliveryCheckout, target: any): string | null {
+  if (checkout.currentBranch === target.branch) return `git:${target.branch}`;
+  const matchedRef = commitScope.integrationTargetRefs(target).find((ref: string) => refTipEquals(checkout.repo, ref, checkout.resultingHead));
+  return matchedRef ? `git:${commitScope.integrationRefLabel(matchedRef)}` : null;
+}
+
+// Reachability from the integration target is deliberately not asked: the work waits on a
+// pull request, so the record states the branch it was found on instead.
+function offTargetNotAtTipDetail(checkout: DeliveryCheckout, branch: string) {
+  const where = checkout.givenWorktree ? `the worktree given (${checkout.givenWorktree})` : 'this checkout';
+  return `${where} is on ${checkout.currentBranch || 'detached HEAD'}, not at the ${branch} tip. Check ${branch} out in a worktree of this project (that checkout is selected automatically), or give a worktree at its tip via worktree:"<path>".`;
+}
+
+function offTargetDeliveryRevisionSource(checkout: DeliveryCheckout, ticket: any, branch: string, deliveryCommit: string) {
+  const atTip = checkout.currentBranch === branch || refTipEquals(checkout.repo, `refs/heads/${branch}`, checkout.resultingHead);
+  if (!atTip) return deliveryRequestRefusal(ticket, 'branch_not_checked_out', offTargetNotAtTipDetail(checkout, branch));
+  if (!commitIsAncestor(checkout.repo, deliveryCommit, checkout.resultingHead)) {
+    return deliveryRequestRefusal(ticket, 'delivery_not_reachable', `delivery commit ${deliveryCommit} is not reachable from ${branch}.`);
+  }
+  return { ok: true as const, source: `git:${branch}` };
+}
+
+function observedDeliveryRevisionSource(checkout: DeliveryCheckout, ticket: any, target: any, delivery: DeliveryBranchRequest, deliveryCommit: string) {
+  if (delivery.offTarget) return offTargetDeliveryRevisionSource(checkout, ticket, delivery.branch, deliveryCommit);
+  const source = targetDeliveryRevisionSource(checkout, target);
+  return source
+    ? { ok: true as const, source }
+    : { ok: false as const, reason: 'branch_not_checked_out', ticket, message: recordedDeliveryNotAtTipMessage(target.branch, checkout.currentBranch, checkout.givenWorktree) };
+}
+
+function offTargetDeliveryRecord(delivery: DeliveryBranchRequest) {
+  return delivery.offTarget ? { deliveryBranch: delivery.branch, deliveryRefs: delivery.refs } : {};
 }
 
 function manualDeliveryIntegrationBranch(slug: string, idOrRef: string, target: { branch?: string } | undefined): string | undefined {
@@ -2258,8 +2338,10 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const registeredRepo = String(readMeta(slug)?.path || '').trim();
   const target = opts.target;
   if (!registeredRepo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  const delivery = deliveryBranchRequest(ticket, opts, target.branch);
+  if (!delivery.ok) return delivery;
   const requestedWorktree = String(opts.worktree || '').trim();
-  let repo = worktrees.branchOwningWorktree(registeredRepo, target.branch);
+  let repo = worktrees.branchOwningWorktree(registeredRepo, delivery.branch);
   if (requestedWorktree) {
     const resolvedWorktree = resolveDeliveryWorktree(registeredRepo, requestedWorktree);
     if (!resolvedWorktree.ok) {
@@ -2281,21 +2363,11 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     // the commit without it (SQ-58). Labelling a plain local checkout `git:origin/<branch>`
     // would claim a remote reachability nothing here checked, and origin routinely lacks the
     // revision until the operator pushes, so it stays `git:<branch>` unless matched otherwise.
-    let observedIntegrationRevisionSource = `git:${target.branch}`;
-    if (currentBranch !== target.branch) {
-      const matchedRef = commitScope.integrationTargetRefs(target).find((ref: string) => refTipEquals(repo, ref, resultingHead));
-      if (!matchedRef) {
-        return {
-          ok: false,
-          reason: 'branch_not_checked_out',
-          ticket,
-          message: recordedDeliveryNotAtTipMessage(target.branch, currentBranch, requestedWorktree ? repo : ''),
-        };
-      }
-      observedIntegrationRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;
-    }
+    const checkout = { repo, currentBranch, resultingHead, givenWorktree: requestedWorktree ? repo : '' };
+    const observedSource = observedDeliveryRevisionSource(checkout, ticket, target, delivery, deliveryCommit);
+    if (!observedSource.ok) return observedSource;
     const observedIntegrationRevision = {
-      source: observedIntegrationRevisionSource,
+      source: observedSource.source,
       value: resultingHead,
       observedAt: new Date().toISOString(),
     };
@@ -2441,6 +2513,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       ...(interaction.interaction ? { sourceCommit: deliveryCommit, interaction: interaction.interaction } : {}),
       ...(workingTreeDelivery ? { method: deliveryMethod } : {}),
       ...(revisionProof ? { revision: revisionProof.revision } : {}),
+      ...offTargetDeliveryRecord(delivery),
     };
     const recorded = updateSubmissionIntegration(slug, ticket.id, {
       mode: interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : completingApplyDelivery ? 'recorded-apply-content-commit' : replacementRequirement ? 'recorded-verify-superseded' : 'recorded',
@@ -2456,6 +2529,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       deliveryIdentity,
       targetBranch: target.branch,
       targetUpstream: target.upstream,
+      ...offTargetDeliveryRecord(delivery),
       changedPaths: changedIntegrationPaths(repo, ticket.submission),
       deliveredFiles,
       // The applied bytes now live in a commit, so the dirty-file record that marked

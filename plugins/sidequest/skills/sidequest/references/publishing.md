@@ -254,6 +254,27 @@ Don't submit the merge from a second ticket: its range contains the candidate's 
 refused as `duplicate_submission`. A squash or cherry-pick of the resolution loses the ancestry and is
 refused as `delivery_content_missing`.
 
+### A delivery waiting on an open pull request
+
+Some projects never land a candidate on the integration branch directly: it goes onto a ticket branch,
+a pull request is opened, and the PR merges after review days later. The default recorded form refuses
+that with `branch_not_checked_out`, because the commit is not at the integration branch's tip. Record it
+on the branch it actually landed on:
+
+1. Check the delivery branch out in a worktree of this project (the board selects that checkout
+   automatically), or pass `worktree` naming one whose HEAD is at that branch's tip.
+2. Call `integrate` with `ref`, `by`, `reason`, `deliveryCommit: <the landed commit>`,
+   `deliveryBranch: "<branch>"` and `pullRequests: ["<PR url>"]`. The branch's tip must contain
+   `deliveryCommit`; reachability from the integration branch is not asked.
+3. The pinned verifier runs in that checkout, the ticket closes, and the record keeps `deliveryBranch`
+   and `deliveryRefs` (`{ kind: "pr", url }`). `pulse` (full) and `list` with a ref show its
+   `deliveryRevision` as `git:<branch>`.
+
+`deliveryBranch` naming the integration branch itself refuses `delivery_branch_is_target` (omit it for
+the default form), and `pullRequests` without `deliveryBranch` refuses `delivery_branch_required`.
+Without `deliveryBranch` nothing changes: a checkout that is not at the integration branch's tip still
+refuses `branch_not_checked_out`.
+
 ### A post-merge suite failure
 
 When the merged tree fails its verifier, `integrate` hard-resets the target to the recorded pre-merge

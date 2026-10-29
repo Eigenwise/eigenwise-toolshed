@@ -300,7 +300,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   rework: 'repair unbound; bound needs verdict.finalize or oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'clear/force need owner.',
-  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod or deliveryRevision; reviewed interaction.',
+  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod or deliveryRevision; reviewed interaction; off-target deliveryBranch.',
   comment: '',
   comments: '',
   plan: '',
