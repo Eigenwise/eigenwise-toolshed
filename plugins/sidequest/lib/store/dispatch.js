@@ -93,6 +93,20 @@ function createDispatch(dependencies) {
     applyLiveVerificationRequirement(state, ticket, nextRequirement);
     return recordVerificationAmendment(ticket, amendment, previousRequirement, nextRequirement);
   }
+  function syncLiveWorkingTreeDelivery(slug, ticket) {
+    const state = dispatchState(ticket);
+    if (!state || state.terminalAt) return;
+    if (state.sharedTree !== true) {
+      throw new Error(`working_tree_delivery_requires_shared_tree: ${ticket.ref} runs in an isolated worktree and must submit a commit. workingTreeDelivery only applies to shared-checkout dispatches.`);
+    }
+    if (state.workingTreeDelivery === true) return;
+    deliveryVerification(slug, { ...ticket, workingTreeDelivery: true }, true, state.declaredFiles);
+    const capture = captureDirtyBaseline(slug);
+    state.workingTreeDelivery = true;
+    state.workingTreeDirtyBaseline = capture.baseline;
+    state.workingTreeDirtyBaselineLate = true;
+    state.workingTreeDeliveryAmendedAt = (/* @__PURE__ */ new Date()).toISOString();
+  }
   const DISPATCH_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
   const DISPATCH_TOKEN_CHARS = 32;
   const DISPATCH_TOKEN_GROUP_SIZE = 4;
@@ -4313,6 +4327,7 @@ function createDispatch(dependencies) {
     worktreeIsolationWarning,
     prepareDispatch,
     syncLiveDispatchVerification,
+    syncLiveWorkingTreeDelivery,
     readDispatchBriefing,
     recoverLiveClaimDispatch,
     recordReleaseObservedCheckout,

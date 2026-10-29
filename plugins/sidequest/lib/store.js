@@ -687,6 +687,7 @@ const {
   worktreeIsolationWarning,
   prepareDispatch,
   syncLiveDispatchVerification,
+  syncLiveWorkingTreeDelivery,
   retirePreparedCompatibilityStaleAttempt,
   preparedCompatibilityHasProvenMismatch,
   preparedCompatibilityWarning,
@@ -1565,6 +1566,7 @@ const {
   dispatchState,
   dispatchVerifyCommandError,
   syncLiveDispatchVerification,
+  syncLiveWorkingTreeDelivery,
   effectiveScope,
   execFileSync,
   executorText,
@@ -2869,7 +2871,7 @@ function submissionRequired(t) {
   return {
     ok: false,
     reason: "submission_required",
-    message: `${t.ref} has repository changes. Commit and submit verified changes. A dispatched executor with no commit, no dirty declared path, and no pending submission may close with done carrying its report. Working-tree deliverables retain their declared paths and verification requirements.`,
+    message: `${t.ref} has repository changes. Commit and submit verified changes. A dispatched executor with no commit, no dirty declared path, and no pending submission may close with done carrying its report. Working-tree deliverables retain their declared paths and verification requirements.${missingWorkingTreeDeliveryGuidance(t)}`,
     ticket: t
   };
 }
@@ -3299,10 +3301,13 @@ function siblingWorkingTreeDeliveryWarnings(slug, ticket) {
   }
   return warnings;
 }
+function hasPreparedWorkingTreeBaseline(dispatch2) {
+  return Array.isArray(dispatch2?.workingTreeDirtyBaseline) && !dispatch2?.workingTreeDirtyBaselineLate;
+}
 function workingTreeDeliveryCandidate(slug, ticket) {
   const dispatch2 = dispatchState(ticket);
   const declaredFiles = commitScope.ticketCommitScope(dispatch2?.declaredFiles, dispatch2?.declaredFiles, ticket?.ref);
-  const baselineRecorded = Array.isArray(dispatch2?.workingTreeDirtyBaseline);
+  const baselineRecorded = hasPreparedWorkingTreeBaseline(dispatch2);
   if (dispatch2?.workingTreeDelivery !== true || !declaredFiles.length) return null;
   const baselineEntries = baselineRecorded ? dispatch2.workingTreeDirtyBaseline : [];
   const baseline = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
@@ -3332,19 +3337,23 @@ function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
   const candidate = workingTreeDeliveryCandidate(slug, ticket);
   if (!candidate) return { ok: false, reason: "working_tree_delivery_unavailable", message: `${ticket.ref} cannot inspect its pinned working-tree deliverable. Release it and dispatch again.` };
   const declaredFiles = commitScope.ticketCommitScope(dispatch2.declaredFiles, dispatch2.declaredFiles, ticket.ref);
-  const current = artifactWorkingState(slug, { allowLarge: !Array.isArray(dispatch2.workingTreeDirtyBaseline) });
+  const current = artifactWorkingState(slug, { allowLarge: !hasPreparedWorkingTreeBaseline(dispatch2) });
   const ignoredDirtyPaths = current.filter((entry) => !commitScope.isInScope(entry.path, declaredFiles)).map((entry) => entry.path).sort();
   const committed = completionDelta?.ok ? completionDelta.committed.filter((file) => commitScope.isInScope(file, declaredFiles)) : [];
   if (committed.length) return { ok: false, reason: "working_tree_commit_forbidden", message: `${ticket.ref} declares a working-tree deliverable, but committed declared paths: ${committed.join(", ")}. Preserve the shared checkout and hand the committed paths back to the parent for a submitted delivery.` };
   if (!candidate.changedPaths.length) return { ok: false, reason: "working_tree_delivery_empty", message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };
   return { ok: true, ...candidate, ignoredDirtyPaths, warnings };
 }
+function missingWorkingTreeDeliveryGuidance(ticket) {
+  if (ticket.workingTreeDelivery !== true || ticket.dispatch?.workingTreeDelivery === true) return "";
+  return ` ${ticket.ref} declares workingTreeDelivery:true, but this dispatch was prepared without it. The orchestrator can run update workingTreeDelivery:true to apply it to a live shared-checkout dispatch, or release and redispatch.`;
+}
 function externalDeliverableCloseout(slug, ticket, verify) {
   if (ticket?.externalDeliverable !== true) {
     return {
       ok: false,
       reason: "external_deliverable_not_declared",
-      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can repeat done: a pinned command requires a current verify-capture; a commandless requirement needs explicit done --verify evidence.`
+      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can repeat done: a pinned command requires a current verify-capture; a commandless requirement needs explicit done --verify evidence.${missingWorkingTreeDeliveryGuidance(ticket)}`
     };
   }
   const workspace = dispatchWorkspace(slug, ticket);
@@ -3357,7 +3366,7 @@ function externalDeliverableCloseout(slug, ticket, verify) {
       pending.working.length ? `uncommitted ${pending.working.join(", ")}` : null,
       pending.committed.length ? `committed but not submitted ${pending.committed.join(", ")}` : null
     ].filter(Boolean).join("; ");
-    return { ok: false, reason: "external_deliverable_scope_dirty", message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion. ${landedWithoutSubmissionGuidance(ticket.ref)}` };
+    return { ok: false, reason: "external_deliverable_scope_dirty", message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion. ${landedWithoutSubmissionGuidance(ticket.ref)}${missingWorkingTreeDeliveryGuidance(ticket)}` };
   }
   let revision;
   try {

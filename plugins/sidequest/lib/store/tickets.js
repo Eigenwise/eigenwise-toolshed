@@ -37,6 +37,7 @@ function createTickets(dependencies) {
     dispatchState,
     dispatchVerifyCommandError,
     syncLiveDispatchVerification,
+    syncLiveWorkingTreeDelivery,
     effectiveScope,
     execFileSync,
     executorText,
@@ -1161,13 +1162,17 @@ function createTickets(dependencies) {
     const filesPatch = patchedFileScope(ticket, patch);
     return filesPatch !== void 0 && !sameFiles(ticket.files, filesPatch);
   }
+  function applyWorkingTreeDeliveryDeclaration(slug, ticket, requested) {
+    if (requested === true) syncLiveWorkingTreeDelivery(slug, ticket);
+    ticket.workingTreeDelivery = requested === true;
+  }
   function activeClaimCloseoutUpdateRefusal(ticket, patch, options = {}, projectPath = "") {
     if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
     const changedFields = [
       ...patchChangesFiles(ticket, patch) ? ["files"] : [],
       ...patch.status !== void 0 && String(patch.status).trim().toLowerCase() !== ticket.status ? ["status"] : [],
       ...(patch.readonly !== void 0 || patch.readonlyOverride !== void 0) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ["readonly"] : [],
-      ...patch.workingTreeDelivery !== void 0 && patch.workingTreeDelivery === true !== (ticket.workingTreeDelivery === true) ? ["workingTreeDelivery"] : [],
+      ...patch.workingTreeDelivery !== void 0 ? ["workingTreeDelivery"] : [],
       ...patch.externalDeliverable !== void 0 && patch.externalDeliverable === true !== (ticket.externalDeliverable === true) ? ["externalDeliverable"] : [],
       ...acceptanceCloseoutChange(ticket, patch),
       ...patch.executorVerify !== void 0 && patch.executorVerify !== ticket.executorVerify ? ["verify"] : [],
@@ -1271,7 +1276,7 @@ function createTickets(dependencies) {
       if (patch.contracts !== void 0) t.contracts = boundedContracts(patch.contracts);
       if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
       if (patch.readonly !== void 0 || patch.readonlyOverride !== void 0) t.readonlyOverride = requestedReadonlyOverride(patch);
-      if (patch.workingTreeDelivery !== void 0) t.workingTreeDelivery = patch.workingTreeDelivery === true;
+      if (patch.workingTreeDelivery !== void 0) applyWorkingTreeDeliveryDeclaration(slug, t, patch.workingTreeDelivery);
       if (patch.externalDeliverable !== void 0) t.externalDeliverable = patch.externalDeliverable === true;
       if (patch.category !== void 0 || patch.readonly !== void 0 || patch.readonlyOverride !== void 0) {
         t.files = boundedFiles(t.files, {
