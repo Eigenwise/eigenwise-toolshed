@@ -173,6 +173,9 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   // SQ-2961: and which board writes reach that grace, since a caller cannot see the trust boundary in the schema.
   assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /bound name only/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.retireOnly?.type, 'boolean');
+  assert.equal(byName.get('dispatch')?.inputSchema.properties?.reason?.type, 'string');
+  assert.ok(byName.get('dispatch')?.description?.includes('preparer reason(20+) retires unclaimed'));
+  assert.match(byName.get('dispatch')?.description ?? '', /retireOnly=no replacement/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, undefined);
   // The served groomClose said nothing about retirement while the source description still claimed evidence
   // only applies before runtime binding (SQ-2953 finding 4).
