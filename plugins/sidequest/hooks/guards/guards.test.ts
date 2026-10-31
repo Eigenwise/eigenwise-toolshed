@@ -53,6 +53,26 @@ test('the Windows-only guards stay silent off Windows', async ($, on) => {
   expect(ran.context).toBeUndefined()
 })
 
+test('SendMessage retries admission timeouts and preserves the second failure cause', async ($, on) => {
+  mock.env(on, WINDOWS)
+  passThrough(on)
+  let attempts = 0
+  const logs: string[] = []
+  const notices: string[] = []
+  on('process.run', () => {
+    attempts += 1
+    if (attempts === 1) return { deny: 'sidequest: $.process.run(node) aborted: still running after 10000ms' }
+    return { value: { exitCode: 3, stdout: '', stderr: 'dispatch store unavailable' } }
+  })
+  on('ui.log', ($$, event) => { logs.push(event.text); return { value: undefined } })
+  on('ui.toast', ($$, event) => { notices.push(event.text); return { value: undefined } })
+  const denied = await $.tool.call({ tool: 'SendMessage', to: 'executor', message: 'continue' } as never)
+  expect(denied).toMatchObject({ deny: expect.stringContaining('admission decision exited 3: dispatch store unavailable') })
+  expect(attempts).toBe(2)
+  expect(logs).toEqual(['guard-executor-admission failed for SendMessage: admission decision exited 3: dispatch store unavailable'])
+  expect(notices).toEqual(logs)
+})
+
 test('an advisory guard error logs and toasts once without a duplicate plugin prefix or sticky status', async ($, on) => {
   mock.env(on, WINDOWS)
   passThrough(on)

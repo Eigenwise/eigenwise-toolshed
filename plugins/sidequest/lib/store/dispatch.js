@@ -1932,8 +1932,13 @@ function createDispatch(dependencies) {
     roots.push(...boardConfig(slug).investigationDataRoots);
     return { evidenceMode: true, evidenceRepositoryRoot: canonicalPath(projectPath), evidenceWriteRoots: [...new Set(roots.map((root) => canonicalPath(root)))] };
   }
-  function dispatchArtifactRoot(slug, t, sharedTree, effectiveFiles) {
-    return sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), effectiveFiles[0]) : null;
+  function declaredArtifactPath(t) {
+    const declared = normalizeFiles(t.files);
+    return declared.length === 1 ? declared[0] : null;
+  }
+  function dispatchArtifactRoot(slug, t, sharedTree) {
+    const artifact = declaredArtifactPath(t);
+    return sharedTree && artifact && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), artifact) : null;
   }
   function dispatchWriteScope(t, effectiveFiles, wholeTreeScope, artifactMode) {
     const writeScope = wholeTreeScope ? [WHOLE_TREE_SCOPE, ...effectiveFiles] : effectiveFiles;
@@ -1950,14 +1955,15 @@ function createDispatch(dependencies) {
     return { artifactDirtyBaseline, dirtyBaselineCapture, workingTreeDirtyBaseline: workingTreeDirtyBaseline(dirtyBaselineCapture, workingTreeDelivery) };
   }
   function dispatchArtifactScope(slug, t, isolation, effectiveFiles, workingTreeDelivery) {
-    const artifactRoot = dispatchArtifactRoot(slug, t, isolation.sharedTree, effectiveFiles);
+    const artifactRoot = dispatchArtifactRoot(slug, t, isolation.sharedTree);
     const artifactMode = Boolean(artifactRoot);
-    const artifactScope = artifactMode ? effectiveFiles[0] : null;
+    const artifactScope = artifactMode ? declaredArtifactPath(t) : null;
+    const writableFiles = artifactScope ? [artifactScope] : effectiveFiles;
     return {
       artifactRoot,
       artifactMode,
       artifactScope,
-      ...dispatchWriteScope(t, effectiveFiles, isolation.wholeTreeScope, artifactMode),
+      ...dispatchWriteScope(t, writableFiles, isolation.wholeTreeScope, artifactMode),
       ...dispatchDirtyBaselines(slug, isolation.sharedTree, artifactMode, artifactScope, workingTreeDelivery)
     };
   }

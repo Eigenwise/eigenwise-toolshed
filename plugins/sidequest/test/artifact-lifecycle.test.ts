@@ -1049,6 +1049,24 @@ test('update status done still closes a plain unclaimed and undispatched ticket'
   assert.strictEqual(updated.status, 'done');
 });
 
+test('artifact mode engages on a board whose alwaysInScope adds docs and the release fragment', (context: any) => {
+  const previous = store.boardConfig(slug).alwaysInScope;
+  assert.strictEqual(store.setBoardConfig(slug, { alwaysInScope: ['docs/', '.release/unreleased/'] }).ok, true);
+  context.after(() => store.setBoardConfig(slug, { alwaysInScope: previous }));
+  const created = ticket('refresh the map beside always-in-scope docs', [
+    'Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.',
+    store.SHARED_TREE_ARTIFACT_MARKER,
+  ].join('\n'), ['.claude/.codebase-info/']);
+
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+
+  assert.strictEqual(prepared.ticket.dispatch.artifactMode, true, JSON.stringify(prepared.ticket.dispatch));
+  assert.strictEqual(prepared.ticket.dispatch.artifactScope, '.claude/.codebase-info');
+  assert.deepStrictEqual(prepared.ticket.dispatch.declaredFiles, ['.claude/.codebase-info'], 'artifact mode writes the artifact path alone, never docs/ or the release fragment');
+  assert.deepStrictEqual(prepared.ticket.dispatch.addedWriteScope, []);
+  assert.strictEqual(prepared.ticket.dispatchExecutor, store.resolveExec(prepared.ticket.model, prepared.ticket.effort).agent);
+});
+
 test('a claimed ticket cannot be rewritten and redispatched into artifact mode', () => {
   const created = ticket('ordinary claimed ticket', 'Start as ordinary scoped repository work.');
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
