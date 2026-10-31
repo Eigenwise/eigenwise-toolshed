@@ -35,6 +35,7 @@ async function cmdDispatch(opts: any, positional: any) {
       allowRepeatFailure: !!opts['allow-repeat-failure'],
       allowUnscoped: !!opts['allow-unscoped'],
       recoveryEvidence: opts['recovery-evidence'],
+      reason: opts.reason,
       retireOnly: !!opts['retire-only'],
       source: 'cli',
       transport: 'cli',

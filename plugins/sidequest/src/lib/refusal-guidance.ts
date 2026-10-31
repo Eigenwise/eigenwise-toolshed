@@ -92,6 +92,7 @@ function notOwnerRecovery(ref: string, context: ClaimContext): string {
   if (context.submission?.by && !context.claim?.by) {
     return `${ref} has a parked submission from "${context.submission.by}". Its producer is terminal: do not ask it to release or resume. The control plane must publish it, request changes on an unbound candidate with MCP rework from the main thread (omit by), or follow the bound review's oracle and repair flow; an executor reports the need to the orchestrator.`;
   }
+  if (!context.claim?.by && !context.by) return `Nobody owns a claim on ${ref}. The preparing session can retire its never-claimed dispatch with \`sidequest release ${ref} --retire-prepared --reason "<why, at least 20 characters>"\` or MCP \`dispatch { ref: "${ref}", retireOnly: true, reason: "<why, at least 20 characters>" }\`. Foreign sessions still require recoveryEvidence and the retirement deadline.`;
   return `This is a live claim. Ask the claim holder to release it with \`sidequest release ${ref}\`.`;
 }
 

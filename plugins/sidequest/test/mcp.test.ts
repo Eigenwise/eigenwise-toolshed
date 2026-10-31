@@ -4781,6 +4781,78 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
   assert.equal(cliRestored.ok, true);
   assert.equal(store.findProject(project).meta.archivedAt, undefined);
 });
+
+test('SQ-3830: preparer retires each never-claimed shape with a reason and preserves its record', async () => {
+  const project = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'sq3830-retirement', name: 'Reason retirement', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  for (const shape of ['prepared', 'launched', 'bound', 'briefed']) {
+    const added = await callTool('add', { title: 'SQ-3830 ' + shape, description: DISPATCH_DESCRIPTION, category: 'sq3830-retirement', files: ['tracked.js'] });
+    const session = 'sq3830-' + added.ref;
+    const dispatched = await callToolAsSession(session, 'dispatch', { ref: added.ref, full: true });
+    const prepared = store.getTicket(project, added.ref);
+    if (shape !== 'prepared') assert.equal(store.recordDispatchLaunch(project, added.ref, { token: dispatched.token, executor: prepared.dispatchExecutor, sessionId: session }).ok, true);
+    if (['bound', 'briefed'].includes(shape)) assert.equal(store.bindDispatchAgent(session, prepared.dispatchExecutor, 'sq3830-' + added.id, 'sq3830-' + added.id).ok, true);
+    const before = store.getTicket(project, added.ref);
+    if (shape === 'briefed') { before.dispatch.briefedAt = new Date().toISOString(); persistTicket(project, before); }
+    const reason = 'The preparing session no longer needs this attempt.';
+    const retired = await callToolAsSession(session, 'dispatch', { ref: added.ref, retireOnly: true, reason, full: true });
+    assert.equal(retired.retired, true, shape);
+    const after = store.getTicket(project, added.ref);
+    assert.equal(after.dispatch.failureShape, 'retired_by_preparer');
+    assert.equal(after.dispatch.retirementReason, reason);
+    assert.equal(after.dispatch.attempts.at(-1).reason, reason);
+    assert.equal(after.dispatch.attempts.at(-1).recoveryEvidence, undefined);
+    assert.equal(after.dispatch.preparedAt, before.dispatch.preparedAt);
+    assert.equal(after.dispatchNonce, null);
+  }
+});
+
+test('SQ-3830: reason validates length and foreign sessions retain evidence and deadline guards', async () => {
+  const project = store.ensureProject(PROJ).slug;
+  const added = await callTool('add', { title: 'SQ-3830 foreign retirement', description: DISPATCH_DESCRIPTION, category: 'sq3830-retirement', files: ['tracked.js'] });
+  const session = 'sq3830-foreign-' + added.ref;
+  const dispatched = await callToolAsSession(session, 'dispatch', { ref: added.ref, full: true });
+  const before = store.getTicket(project, added.ref);
+  assert.equal(store.recordDispatchLaunch(project, added.ref, { token: dispatched.token, executor: before.dispatchExecutor, sessionId: session }).ok, true);
+  const short = await callToolRawAsSession(session, 'dispatch', { ref: added.ref, retireOnly: true, reason: 'too short' });
+  assert.equal(short.isError, true);
+  assert.match(short.content[0].text, /at least 20 characters/);
+  const foreign = await callToolRawAsSession('sq3830-foreign-caller', 'dispatch', { ref: added.ref, retireOnly: true, reason: 'I want to retire another session attempt.', recoveryEvidence: 'The host reported the runtime ended before claiming.' });
+  assert.equal(foreign.isError, true);
+  assert.match(foreign.content[0].text, /retirable on evidence.*in .*minute/);
+  assert.equal(store.getTicket(project, added.ref).dispatchNonce, before.dispatchNonce);
+  const noEvidence = await callToolRawAsSession('sq3830-foreign-caller', 'dispatch', { ref: added.ref, retireOnly: true, reason: 'I want to retire another session attempt.' });
+  assert.equal(noEvidence.isError, true);
+  assert.match(noEvidence.content[0].text, /Other sessions require observed failure/);
+  await callToolAsSession(session, 'dispatch', { ref: added.ref, retireOnly: true, reason: 'The preparer is cleaning up its test attempt.' });
+});
+
+test('SQ-3830: preparer reason retires and prepares one replacement with immutable history', async () => {
+  const project = store.ensureProject(PROJ).slug;
+  const added = await callTool('add', { title: 'SQ-3830 replacement', description: DISPATCH_DESCRIPTION, category: 'sq3830-retirement', files: ['tracked.js'] });
+  const session = 'sq3830-replacement-' + added.ref;
+  const before = await callToolAsSession(session, 'dispatch', { ref: added.ref, full: true });
+  await callToolAsSession(session, 'dispatch', { ref: added.ref, reason: 'The earlier prepared attempt needs a replacement.', full: true });
+  const after = store.getTicket(project, added.ref);
+  assert.notEqual(after.dispatchNonce, before.token);
+  assert.equal(after.dispatch.attempts.at(-1).failureShape, 'retired_by_preparer');
+  assert.equal(after.dispatch.attempts.at(-1).reason, 'The earlier prepared attempt needs a replacement.');
+  assert.equal(after.dispatch.outcome, 'prepared');
+  await callToolAsSession(session, 'dispatch', { ref: added.ref, retireOnly: true, reason: 'The preparer is cleaning up the replacement.' });
+});
+
+test('SQ-3830: CLI release retires prepared attempts but refuses a claimed attempt', () => {
+  const project = store.ensureProject(PROJ).slug;
+  const added = store.createTicket(project, { title: 'SQ-3830 CLI retire', description: DISPATCH_DESCRIPTION, category: 'sq3830-retirement', files: ['tracked.js'] });
+  store.prepareDispatch(project, added.ref, { sessionId: MCP_SESSION_ID });
+  const retired = runCli(['release', added.ref, '--retire-prepared', '--reason', 'The preparer cancelled this unlaunched attempt.', '--json']);
+  assert.equal(retired.retired, true);
+  assert.equal(store.getTicket(project, added.ref).dispatch.failureShape, 'retired_by_preparer');
+  const claimed = isolatedDispatch('sq3830-claimed-', 'a3830claimed', ['src/engine.js'], 'node -p "process.cwd()"', { preparingSessionId: MCP_SESSION_ID });
+  assert.throws(() => store.prepareDispatch(claimed.project, claimed.ref, { sessionId: MCP_SESSION_ID, retireOnly: true, reason: 'The preparer cannot retire a claimed attempt.', recoveryEvidence: 'Compatibility evidence cannot bypass a live claim.' }), /claimed/);
+  assert.equal(store.getTicket(claimed.project, claimed.ref).claim.by, claimed.by);
+});
+
 test('SQ-2944: MCP pulse and recovery evidence agree at every retirement boundary', async () => {
   const projectSlug = store.ensureProject(PROJ).slug;
   store.setCategory({ id: 'mcp-retirement-boundary', name: 'MCP retirement boundary', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
@@ -4990,7 +5062,7 @@ test('SQ-2961: CLI and MCP groom-close answer recovery evidence with one retirem
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'retireOnly', 'sharedTree', 'workProvenance', 'worktree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'reason', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'retireOnly', 'sharedTree', 'workProvenance', 'worktree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
