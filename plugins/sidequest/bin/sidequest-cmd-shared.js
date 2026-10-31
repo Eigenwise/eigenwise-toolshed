@@ -8,6 +8,15 @@ function fail(msg) {
   console.error(`sidequest: ${msg}`);
   process.exit(1);
 }
+const DEFECT_ERROR_TYPES = [TypeError, ReferenceError, SyntaxError, RangeError];
+function deservesStack(error) {
+  if (!(error instanceof Error)) return false;
+  return Boolean(process.env.SIDEQUEST_DEBUG) || DEFECT_ERROR_TYPES.some((type) => error instanceof type);
+}
+function errorReport(error) {
+  if (deservesStack(error) && error.stack) return error.stack;
+  return error?.message || String(error);
+}
 function registeredBoard(registration) {
   if (!registration.ok) fail(registration.reason);
   return registration;
@@ -69,4 +78,4 @@ function addBodyComment(slug, idOrRef, by, body, source) {
   if (!body || !String(body).trim()) return null;
   return store.addComment(slug, idOrRef, { by, body, kind: "comment", source });
 }
-module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, errorReport, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
