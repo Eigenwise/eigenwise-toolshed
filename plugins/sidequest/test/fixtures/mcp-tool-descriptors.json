@@ -1914,7 +1914,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Tree. token and spawn spec; scope additions, not writes; retireOnly.",
+    "description": "token and spawn spec; preparer reason(20+) retires unclaimed; retireOnly=no replacement.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1943,6 +1943,9 @@
         "recoveryEvidence": {
           "type": "string",
           "description": "Unverified; preparer retires now, else latest signal grace; bound name only."
+        },
+        "reason": {
+          "type": "string"
         },
         "retireOnly": {
           "type": "boolean"
@@ -2484,7 +2487,7 @@
             "report",
             "off"
           ],
-          "description": "enforce (default): measured failures refuse. report: record only. off: skip quality, verify normally."
+          "description": "enforce(default): measured failures refuse; report: record; off: verify only."
         },
         "integrationBranch": {
           "type": "string",
@@ -2509,7 +2512,7 @@
             "isolated",
             "shared"
           ],
-          "description": "shared: verify at integration only. Frozen per dispatch; default isolated."
+          "description": "shared: integration-only verify; default isolated. Dispatch-frozen."
         },
         "worktreeBase": {
           "type": "string",

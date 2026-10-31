@@ -148,10 +148,19 @@ async function cmdVerdict(opts: any, positional: any) {
   else fail(`verdict: ${res.message || `could not record a verdict for ${idOrRef}`}`);
 }
 
+function closeReleasedDispatch(ticket: unknown, result: { ok: boolean }): void {
+  if (result.ok) closeDispatchExecutor(ticket);
+}
+
 async function cmdRelease(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
   const { slug, meta } = await resolveProject(opts);
+  if (opts['retire-prepared']) {
+    const result = store.prepareDispatch(slug, idOrRef, { retireOnly: true, reason: opts.reason, sessionId: sessionId(opts), source: 'cli' });
+    process.stdout.write(JSON.stringify({ project: slug, ...result }, null, 2) + '\n');
+    return;
+  }
   const by = workerId(opts);
   // The reason mandate is the MCP executor surface's contract (3.23.0); the CLI
   // stays the human/admin fallback where forced ceremony on dead-claim cleanup
@@ -180,7 +189,7 @@ async function cmdRelease(opts: any, positional: any) {
     source: opts.source || 'cli',
     sessionId: sessionId(opts),
   });
-  if (res.ok) closeDispatchExecutor(ticket);
+  closeReleasedDispatch(ticket, res);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;

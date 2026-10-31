@@ -2,6 +2,8 @@ const { emitExternalRefUpdates } = require('./external-ref-updates.js');
 const { currentBoardPath } = require('./move.js');
 'use strict';
 
+import { stampExecutorIntegration, type ExecutorDispatchRecord } from './completion';
+
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
 const { readLockHolder } = require('./locks.js');
@@ -1383,7 +1385,7 @@ type DeliveryTicket = {
   id: string;
   ref: string;
   externalRefs?: import('../external-refs').ExternalReference[];
-  dispatch?: { integrationTarget?: { branch: string } };
+  dispatch?: ExecutorDispatchRecord & { integrationTarget?: { branch: string } };
   submission: {
     integration: {
       deliveredAt?: string;
@@ -1408,7 +1410,9 @@ function assertRecordedIntegrationBranch(slug: string, ticket: DeliveryTicket, r
 
 function persistSubmissionIntegration(slug: string, ticket: DeliveryTicket, resolvedRecordingBranch?: string) {
   assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch);
-  const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+  const deliveredAt = ticket.submission.integration.deliveredAt;
+  const newlyDelivered = deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+  stampExecutorIntegration(ticket.dispatch, deliveredAt);
   putTicket(slug, ticket);
   if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
   queueEventNotification(slug, ticket, 'status', 'integration');

@@ -1,4 +1,5 @@
 "use strict";
+var import_completion = require("./completion");
 var import_integration_tests = require("../integration-tests.js");
 var import_integration_quality = require("../integration-quality.js");
 var import_commit_scope = require("../commit-scope.js");
@@ -1112,7 +1113,9 @@ ${verify.outputTail}` : null
   }
   function persistSubmissionIntegration(slug, ticket, resolvedRecordingBranch) {
     assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch);
-    const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+    const deliveredAt = ticket.submission.integration.deliveredAt;
+    const newlyDelivered = deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+    (0, import_completion.stampExecutorIntegration)(ticket.dispatch, deliveredAt);
     putTicket(slug, ticket);
     if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
     queueEventNotification(slug, ticket, "status", "integration");
