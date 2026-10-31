@@ -2524,9 +2524,16 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   context.after(() => removeTestWorktree(primary, worktree));
   await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
 
+  const submittedDispatch = store.getTicket(project, ticket.ref).dispatch;
+  assert.equal(submittedDispatch.attempts.length, 1);
   const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'delivery-cleanup-integrator' });
   assert.equal(integrated.ok, true, integrated.message || integrated.reason);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  const deliveredDispatch = store.getTicket(project, ticket.ref).dispatch;
+  assert.equal(deliveredDispatch.terminalAt, submittedDispatch.terminalAt);
+  assert.equal(deliveredDispatch.attempts.length, 1);
+  assert.equal(deliveredDispatch.attempts[0].outcome, 'submitted');
+  assert.equal(deliveredDispatch.attempts[0].integratedAt, deliveredDispatch.integratedAt);
   assert.equal(fs.existsSync(worktree), false);
 });
 
@@ -2648,6 +2655,8 @@ test('CLI integrate reclaims a terminal isolated worktree in the same command', 
   await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
   assert.equal(fs.existsSync(worktree), true, 'the candidate worktree is seconds old when integration starts');
 
+  const submittedDispatch = store.getTicket(project, ticket.ref).dispatch;
+  assert.equal(submittedDispatch.attempts.length, 1);
   const integrated = spawnSync(process.execPath, [
     path.join(__dirname, '..', 'bin', 'sidequest.js'), 'integrate', ticket.ref,
     '--project', primary, '--by', 'cli-delivery-integrator', '--json',
@@ -2656,6 +2665,11 @@ test('CLI integrate reclaims a terminal isolated worktree in the same command', 
   assert.equal(integrated.status, 0, integrated.stderr);
   assert.equal(JSON.parse(integrated.stdout).ok, true, integrated.stdout);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  const deliveredDispatch = store.getTicket(project, ticket.ref).dispatch;
+  assert.equal(deliveredDispatch.terminalAt, submittedDispatch.terminalAt);
+  assert.equal(deliveredDispatch.attempts.length, 1);
+  assert.equal(deliveredDispatch.attempts[0].outcome, 'submitted');
+  assert.equal(deliveredDispatch.attempts[0].integratedAt, deliveredDispatch.integratedAt);
   assert.equal(fs.existsSync(worktree), false, 'CLI integration reclaimed the worktree in the same command');
   assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), false, 'and left it unregistered');
 });

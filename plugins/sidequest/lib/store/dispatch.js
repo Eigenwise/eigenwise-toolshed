@@ -1,4 +1,5 @@
 "use strict";
+var import_completion = require("./completion");
 var import_work_provenance = require("./work-provenance");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("../prepared-dispatch.js");
 const { classifyVerificationKind, verificationRequirement } = require("../kernel/verification.js");
@@ -832,7 +833,7 @@ function createDispatch(dependencies) {
     return null;
   }
   function appendDispatchAttempt(state, outcome, source, failureShape, at, commit, release) {
-    const route = state && state.route && typeof state.route === "object" ? state.route : {};
+    const route = state.route && typeof state.route === "object" ? state.route : {};
     const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
     const terminalSource = source || "store";
     attempts.push({
@@ -855,6 +856,7 @@ function createDispatch(dependencies) {
       failureShape,
       source: terminalSource,
       terminalAt: at,
+      ...outcome === "submitted" ? { submittedAt: at } : {},
       terminalSource,
       ...commit ? { commit } : {},
       ...release?.kind ? { release } : {}
@@ -943,17 +945,28 @@ function createDispatch(dependencies) {
       message: `${ticket.ref} cannot close: its checkout is on ${observed} rather than the candidate ${candidate}, so this verdict is about a different tree. A review ENDS on its candidate. Run \`git -C ${worktree} checkout --detach ${candidate}\`, re-run the declared verify there, then close. Comparing against the integration branch never needs HEAD to move: use \`git diff ${candidate}...main\` or \`git show\`.`
     };
   }
-  function setDispatchTerminal(ticket, outcome, source, opts) {
-    const state = dispatchState(ticket);
-    if (!state) return;
-    const at = (/* @__PURE__ */ new Date()).toISOString();
-    captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
-    const release = opts?.releaseKind ? {
+  function recordAttemptIntegration(state, outcome, at) {
+    if (state.outcome !== "submitted" || outcome !== "done") return false;
+    if (!(0, import_completion.stampExecutorIntegration)(state, state.integratedAt || at)) return false;
+    state.outcome = outcome;
+    return true;
+  }
+  function dispatchTerminalRelease(opts) {
+    return opts.releaseKind ? {
       kind: opts.releaseKind,
       reason: opts.releaseReason || null,
       evidence: opts.releaseEvidence || null
     } : null;
-    const failureShape = opts?.failureShape || release?.kind || classifyDispatchFailure(opts?.error);
+  }
+  function setDispatchTerminal(ticket, outcome, source, opts) {
+    const state = dispatchState(ticket);
+    if (!state) return;
+    opts ??= {};
+    const at = (/* @__PURE__ */ new Date()).toISOString();
+    if (recordAttemptIntegration(state, outcome, at)) return;
+    captureTerminalWorktreeRevision(opts.slug, ticket, state, at);
+    const release = dispatchTerminalRelease(opts);
+    const failureShape = opts.failureShape || release?.kind || classifyDispatchFailure(opts.error);
     state.outcome = outcome;
     state.failureShape = failureShape;
     state.terminalAt = at;
