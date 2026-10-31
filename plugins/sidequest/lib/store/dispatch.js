@@ -136,8 +136,9 @@ function createDispatch(dependencies) {
   function dispatchTokenFile(ticket) {
     return typeof ticket?.dispatch?.tokenFile === "string" ? ticket.dispatch.tokenFile : null;
   }
-  function newDispatchTokenFile() {
-    return path.join(homeRoot(), "dispatch-tokens", `${crypto.randomUUID()}.token`);
+  function newDispatchTokenFile(slug, ticket) {
+    ticket.dispatchPrepareSeq = (Number(ticket.dispatchPrepareSeq) || 0) + 1;
+    return path.join(homeRoot(), "dispatch-tokens", slug, `${ticket.ref}-p${ticket.dispatchPrepareSeq}.token`);
   }
   function ticketEvidenceDirectory(slug, ref, projectPath) {
     const safeSlug = String(slug || "project").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -171,12 +172,12 @@ function createDispatch(dependencies) {
     }
     return segmentsUnder(root, requested).length > 0;
   }
-  function writeDispatchTokenFile(ticket) {
+  function writeDispatchTokenFile(ticket, exclusive = false) {
     const file = dispatchTokenFile(ticket);
     if (!file) throw new Error("dispatch token file is unavailable");
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 448 });
     fs.writeFileSync(file, `${ticket.dispatchNonce}
-`, { encoding: "utf8", mode: 384 });
+`, { encoding: "utf8", mode: 384, flag: exclusive ? "wx" : "w" });
     return file;
   }
   function removeDispatchTokenFile(ticket) {
@@ -188,18 +189,29 @@ function createDispatch(dependencies) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
+  function dispatchTokenReadErrorCode(error) {
+    return error instanceof Error && "code" in error ? String(error.code) : "UNKNOWN";
+  }
   function dispatchTokenFromFile(file) {
     const tokenFile = String(file || "").trim();
-    if (!tokenFile) return null;
+    if (!tokenFile) return { token: null };
     try {
       const token = fs.readFileSync(tokenFile, "utf8").trim();
-      return token && !/[\r\n]/.test(token) ? token : null;
-    } catch (_) {
-      return null;
+      return { token: token && !/[\r\n]/.test(token) ? token : null };
+    } catch (error) {
+      return { token: null, readError: dispatchTokenReadErrorCode(error) };
+    }
+  }
+  function matchingDispatchTokenFiles(file, ref) {
+    try {
+      const names = fs.readdirSync(path.dirname(file));
+      return names.filter((name) => name.startsWith(`${ref}-p`) && name.endsWith(".token")).sort();
+    } catch {
+      return [];
     }
   }
   function dispatchTokenForRequest(token, tokenFile) {
-    return token == null || token === "" ? dispatchTokenFromFile(tokenFile) : token;
+    return token == null || token === "" ? dispatchTokenFromFile(tokenFile).token : token;
   }
   function dispatchState(ticket) {
     return ticket && ticket.dispatch && typeof ticket.dispatch === "object" ? ticket.dispatch : null;
@@ -2200,10 +2212,10 @@ function createDispatch(dependencies) {
       ...plan.isolation.sharedTree ? { dirtyBaseline: sharedTreeDirtyBaseline(plan.artifact) } : {}
     };
   }
-  function launchFields(t, plan) {
+  function launchFields(slug, t, plan) {
     return {
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-      tokenFile: newDispatchTokenFile(),
+      tokenFile: newDispatchTokenFile(slug, t),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, plan.preparedExec),
       launchSeq: plan.launchSeq,
@@ -2260,7 +2272,7 @@ function createDispatch(dependencies) {
       ...unscopedOverrideFields(slug, plan.isolation.wholeTreeScope, opts, plan.now),
       ...artifactFields(plan),
       ...dirtyBaselineFields(plan),
-      ...launchFields(t, plan),
+      ...launchFields(slug, t, plan),
       ...routeHistoryFields(plan, current, opts, preflight),
       ...storyFields(plan),
       preparedAt: plan.now,
@@ -2280,10 +2292,10 @@ function createDispatch(dependencies) {
     t.dispatchNonce = mintDispatchToken();
     t.dispatch = preparedDispatchRecord(slug, t, current, plan, opts, preflight);
     consumePreparedComposition(t, dispatchTokenDigest(t.dispatchNonce));
-    effects.staged = dispatchTokenFile(t);
     t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
     stampDispatchEvent(t, "dispatch", plan.now);
-    writeDispatchTokenFile(t);
+    writeDispatchTokenFile(t, true);
+    effects.staged = dispatchTokenFile(t);
     const warnings = preparedDispatchWarnings(plan, preflight);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery: plan.recovery, ...warnings.length ? { warnings } : {} };
   }
@@ -2367,16 +2379,29 @@ function createDispatch(dependencies) {
     const preflight = { projectPath, ...install, ...preparedDispatchEnvironment(slug, found, idOrRef, projectPath) };
     return prepareUnderDispatchLocks(slug, idOrRef, found, opts, preflight);
   }
+  function dispatchBriefingTokenFile(tokenFile, ref) {
+    const credential = dispatchTokenFromFile(tokenFile);
+    if (credential.readError === "ENOENT") return { ok: false, reason: "token_file_not_found", tokenFile, matchingFiles: matchingDispatchTokenFiles(tokenFile, ref) };
+    if (credential.readError) return { ok: false, reason: "token_file_unreadable", tokenFile, readError: credential.readError };
+    return { ok: true, token: credential.token };
+  }
+  function dispatchBriefingCredential(ticket, token, tokenFile) {
+    const credential = token ? { ok: true, token } : dispatchBriefingTokenFile(String(tokenFile || ""), ticket.ref);
+    if (!credential.ok) return credential;
+    return dispatchBriefingTokenMatch(ticket.dispatchNonce, credential.token);
+  }
+  function dispatchBriefingTokenMatch(expected, received) {
+    return dispatchTokenMatches(expected, received) ? { ok: true, token: received } : { ok: false, reason: "token" };
+  }
   function readDispatchBriefing(slug, idOrRef, token, tokenFile) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
     const state = dispatchState(ticket);
-    const receivedToken = dispatchTokenForRequest(token, tokenFile);
     if (!state || !ticket.dispatchNonce) return { ok: false, reason: "token" };
     if (state.terminalAt) return { ok: false, reason: "stale" };
-    if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
-      return { ok: false, reason: "token" };
-    }
+    const credential = dispatchBriefingCredential(ticket, token, tokenFile);
+    if (!credential.ok) return credential;
+    const receivedToken = credential.token;
     const briefed = withTicketLock(slug, ticket.id, () => {
       const current = getTicket(slug, ticket.id);
       const currentState = dispatchState(current);
@@ -2649,7 +2674,7 @@ function createDispatch(dependencies) {
         artifactScope: state.artifactScope || null,
         ...Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {},
         tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-        tokenFile: newDispatchTokenFile(),
+        tokenFile: newDispatchTokenFile(slug, t),
         executor: t.dispatchExecutor,
         description: spawnDescription(t, fallback.exec),
         launchSeq,
@@ -2667,7 +2692,7 @@ function createDispatch(dependencies) {
         supersededTokens,
         recovery
       };
-      writeDispatchTokenFile(t);
+      writeDispatchTokenFile(t, true);
       stampDispatchEvent(t, opts.source || "agent-launch-failure", now);
       putTicket(slug, t);
       return { ok: true, ticket: t, token: t.dispatchNonce, recovery };

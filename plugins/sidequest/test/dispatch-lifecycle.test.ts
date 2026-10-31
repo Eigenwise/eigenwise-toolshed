@@ -671,6 +671,10 @@ test('a durable replacement retires only the superseded token file', () => {
   const secondTokenFile = second.ticket.dispatch.tokenFile;
 
   assert.notEqual(secondTokenFile, firstTokenFile);
+  assert.equal(first.ticket.dispatch.launchSeq, second.ticket.dispatch.launchSeq);
+  assert.equal(path.basename(firstTokenFile), `${ticket.ref}-p1.token`);
+  assert.equal(path.basename(secondTokenFile), `${ticket.ref}-p2.token`);
+  assert.equal(second.ticket.dispatchPrepareSeq, 2);
   assert.equal(fs.existsSync(firstTokenFile), false, 'the durable replacement retires the superseded token file');
   assert.equal(fs.readFileSync(secondTokenFile, 'utf8').trim(), second.token);
   assert.equal(store.readDispatchBriefing(slug, ticket.ref, null, secondTokenFile).ok, true);
@@ -2309,7 +2313,7 @@ test('a resumed live claim re-mints its token, re-binds the linked worktree, and
     execFileSync('git', ['worktree', 'add', '--detach', worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
     fs.rmSync(prepared.ticket.dispatch.tokenFile);
-    assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).reason, 'token');
+    assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).reason, 'token_file_not_found');
 
     const refusedRecovery = (override: Record<string, string>) => store.recoverLiveClaimDispatch(slug, ticket.ref, {
       by: claimHolder, executor, worktree, sessionId: resumedSession,
@@ -4984,7 +4988,13 @@ test('dispatch token files authenticate the briefing and claim without transcrib
   const tokenFile = prepared.ticket.dispatch.tokenFile;
 
   assert.ok(path.isAbsolute(tokenFile));
+  assert.equal(path.dirname(tokenFile), path.join(SIDEQUEST_HOME, 'dispatch-tokens', slug));
+  assert.equal(path.basename(tokenFile), `${ticket.ref}-p1.token`);
+  assert.equal(prepared.ticket.dispatchPrepareSeq, 1);
   assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), prepared.token);
+  const legacyTokenFile = path.join(SIDEQUEST_HOME, 'dispatch-tokens', '00000000-0000-4000-8000-000000000000.token');
+  fs.writeFileSync(legacyTokenFile, `${prepared.token}\n`);
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, legacyTokenFile).ok, true);
   assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, tokenFile).ok, true);
 
   // The store seam above went green while the shipped CLI threw "dispatch
@@ -4997,11 +5007,25 @@ test('dispatch token files authenticate the briefing and claim without transcrib
   ], { encoding: 'utf8', env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }) });
   assert.equal(cliBriefing.status, 0, `briefing --token-file must render: ${cliBriefing.stderr}${cliBriefing.stdout}`);
   assert.match(cliBriefing.stdout, new RegExp(ticket.ref));
+  const cliByName = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'briefing', ticket.ref, '--token-name', `${ticket.ref}-p1`, '--project', PROJECT,
+  ], { encoding: 'utf8', env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }) });
+  assert.equal(cliByName.status, 0, cliByName.stderr);
+  assert.match(cliByName.stdout, new RegExp(ticket.ref));
+  const missing = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'briefing', ticket.ref, '--token-name', `${ticket.ref}-p99`, '--project', PROJECT,
+  ], { encoding: 'utf8', env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }) });
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /token file not found at/);
+  assert.ok(missing.stderr.includes(`${ticket.ref}-p1.token`));
+  assert.match(missing.stderr, /without retyping/);
   assert.equal(store.claimTicket(slug, ticket.ref, 'token-file-worker', {
     tokenFile,
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
-  assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, `${tokenFile}.missing`).reason, 'token');
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, `${tokenFile}.missing`).reason, 'token_file_not_found');
 });
 
 test('dispatch token files reject altered credentials with recovery guidance', () => {
@@ -5014,6 +5038,13 @@ test('dispatch token files reject altered credentials with recovery guidance', (
   const alteredToken = `${prepared.token.slice(0, swappedIndex)}${prepared.token[swappedIndex + 1]}${prepared.token[swappedIndex]}${prepared.token.slice(swappedIndex + 2)}`;
   fs.writeFileSync(alteredTokenFile, `${alteredToken}\n`);
 
+  const refused = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'briefing', ticket.ref, '--token-file', alteredTokenFile, '--project', PROJECT,
+  ], { encoding: 'utf8', env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }) });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /token refused/);
+  assert.doesNotMatch(refused.stderr, /not found/);
   assert.match(prepared.token, /^[abcdefghjkmnpqrstuvwxyz23456789]{4}(?:-[abcdefghjkmnpqrstuvwxyz23456789]{4}){7}$/);
   assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).ok, true);
   assert.equal(store.claimTicket(slug, ticket.ref, 'altered-token-file-worker', {
