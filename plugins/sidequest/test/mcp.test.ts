@@ -1614,7 +1614,7 @@ test('board worktree isolation defaults on and permits explicit isolation when d
   assert.equal(readonly.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, false);
   assert.match(readonly.spawn.prompt, /zero-scope read-only isolated checkout/);
-  assert.match(readonly.spawn.prompt, new RegExp(`--project "${isolatedRoot.replace(/\\/g, '\\\\')}"`));
+  assert.ok(readonly.spawn.prompt.includes(`--project "${isolatedRoot.replaceAll('\\', '/')}"`), readonly.spawn.prompt);
   const readonlyBriefing = agentsync.renderTicketBriefing(store.getTicket(isolatedProject, readonlyTicket.ref), readonly.token, isolatedProject, isolatedRoot);
   assert.match(readonlyBriefing, /Worktree isolation contract: this dispatch runs in its own linked worktree/);
   const explicitlyIsolated = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, sharedTree: false, full: true });
@@ -5001,7 +5001,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.ok(Buffer.byteLength(instant.spawn.prompt) < 1200, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
   assert.match(instant.spawn.prompt, /instant dispatch/);
   assert.ok(!instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
-  assert.ok(instant.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
+  assert.ok(instant.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-name ${path.basename(store.getTicket(slug, addedInstant.ref).dispatch.tokenFile, '.token')}`), instant.spawn.prompt);
   assert.match(instant.spawn.prompt, /FIRST action:/);
   assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high ticket=SQ-\d+\]/);
   assert.doesNotMatch(instant.spawn.prompt, /## This ticket/);
@@ -5032,13 +5032,13 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
   assert.equal(Object.hasOwn(adopted, 'briefing'), false);
-  assert.ok(adopted.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
+  assert.ok(adopted.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-name ${path.basename(store.getTicket(slug, addedInstant.ref).dispatch.tokenFile, '.token')}`), adopted.spawn.prompt);
   const staleBriefing = spawnSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token-file', staleInstantTokenFile, '--project', PROJ], {
     encoding: 'utf8', windowsHide: true,
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
   assert.equal(staleBriefing.status, 1);
-  assert.match(staleBriefing.stderr, /dispatch token was refused/);
+  assert.match(staleBriefing.stderr, /token refused/);
   assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
 
   store.setCategory({ id: 'dispatch-readonly-codex', name: 'Dispatch Readonly Codex', readonly: true, route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });

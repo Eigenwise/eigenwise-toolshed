@@ -200,7 +200,7 @@ function verifyDeliveredQuality(input: QualityInput, mode = 'enforce', filingErr
   fs.writeFileSync(path.join(input.project, 'gate', 'lib', 'core.mjs'), '');
   const submissions = createSubmissions({
     fs, path, crypto: require('node:crypto'),
-    getTicket: () => ticket, readMeta: () => ({ path: input.project }),
+    getTicket: () => ticket, readMeta: () => ({ path: input.project }), projectDir: () => path.join(input.project, 'board'),
     boardConfig: () => ({ integrationQuality: mode }),
     normalizeIntegrationVerifyTimeoutMs: () => input.timeoutMilliseconds,
     verifyCommandError: () => null, dispatchState: () => ({ evidenceDirectory: input.directory }),

@@ -3,6 +3,7 @@ const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRef
 const { DEMONSTRATIONS_FILE } = require('./store/completion.js');
 'use strict';
 
+import { committedBuildCommands } from './commit-scope.js';
 import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
 /**
  * sidequest - runtime exec agent sync (SQ-158)
@@ -1269,7 +1270,9 @@ function scopeAddedBeyondDeclared(ticket: any, slug: string, declared: string[])
   const declaredKeys = new Set(declared.map(scopeKey));
   const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
   const added = store.effectiveScope(slug, ticket).filter((file: string) => !declaredKeys.has(scopeKey(file)));
-  return scopeListing('Auto-paired tracked generated files (regenerate before verifying)', added.filter((file: string) => !alwaysKeys.has(scopeKey(file))))
+  const buildCommands = committedBuildCommands(store.readMeta(slug)?.path, declared);
+  const buildGuidance = buildCommands.length ? '\n\nCommitted build outputs: run ' + buildCommands.join(' && ') + ' before the final verify-capture so it binds the built output.' : '';
+  return buildGuidance + scopeListing('Auto-paired tracked generated files (regenerate before verifying)', added.filter((file: string) => !alwaysKeys.has(scopeKey(file))))
     + scopeListing('Added write scope (board config alwaysInScope, not declared on this ticket; paths are scope additions, not writes; a dirty path here still blocks submit)', added.filter((file: string) => alwaysKeys.has(scopeKey(file))));
 }
 
@@ -1506,6 +1509,13 @@ function formatWorktreeBase(base: string | null): string {
   return base ? `worktreeBase: ${base}` : '';
 }
 
+function dispatchStubCredential(tokenFile: string): string[] {
+  const portablePath = tokenFile.replaceAll('\\', '/');
+  const filename = portablePath.split('/').pop() || '';
+  if (/^SQ-[0-9]+-p[1-9][0-9]*\.token$/.test(filename)) return ['--token-name', filename.slice(0, -6)];
+  return ['--token-file', quotedShellArgument(portablePath)];
+}
+
 function renderDispatchStub(ticket?: any, projectPath?: any) {
   const project = String(projectPath || '').trim();
   const tokenFile = String(ticket?.dispatch?.tokenFile || '').trim();
@@ -1514,13 +1524,12 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   const marker = ticketRouteMarker(ticket);
   const command = [
     'node',
-    quotedShellArgument(ensureDispatchLauncher()),
+    quotedShellArgument(ensureDispatchLauncher().replaceAll('\\', '/')),
     'briefing',
     String(ticket.ref),
-    '--token-file',
-    quotedShellArgument(tokenFile),
+    ...dispatchStubCredential(tokenFile),
     '--project',
-    quotedShellArgument(project),
+    quotedShellArgument(project.replaceAll('\\', '/')),
   ].join(' ');
   const label = String(ticket?.dispatch?.description || spawnDescription(ticket, store.resolveExec(ticket?.model, ticket?.effort)))
     .replace(EMBEDDED_ROUTE_MARKER_RE, ' ')

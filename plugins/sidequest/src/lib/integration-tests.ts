@@ -227,6 +227,16 @@ function selectionWithExclusions(project: string, selection: IntegrationTestSele
   return { ...selection, excludedFiles };
 }
 
+export function integrationCaptureEnvironment(boardDirectory: string, environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { liveVerificationCaptureCount } = require('./verify-capture.js') as { liveVerificationCaptureCount(directory: string): number };
+  return { ...environment, SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT: String(liveVerificationCaptureCount(boardDirectory)) };
+}
+
+export function phaseBudgetResult(result: VerificationResult): VerificationResult {
+  if (!/Sidequest .* tests exceeded their \d+ms phase budget/.test(result.outputTail ?? '')) return result;
+  return { ...result, evidence: 'Phase budget failure. ' + result.evidence, failureIdentities: [...(result.failureIdentities ?? []), 'phase_budget_exceeded'] };
+}
+
 function runImportBatch(project: string, batch: IntegrationTestBatch, logPath: string, pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult {
   const started = Date.now();
   const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
@@ -235,7 +245,7 @@ function runImportBatch(project: string, batch: IntegrationTestBatch, logPath: s
     logPath,
     environment,
   });
-  const receipt = { ...result, batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
+  const receipt = { ...phaseBudgetResult(result), liveVerifyCaptureCount: Number(environment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT || 0), batchShape: batch.shape, timeoutMilliseconds: batch.timeoutMilliseconds, durationMilliseconds: Date.now() - started };
   if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk batch: ' + JSON.stringify(receipt) + '\n');
   return receipt;
 }

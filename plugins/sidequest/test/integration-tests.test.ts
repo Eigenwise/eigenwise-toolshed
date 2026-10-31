@@ -3,7 +3,56 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { integrationTestBatches, runImportingIntegrationTests, selectIntegrationTests } from '../src/lib/integration-tests.js';
+import { integrationCaptureEnvironment, phaseBudgetResult, integrationTestBatches, runImportingIntegrationTests, selectIntegrationTests } from '../src/lib/integration-tests.js';
+import { pathToFileURL } from 'node:url';
+import type { VerificationResult } from '../src/lib/kernel/verification.js';
+
+test('two live captures stretch the integration full-suite phase budget and dead records do not count', async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-live-captures-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  writeFixture(directory, {
+    [`running-captures/000000000000001-${process.pid}-first.json`]: '{}',
+    [`running-captures/000000000000002-${process.pid}-second.json`]: '{}',
+    'running-captures/000000000000003-2147483647-dead.json': '{}',
+    'running-captures/invalid.json': '{}',
+  });
+  const environment = integrationCaptureEnvironment(directory, { SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: '0' });
+  assert.equal(environment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT, '2');
+  assert.equal(environment.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT, '0');
+  const runner = await import(pathToFileURL(path.join(__dirname, '../scripts/test-full.mjs')).href) as { calculateTestPhaseTimeoutMilliseconds(concurrency: number, captures?: number): number };
+  assert.equal(runner.calculateTestPhaseTimeoutMilliseconds(8, Number(environment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT)), 2_400_000);
+  assert.equal(runner.calculateTestPhaseTimeoutMilliseconds(8), 1_200_000);
+  fs.rmSync(path.join(directory, 'running-captures'), { recursive: true });
+  assert.equal(integrationCaptureEnvironment(directory, {}).SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT, '0');
+});
+
+test('ordinary captures register while running and remove records after success or failure', async (context) => {
+  const store = require('../lib/store.js');
+  const { runOrdinaryCapture, liveVerificationCaptureCount } = require('../lib/verify-capture.js');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-capture-lifecycle-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  const { slug } = store.ensureProject(project);
+  const boardDirectory = store.projectDir(slug);
+  const scriptPath = path.join(project, 'observe-captures.cjs');
+  const captureModule = path.resolve(__dirname, '../lib/verify-capture.js');
+  fs.writeFileSync(scriptPath, `const { liveVerificationCaptureCount } = require(${JSON.stringify(captureModule)}); console.log('live=' + liveVerificationCaptureCount(${JSON.stringify(boardDirectory)})); process.exit(Number(process.argv[2]));`);
+  assert.equal(liveVerificationCaptureCount(boardDirectory), 0);
+  for (const exitCode of [0, 3]) {
+    const capture = await runOrdinaryCapture(`"${process.execPath}" "${scriptPath}" ${exitCode}`, project, 30_000, process.env, path.join(project, `capture-${exitCode}.log`), { slug, path: project });
+    assert.equal(capture.exitCode, exitCode);
+    assert.match(fs.readFileSync(capture.logPath, 'utf8'), /live=1/, 'the real child observes its running capture');
+    assert.equal(liveVerificationCaptureCount(boardDirectory), 0, 'the completed capture no longer counts');
+    assert.deepEqual(fs.readdirSync(path.join(boardDirectory, 'running-captures')), []);
+  }
+});
+
+test('integration timeout identifies phase budget exhaustion separately from failing assertions', () => {
+  const result: VerificationResult = { kind: 'command', status: 'failed_suite', command: 'npm run test:full', evidence: 'exit 1', failureIdentities: ['exit:1'], outputTail: 'Sidequest functional tests exceeded their 1200000ms phase budget at concurrency 8' };
+  assert.deepEqual(phaseBudgetResult(result).failureIdentities, ['exit:1', 'phase_budget_exceeded']);
+  assert.match(phaseBudgetResult(result).evidence, /Phase budget failure/);
+  const assertionFailure = { ...result, outputTail: 'not ok 1 - expected true' };
+  assert.equal(phaseBudgetResult(assertionFailure), assertionFailure);
+});
 
 test('integration test batches honour the board deadline and exclude pinned files', (context) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-batches-'));
@@ -106,6 +155,23 @@ test('large selection prefers the documented full gate and configurable threshol
   assert.equal(batches[0]!.files.length, 45);
   assert.ok(!batches[0]!.command.includes('perf'));
   assert.ok(!batches[0]!.command.includes('benchmark'));
+});
+
+test('full-gate receipts preserve the live capture count and phase budget failure identity', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-budget-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  manyTestFixture(project, { 'test:full': 'node full.cjs' });
+  writeFixture(project, { 'plugins/example/full.cjs': "console.log('live=' + process.env.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT); console.error('Sidequest functional tests exceeded their 1200000ms phase budget at concurrency 8'); process.exit(1);" });
+  const environment: NodeJS.ProcessEnv = { ...process.env, SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT: '2' };
+  delete environment.NODE_TEST_CONTEXT;
+  const logPath = path.join(project, 'gate.log');
+  const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath };
+  const result = runImportingIntegrationTests(project, ['plugins/example/src/store.ts'], pinned, 30_000, environment);
+  assert.equal(result.status, 'failed_suite');
+  assert.ok(result.failureIdentities!.includes('phase_budget_exceeded'));
+  assert.match(result.evidence, /Phase budget failure/);
+  assert.match(fs.readFileSync(logPath + '.import-0.log', 'utf8'), /live=2/);
+  assert.match(fs.readFileSync(logPath, 'utf8'), /"liveVerifyCaptureCount":2/);
 });
 
 test('import gate executes one batch and records exclusions timing and only failures', (context) => {

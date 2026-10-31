@@ -1,7 +1,7 @@
 'use strict';
 
 type TicketLockKey = { slug: string; id: string };
-type BusyTicketLock = { ok: false; reason: 'busy' };
+type BusyTicketLock = { ok: false; reason: 'busy'; waitedMs: number; holder?: number };
 const LOCK_HELD_ELSEWHERE = Symbol('lock held elsewhere');
 const LOCK_BEING_DELETED = Symbol('lock being deleted');
 const LOCK_RETRY_MS = 10;
@@ -172,15 +172,21 @@ function createLocks(dependencies: any) {
     return [...new Set(keys.map((key) => ticketLockPath(key.slug, key.id)))].sort();
   }
 
+  function busyTicketLock(lockPath: string, startedAt: number): BusyTicketLock {
+    const holder = readLockOwner(lockPath)?.pid;
+    return { ok: false, reason: 'busy', waitedMs: Date.now() - startedAt, ...(holder == null ? {} : { holder }) };
+  }
+
   // Every ticket file lock is taken, in one path order, before anything opens the SQLite write lock. Taking a
   // second file lock inside an open transaction ordered file(A) -> SQLite -> file(B) against plain writers'
   // file(B) -> SQLite, and that ABBA spun a whole retry budget while holding every project's writers (SQ-3348).
   function withTicketFileLocks<Result>(keys: readonly TicketLockKey[], fn: () => Result): Result | BusyTicketLock {
+    const startedAt = Date.now();
     const held: Array<{ lockPath: string; owner: { token: string } }> = [];
     try {
       for (const lockPath of orderedTicketLockPaths(keys)) {
         const owner = acquireLock(lockPath);
-        if (!owner) return { ok: false, reason: 'busy' };
+        if (!owner) return busyTicketLock(lockPath, startedAt);
         held.push({ lockPath, owner });
       }
       return fn();

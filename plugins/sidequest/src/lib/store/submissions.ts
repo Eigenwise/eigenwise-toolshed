@@ -17,12 +17,14 @@ const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyD
 const worktrees = require('../worktrees.js');
 const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require('./composition-admission.js');
 const { stillSpawnsInsideItsWrite } = require('../db');
-import type { VerificationRequirement, VerificationResult } from '../kernel/verification.js';
+import type { VerificationRequirement as PinnedVerificationRequirement, VerificationResult } from '../kernel/verification.js';
+type VerificationRequirement = PinnedVerificationRequirement & Readonly<{ verifyCwd?: string }>;
 import type { CandidateInvalidation } from '../kernel/wave.js';
-import { beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
+import { integrationCaptureEnvironment, phaseBudgetResult, beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
+import { checkCommittedBuilds, committedBuildPackages } from '../commit-scope.js';
 import { buildsOnCandidates, type BuildsOnCandidate } from './work-provenance';
 
 function createSubmissions(dependencies: any) {
@@ -1047,9 +1049,22 @@ function unexecutedDeliveryVerification(ticket: any, requirement: any, opts?: an
   return evidenceDeliveryVerification(ticket, requirement);
 }
 
+function deliveryBuildFailure(slug: string, ticket: QualityTicket, opts?: { cwd?: string; qualityTickets?: QualityTicket[] }) {
+  const repository = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
+  return checkCommittedBuilds(repository, candidateBuildPaths(opts?.qualityTickets || [ticket]), normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs));
+}
+
+function candidateBuildPaths(tickets: QualityTicket[]): string[] {
+  return tickets.flatMap((ticket) => ticket.submission.changedPaths || []);
+}
+
+function preflightDeliveryVerification(slug: string, ticket: QualityTicket, requirement: VerificationRequirement, opts?: { cwd?: string; qualityTickets?: QualityTicket[]; skipVerify?: boolean; verificationWaiver?: unknown }) {
+  return deliveryBuildFailure(slug, ticket, opts) || unexecutedDeliveryVerification(ticket, requirement, opts);
+}
+
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
-  const unexecuted = unexecutedDeliveryVerification(ticket, requirement, opts);
+  const unexecuted = preflightDeliveryVerification(slug, ticket, requirement, opts);
   if (unexecuted) return unexecuted;
   const validationError = verifyCommandError(requirement.command);
   if (validationError) {
@@ -1080,7 +1095,11 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const participants = opts?.qualityTickets || [ticket];
   const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
   const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
-  const runWithQuality = (environment: NodeJS.ProcessEnv) => verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, environment);
+  const runWithQuality = (environment: NodeJS.ProcessEnv) => {
+    const captureEnvironment = integrationCaptureEnvironment(projectDir(slug), environment);
+    const result = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
+    return { ...phaseBudgetResult(result), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
+  };
   return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
 }
 
@@ -4322,7 +4341,10 @@ function waveVerifierMismatchMessage(tickets: any[], requirements: any[]) {
 }
 
 function waveVerificationRequirement(tickets: any[]) {
-  const requirements = tickets.map(deliveryVerificationRequirement);
+  const requirements = tickets.map((ticket) => {
+    const requirement = deliveryVerificationRequirement(ticket);
+    return { ...requirement, verifyCwd: verifyCwdForRequirement(requirement, ticket.executorVerifyCwd) };
+  });
   const first = requirements[0];
   if (!first) return { ok: false, reason: 'wave_verification_required', message: 'Wave assembly requires a pinned project verification requirement.' };
   const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
@@ -4335,7 +4357,7 @@ function waveVerificationRequirement(tickets: any[]) {
 }
 
 function sameWaveVerifier(left: VerificationRequirement, right: VerificationRequirement) {
-  return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment;
+  return waveVerifierIdentity(left) === waveVerifierIdentity(right) && left.environment === right.environment && left.verifyCwd === right.verifyCwd;
 }
 
 // Participants that pin the same verifier share one run on the composed tree (SQ-2463).
@@ -4415,16 +4437,47 @@ type WaveGateVerification = { ok: boolean; verification?: any; provisioning?: st
 function authoritativeWaveVerification(slug: any, tickets: any[], wave: any, supplied: any, opts?: any): WaveGateVerification {
   const requirement = waveVerificationRequirement(tickets);
   if (!requirement.ok) return requirement;
-  if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
-  if (waveNeedsSharedEnvironment(requirement.requirement, requirement.requirements)) {
-    return {
-      ok: true,
-      provisioning: 'The gate deferred to the environment lane: the pinned command runs in the shared checkout at delivery, so nothing ran and worktree provisioning was skipped.',
-      verification: deferredWaveVerification(requirement.requirement, requirement.requirements),
-    };
+  if (waveHasCommittedBuild(slug, tickets)) {
+    return committedBuildWaveVerification(slug, tickets, wave, requirement.requirement, requirement.requirements, supplied, opts);
   }
+  const unexecuted = unexecutedWaveVerification(requirement.requirement, requirement.requirements, opts);
+  if (unexecuted) return unexecuted;
   if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement, requirement.requirements);
   return suppliedWaveVerification(wave.id, requirement.requirement, supplied);
+}
+
+function waveHasCommittedBuild(slug: string, tickets: QualityTicket[]): boolean {
+  const paths = candidateBuildPaths(tickets);
+  return paths.some((file) => /(?:^|\/)scripts\/build\.mjs$/.test(file))
+    || committedBuildPackages(readMeta(slug).path, paths).length > 0;
+}
+
+function committedBuildWaveVerification(slug: string, tickets: QualityTicket[], wave: { id: string }, requirement: VerificationRequirement, requirements: VerificationRequirement[] = [requirement], supplied: VerificationResult, opts?: { skipVerify?: boolean; verificationWaiver?: unknown }) {
+  const checkout = waveGateCheckout(slug, tickets, wave);
+  if (!checkout.ok) return checkout;
+  try {
+    const verification = () => authoritativeWaveVerificationWithoutBuild(slug, wave, requirement, requirements, supplied, opts, checkout);
+    return verifyWaveGateCheckout(slug, wave.id, requirements, checkout, candidateBuildPaths(tickets), verification);
+  } finally {
+    checkout.remove();
+  }
+}
+
+function authoritativeWaveVerificationWithoutBuild(slug: string, wave: { id: string }, requirement: VerificationRequirement, requirements: VerificationRequirement[], supplied: VerificationResult, opts: { skipVerify?: boolean; verificationWaiver?: unknown } | undefined, checkout: { cwd: string; tree: string | null }): WaveGateVerification {
+  const unexecuted = unexecutedWaveVerification(requirement, requirements, opts);
+  if (unexecuted) return unexecuted;
+  if (requirement.command) return { ok: true, verification: verifyWaveCommands(slug, wave.id, requirements, checkout) };
+  return suppliedWaveVerification(wave.id, requirement, supplied);
+}
+
+function unexecutedWaveVerification(requirement: VerificationRequirement, requirements: VerificationRequirement[] = [requirement], opts?: { skipVerify?: boolean; verificationWaiver?: unknown }): WaveGateVerification | null {
+  if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement, opts.verificationWaiver) };
+  if (waveNeedsSharedEnvironment(requirement, requirements)) return {
+    ok: true,
+    provisioning: 'The gate deferred to the environment lane: the pinned command runs in the shared checkout at delivery, so nothing ran and worktree provisioning was skipped.',
+    verification: deferredWaveVerification(requirement, requirements),
+  };
+  return null;
 }
 
 function waveNeedsSharedEnvironment(requirement: VerificationRequirement, requirements: VerificationRequirement[] = [requirement]) {
@@ -4457,7 +4510,7 @@ function commandWaveVerification(slug: any, tickets: any[], wave: any, requireme
   const checkout = waveGateCheckout(slug, tickets, wave);
   if (!checkout.ok) return checkout;
   try {
-    return verifyWaveGateCheckout(slug, wave.id, requirements, checkout);
+    return verifyWaveGateCheckout(slug, wave.id, requirements, checkout, []);
   } finally {
     checkout.remove();
   }
@@ -4503,7 +4556,7 @@ function removeComposedWaveCheckout(slug: any, repository: string, checkout: str
   integrationGit(repository, ['worktree', 'prune']);
 }
 
-function verifyWaveGateCheckout(slug: any, waveId: string, requirements: VerificationRequirement[], checkout: any) {
+function verifyWaveGateCheckout(slug: any, waveId: string, requirements: VerificationRequirement[], checkout: any, buildPaths: string[], verification: () => WaveGateVerification = () => ({ ok: true, verification: verifyWaveCommands(slug, waveId, requirements, checkout) })) {
   const provisioning = provisionWaveGateWorktree(slug, checkout.isolatedWorktree);
   if (!provisioning.ok) {
     return {
@@ -4512,18 +4565,29 @@ function verifyWaveGateCheckout(slug: any, waveId: string, requirements: Verific
       message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`,
     };
   }
-  return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
+  const buildFailure = checkCommittedBuilds(checkout.cwd, buildPaths, normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs));
+  if (buildFailure) return { ok: true, provisioning: provisioning.evidence, verification: buildFailure };
+  return { provisioning: provisioning.evidence, ...verification() };
+}
+
+function verifyWaveCommand(slug: string, waveId: string, requirement: VerificationRequirement, checkoutRoot: string, index: number): VerificationResult & { cwd: string } {
+  const cwd = path.resolve(checkoutRoot, requirement.verifyCwd || '.');
+  if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+    return { kind: requirement.kind, status: 'could_not_run', command: requirement.command, cwd,
+      evidence: `verify_cwd_missing: ${cwd}`, failureIdentities: [`verify_cwd_missing: ${cwd}`] };
+  }
+  return { ...runProcessVerification(requirement, {
+    cwd,
+    timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
+    logPath: integrationVerifyLogPath(slug, { ref: waveId + '-' + index }),
+    outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+  }), cwd };
 }
 
 function verifyWaveCommands(slug: string, waveId: string, requirements: VerificationRequirement[], checkout: { cwd: string; tree: string | null }) {
   const results = requirements.map((requirement, index): VerificationResult => {
     reportIntegrationProgress('wave gate', requirement.command);
-    const verification = runProcessVerification(requirement, {
-      cwd: checkout.cwd,
-      timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
-      logPath: integrationVerifyLogPath(slug, { ref: waveId + '-' + index }),
-      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
-    });
+    const verification = verifyWaveCommand(slug, waveId, requirement, checkout.cwd, index);
     return checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification;
   });
   const result = results.find((verification) => !verificationAccepted(verification)) || results[0];

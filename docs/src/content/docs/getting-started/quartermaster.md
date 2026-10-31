@@ -128,6 +128,16 @@ The miner reads local transcript files and emits a bounded aggregate. The active
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
 - short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence.
 
+Resupply also reads retained Sidequest lifecycle records from `SIDEQUEST_HOME/sidequest.db`
+(default `~/.claude/sidequest/sidequest.db`) when present. Its `sidequest` aggregate counts verifier
+amendments per ticket, failed and timed-out verification captures, checkpoint or budget releases,
+and rejected submissions in the same day window. The transcript session cap does not limit board
+records. Project filtering follows the current project, or all boards for an explicit global pass.
+Capture ids and executor attempts are deduplicated, negative controls are excluded, and sample limits
+are reported. Retained history can be incomplete; no duration totals are inferred. Missing databases
+are skipped, and unreadable databases are reported as unavailable. Quartermaster never writes to the
+board. These counts are proposal evidence under the same per-item approval rules.
+
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply.
 
 Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial and no hook block, and it never covers a destructive command such as `rm` or `git push --force`. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. It vetoes several other classes of rule that would be too broad however often approved: a shell control keyword or subshell opener (`for`, `if`, `{`); a compound command whose separator or redirection (`;`, `&`, `|`, `<`, `>`) proves the rest of the command was cut off the fingerprint; a `cd` target, other argument, or command substitution (`$VAR`, `$(...)`, a backtick) that only resolves at runtime; a wrapper (`nohup`, `timeout`, `nice`, `setsid`, `stdbuf`, `command`, `builtin`, `watch`, `script`, `chroot`), an interpreter, or `source`/`.` that runs caller-supplied code; and a version-pinned plugin cache path or per-session scratchpad path that goes stale on its own. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting. Learned rules are merged into `permissions.allow`, preserving deny rules, the permission mode, and unrelated settings. A write reformats the JSON with two-space indentation.

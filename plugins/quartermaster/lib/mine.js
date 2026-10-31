@@ -5,6 +5,7 @@ const { readInstalled, unusedInstalled } = require('./catalog.js');
 const { rejectedFingerprints } = require('./state.js');
 const { resolveWindow } = require('./scan.js');
 const { streamTranscript } = require('./stream.js');
+const { sidequestFriction } = require('./sidequest-friction.js');
 
 async function mine(options = {}) {
   const env = options.env ?? process.env;
@@ -35,6 +36,7 @@ async function mine(options = {}) {
       latest: window.latestMs ? new Date(window.latestMs).toISOString() : null,
     },
     ...signals,
+    sidequest: sidequestFriction(options, window.cutoffMs),
     installed: readInstalled(env).map((plugin) => plugin.id),
     installedWithoutAttribution: unusedInstalled(signals.attribution.plugins, env),
     decisions,

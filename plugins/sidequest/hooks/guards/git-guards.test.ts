@@ -98,8 +98,8 @@ function wholeTreeWrites(target: string): string[] {
 const projectRepo: Repo = { root: PROJECT, commonDir: `${PROJECT}\\.git` }
 const CLONE = `${HOME}\\projects\\proj-x\\verification\\SQ-3436\\pr450`
 
-for (const suffix of ['status --porcelain -- app routes', 'log', 'show', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'branch', 'branch --list feature*', 'branch --show-current', 'worktree list', 'remote -v', 'describe', 'blame']) {
-  test(`SQ-3835: isolated executor can read shared checkout with ${suffix}`, async ($, on) => {
+for (const suffix of ['status --porcelain -- app routes', 'log', 'show', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'branch', 'branch --list feature*', 'branch --show-current', 'worktree list', 'remote -v', 'describe', 'blame', 'archive --format=tar HEAD', 'hash-object --stdin', 'hash-object --stdin-paths', 'merge-tree --trivial-merge HEAD HEAD']) {
+  test(`SQ-4004: isolated executor can read shared checkout with ${suffix}`, async ($, on) => {
     const worktree = `${await worktreeRoot()}\\agent-reader`
     await world(on, { cwd: worktree, repos: [projectRepo], registered: [PROJECT], rows: [
       { ref: 'SQ-3835', agentId: 'reader', worktree, sharedTree: false, state: 'claimed' },
@@ -107,6 +107,16 @@ for (const suffix of ['status --porcelain -- app routes', 'log', 'show', 'diff',
     expect((await bash($, `git -C "${PROJECT}" -c color.ui=false ${suffix}`, 'reader')).deny).toBeUndefined()
   })
 }
+
+test('SQ-4004: the write-capable archive, hash-object and merge-tree forms stay refused against the shared checkout', async ($, on) => {
+  await isolatedWorld(on)
+  const sharedCheckout = PROJECT.replace(/\\/g, '/')
+  for (const suffix of ['archive -o result.tar HEAD', 'archive --remote=origin HEAD', 'hash-object -w file.txt', 'merge-tree HEAD HEAD', 'merge-tree --write-tree HEAD HEAD']) {
+    const refusal = String(Reflect.get(await bash($, `git -C "${sharedCheckout}" ${suffix}`, 'agent-own-id'), 'deny'))
+    expect(refusal).toContain('read-only-git.ts is the subcommand allowlist')
+    expect(refusal).toContain('Default merge-tree writes a tree object to the shared store')
+  }
+})
 
 test('destructive git: an evidence clone under the ticket verification directory is not the shared checkout', async ($, on) => {
   const clone: Repo = { root: CLONE, commonDir: `${CLONE}\\.git`, dirty: [' D README.md'] }
@@ -257,7 +267,7 @@ test('an isolated executor mutates its evidence clone and own worktree, never th
   for (const target of [PROJECT, other]) {
     for (const command of wholeTreeWrites(target)) {
       const reason = Reflect.get(await bash($, command, 'agent-own-id'), 'deny')
-      expect(reason).toBe(`sidequest: refusing a mutating git command against the shared checkout (${target}) from an isolated worktree. The shared checkout means the project's registered root and every other executor's worktree; a clone you created under your ticket's verification directory or scratchpad is not it and stays writable. Read-only git commands such as log, diff, show, rev-parse, and ls-files are allowed for review; make repository changes only in the assigned worktree.`)
+      expect(reason).toBe(`sidequest: refusing a mutating git command against the shared checkout (${target}) from an isolated worktree. The shared checkout means the project's registered root and every other executor's worktree; a clone you created under your ticket's verification directory or scratchpad is not it and stays writable. Read-only git commands such as log, diff, show, rev-parse, ls-files, archive, hash-object, and merge-tree --trivial-merge are allowed for review; read-only-git.ts is the subcommand allowlist. Default merge-tree writes a tree object to the shared store, so it remains refused. Make repository changes only in the assigned worktree.`)
     }
   }
   expect(await bash($, `git -C "${PROJECT.replace(/\\/g, '/')}" log --oneline`, 'agent-own-id')).toMatchObject({ text: 'ran' })

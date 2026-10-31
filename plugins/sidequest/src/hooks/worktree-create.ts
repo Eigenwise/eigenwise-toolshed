@@ -5,7 +5,7 @@ import { execFileSync } from '../lib/git-process.js';
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
 import { worktreeSetupDeadlineMs } from '../lib/hook-timeouts.js';
-import { worktreeCreationRefusalMessage, type WorktreeCreationBindingFailure } from '../lib/refusal-guidance.js';
+import { worktreeCreationRefusalMessage, type TicketLockWait, type WorktreeCreationBindingFailure } from '../lib/refusal-guidance.js';
 
 const leaseKernel = require(runtimeModule('kernel/worktree')) as {
   canonicalPath: (value: string) => string;
@@ -130,7 +130,7 @@ function createWorktree(binding: CreationBinding, name: string): boolean {
   return true;
 }
 
-interface CreationBinding {
+interface CreationBinding extends Partial<TicketLockWait> {
   ok: boolean;
   reason?: string;
   binding?: WorktreeCreationBindingFailure;
@@ -355,7 +355,7 @@ async function createWorktreeMain(): Promise<void> {
   };
   const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, 'cwd'), sessionId), sessionId, name, worktrees.namedWorktreePath);
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
-    throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ''), repository, binding.binding));
+    throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ''), repository, binding.binding, binding));
   }
   const attempt = String(binding.attempt || '');
   // Without the generation no callback can be recorded, so fail before creating a checkout nothing can stamp.

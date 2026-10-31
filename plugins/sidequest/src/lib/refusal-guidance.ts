@@ -148,7 +148,22 @@ function occupiedCheckoutRefusal(failure?: WorktreeCreationBindingFailure): stri
     + ' Let that claim reach a terminal state, or dispatch this ticket with its own worktree.';
 }
 
-export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
+export interface TicketLockWait {
+  waitedMs: number;
+  holder?: string | number;
+}
+
+function busyWorktreeCreationRefusal(wait: TicketLockWait): string {
+  const holder = wait.holder == null ? '' : `, held by ${wait.holder}`;
+  return `worktree lease refused creation: busy after waiting ${Math.round(wait.waitedMs / 1000)} s for the ticket lock${holder}. Retry the dispatch; the lease is released when the holder finishes.`;
+}
+
+export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure, wait?: Partial<TicketLockWait>): string {
+  if (reason === 'busy' && typeof wait?.waitedMs === 'number') return busyWorktreeCreationRefusal({ ...wait, waitedMs: wait.waitedMs });
+  return worktreeBindingRefusalMessage(reason, repository, failure);
+}
+
+function worktreeBindingRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
   return `worktree lease refused creation: ${reason || 'dispatch binding is incomplete'}${guidance ? `. ${guidance(repository, failure)}` : ''}`;
 }
@@ -263,7 +278,7 @@ export function inheritedRejectedDuplicateGuidance(reason?: string, buildsOn = f
 }
 
 export function negativeControlRecoveryGuidance(): string {
-  return 'Revert the changed source while keeping changed tests importable, then either rerun the pinned verify-capture wrapper with --control over that reverted tree and post the [sidequest:negative-control] capture=<id> line it prints (recorded as a captured control bound to this commit), or post the plain marker, which is recorded as agent-reported: [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion with n greater than zero and [sidequest:negative-control-test] failed <test name> (or unaffected <test name> because <reason>) for every changed named test, or post [sidequest:negative-control] waived <reason of at least 20 characters> if the control cannot run; the assertion ends at its first \';\' outside double quotes or backticks, so put the real command, which must not be empty, between that \';\' and failed=<n> (a failed=<n> inside the assertion text is not counted), and for a parameterised test.each/it.each name report the name with its runtime values filled in or its literal placeholders (%s, %d, $name) kept as-is, since either is matched against the table’s own name. The main thread can freeze workProvenance.kind as behavior-preserving-refactor, inherited-read-only, docs, type-annotation-only or fixture-only before dispatch to complete on the author-chosen oracle and record negativeControl: not_required(<reason>); new-behavior still requires the marker, and import or collection failures never prove assertion failure; a merge answers only for the tests its conflict resolution changed, not the tests it brought in from the integration branch or from a remote\'s copy of it.';
+  return 'Revert the changed source while keeping changed tests importable, then either rerun the pinned verify-capture wrapper with --control over that reverted tree and post the [sidequest:negative-control] capture=<id> line it prints (recorded as a captured control bound to this commit; for a test that passes on both trees also post [sidequest:negative-control-test] unaffected <test name>: <reason>, recorded as unaffected_agent_reported, or as unaffected_verified_identical when its body matches the dispatch base), or post the plain marker, which is recorded as agent-reported: [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=assertion with n greater than zero and [sidequest:negative-control-test] failed <test name> (or unaffected <test name> because <reason>) for every changed named test, or post [sidequest:negative-control] waived <reason of at least 20 characters> if the control cannot run; the assertion ends at its first \';\' outside double quotes or backticks, so put the real command, which must not be empty, between that \';\' and failed=<n> (a failed=<n> inside the assertion text is not counted), and for a parameterised test.each/it.each name report the name with its runtime values filled in or its literal placeholders (%s, %d, $name) kept as-is, since either is matched against the table’s own name. The main thread can freeze workProvenance.kind as behavior-preserving-refactor, inherited-read-only, docs, type-annotation-only or fixture-only before dispatch to complete on the author-chosen oracle and record negativeControl: not_required(<reason>); new-behavior still requires the marker, and import or collection failures never prove assertion failure; a merge answers only for the tests its conflict resolution changed, not the tests it brought in from the integration branch or from a remote\'s copy of it.';
 }
 
 type SnapshotWalkFacts = Readonly<{

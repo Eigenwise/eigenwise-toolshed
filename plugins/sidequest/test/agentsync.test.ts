@@ -355,6 +355,27 @@ test('briefings surface tracked generated outputs paired into effective scope', 
   assert.doesNotMatch(agentsync.renderTicketBriefing(ticket, 'empty-generated-brief-token', slug, root), /Auto-paired tracked generated files/);
 });
 
+test('briefings tell shared-source executors to build committed package outputs before capture', () => {
+  const root = tmpDir();
+  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
+  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
+  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
+  const files = ['src/hooks/shared/policy.ts', 'hooks/first.js', 'scripts/build.mjs', 'scripts/build-check.mjs', 'package.json'];
+  for (const file of files) {
+    const filename = path.join(root, 'plugins/sidequest', file);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    fs.writeFileSync(filename, '{}');
+  }
+  assert.equal(git(root, ['add', '.']).status, 0);
+  assert.equal(git(root, ['commit', '-m', 'shared build fixture']).status, 0);
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(root, 'committed build briefing').slug;
+  const ticket = store.createTicket(slug, { title: 'shared build', files: ['plugins/sidequest/src/hooks/shared/policy.ts'] });
+  const briefing = agentsync.renderTicketBriefing(ticket, 'shared-build-token', slug, root);
+  assert.match(briefing, /run npm --prefix "plugins\/sidequest" run build before the final verify-capture/);
+  assert.match(briefing, /plugins\/sidequest\/hooks\/\*\.js/);
+});
+
 test('dispatch uncertainty does not inspect symbols named in ticket text', () => {
   const root = tmpDir();
   assert.equal(git(root, ['init', '-b', 'main']).status, 0);
@@ -1096,6 +1117,9 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
+  const shortStub = agentsync.renderDispatchStub({ ...ticket, dispatch: { tokenFile: 'C:\\dispatch\\project-slug\\SQ-334-p2.token' } }, 'C:\\dev\\fixture');
+  assert.match(shortStub, /--token-name SQ-334-p2 --project "C:\/dev\/fixture"/);
+  assert.doesNotMatch(shortStub, /project-slug|--token-file/);
   assert.ok(stub.startsWith('GPT-5.6 Terra, high · Instant dispatch\n'), stub);
   assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
   assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
@@ -1105,7 +1129,7 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.match(briefing, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
   assert.match(briefing, /lib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
-  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\\dispatch\\instant-token-334\.token" --project "C:\\dev\\fixture"`/);
+  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\/dispatch\/instant-token-334\.token" --project "C:\/dev\/fixture"`/);
 });
 
 test('SQ-677: malformed and foreign asset names stay bounded and inaccessible', () => {

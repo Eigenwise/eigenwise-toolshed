@@ -50,6 +50,20 @@ this file only covers what the schema has no way to say.
 - **`update.admitComposition`**: the trusted main thread can adopt exact immutable candidate C for a genuinely released, unclaimed root using `authority: "main-attestation"` and `historicalCheckout: false`. `by` and `evidence` are audit fields; the caller class, internal MCP/store grant, and actual runtime session supply authority. Call it separately from ordinary updates. Omit `expected` for a write-free `expected_required` probe, then copy the observed root `attemptCount`, `releasedAt`, `preparedAt`, and each source's `ref`, `reviewTicketId`, `reviewOutcome`, `correctedAt`, and `snapshot` into `expected`. Name each related source's exact `commit` and `submittedAt`; sources need their complete recorded base, commits, and admitted scope. The locked CAS includes the authoritative two-sided review, verdict, and correction generation, even when the source mirror did not change. Rejected, delivered, superseded, active, or drifting sources refuse. `ownCommits` plus the complete source ranges must account for every commit in original BASE..C exactly once; `ownPaths` must match the root's own changes within its original scope. Another ticket's recorded commits or release fragments cannot become root own attribution. Admission leaves sources and old proofs unchanged and preserves the released dispatch snapshot. A fresh scoped writable native isolated checkout starts at C, while `dispatch.baseCommit` stays original BASE. One new attempt, `preparedAt`, and genuine nonce digest consume the grant; redispatch cannot replay it, and live-claim recovery (`dispatch` with `claimHolder`) refuses write-free with `admission_consumed` instead of re-minting that nonce. Run ordinary `update.verify`/`verifyCwd` separately for fresh holder-owned output, then ordinary controls, capture, full-range submission, independent post-submit exact-C review, and delivery. Adoption never supplies historical checkout ownership, source acceptance, capture evidence, or a delivery waiver.
 - **`supersede_submission`**: `supersededBy` is the repair ticket's ref, not a commit. A bound candidate stays locked. Its completed normal review records the explicit decision through main-thread MCP `verdict.finalize`; an awaiting-oracle review uses ordinary `verdict`. When the defect means the bound candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and verdict text does not override the enum. After a fresh repair is reviewed and integrated, `supersede_submission` can close the rejected source submission.
 
+### update.admitComposition shape
+
+The served descriptor keeps enum/const constraints; the handler validates the full object below.
+Unknown fields are refused at every object level. Required fields are `authority` (exactly
+`"main-attestation"`), `historicalCheckout` (exactly `false`), nonblank strings `by` and `evidence`,
+`candidate` and `base` (40 lowercase hexadecimal characters), `ownCommits` (unique commit strings),
+`ownPaths` (unique nonblank strings), and `sources` (1 to 20 objects).
+Each source requires nonblank `ref` and `submittedAt`, plus a commit string `commit`.
+
+Optional `expected` requires nonnegative integer `attemptCount`, nonblank `releasedAt` and
+`preparedAt`, and 1 to 20 `sources`. Each expected source requires nonblank `ref` and `snapshot`,
+`reviewTicketId` and `correctedAt` (each null or a nonblank string), and `reviewOutcome`
+(`planned`, `accepted`, `rejected`, `inconclusive`, or null). Copy these values from the probe.
+
 ## Held-executor messages
 
 If a board-derived name fails, only the ORIGINAL matching host session may send once to the authentic `dispatch.agentId`, or the exact original host Agent-returned identifier when actually available. Confirm the recorded original session. `claim.by` and holder labels are not addresses; never guess an ID/name, shorten an ID, use another session, or dispatch a replacement as an address substitute. Missing/mismatched authentic ID or session means continuation UNVERIFIED: preserve claim/work. Honor an explicit user **Pause retries** decision.
