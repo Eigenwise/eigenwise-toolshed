@@ -91,6 +91,64 @@ test('an Agent spawn fails closed when the admission decision cannot run', async
   expect(denied).toMatchObject({ deny: expect.stringMatching(/guard-executor-admission failed for Agent:.*node missing/) })
 })
 
+test('a decision exit preserves stderr in the log and bounds the refusal cause to 200 UTF-8 bytes', async ($, on) => {
+  session(on)
+  const stderr = `broken dispatch ${'é'.repeat(150)} tail`
+  const logs: string[] = []
+  let attempts = 0
+  on('process.run', () => {
+    attempts += 1
+    return { value: { exitCode: 7, stdout: '', stderr } }
+  })
+  on('ui.log', ($$, event) => { logs.push(event.text); return { value: undefined } })
+  const denied = await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'Explore' })
+  const reason = String(Reflect.get(denied, 'deny'))
+  expect(reason).toContain('admission decision exited 7: broken dispatch')
+  expect(reason).toContain('Re-issue the identical spawn or tool call; the dispatch token stays valid')
+  const cause = reason.split('failed for Agent: ')[1]!.split('. Re-issue')[0]!
+  expect(new TextEncoder().encode(cause).length).toBeLessThanOrEqual(200)
+  expect(new TextEncoder().encode(cause).length).toBeGreaterThanOrEqual(199)
+  expect(cause).not.toContain('�')
+  expect(logs).toEqual([`guard-executor-admission failed for Agent: admission decision exited 7: ${stderr}`])
+  expect(attempts).toBe(1)
+})
+
+const DECISION_TIMEOUT = 'sidequest: $.process.run(node) aborted: still running after 10000ms'
+
+test('an admission timeout retries the identical decision once and admits success', async ($, on) => {
+  session(on)
+  const requests: object[] = []
+  on('process.run', ($$, event) => {
+    requests.push(event)
+    if (requests.length === 1) return { deny: DECISION_TIMEOUT }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  expect(await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'Explore' })).toMatchObject({ text: 'ran' })
+  expect(requests.length).toBe(2)
+  expect(requests[1]).toEqual(requests[0])
+})
+
+test('two admission timeouts refuse with recovery and no third attempt', async ($, on) => {
+  session(on)
+  let attempts = 0
+  on('process.run', () => { attempts += 1; return { deny: DECISION_TIMEOUT } })
+  const denied = await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'Explore' })
+  expect(denied).toMatchObject({ deny: expect.stringContaining('admission decision timed out twice (10 s each)') })
+  expect(Reflect.get(denied, 'deny')).toContain('dispatch token stays valid')
+  expect(attempts).toBe(2)
+})
+
+test('caller lookup failures name the step and never run a decision', async ($, on) => {
+  mock.env(on, { OS: 'Windows_NT', USERPROFILE: 'C:/Users/kenny' })
+  on('session.id', () => ({ deny: 'session lookup unavailable' }))
+  let attempts = 0
+  on('process.run', () => { attempts += 1; return { deny: DECISION_TIMEOUT } })
+  const denied = await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'Explore' })
+  expect(denied).toMatchObject({ deny: expect.stringMatching(/caller lookup failed:.*session lookup unavailable/) })
+  expect(attempts).toBe(0)
+})
+
 test('an admitted spawn runs with the decision\'s rewritten arguments and its note', async ($, on) => {
   session(on)
   const decisions: string[][] = []

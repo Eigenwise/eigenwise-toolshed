@@ -13,4 +13,6 @@ If a `cd`, push, or tag targets a missing directory without a recognized earlier
 
 When a directory expression cannot be resolved safely, such as `cd "$TARGET"`, the refusal names the command segment it could not parse. Use a literal directory path so the guard can check the repository that Git will use.
 
+The executor admission guard retries its decision process once if it exceeds 10 seconds. Two timeouts refuse with `admission decision timed out twice (10 s each)`. Caller lookup failures and non-zero decision exits refuse immediately. The refusal includes up to 200 UTF-8 bytes of the cause; the debug log keeps the full message. Re-issue the identical spawn or tool call after a refusal. Its dispatch token stays valid.
+
 If a guard fails internally, its diagnostic names the guard, tool, and error. Sidequest writes it to the debug log and shows a transient toast. Permission and destructive-operation guards refuse the unchecked call. Advisory guards, such as repeated-command warnings and inline-work nudges, let the call continue with that diagnostic. The toast expires instead of leaving a stale status line behind.

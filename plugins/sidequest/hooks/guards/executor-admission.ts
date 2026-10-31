@@ -102,12 +102,39 @@ async function agentType($: EngineInterface, agentId: string): Promise<string> {
 }
 
 // A subagent's type is the runtime's; a teammate runs as its session's main loop, so its claimed row names it.
-async function callerOf($: EngineInterface, agentId: string): Promise<Caller> {
+async function readCaller($: EngineInterface, agentId: string): Promise<Caller> {
   const sessionId = await $.session.id()
   const snapshot = await cachedSnapshot($, await projectDirectory($, await $.session.cwd()))
   const row = callerRow(snapshot?.dispatches ?? [], agentId || undefined, sessionId)
   const type = agentId ? await agentType($, agentId) : row?.executor ?? ''
   return { agentId, sessionId, row, fresh: isFresh(snapshot), type }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function callerOf($: EngineInterface, agentId: string): Promise<Caller> {
+  try {
+    return await readCaller($, agentId)
+  } catch (error) {
+    throw new Error(`caller lookup failed: ${errorMessage(error)}`, { cause: error })
+  }
+}
+
+function boundedErrorMessage(error: unknown): string {
+  let excerpt = ''
+  for (const character of errorMessage(error)) {
+    if (new TextEncoder().encode(excerpt + character).length > 200) break
+    excerpt += character
+  }
+  return excerpt
+}
+
+function admissionFailure($: EngineInterface, tool: string, error: unknown): Decision {
+  const excerpt = boundedErrorMessage(error)
+  const reason = `guard-executor-admission failed for ${tool}: ${excerpt}. Re-issue the identical spawn or tool call; the dispatch token stays valid`
+  return { deny: guardFailure($, 'guard-executor-admission', tool, 'closed', error, reason)! }
 }
 
 function toolArguments(e: object): Record<string, unknown> {
@@ -116,13 +143,33 @@ function toolArguments(e: object): Record<string, unknown> {
 
 let transcriptPath = ''
 
+async function runAdmissionProcess($: EngineInterface, input: object) {
+  const argv = ['node', `${$.plugin.root}/hooks/force-exec-bypass.js`]
+  const options = { stdin: JSON.stringify(input), timeoutMs: 10_000 }
+  try {
+    return await $.process.run(argv, options)
+  } catch (error) {
+    if (!decisionTimedOut(error)) throw error
+  }
+  try {
+    return await $.process.run(argv, options)
+  } catch (error) {
+    if (!decisionTimedOut(error)) throw error
+    throw new Error(`admission decision timed out twice (10 s each): ${errorMessage(error)}`, { cause: error })
+  }
+}
+
+function decisionTimedOut(error: unknown): boolean {
+  return /\$\.process\.run\(node\) aborted: still running after 10000ms/.test(errorMessage(error))
+}
+
 async function runDecision($: EngineInterface, tool: string, e: object, caller: Caller): Promise<Decision> {
   const input = {
     hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolArguments(e), session_id: caller.sessionId,
     cwd: await $.session.cwd(), transcript_path: transcriptPath || undefined, agent_id: caller.agentId || undefined, agent_type: caller.type || undefined,
   }
-  const ran = await $.process.run(['node', `${$.plugin.root}/hooks/force-exec-bypass.js`], { stdin: JSON.stringify(input), timeoutMs: 10_000 })
-  if (ran.exitCode !== 0) throw new Error(`force-exec-bypass exited ${ran.exitCode}: ${ran.stderr.slice(0, 200)}`)
+  const ran = await runAdmissionProcess($, input)
+  if (ran.exitCode !== 0) throw new Error(`admission decision exited ${ran.exitCode}: ${ran.stderr}`)
   return parseDecision(ran.stdout)
 }
 
@@ -167,7 +214,7 @@ async function guardedDecision($: EngineInterface, e: { tool: string; agentId?: 
   try {
     return await callerDecision($, e, await callerOf($, e.agentId ?? ''))
   } catch (error) {
-    return { deny: guardFailure($, 'guard-executor-admission', e.tool, 'closed', error)! }
+    return admissionFailure($, e.tool, error)
   }
 }
 
@@ -176,7 +223,7 @@ async function admissionDecision($: EngineInterface, e: { tool: string; agentId?
   try {
     return await runDecision($, e.tool, e, await callerOf($, e.agentId ?? ''))
   } catch (error) {
-    return { deny: guardFailure($, 'guard-executor-admission', e.tool, 'closed', error)! }
+    return admissionFailure($, e.tool, error)
   }
 }
 
