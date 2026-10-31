@@ -833,7 +833,7 @@ function createDispatch(dependencies) {
     return null;
   }
   function appendDispatchAttempt(state, outcome, source, failureShape, at, commit, release) {
-    const route = state && state.route && typeof state.route === "object" ? state.route : {};
+    const route = state.route && typeof state.route === "object" ? state.route : {};
     const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
     const terminalSource = source || "store";
     attempts.push({
@@ -951,18 +951,22 @@ function createDispatch(dependencies) {
     state.outcome = outcome;
     return true;
   }
-  function setDispatchTerminal(ticket, outcome, source, opts) {
-    const state = dispatchState(ticket);
-    if (!state) return;
-    const at = (/* @__PURE__ */ new Date()).toISOString();
-    if (recordAttemptIntegration(state, outcome, at)) return;
-    captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
-    const release = opts?.releaseKind ? {
+  function dispatchTerminalRelease(opts) {
+    return opts.releaseKind ? {
       kind: opts.releaseKind,
       reason: opts.releaseReason || null,
       evidence: opts.releaseEvidence || null
     } : null;
-    const failureShape = opts?.failureShape || release?.kind || classifyDispatchFailure(opts?.error);
+  }
+  function setDispatchTerminal(ticket, outcome, source, opts) {
+    const state = dispatchState(ticket);
+    if (!state) return;
+    opts ??= {};
+    const at = (/* @__PURE__ */ new Date()).toISOString();
+    if (recordAttemptIntegration(state, outcome, at)) return;
+    captureTerminalWorktreeRevision(opts.slug, ticket, state, at);
+    const release = dispatchTerminalRelease(opts);
+    const failureShape = opts.failureShape || release?.kind || classifyDispatchFailure(opts.error);
     state.outcome = outcome;
     state.failureShape = failureShape;
     state.terminalAt = at;

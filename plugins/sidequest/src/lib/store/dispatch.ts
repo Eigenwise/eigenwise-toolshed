@@ -1152,7 +1152,7 @@ function soleIdleCandidate(candidates: any[]) {
 }
 
 function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any, commit?: any, release?: any) {
-  const route = state && state.route && typeof state.route === 'object' ? state.route : {};
+  const route = state.route && typeof state.route === 'object' ? state.route : {};
   const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
   const terminalSource = source || 'store';
   attempts.push({
@@ -1311,18 +1311,23 @@ function recordAttemptIntegration(state: StoredRecord, outcome: string, at: stri
   return true;
 }
 
-function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
-  const state = dispatchState(ticket);
-  if (!state) return;
-  const at = new Date().toISOString();
-  if (recordAttemptIntegration(state, outcome, at)) return;
-  captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
-  const release = opts?.releaseKind ? {
+function dispatchTerminalRelease(opts: { releaseKind?: string; releaseReason?: string; releaseEvidence?: unknown }) {
+  return opts.releaseKind ? {
     kind: opts.releaseKind,
     reason: opts.releaseReason || null,
     evidence: opts.releaseEvidence || null,
   } : null;
-  const failureShape = opts?.failureShape || release?.kind || classifyDispatchFailure(opts?.error);
+}
+
+function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
+  const state = dispatchState(ticket);
+  if (!state) return;
+  opts ??= {};
+  const at = new Date().toISOString();
+  if (recordAttemptIntegration(state, outcome, at)) return;
+  captureTerminalWorktreeRevision(opts.slug, ticket, state, at);
+  const release = dispatchTerminalRelease(opts);
+  const failureShape = opts.failureShape || release?.kind || classifyDispatchFailure(opts.error);
   state.outcome = outcome;
   state.failureShape = failureShape;
   state.terminalAt = at;
