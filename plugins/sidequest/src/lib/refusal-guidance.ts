@@ -148,7 +148,22 @@ function occupiedCheckoutRefusal(failure?: WorktreeCreationBindingFailure): stri
     + ' Let that claim reach a terminal state, or dispatch this ticket with its own worktree.';
 }
 
-export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
+export interface TicketLockWait {
+  waitedMs: number;
+  holder?: string | number;
+}
+
+function busyWorktreeCreationRefusal(wait: TicketLockWait): string {
+  const holder = wait.holder == null ? '' : `, held by ${wait.holder}`;
+  return `worktree lease refused creation: busy after waiting ${Math.round(wait.waitedMs / 1000)} s for the ticket lock${holder}. Retry the dispatch; the lease is released when the holder finishes.`;
+}
+
+export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure, wait?: Partial<TicketLockWait>): string {
+  if (reason === 'busy' && typeof wait?.waitedMs === 'number') return busyWorktreeCreationRefusal({ ...wait, waitedMs: wait.waitedMs });
+  return worktreeBindingRefusalMessage(reason, repository, failure);
+}
+
+function worktreeBindingRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
   return `worktree lease refused creation: ${reason || 'dispatch binding is incomplete'}${guidance ? `. ${guidance(repository, failure)}` : ''}`;
 }
