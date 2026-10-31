@@ -1,5 +1,7 @@
 'use strict';
 
+import { stampExecutorIntegration } from './completion';
+
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('../prepared-dispatch.js');
 const { classifyVerificationKind, verificationRequirement } = require('../kernel/verification.js');
 const { resolveSuite } = require('../suite-resolver.js');
@@ -1150,7 +1152,7 @@ function soleIdleCandidate(candidates: any[]) {
 }
 
 function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any, commit?: any, release?: any) {
-  const route = state && state.route && typeof state.route === 'object' ? state.route : {};
+  const route = state.route && typeof state.route === 'object' ? state.route : {};
   const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
   const terminalSource = source || 'store';
   attempts.push({
@@ -1173,6 +1175,7 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
     failureShape,
     source: terminalSource,
     terminalAt: at,
+    ...(outcome === 'submitted' ? { submittedAt: at } : {}),
     terminalSource,
     ...(commit ? { commit } : {}),
     ...(release?.kind ? { release } : {}),
@@ -1301,17 +1304,30 @@ function reviewCandidateTreeRefusal(slug?: any, ticket?: any) {
   };
 }
 
-function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
-  const state = dispatchState(ticket);
-  if (!state) return;
-  const at = new Date().toISOString();
-  captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
-  const release = opts?.releaseKind ? {
+function recordAttemptIntegration(state: StoredRecord, outcome: string, at: string): boolean {
+  if (state.outcome !== 'submitted' || outcome !== 'done') return false;
+  if (!stampExecutorIntegration(state, state.integratedAt || at)) return false;
+  state.outcome = outcome;
+  return true;
+}
+
+function dispatchTerminalRelease(opts: { releaseKind?: string; releaseReason?: string; releaseEvidence?: unknown }) {
+  return opts.releaseKind ? {
     kind: opts.releaseKind,
     reason: opts.releaseReason || null,
     evidence: opts.releaseEvidence || null,
   } : null;
-  const failureShape = opts?.failureShape || release?.kind || classifyDispatchFailure(opts?.error);
+}
+
+function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
+  const state = dispatchState(ticket);
+  if (!state) return;
+  opts ??= {};
+  const at = new Date().toISOString();
+  if (recordAttemptIntegration(state, outcome, at)) return;
+  captureTerminalWorktreeRevision(opts.slug, ticket, state, at);
+  const release = dispatchTerminalRelease(opts);
+  const failureShape = opts.failureShape || release?.kind || classifyDispatchFailure(opts.error);
   state.outcome = outcome;
   state.failureShape = failureShape;
   state.terminalAt = at;

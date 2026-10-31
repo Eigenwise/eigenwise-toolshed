@@ -4,6 +4,42 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { integrationProgressPath, readIntegrationProgress } from '../integration-tests.js';
 
+interface ExecutorAttemptRecord {
+  preparedAt?: string | null;
+  tokenPrefix?: string | null;
+  outcome?: string;
+  terminalAt?: string;
+  submittedAt?: string;
+  integratedAt?: string;
+}
+
+export interface ExecutorDispatchRecord extends ExecutorAttemptRecord { attempts?: ExecutorAttemptRecord[] }
+
+export function stampExecutorIntegration(dispatch: ExecutorDispatchRecord | undefined, at: string | undefined): boolean {
+  if (!dispatch || !at) return false;
+  const attempt = dispatch.attempts?.find(entry => entry.preparedAt === dispatch.preparedAt && entry.tokenPrefix === dispatch.tokenPrefix);
+  if (!attempt) return false;
+  Object.assign(attempt, { submittedAt: attempt.terminalAt, integratedAt: at });
+  dispatch.integratedAt = at;
+  dispatch.submittedAt = dispatch.terminalAt;
+  return true;
+}
+
+export function executorAttemptHistory<Attempt extends ExecutorAttemptRecord>(attempts: readonly Attempt[]): Attempt[] {
+  const history = new Map<string | Attempt, Attempt>();
+  for (const attempt of attempts) {
+    const identity = attempt.preparedAt ? JSON.stringify([attempt.preparedAt, attempt.tokenPrefix]) : attempt;
+    const existing = history.get(identity);
+    history.set(identity, existing ? mergeExecutorAttempt(existing, attempt) : { ...attempt });
+  }
+  return [...history.values()];
+}
+
+function mergeExecutorAttempt<Attempt extends ExecutorAttemptRecord>(existing: Attempt, later: Attempt): Attempt {
+  if (existing.outcome !== 'submitted' || later.outcome !== 'done') return existing;
+  return { ...existing, submittedAt: existing.terminalAt, integratedAt: later.terminalAt };
+}
+
 export type CompletionStage =
   | 'proposed' | 'blocked' | 'ready' | 'running' | 'submitted' | 'integrating'
   | 'rejected' | 'integrated' | 'released' | 'closed' | 'abandoned';
