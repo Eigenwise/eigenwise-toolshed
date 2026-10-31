@@ -1,4 +1,5 @@
 "use strict";
+var import_completion = require("./completion");
 var import_work_provenance = require("./work-provenance");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("../prepared-dispatch.js");
 const { classifyVerificationKind, verificationRequirement } = require("../kernel/verification.js");
@@ -855,6 +856,7 @@ function createDispatch(dependencies) {
       failureShape,
       source: terminalSource,
       terminalAt: at,
+      ...outcome === "submitted" ? { submittedAt: at } : {},
       terminalSource,
       ...commit ? { commit } : {},
       ...release?.kind ? { release } : {}
@@ -943,10 +945,17 @@ function createDispatch(dependencies) {
       message: `${ticket.ref} cannot close: its checkout is on ${observed} rather than the candidate ${candidate}, so this verdict is about a different tree. A review ENDS on its candidate. Run \`git -C ${worktree} checkout --detach ${candidate}\`, re-run the declared verify there, then close. Comparing against the integration branch never needs HEAD to move: use \`git diff ${candidate}...main\` or \`git show\`.`
     };
   }
+  function recordAttemptIntegration(state, outcome, at) {
+    if (state.outcome !== "submitted" || outcome !== "done") return false;
+    if (!(0, import_completion.stampExecutorIntegration)(state, state.integratedAt || at)) return false;
+    state.outcome = outcome;
+    return true;
+  }
   function setDispatchTerminal(ticket, outcome, source, opts) {
     const state = dispatchState(ticket);
     if (!state) return;
     const at = (/* @__PURE__ */ new Date()).toISOString();
+    if (recordAttemptIntegration(state, outcome, at)) return;
     captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
     const release = opts?.releaseKind ? {
       kind: opts.releaseKind,

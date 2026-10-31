@@ -1,5 +1,7 @@
 'use strict';
 
+import { stampExecutorIntegration } from './completion';
+
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('../prepared-dispatch.js');
 const { classifyVerificationKind, verificationRequirement } = require('../kernel/verification.js');
 const { resolveSuite } = require('../suite-resolver.js');
@@ -1173,6 +1175,7 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
     failureShape,
     source: terminalSource,
     terminalAt: at,
+    ...(outcome === 'submitted' ? { submittedAt: at } : {}),
     terminalSource,
     ...(commit ? { commit } : {}),
     ...(release?.kind ? { release } : {}),
@@ -1301,10 +1304,18 @@ function reviewCandidateTreeRefusal(slug?: any, ticket?: any) {
   };
 }
 
+function recordAttemptIntegration(state: StoredRecord, outcome: string, at: string): boolean {
+  if (state.outcome !== 'submitted' || outcome !== 'done') return false;
+  if (!stampExecutorIntegration(state, state.integratedAt || at)) return false;
+  state.outcome = outcome;
+  return true;
+}
+
 function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (!state) return;
   const at = new Date().toISOString();
+  if (recordAttemptIntegration(state, outcome, at)) return;
   captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
   const release = opts?.releaseKind ? {
     kind: opts.releaseKind,
