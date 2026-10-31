@@ -1,4 +1,5 @@
 "use strict";
+const { committedBuildPackages } = require("../commit-scope.js");
 const { normalizeDeniedTools } = require("../denied-tools.js");
 const { VERIFICATION_ENVIRONMENTS } = require("../kernel/verification.js");
 const { canonicalPath } = require("../kernel/worktree.js");
@@ -463,8 +464,9 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const config = boardConfig(slug) || {};
     const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
     const generatedPairs = [...arrayOrEmpty(config.generatedPairs), ...derivedGeneratedPairs(generatedConfig, files)];
+    const generatedRoots = committedBuildPackages(generatedConfig.path, files, true).flatMap((build) => build.outputs);
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
-    return Array.from(/* @__PURE__ */ new Set([...files, ...arrayOrEmpty(ticket?.scopeResolution?.granted), ...alwaysInScopeBeside(config, files), ...paired]));
+    return Array.from(/* @__PURE__ */ new Set([...files, ...arrayOrEmpty(ticket?.scopeResolution?.granted), ...alwaysInScopeBeside(config, files), ...paired, ...generatedRoots]));
   }
   return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeVerifyEnvironment, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
