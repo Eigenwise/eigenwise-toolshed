@@ -83,7 +83,7 @@ function sharedTreeCommitRefusal(ref: string): string {
 }
 
 function isolatedMutationRefusal(root: string): string {
-  return `sidequest: refusing a mutating git command against the shared checkout (${root}) from an isolated worktree. The shared checkout means the project's registered root and every other executor's worktree; a clone you created under your ticket's verification directory or scratchpad is not it and stays writable. Read-only git commands such as log, diff, show, rev-parse, and ls-files are allowed for review; make repository changes only in the assigned worktree.`
+  return `sidequest: refusing a mutating git command against the shared checkout (${root}) from an isolated worktree. The shared checkout means the project's registered root and every other executor's worktree; a clone you created under your ticket's verification directory or scratchpad is not it and stays writable. Read-only git commands such as log, diff, show, rev-parse, ls-files, archive, hash-object, and merge-tree --trivial-merge are allowed for review; read-only-git.ts is the subcommand allowlist. Default merge-tree writes a tree object to the shared store, so it remains refused. Make repository changes only in the assigned worktree.`
 }
 
 async function plannedDestructiveDenial($: EngineInterface, shell: Shell, index: number, dashC: string | null, label: string): Promise<string | null> {
