@@ -2506,9 +2506,19 @@ function dispatchEvidenceScope(slug: string, ticket: StoredRecord, projectPath: 
   return { evidenceMode: true, evidenceRepositoryRoot: canonicalPath(projectPath), evidenceWriteRoots: [...new Set(roots.map((root) => canonicalPath(root)))] };
 }
 
-function dispatchArtifactRoot(slug: string, t: StoredRecord, sharedTree: boolean, effectiveFiles: readonly string[]): string | null {
-  return sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t)
-    ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), effectiveFiles[0])
+// The board's alwaysInScope entries (docs/, the release fragment) join the
+// effective files of every dispatch, so the single-artifact test has to read
+// the ticket's own declared files; reading the merged list left artifact mode
+// unreachable on any board with a docs directory (SQ-4011).
+function declaredArtifactPath(t: StoredRecord): string | null {
+  const declared = normalizeFiles(t.files);
+  return declared.length === 1 ? declared[0] : null;
+}
+
+function dispatchArtifactRoot(slug: string, t: StoredRecord, sharedTree: boolean): string | null {
+  const artifact = declaredArtifactPath(t);
+  return sharedTree && artifact && sharedTreeArtifactRequested(t)
+    ? categoryArtifactRoot(getCategory(ticketCategory(t), { project: slug }), artifact)
     : null;
 }
 
@@ -2530,12 +2540,13 @@ function dispatchDirtyBaselines(slug: string, sharedTree: boolean, artifactMode:
 }
 
 function dispatchArtifactScope(slug: string, t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: string[], workingTreeDelivery: boolean) {
-  const artifactRoot = dispatchArtifactRoot(slug, t, isolation.sharedTree, effectiveFiles);
+  const artifactRoot = dispatchArtifactRoot(slug, t, isolation.sharedTree);
   const artifactMode = Boolean(artifactRoot);
-  const artifactScope = artifactMode ? effectiveFiles[0] : null;
+  const artifactScope = artifactMode ? declaredArtifactPath(t) : null;
+  const writableFiles = artifactScope ? [artifactScope] : effectiveFiles;
   return {
     artifactRoot, artifactMode, artifactScope,
-    ...dispatchWriteScope(t, effectiveFiles, isolation.wholeTreeScope, artifactMode),
+    ...dispatchWriteScope(t, writableFiles, isolation.wholeTreeScope, artifactMode),
     ...dispatchDirtyBaselines(slug, isolation.sharedTree, artifactMode, artifactScope, workingTreeDelivery),
   };
 }
