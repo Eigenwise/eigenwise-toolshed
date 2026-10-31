@@ -152,4 +152,21 @@ test('concurrent done retries share one terminal comment', async () => {
   assert.strictEqual(comments.filter((comment?: any) => comment.body === body && comment.by === by).length, 1);
 });
 
+test('a CLI defect reports its stack while a refusal keeps only its message', () => {
+  const { errorReport } = require('../bin/sidequest-cmd-shared.js');
+  const previousDebug = process.env.SIDEQUEST_DEBUG;
+  delete process.env.SIDEQUEST_DEBUG;
+  try {
+    const defect = errorReport(new TypeError('worktreeLease.canonicalPath is not a function'));
+    assert.match(defect, /^TypeError: worktreeLease\.canonicalPath is not a function\n\s+at /);
+    assert.strictEqual(errorReport(new Error('ticket SQ-1 is already claimed')), 'ticket SQ-1 is already claimed');
+    assert.strictEqual(errorReport('plain refusal'), 'plain refusal');
+    process.env.SIDEQUEST_DEBUG = '1';
+    assert.match(errorReport(new Error('ticket SQ-1 is already claimed')), /^Error: ticket SQ-1 is already claimed\n\s+at /);
+  } finally {
+    if (previousDebug === undefined) delete process.env.SIDEQUEST_DEBUG;
+    else process.env.SIDEQUEST_DEBUG = previousDebug;
+  }
+});
+
 export {};

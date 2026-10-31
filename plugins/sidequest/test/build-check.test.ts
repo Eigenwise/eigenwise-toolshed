@@ -64,6 +64,34 @@ test('build:check reports generated output changed by the build', () => {
   }
 });
 
+test('a rebuild never truncates an output in place: unchanged bytes stay untouched, changed ones are swapped in whole', () => {
+  const fixture = createFixture();
+  try {
+    fs.mkdirSync(path.join(fixture, 'src', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'src', 'lib', 'stable.ts'), 'export const stable = 1;\n');
+    fs.writeFileSync(path.join(fixture, 'src', 'lib', 'edited.ts'), 'export const edited = 1;\n');
+    const first = run(process.execPath, ['scripts/build.mjs'], fixture);
+    assert.equal(first.status, 0, first.stderr);
+    const stablePath = path.join(fixture, 'lib', 'stable.js');
+    const editedPath = path.join(fixture, 'lib', 'edited.js');
+    const stableBefore = fs.statSync(stablePath, { bigint: true });
+    const editedBefore = fs.statSync(editedPath, { bigint: true });
+
+    fs.writeFileSync(path.join(fixture, 'src', 'lib', 'edited.ts'), 'export const edited = 2;\n');
+    const second = run(process.execPath, ['scripts/build.mjs'], fixture);
+    assert.equal(second.status, 0, second.stderr);
+
+    const stableAfter = fs.statSync(stablePath, { bigint: true });
+    assert.equal(stableAfter.mtimeNs, stableBefore.mtimeNs, 'an unchanged output must not be rewritten');
+    assert.equal(stableAfter.ino, stableBefore.ino, 'an unchanged output must keep its file identity');
+    assert.match(fs.readFileSync(editedPath, 'utf8'), /edited = 2/);
+    assert.notEqual(fs.statSync(editedPath, { bigint: true }).ino, editedBefore.ino, 'a changed output must be renamed into place, never truncated and rewritten');
+    assert.deepEqual(fs.readdirSync(path.join(fixture, 'lib')).filter((name) => name.endsWith('.tmp')), [], 'no staged file is left behind');
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 function builtScripts(fixture: string) {
   const scripts = new Map<string, string>();
   for (const directory of ['lib', 'bin', 'hooks']) {

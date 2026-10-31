@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -26,6 +27,32 @@ export const bundledBuildOutputs = [{
   outputExtension: '.js',
 }];
 
+async function currentOutput(outputPath) {
+  try {
+    return await fs.readFile(outputPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+// Tests and live sessions require these outputs while a build runs (SQ-4018): an in-place write
+// truncates first, and a reader in that window loads an empty module as `{}`. Unchanged bytes are
+// never touched, and a changed file is swapped in whole by rename.
+async function replaceOutputIfChanged({ path: outputPath, contents }) {
+  const current = await currentOutput(outputPath);
+  if (current && Buffer.compare(current, contents) === 0) return;
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  const staged = `${outputPath}.${randomUUID()}.tmp`;
+  await fs.writeFile(staged, contents);
+  await fs.rename(staged, outputPath);
+}
+
+async function buildOutputs(options) {
+  const result = await build({ ...options, write: false });
+  for (const outputFile of result.outputFiles) await replaceOutputIfChanged(outputFile);
+}
+
 // Only lib and bin mirror nested sources into output. Hook entry points stay top-level:
 // src/hooks/shared/* are bundled into each hook, and emitting them would flatten distinct
 // nested paths onto colliding basenames in hooks/.
@@ -51,7 +78,7 @@ async function sourceEntries(directory, { recursive = true } = {}) {
 async function buildNonBundled(directory, banner) {
   const entryPoints = await sourceEntries(directory);
   if (!entryPoints.length) return;
-  await build({
+  await buildOutputs({
     entryPoints,
     outdir: path.join(pluginRoot, directory),
     outbase: path.join(pluginRoot, 'src', directory),
@@ -70,7 +97,7 @@ async function buildHooks() {
   for (const { sourceDirectory, outputDirectory, outputExtension } of bundledBuildOutputs) {
     const entryPoints = await sourceEntries(sourceDirectory.replace(/^src\//, ''), { recursive: false });
     for (const entryPoint of entryPoints) {
-      await build({
+      await buildOutputs({
         entryPoints: [entryPoint],
         outfile: path.join(pluginRoot, outputDirectory, `${path.basename(entryPoint, '.ts')}${outputExtension}`),
         bundle: true,

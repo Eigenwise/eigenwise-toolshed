@@ -1,4 +1,5 @@
 "use strict";
+var import_commit_scope = require("./commit-scope.js");
 const { referenceHeader } = require("./external-refs");
 const { experimentRoundRef, resolveExperimentRoundRef, migrateExperimentRoundRefs } = require("./experiment-refs");
 const { DEMONSTRATIONS_FILE } = require("./store/completion.js");
@@ -976,7 +977,9 @@ function scopeAddedBeyondDeclared(ticket, slug, declared) {
   const declaredKeys = new Set(declared.map(scopeKey));
   const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
   const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
-  return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Added write scope (board config alwaysInScope, not declared on this ticket; paths are scope additions, not writes; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
+  const buildCommands = (0, import_commit_scope.committedBuildCommands)(store.readMeta(slug)?.path, declared);
+  const buildGuidance = buildCommands.length ? "\n\nCommitted build outputs: run " + buildCommands.join(" && ") + " before the final verify-capture so it binds the built output." : "";
+  return buildGuidance + scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Added write scope (board config alwaysInScope, not declared on this ticket; paths are scope additions, not writes; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
 }
 function noDeclaredFilesText(ticket) {
   const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
