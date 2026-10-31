@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3 (2026-10-31)
+
+Released in v3.618.0, up from 1.0.2.
+
+### Fixes
+
+- Read Sidequest lifecycle friction during resupply (SQ-3992)
+  Resupply mining now includes read-only Sidequest lifecycle counts for amended verifiers, failed and timed-out verification, checkpoint releases, and rejected submissions. Missing boards are skipped; proposals still need approval one item at a time.
+
 ## 1.0.2 (2026-10-27)
 
 Released in v3.616.0, up from 1.0.1.

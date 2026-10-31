@@ -8,6 +8,42 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.618.0 (2026-10-31)
+
+### quartermaster 1.0.2 → 1.0.3
+
+#### Fixes
+
+- Read Sidequest lifecycle friction during resupply (SQ-3992)
+  Resupply mining now includes read-only Sidequest lifecycle counts for amended verifiers, failed and timed-out verification, checkpoint releases, and rejected submissions. Missing boards are skipped; proposals still need approval one item at a time.
+
+### sidequest 6.8.0 → 6.8.1
+
+#### Fixes
+
+- Preserve executor admission errors and retry transient timeouts (SQ-3897)
+  Executor admission retries a 10-second decision timeout once. Refusals name the failing step, retain a bounded cause, and explain how to retry without replacing the dispatch token. The shared guard log keeps the full error message.
+- Run wave verifiers from each ticket's verification directory (SQ-3994)
+  Wave gates now respect each ticket's verifyCwd, record the resolved cwd per result, and report verify_cwd_missing when the directory is absent. Identical commands with different verification directories run separately.
+- Account for live executor captures in integration phase budgets (SQ-3995)
+  Integration records live ordinary captures on its board and stretches full-suite phase budgets within the existing cap. Phase budget failures include `phase_budget_exceeded`.
+- Explain worktree ticket-lock timeout refusals (SQ-3997)
+  Worktree creation lock refusals now report elapsed waiting time and the recorded holder PID when available, followed by retry guidance.
+- Compare test bodies for negative-control requirements (SQ-3999)
+  Appending tests no longer requires a negative control for an unchanged neighbor. Captured controls accept claim-holder unaffected notes and retain their reasons and body-identity classification.
+- Reduce MCP descriptor context cost (SQ-4002)
+  Compact the orchestrator-only composition admission and work provenance descriptors, keeping enum and const constraints and moving full shapes into invocation references. The served listing saves 1,518 bytes without changing server validation. Document the context-cost origin of the descriptor budget and growth reserve.
+- Read-only Git classifier accepts archive, hash-object and trivial merge-tree (SQ-4004)
+  Isolated executors can now run `git archive` (without -o/--output/--remote), `git hash-object` (without -w) and `git merge-tree --trivial-merge` against the shared checkout for review snapshots. The refusal for any other Git subcommand names read-only-git.ts as the allowlist and says why default merge-tree stays refused.
+- Shared-tree artifact dispatches engage on boards with always-in-scope paths (SQ-4011)
+  A marked shared-tree artifact dispatch now decides artifact mode from the ticket's own declared files, so a board whose always-in-scope entries add docs/ or the release fragment still gets the writable artifact executor instead of the read-only one. In artifact mode the write scope is the artifact path alone.
+- Use short project-scoped dispatch token handles (SQ-4013)
+  Dispatch briefing commands use readable ticket prepare handles instead of UUID paths. Missing-file errors list matching handles, and legacy token-file commands remain supported.
+- Admit shared-source build outputs and check them before integration (SQ-4014)
+  Sidequest admits committed package build roots for source tickets and names the build command in executor briefings. Commit and integration gates reject stale generated output before verifiers run, including supplied and waived verification.
+- Builds no longer truncate outputs that running code is loading (SQ-4018)
+  The Sidequest build now leaves byte-identical outputs untouched and swaps changed ones in by rename, so a CLI or hook loading `lib/` during a rebuild can no longer read an empty module and die with errors like `worktreeLease.canonicalPath is not a function`. The LCOV producer test now builds a fixture copy instead of the live plugin, and a CLI failure caused by a TypeError (or any error with `SIDEQUEST_DEBUG` set) prints its stack.
+
 ## v3.617.0 (2026-10-29)
 
 ### sidequest 6.7.0 → 6.8.0
