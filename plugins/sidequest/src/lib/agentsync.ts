@@ -1506,6 +1506,13 @@ function formatWorktreeBase(base: string | null): string {
   return base ? `worktreeBase: ${base}` : '';
 }
 
+function dispatchStubCredential(tokenFile: string): string[] {
+  const portablePath = tokenFile.replaceAll('\\', '/');
+  const filename = portablePath.split('/').pop() || '';
+  if (/^SQ-[0-9]+-p[1-9][0-9]*\.token$/.test(filename)) return ['--token-name', filename.slice(0, -6)];
+  return ['--token-file', quotedShellArgument(portablePath)];
+}
+
 function renderDispatchStub(ticket?: any, projectPath?: any) {
   const project = String(projectPath || '').trim();
   const tokenFile = String(ticket?.dispatch?.tokenFile || '').trim();
@@ -1514,13 +1521,12 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   const marker = ticketRouteMarker(ticket);
   const command = [
     'node',
-    quotedShellArgument(ensureDispatchLauncher()),
+    quotedShellArgument(ensureDispatchLauncher().replaceAll('\\', '/')),
     'briefing',
     String(ticket.ref),
-    '--token-file',
-    quotedShellArgument(tokenFile),
+    ...dispatchStubCredential(tokenFile),
     '--project',
-    quotedShellArgument(project),
+    quotedShellArgument(project.replaceAll('\\', '/')),
   ].join(' ');
   const label = String(ticket?.dispatch?.description || spawnDescription(ticket, store.resolveExec(ticket?.model, ticket?.effort)))
     .replace(EMBEDDED_ROUTE_MARKER_RE, ' ')

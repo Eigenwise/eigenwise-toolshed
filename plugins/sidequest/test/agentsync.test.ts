@@ -1096,6 +1096,9 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
+  const shortStub = agentsync.renderDispatchStub({ ...ticket, dispatch: { tokenFile: 'C:\\dispatch\\project-slug\\SQ-334-p2.token' } }, 'C:\\dev\\fixture');
+  assert.match(shortStub, /--token-name SQ-334-p2 --project "C:\/dev\/fixture"/);
+  assert.doesNotMatch(shortStub, /project-slug|--token-file/);
   assert.ok(stub.startsWith('GPT-5.6 Terra, high · Instant dispatch\n'), stub);
   assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
   assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
@@ -1105,7 +1108,7 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.match(briefing, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
   assert.match(briefing, /lib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
-  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\\dispatch\\instant-token-334\.token" --project "C:\\dev\\fixture"`/);
+  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\/dispatch\/instant-token-334\.token" --project "C:\/dev\/fixture"`/);
 });
 
 test('SQ-677: malformed and foreign asset names stay bounded and inaccessible', () => {

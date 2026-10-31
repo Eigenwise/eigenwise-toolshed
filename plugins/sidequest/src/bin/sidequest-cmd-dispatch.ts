@@ -86,18 +86,36 @@ async function cmdDispatch(opts: any, positional: any) {
   }, null, 2) + '\n');
 }
 
+function briefingTokenFile(opts: Record<string, string>, slug: string): string {
+  if (opts['token-file']) return opts['token-file'];
+  const name = opts['token-name'] || '';
+  if (!/^SQ-[0-9]+-p[1-9][0-9]*$/.test(name)) fail('briefing: invalid token name; re-copy --token-name from the spawn prompt.');
+  return path.join(store.homeRoot(), 'dispatch-tokens', slug, `${name}.token`);
+}
+
+function missingDispatchTokenFileMessage(file: string | undefined, matchingFiles: string[] = []): string {
+  return `token file not found at ${file}. Re-copy the token name or path from the spawn prompt without retyping it. Matching token files: ${matchingFiles.join(', ') || '(none)'}.`;
+}
+
+function briefingRefusalMessage(result: { reason: string; tokenFile?: string; matchingFiles?: string[]; readError?: string }, ref: string): string {
+  switch (result.reason) {
+    case 'not_found': return `no ticket "${ref}".`;
+    case 'stale': return 'dispatch is no longer current; re-run dispatch for a current spawn.';
+    case 'token_file_not_found': return missingDispatchTokenFileMessage(result.tokenFile, result.matchingFiles);
+    case 'token_file_unreadable': return `token file unreadable at ${result.tokenFile} (${result.readError}). Re-run the exact briefing command from the spawn prompt; do not re-run dispatch.`;
+    default: return 'token refused. Re-run the exact briefing command from the spawn prompt; do not re-run dispatch.';
+  }
+}
+
 async function cmdBriefing(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('briefing: pass a ticket ref, e.g. sidequest briefing SQ-12 --token-file <path>.');
-  if (!opts['token-file']) fail('briefing: pass the dispatch token file with --token-file.');
+  if (!opts['token-file'] && !opts['token-name']) fail('briefing: pass --token-name <SQ-n-pN> or --token-file <path>.');
   const { slug, meta } = await resolveProject(opts);
-  const result = store.readDispatchBriefing(slug, idOrRef, undefined, opts['token-file']);
+  const tokenFile = briefingTokenFile(opts, slug);
+  const result = store.readDispatchBriefing(slug, idOrRef, undefined, tokenFile);
   if (!result.ok) {
-    const message = result.reason === 'not_found'
-      ? `no ticket "${idOrRef}".`
-      : result.reason === 'stale'
-        ? 'dispatch is no longer current; re-run dispatch for a current spawn.'
-        : 'dispatch token was refused or its token file was unavailable. Re-run the exact briefing command from this executor prompt; do not re-run dispatch.';
+    const message = briefingRefusalMessage(result, idOrRef);
     fail(`briefing: ${message}`);
   }
   const briefing = agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, result.token, slug, meta.path), meta.path);

@@ -194,8 +194,9 @@ function dispatchTokenFile(ticket?: any) {
   return typeof ticket?.dispatch?.tokenFile === 'string' ? ticket.dispatch.tokenFile : null;
 }
 
-function newDispatchTokenFile() {
-  return path.join(homeRoot(), 'dispatch-tokens', `${crypto.randomUUID()}.token`);
+function newDispatchTokenFile(slug: string, ticket: StoredRecord): string {
+  ticket.dispatchPrepareSeq = (Number(ticket.dispatchPrepareSeq) || 0) + 1;
+  return path.join(homeRoot(), 'dispatch-tokens', slug, `${ticket.ref}-p${ticket.dispatchPrepareSeq}.token`);
 }
 
 function ticketEvidenceDirectory(slug?: any, ref?: any, projectPath?: any) {
@@ -263,11 +264,11 @@ function boardVerificationEvidencePath(target?: any, evidenceDirectory?: any) {
   return segmentsUnder(root, requested).length > 0;
 }
 
-function writeDispatchTokenFile(ticket?: any) {
+function writeDispatchTokenFile(ticket?: any, exclusive = false) {
   const file = dispatchTokenFile(ticket);
   if (!file) throw new Error('dispatch token file is unavailable');
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, `${ticket.dispatchNonce}\n`, { encoding: 'utf8', mode: 0o600 });
+  fs.writeFileSync(file, `${ticket.dispatchNonce}\n`, { encoding: 'utf8', mode: 0o600, flag: exclusive ? 'wx' : 'w' });
   return file;
 }
 
@@ -277,19 +278,32 @@ function removeDispatchTokenFile(ticket?: any) {
   try { fs.unlinkSync(file); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
 }
 
-function dispatchTokenFromFile(file?: any) {
+function dispatchTokenReadErrorCode(error: unknown): string {
+  return error instanceof Error && 'code' in error ? String(error.code) : 'UNKNOWN';
+}
+
+function dispatchTokenFromFile(file: unknown): { token: string | null; readError?: string } {
   const tokenFile = String(file || '').trim();
-  if (!tokenFile) return null;
+  if (!tokenFile) return { token: null };
   try {
     const token = fs.readFileSync(tokenFile, 'utf8').trim();
-    return token && !/[\r\n]/.test(token) ? token : null;
-  } catch (_) {
-    return null;
+    return { token: token && !/[\r\n]/.test(token) ? token : null };
+  } catch (error: unknown) {
+    return { token: null, readError: dispatchTokenReadErrorCode(error) };
+  }
+}
+
+function matchingDispatchTokenFiles(file: string, ref: string): string[] {
+  try {
+    const names: string[] = fs.readdirSync(path.dirname(file));
+    return names.filter(name => name.startsWith(`${ref}-p`) && name.endsWith('.token')).sort();
+  } catch {
+    return [];
   }
 }
 
 function dispatchTokenForRequest(token?: any, tokenFile?: any) {
-  return token == null || token === '' ? dispatchTokenFromFile(tokenFile) : token;
+  return token == null || token === '' ? dispatchTokenFromFile(tokenFile).token : token;
 }
 
 function dispatchState(ticket?: any) {
@@ -2824,10 +2838,10 @@ function dirtyBaselineFields(plan: PreparedDispatchPlan) {
   };
 }
 
-function launchFields(t: StoredRecord, plan: PreparedDispatchPlan) {
+function launchFields(slug: string, t: StoredRecord, plan: PreparedDispatchPlan) {
   return {
     tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-    tokenFile: newDispatchTokenFile(),
+    tokenFile: newDispatchTokenFile(slug, t),
     executor: t.dispatchExecutor,
     description: spawnDescription(t, plan.preparedExec),
     launchSeq: plan.launchSeq,
@@ -2889,7 +2903,7 @@ function preparedDispatchRecord(slug: string, t: StoredRecord, current: StoredRe
     ...unscopedOverrideFields(slug, plan.isolation.wholeTreeScope, opts, plan.now),
     ...artifactFields(plan),
     ...dirtyBaselineFields(plan),
-    ...launchFields(t, plan),
+    ...launchFields(slug, t, plan),
     ...routeHistoryFields(plan, current, opts, preflight),
     ...storyFields(plan),
     preparedAt: plan.now,
@@ -2917,10 +2931,10 @@ function mintPreparedDispatch(slug: string, t: StoredRecord, current: StoredReco
   t.dispatchNonce = mintDispatchToken();
   t.dispatch = preparedDispatchRecord(slug, t, current, plan, opts, preflight);
   consumePreparedComposition(t, dispatchTokenDigest(t.dispatchNonce));
-  effects.staged = dispatchTokenFile(t);
   t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
   stampDispatchEvent(t, 'dispatch', plan.now);
-  writeDispatchTokenFile(t);
+  writeDispatchTokenFile(t, true);
+  effects.staged = dispatchTokenFile(t);
   const warnings = preparedDispatchWarnings(plan, preflight);
   return { ok: true, ticket: t, token: t.dispatchNonce, recovery: plan.recovery, ...(warnings.length ? { warnings } : {}) };
 }
@@ -3009,16 +3023,34 @@ function prepareDispatchRequest(slug?: any, idOrRef?: any, opts?: any) {
   return prepareUnderDispatchLocks(slug, idOrRef, found, opts, preflight);
 }
 
+function dispatchBriefingTokenFile(tokenFile: string, ref: string) {
+  const credential = dispatchTokenFromFile(tokenFile);
+  if (credential.readError === 'ENOENT') return { ok: false as const, reason: 'token_file_not_found', tokenFile, matchingFiles: matchingDispatchTokenFiles(tokenFile, ref) };
+  if (credential.readError) return { ok: false as const, reason: 'token_file_unreadable', tokenFile, readError: credential.readError };
+  return { ok: true as const, token: credential.token };
+}
+
+function dispatchBriefingCredential(ticket: StoredRecord, token: string | undefined, tokenFile: string | undefined) {
+  const credential = token ? { ok: true as const, token } : dispatchBriefingTokenFile(String(tokenFile || ''), ticket.ref);
+  if (!credential.ok) return credential;
+  return dispatchBriefingTokenMatch(ticket.dispatchNonce, credential.token);
+}
+
+function dispatchBriefingTokenMatch(expected: string, received: string | null) {
+  return dispatchTokenMatches(expected, received)
+    ? { ok: true as const, token: received }
+    : { ok: false as const, reason: 'token' };
+}
+
 function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?: any) {
   const ticket = getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: 'not_found' };
   const state = dispatchState(ticket);
-  const receivedToken = dispatchTokenForRequest(token, tokenFile);
   if (!state || !ticket.dispatchNonce) return { ok: false, reason: 'token' };
   if (state.terminalAt) return { ok: false, reason: 'stale' };
-  if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
-    return { ok: false, reason: 'token' };
-  }
+  const credential = dispatchBriefingCredential(ticket, token, tokenFile);
+  if (!credential.ok) return credential;
+  const receivedToken = credential.token;
   // A briefing fetch is the running executor saying it got this far, and for a slow first turn it is the
   // only thing it says before claiming, so record it as runtime liveness (SQ-2934).
   const briefed = withTicketLock(slug, ticket.id, () => {
@@ -3318,7 +3350,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       artifactScope: state.artifactScope || null,
       ...(Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-      tokenFile: newDispatchTokenFile(),
+      tokenFile: newDispatchTokenFile(slug, t),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, fallback.exec),
       launchSeq,
@@ -3336,7 +3368,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       supersededTokens,
       recovery,
     };
-    writeDispatchTokenFile(t);
+    writeDispatchTokenFile(t, true);
     stampDispatchEvent(t, opts.source || 'agent-launch-failure', now);
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
