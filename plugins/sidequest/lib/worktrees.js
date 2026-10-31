@@ -685,7 +685,10 @@ function dispatchHasTerminalLifecycleAuthority(dispatch) {
   const outcome = String(dispatch?.outcome || "").trim();
   if (!terminalAt || !terminalSource || !outcome) return false;
   const attempts = Array.isArray(dispatch?.attempts) ? dispatch.attempts : [];
-  return attempts.some((attempt) => attempt?.terminalAt === terminalAt && attempt?.terminalSource === terminalSource && attempt?.outcome === outcome);
+  return attempts.some((attempt) => attempt?.terminalAt === terminalAt && attempt?.terminalSource === terminalSource && terminalAttemptOutcomes(attempt).includes(outcome));
+}
+function terminalAttemptOutcomes(attempt) {
+  return [attempt.outcome, ...attempt.integratedAt ? ["done"] : []];
 }
 function dispatchHasCompletedWorktreeCreation(dispatch) {
   return Boolean(dispatch?.worktreeBindingSource === "worktree-create" && dispatch?.worktreeCreationCompletedAt && dispatch?.worktree && dispatch?.worktreeGitDirectory && dispatch?.worktreeCommonGitDirectory && dispatch?.worktreeCheckoutInstance && dispatch?.worktreeObservedRevision);
