@@ -5378,7 +5378,7 @@ test('pre-tool hook: exact prepared briefing is the sole dispatch launch authori
     },
     {
       name: 'project mismatch',
-      mutate: (prompt: string) => prompt.replace(`--project "${BOARD_PATH}"`, '--project "C:\\wrong-project"'),
+      mutate: (prompt: string) => prompt.replace(/--project "[^"]+"/, '--project "C:/wrong-project"'),
     },
     {
       name: 'route mismatch',

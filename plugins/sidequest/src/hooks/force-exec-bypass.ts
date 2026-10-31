@@ -32,6 +32,7 @@ interface ExecutorClassification {
 interface DispatchLaunch {
   ref: string;
   tokenFile: string;
+  tokenName?: string;
 }
 interface ResolveResult {
   status: 'no-refs' | 'error' | 'no-project' | 'ticket-not-found' | 'ticket-not-builtin' | 'conflicting' | 'ok';
@@ -434,7 +435,7 @@ function dispatchRefs(prompt: unknown): string[] {
   if (typeof prompt !== 'string' || !prompt) return [];
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"[^"]+"|\S+)/gi)) {
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-(?:file|name)\s+(?:"[^"]+"|\S+)/gi)) {
     const ref = (match[1] || '').toUpperCase();
     if (ref && !seen.has(ref)) {
       seen.add(ref);
@@ -442,6 +443,17 @@ function dispatchRefs(prompt: unknown): string[] {
     }
   }
   return out;
+}
+
+function namedDispatchLaunches(prompt: string): DispatchLaunch[] {
+  return [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-name\s+(SQ-\d+-p[1-9][0-9]*)\b/gi)]
+    .map(match => ({ ref: (match[1] || '').toUpperCase(), tokenFile: '', tokenName: match[2] }));
+}
+
+function dispatchLaunchTokenFile(store: Store, slug: string, launch: DispatchLaunch): string {
+  if (!launch.tokenName) return launch.tokenFile;
+  const file = store.getTicket(slug, launch.ref)?.dispatch?.tokenFile || '';
+  return path.basename(file) === `${launch.tokenName}.token` ? file : '';
 }
 
 function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
@@ -452,6 +464,7 @@ function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
     const section = prompt.slice(match.index, next ? next.index : prompt.length);
     return { ref: (match[1] || '').toUpperCase(), tokenFile: extractDispatchTokenFile(section) };
   }).filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.tokenFile));
+  launches.push(...namedDispatchLaunches(prompt));
   if (launches.length) return launches;
 
   // The briefing command pairs its ref with its token file, so read the pair from
@@ -502,7 +515,7 @@ function recordAuthoritativeLaunch(input: HookInput, type: string, agentName: st
     if (!found.ok || !found.slug) return;
     for (const launch of launches) {
       store.recordDispatchLaunch(found.slug, launch.ref, {
-        tokenFile: launch.tokenFile,
+        tokenFile: dispatchLaunchTokenFile(store, found.slug, launch),
         executor: type,
         sessionId,
         agentName: agentName || toolInput.name,

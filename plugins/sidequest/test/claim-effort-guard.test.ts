@@ -483,7 +483,7 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
   const assertRefused = (ref: string, tokenFile: string, secret: string) => {
     const result = runCli(['briefing', ref, '--token-file', tokenFile]);
     assert.equal(result.status, 1);
-    assert.match(result.stdout + result.stderr, /dispatch token was refused/);
+    assert.match(result.stdout + result.stderr, /token refused|dispatch is no longer current/);
     assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
   };
 
@@ -656,7 +656,7 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
   assert.ok(Buffer.byteLength(dispatched.spawn.prompt) < 1200);
   assert.match(dispatched.spawn.prompt, /guard fixture/);
   assert.doesNotMatch(dispatched.spawn.prompt, /Where: claim guard fixture/);
-  assert.ok(dispatched.spawn.prompt.includes(`briefing ${ref} --token-file "${ticket(ref).dispatch.tokenFile}"`));
+  assert.ok(dispatched.spawn.prompt.includes(`briefing ${ref} --token-name ${ref}-p${ticket(ref).dispatchPrepareSeq}`));
   assert.match(dispatched.spawn.prompt, /FIRST action:/);
   assert.doesNotMatch(dispatched.spawn.prompt, /## This ticket/);
   assert.doesNotMatch(dispatched.spawn.prompt, /You are a sidequest ticket executor/);

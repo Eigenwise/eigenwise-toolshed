@@ -1246,7 +1246,7 @@ function dispatchRefs(prompt) {
   if (typeof prompt !== "string" || !prompt) return [];
   const seen = /* @__PURE__ */ new Set();
   const out = [];
-  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"[^"]+"|\S+)/gi)) {
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-(?:file|name)\s+(?:"[^"]+"|\S+)/gi)) {
     const ref = (match[1] || "").toUpperCase();
     if (ref && !seen.has(ref)) {
       seen.add(ref);
@@ -1254,6 +1254,14 @@ function dispatchRefs(prompt) {
     }
   }
   return out;
+}
+function namedDispatchLaunches(prompt) {
+  return [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-name\s+(SQ-\d+-p[1-9][0-9]*)\b/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), tokenFile: "", tokenName: match[2] }));
+}
+function dispatchLaunchTokenFile(store, slug, launch) {
+  if (!launch.tokenName) return launch.tokenFile;
+  const file = store.getTicket(slug, launch.ref)?.dispatch?.tokenFile || "";
+  return import_node_path9.default.basename(file) === `${launch.tokenName}.token` ? file : "";
 }
 function dispatchLaunches(prompt) {
   if (typeof prompt !== "string" || !prompt) return [];
@@ -1263,6 +1271,7 @@ function dispatchLaunches(prompt) {
     const section = prompt.slice(match.index, next ? next.index : prompt.length);
     return { ref: (match[1] || "").toUpperCase(), tokenFile: extractDispatchTokenFile(section) };
   }).filter((launch) => Boolean(launch.ref && launch.tokenFile));
+  launches.push(...namedDispatchLaunches(prompt));
   if (launches.length) return launches;
   return [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"([^"]+)"|(\S+))/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), tokenFile: match[2] || match[3] || "" })).filter((launch) => Boolean(launch.ref && launch.tokenFile));
 }
@@ -1298,7 +1307,7 @@ function recordAuthoritativeLaunch(input, type, agentName) {
     if (!found.ok || !found.slug) return;
     for (const launch of launches) {
       store.recordDispatchLaunch(found.slug, launch.ref, {
-        tokenFile: launch.tokenFile,
+        tokenFile: dispatchLaunchTokenFile(store, found.slug, launch),
         executor: type,
         sessionId,
         agentName: agentName || toolInput.name
