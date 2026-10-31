@@ -1,5 +1,7 @@
 import { execFileSync, execFileText } from './git-process.js';
 import fs from 'node:fs';
+import { runProcessVerification } from './ports/process.js';
+import type { VerificationResult } from './kernel/verification.js';
 import path from 'node:path';
 import { hasGlob, isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
 
@@ -36,6 +38,55 @@ export function trackedBuildOutputSource(repository: string, file: string, sourc
   const source = `${match[1]}/src/${match[2]}.ts`;
   if (!isInScope(source, sources)) return null;
   return indexedPaths(repository).includes(output) ? source : null;
+}
+
+export type CommittedBuildPackage = Readonly<{ directory: string; outputs: readonly string[] }>;
+
+function committedBuildDirectory(file: string): string | null {
+  const match = /^(?:(.*)\/)?src(?:\/|$)/.exec(normalizeScope(file));
+  return match ? match[1] || '.' : null;
+}
+
+function committedBuildOutputs(directory: string, tracked: readonly string[]): string[] {
+  const prefix = directory === '.' ? '' : directory + '/';
+  return ['lib/', 'bin/', 'hooks/*.js', 'agents/']
+    .map((output) => prefix + output)
+    .filter((output) => tracked.some((file) => isInScope(file, [output])));
+}
+
+export function committedBuildPackages(repository: string, files: readonly string[]): CommittedBuildPackage[] {
+  const listed = gitResult(repository, ['ls-files', '--full-name', '-z']);
+  if (!listed.ok) return [];
+  const tracked = listed.value.split('\0');
+  const directories = [...new Set(files.map(committedBuildDirectory).filter((directory): directory is string => directory !== null))];
+  return directories.filter((directory) => committedBuildScriptsTracked(directory, tracked))
+    .map((directory) => ({ directory, outputs: committedBuildOutputs(directory, tracked) }))
+    .filter((build) => build.outputs.length > 0);
+}
+
+function committedBuildScriptsTracked(directory: string, tracked: readonly string[]): boolean {
+  const prefix = directory === '.' ? '' : directory + '/';
+  return ['package.json', 'scripts/build.mjs', 'scripts/build-check.mjs']
+    .every((file) => tracked.includes(prefix + file));
+}
+
+export function committedBuildCommands(repository: string, files: readonly string[]): string[] {
+  return committedBuildPackages(repository, files).map((build) => build.directory === '.'
+    ? 'npm run build' : 'npm --prefix ' + JSON.stringify(build.directory) + ' run build');
+}
+
+export function checkCommittedBuilds(repository: string, files: readonly string[], timeoutMilliseconds: number): VerificationResult | null {
+  for (const build of committedBuildPackages(repository, files)) {
+    const command = 'node ' + JSON.stringify(path.join('scripts', 'build-check.mjs'));
+    const result = runProcessVerification({ kind: 'command', evidenceContract: '', command }, {
+      cwd: path.resolve(repository, build.directory), timeoutMilliseconds,
+    });
+    if (result.status !== 'passed') return {
+      ...result, evidence: 'generated_output_stale: ' + build.directory + '\n' + result.evidence + '\n' + (result.outputTail || ''),
+      failureIdentities: ['generated_output_stale'],
+    };
+  }
+  return null;
 }
 
 function patchIds(cwd: string, args: readonly string[]): GitResult {
@@ -978,6 +1029,9 @@ export async function commitScoped(cwd: string, message: unknown, files: unknown
     const root = repoRoot(cwd);
     const resolution = validateScopeResolution(root, scopes);
     if (!resolution.ok) return resolution;
+    const changedSources = workingPaths(root).filter((file) => isInScope(file, scopes));
+    const buildFailure = checkCommittedBuilds(root, changedSources, 300_000);
+    if (buildFailure) return { ok: false, reason: 'generated_output_stale', message: buildFailure.evidence + '\nRun ' + committedBuildCommands(root, changedSources).join(' && ') + ' before committing.', buildFailure };
     const canonicalScopes = canonicalScopedPaths(root, scopes);
     const commitScopes = commitScopedPaths(root, canonicalScopes);
     const missingScopes = canonicalScopes.filter((scope) => !commitScopes.includes(scope));

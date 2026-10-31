@@ -30,8 +30,11 @@ var commit_scope_exports = {};
 __export(commit_scope_exports, {
   WHOLE_TREE_SCOPE: () => WHOLE_TREE_SCOPE,
   candidatePaths: () => candidatePaths,
+  checkCommittedBuilds: () => checkCommittedBuilds,
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
+  committedBuildCommands: () => committedBuildCommands,
+  committedBuildPackages: () => committedBuildPackages,
   foreignRefMessage: () => foreignRefMessage,
   foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
   foreignReleaseFragmentRefusalMessage: () => foreignReleaseFragmentRefusalMessage,
@@ -71,6 +74,7 @@ __export(commit_scope_exports, {
 module.exports = __toCommonJS(commit_scope_exports);
 var import_git_process = require("./git-process.js");
 var import_node_fs = __toESM(require("node:fs"));
+var import_process = require("./ports/process.js");
 var import_node_path = __toESM(require("node:path"));
 var import_scope_match = require("./scope-match.js");
 var import_scope_match2 = require("./scope-match.js");
@@ -97,6 +101,43 @@ function trackedBuildOutputSource(repository, file, sources) {
   const source = `${match[1]}/src/${match[2]}.ts`;
   if (!(0, import_scope_match.isInScope)(source, sources)) return null;
   return indexedPaths(repository).includes(output) ? source : null;
+}
+function committedBuildDirectory(file) {
+  const match = /^(?:(.*)\/)?src(?:\/|$)/.exec((0, import_scope_match.normalizeScope)(file));
+  return match ? match[1] || "." : null;
+}
+function committedBuildOutputs(directory, tracked) {
+  const prefix = directory === "." ? "" : directory + "/";
+  return ["lib/", "bin/", "hooks/*.js", "agents/"].map((output) => prefix + output).filter((output) => tracked.some((file) => (0, import_scope_match.isInScope)(file, [output])));
+}
+function committedBuildPackages(repository, files) {
+  const listed = gitResult(repository, ["ls-files", "--full-name", "-z"]);
+  if (!listed.ok) return [];
+  const tracked = listed.value.split("\0");
+  const directories = [...new Set(files.map(committedBuildDirectory).filter((directory) => directory !== null))];
+  return directories.filter((directory) => committedBuildScriptsTracked(directory, tracked)).map((directory) => ({ directory, outputs: committedBuildOutputs(directory, tracked) })).filter((build) => build.outputs.length > 0);
+}
+function committedBuildScriptsTracked(directory, tracked) {
+  const prefix = directory === "." ? "" : directory + "/";
+  return ["package.json", "scripts/build.mjs", "scripts/build-check.mjs"].every((file) => tracked.includes(prefix + file));
+}
+function committedBuildCommands(repository, files) {
+  return committedBuildPackages(repository, files).map((build) => build.directory === "." ? "npm run build" : "npm --prefix " + JSON.stringify(build.directory) + " run build");
+}
+function checkCommittedBuilds(repository, files, timeoutMilliseconds) {
+  for (const build of committedBuildPackages(repository, files)) {
+    const command = "node " + JSON.stringify(import_node_path.default.join("scripts", "build-check.mjs"));
+    const result = (0, import_process.runProcessVerification)({ kind: "command", evidenceContract: "", command }, {
+      cwd: import_node_path.default.resolve(repository, build.directory),
+      timeoutMilliseconds
+    });
+    if (result.status !== "passed") return {
+      ...result,
+      evidence: "generated_output_stale: " + build.directory + "\n" + result.evidence + "\n" + (result.outputTail || ""),
+      failureIdentities: ["generated_output_stale"]
+    };
+  }
+  return null;
 }
 function patchIds(cwd, args) {
   try {
@@ -822,6 +863,9 @@ async function commitScoped(cwd, message, files) {
     const root = repoRoot(cwd);
     const resolution = validateScopeResolution(root, scopes);
     if (!resolution.ok) return resolution;
+    const changedSources = workingPaths(root).filter((file) => (0, import_scope_match.isInScope)(file, scopes));
+    const buildFailure = checkCommittedBuilds(root, changedSources, 3e5);
+    if (buildFailure) return { ok: false, reason: "generated_output_stale", message: buildFailure.evidence + "\nRun " + committedBuildCommands(root, changedSources).join(" && ") + " before committing.", buildFailure };
     const canonicalScopes = canonicalScopedPaths(root, scopes);
     const commitScopes = commitScopedPaths(root, canonicalScopes);
     const missingScopes = canonicalScopes.filter((scope) => !commitScopes.includes(scope));
@@ -845,8 +889,11 @@ async function commitScoped(cwd, message, files) {
 0 && (module.exports = {
   WHOLE_TREE_SCOPE,
   candidatePaths,
+  checkCommittedBuilds,
   commitPaths,
   commitScoped,
+  committedBuildCommands,
+  committedBuildPackages,
   foreignRefMessage,
   foreignReleaseFragmentPaths,
   foreignReleaseFragmentRefusalMessage,

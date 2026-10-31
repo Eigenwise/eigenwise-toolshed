@@ -1,6 +1,7 @@
 "use strict";
 var import_integration_tests = require("../integration-tests.js");
 var import_integration_quality = require("../integration-quality.js");
+var import_commit_scope = require("../commit-scope.js");
 var import_work_provenance = require("./work-provenance");
 const { emitExternalRefUpdates } = require("./external-ref-updates.js");
 const { currentBoardPath } = require("./move.js");
@@ -836,6 +837,10 @@ ${JSON.stringify(quality.unverified)}`,
   }
   function verifyDeliveredSubmission(slug, ticket, opts) {
     const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
+    const buildProject = String(opts?.cwd || "").trim() || readMeta(slug)?.path;
+    const buildPaths = (opts?.qualityTickets || [ticket]).flatMap((participant) => participant.submission.changedPaths || []);
+    const buildFailure = (0, import_commit_scope.checkCommittedBuilds)(buildProject, buildPaths, normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs));
+    if (buildFailure) return buildFailure;
     const unexecuted = unexecutedDeliveryVerification(ticket, requirement, opts);
     if (unexecuted) return unexecuted;
     const validationError = verifyCommandError(requirement.command);
@@ -3715,7 +3720,9 @@ ${parts.join("\n\n")}` });
     };
   }
   function commandWaveVerification(slug, tickets, wave, requirement, requirements = [requirement]) {
-    const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement) : null;
+    const buildPaths = tickets.flatMap((ticket) => ticket.submission.changedPaths || []);
+    const hasCommittedBuild = (0, import_commit_scope.committedBuildPackages)(readMeta(slug).path, buildPaths).length > 0;
+    const reused = tickets.length === 1 && !hasCommittedBuild ? reusedSingletonGateVerification(tickets[0], requirement) : null;
     if (reused) {
       return {
         ok: true,
@@ -3726,7 +3733,7 @@ ${parts.join("\n\n")}` });
     const checkout = waveGateCheckout(slug, tickets, wave);
     if (!checkout.ok) return checkout;
     try {
-      return verifyWaveGateCheckout(slug, wave.id, requirements, checkout);
+      return verifyWaveGateCheckout(slug, wave.id, requirements, checkout, buildPaths);
     } finally {
       checkout.remove();
     }
@@ -3765,7 +3772,7 @@ ${parts.join("\n\n")}` });
     fs.rmSync(checkout, { recursive: true, force: true });
     integrationGit(repository, ["worktree", "prune"]);
   }
-  function verifyWaveGateCheckout(slug, waveId, requirements, checkout) {
+  function verifyWaveGateCheckout(slug, waveId, requirements, checkout, buildPaths) {
     const provisioning = provisionWaveGateWorktree(slug, checkout.isolatedWorktree);
     if (!provisioning.ok) {
       return {
@@ -3774,6 +3781,8 @@ ${parts.join("\n\n")}` });
         message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`
       };
     }
+    const buildFailure = (0, import_commit_scope.checkCommittedBuilds)(checkout.cwd, buildPaths, normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs));
+    if (buildFailure) return { ok: true, provisioning: provisioning.evidence, verification: buildFailure };
     return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
   }
   function verifyWaveCommand(slug, waveId, requirement, checkoutRoot, index) {

@@ -24,6 +24,7 @@ import { integrationCaptureEnvironment, phaseBudgetResult, beginIntegrationProgr
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
 import type { CompositionRefusal } from './composition-range.js';
+import { checkCommittedBuilds, committedBuildPackages } from '../commit-scope.js';
 import { buildsOnCandidates, type BuildsOnCandidate } from './work-provenance';
 
 function createSubmissions(dependencies: any) {
@@ -1050,6 +1051,10 @@ function unexecutedDeliveryVerification(ticket: any, requirement: any, opts?: an
 
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
+  const buildProject = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
+  const buildPaths = (opts?.qualityTickets || [ticket]).flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
+  const buildFailure = checkCommittedBuilds(buildProject, buildPaths, normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs));
+  if (buildFailure) return buildFailure;
   const unexecuted = unexecutedDeliveryVerification(ticket, requirement, opts);
   if (unexecuted) return unexecuted;
   const validationError = verifyCommandError(requirement.command);
@@ -4454,7 +4459,9 @@ function suppliedWaveVerification(waveId: string, requirement: any, supplied: an
 }
 
 function commandWaveVerification(slug: any, tickets: any[], wave: any, requirement: any, requirements: VerificationRequirement[] = [requirement]) {
-  const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement) : null;
+  const buildPaths = tickets.flatMap((ticket) => ticket.submission.changedPaths || []);
+  const hasCommittedBuild = committedBuildPackages(readMeta(slug).path, buildPaths).length > 0;
+  const reused = tickets.length === 1 && !hasCommittedBuild ? reusedSingletonGateVerification(tickets[0], requirement) : null;
   if (reused) {
     return {
       ok: true,
@@ -4465,7 +4472,7 @@ function commandWaveVerification(slug: any, tickets: any[], wave: any, requireme
   const checkout = waveGateCheckout(slug, tickets, wave);
   if (!checkout.ok) return checkout;
   try {
-    return verifyWaveGateCheckout(slug, wave.id, requirements, checkout);
+    return verifyWaveGateCheckout(slug, wave.id, requirements, checkout, buildPaths);
   } finally {
     checkout.remove();
   }
@@ -4511,7 +4518,7 @@ function removeComposedWaveCheckout(slug: any, repository: string, checkout: str
   integrationGit(repository, ['worktree', 'prune']);
 }
 
-function verifyWaveGateCheckout(slug: any, waveId: string, requirements: VerificationRequirement[], checkout: any) {
+function verifyWaveGateCheckout(slug: any, waveId: string, requirements: VerificationRequirement[], checkout: any, buildPaths: string[]) {
   const provisioning = provisionWaveGateWorktree(slug, checkout.isolatedWorktree);
   if (!provisioning.ok) {
     return {
@@ -4520,6 +4527,8 @@ function verifyWaveGateCheckout(slug: any, waveId: string, requirements: Verific
       message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`,
     };
   }
+  const buildFailure = checkCommittedBuilds(checkout.cwd, buildPaths, normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs));
+  if (buildFailure) return { ok: true, provisioning: provisioning.evidence, verification: buildFailure };
   return { ok: true, provisioning: provisioning.evidence, verification: verifyWaveCommands(slug, waveId, requirements, checkout) };
 }
 
