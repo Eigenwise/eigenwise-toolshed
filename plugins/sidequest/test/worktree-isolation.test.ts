@@ -3417,6 +3417,22 @@ test('GH-406: concurrent WorktreeCreate hooks of one message each bind a free re
 
 // Windows CI reported `worktree lease refused creation: busy` 10.5s into this race. A released lock file stays
 // delete-pending while a reader holds it, and the exclusive create there fails EPERM, not EEXIST (SQ-3986).
+test('SQ-3997: WorktreeCreate reports the elapsed ticket lock wait and its holder', () => {
+  const { createLocks } = require('../lib/store/locks.js');
+  const locks = createLocks({ fs, path, ticketsDir: (project: string) => path.join(store.projectDir(project), 'tickets'), transaction: (callback: () => unknown) => callback() });
+  const wave = sq3139CrossedWave('sq3997busy', ['one']);
+  const lockPath = locks.ticketLockPath(slug, store.getTicket(slug, wave.first.ref).id);
+  const owner = locks.acquireLock(lockPath);
+  try {
+    const result = createWorktree(wave.sessionId, wave.first.name);
+    assert.equal(result.ok, false);
+    assert.match(result.output, new RegExp(`worktree lease refused creation: busy after waiting \\d+ s for the ticket lock, held by ${process.pid}\\. Retry the dispatch; the lease is released when the holder finishes\\.`));
+  } finally {
+    locks.releaseLock(lockPath, owner);
+    wave.cleanup();
+  }
+});
+
 test('SQ-3986: a ticket lock file still being deleted is waited on, not reported busy', () => {
   const { createLocks } = require('../lib/store/locks.js');
   const lockDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq3986-locks-'));
@@ -3775,4 +3791,21 @@ test('releasing gate dependency links before git worktree remove keeps the linke
   fixture.git(['worktree', 'remove', fixture.worktree]);
   assert.equal(fs.existsSync(fixture.worktree), false);
   assert.deepEqual(fixture.registeredEntries(), before, 'git worktree remove never reaches the linked install');
+});
+
+test('SQ-3997: a held ticket lock reports its elapsed wait and recorded holder', () => {
+  const { createLocks } = require("../lib/store/locks.js");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq3997-locks-'));
+  const locks = createLocks({ fs, path, ticketsDir: () => directory, transaction: (callback: () => unknown) => callback() });
+  const lockPath = locks.ticketLockPath('project', 'SQ-1');
+  const owner = locks.acquireLock(lockPath);
+  try {
+    const result = locks.withTicketFileLocks([{ slug: 'project', id: 'SQ-1' }], () => assert.fail('the held lock must not be acquired'));
+    assert.equal(result.reason, 'busy');
+    assert.ok(result.waitedMs >= 30000, `elapsed wait ${result.waitedMs} reaches the configured 30-second budget`);
+    assert.equal(result.holder, process.pid);
+  } finally {
+    locks.releaseLock(lockPath, owner);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

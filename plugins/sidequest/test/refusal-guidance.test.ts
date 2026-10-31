@@ -22,6 +22,15 @@ const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, manualCandidateDeliveryGuid
   routingDisabledMessage(ref: string): string;
 };
 
+test('SQ-3997: busy creation guidance rounds elapsed seconds and omits unknown holders', () => {
+  const { worktreeCreationRefusalMessage } = require('../lib/refusal-guidance.js');
+  assert.equal(worktreeCreationRefusalMessage('busy', '/repository', undefined, { waitedMs: 30501 }),
+    'worktree lease refused creation: busy after waiting 31 s for the ticket lock. Retry the dispatch; the lease is released when the holder finishes.');
+  assert.equal(worktreeCreationRefusalMessage('busy', '/repository', undefined, { waitedMs: 30001, holder: '/holder' }),
+    'worktree lease refused creation: busy after waiting 30 s for the ticket lock, held by /holder. Retry the dispatch; the lease is released when the holder finishes.');
+  assert.equal(worktreeCreationRefusalMessage('busy', '/repository'), 'worktree lease refused creation: busy');
+});
+
 test('claim refusal guidance always gives an actionable next step', () => {
   for (const [reason, message] of Object.entries(CLAIM_REFUSAL_MESSAGES)) {
     assert.match(message('SQ-42', { by: 'other-worker', at: '2026-07-20T00:00:00.000Z' }), /sidequest [a-z]+|--[a-z]+|direct:true|token file/i, reason);

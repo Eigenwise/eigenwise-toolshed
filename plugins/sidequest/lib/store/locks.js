@@ -139,12 +139,17 @@ function createLocks(dependencies) {
   function orderedTicketLockPaths(keys) {
     return [...new Set(keys.map((key) => ticketLockPath(key.slug, key.id)))].sort();
   }
+  function busyTicketLock(lockPath, startedAt) {
+    const holder = readLockOwner(lockPath)?.pid;
+    return { ok: false, reason: "busy", waitedMs: Date.now() - startedAt, ...holder == null ? {} : { holder } };
+  }
   function withTicketFileLocks(keys, fn) {
+    const startedAt = Date.now();
     const held = [];
     try {
       for (const lockPath of orderedTicketLockPaths(keys)) {
         const owner = acquireLock(lockPath);
-        if (!owner) return { ok: false, reason: "busy" };
+        if (!owner) return busyTicketLock(lockPath, startedAt);
         held.push({ lockPath, owner });
       }
       return fn();

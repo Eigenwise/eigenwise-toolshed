@@ -119,7 +119,15 @@ function occupiedCheckoutRefusal(failure) {
   const arrival = failure?.checkoutAgentId ? `this creation names agent \`${failure.checkoutAgentId}\`, so it is not that owner re-entering its own checkout` : "the board could not read an agent id from this checkout's name, so it cannot confirm this creation as that owner re-entering";
   return `${failure?.ownerRef} holds this checkout under a live claim by "${failure?.ownerClaimHolder}" ${ownerAgent}, and ${arrival}. A second executor in an occupied checkout crosses both records and every completion gate then reads the other one's tree, so nothing was bound. Let that claim reach a terminal state, or dispatch this ticket with its own worktree.`;
 }
-function worktreeCreationRefusalMessage(reason, repository, failure) {
+function busyWorktreeCreationRefusal(wait) {
+  const holder = wait.holder == null ? "" : `, held by ${wait.holder}`;
+  return `worktree lease refused creation: busy after waiting ${Math.round(wait.waitedMs / 1e3)} s for the ticket lock${holder}. Retry the dispatch; the lease is released when the holder finishes.`;
+}
+function worktreeCreationRefusalMessage(reason, repository, failure, wait) {
+  if (reason === "busy" && typeof wait?.waitedMs === "number") return busyWorktreeCreationRefusal({ ...wait, waitedMs: wait.waitedMs });
+  return worktreeBindingRefusalMessage(reason, repository, failure);
+}
+function worktreeBindingRefusalMessage(reason, repository, failure) {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
   return `worktree lease refused creation: ${reason || "dispatch binding is incomplete"}${guidance ? `. ${guidance(repository, failure)}` : ""}`;
 }
