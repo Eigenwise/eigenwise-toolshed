@@ -27,6 +27,10 @@ function reflogReads(arguments_: string[]): boolean {
 }
 
 const READ_ARGUMENTS = new Map<string, (arguments_: string[]) => boolean>([
+  ['archive', (arguments_) => !arguments_.some((argument) => ['-o', '--output', '--remote'].includes(argument) || argument.startsWith('--output=') || argument.startsWith('--remote='))],
+  ['hash-object', (arguments_) => !arguments_.some((argument) => ['-w', '--write'].includes(argument))],
+  // Default merge-tree writes a tree object to the shared store; the deprecated trivial form only reads.
+  ['merge-tree', (arguments_) => arguments_.includes('--trivial-merge')],
   ['branch', branchReads],
   ['worktree', (arguments_) => arguments_[0] === 'list'],
   ['remote', (arguments_) => /^(?:-v$|(?:show|get-url)(?: |$))/.test(arguments_.join(' '))],
