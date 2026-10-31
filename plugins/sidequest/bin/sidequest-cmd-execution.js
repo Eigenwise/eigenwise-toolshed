@@ -130,10 +130,18 @@ async function cmdVerdict(opts, positional) {
   if (res.ok) console.log(`✓ recorded ${res.outcome} verdict for ${idOrRef} round ${res.round} — ${meta.name}`);
   else fail(`verdict: ${res.message || `could not record a verdict for ${idOrRef}`}`);
 }
+function closeReleasedDispatch(ticket, result) {
+  if (result.ok) closeDispatchExecutor(ticket);
+}
 async function cmdRelease(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("release: pass a ticket id or ref, e.g. sidequest release SQ-3");
   const { slug, meta } = await resolveProject(opts);
+  if (opts["retire-prepared"]) {
+    const result = store.prepareDispatch(slug, idOrRef, { retireOnly: true, reason: opts.reason, sessionId: sessionId(opts), source: "cli" });
+    process.stdout.write(JSON.stringify({ project: slug, ...result }, null, 2) + "\n");
+    return;
+  }
   const by = workerId(opts);
   const reason = String(opts.reason || opts.oracle || "").trim();
   const evidence = store.technicalBlockerRelease({
@@ -159,7 +167,7 @@ async function cmdRelease(opts, positional) {
     source: opts.source || "cli",
     sessionId: sessionId(opts)
   });
-  if (res.ok) closeDispatchExecutor(ticket);
+  closeReleasedDispatch(ticket, res);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
