@@ -8,6 +8,20 @@ function fail(msg: any) {
   process.exit(1);
 }
 
+// A refusal throws a plain Error whose message is the whole story. A TypeError and its kin are
+// defects, and a CI log that carries only their message cannot be traced (SQ-4018).
+const DEFECT_ERROR_TYPES = [TypeError, ReferenceError, SyntaxError, RangeError];
+
+function deservesStack(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  return Boolean(process.env.SIDEQUEST_DEBUG) || DEFECT_ERROR_TYPES.some((type) => error instanceof type);
+}
+
+function errorReport(error: any): string {
+  if (deservesStack(error) && error.stack) return error.stack;
+  return error?.message || String(error);
+}
+
 function registeredBoard(registration: any) {
   if (!registration.ok) fail(registration.reason);
   return registration;
@@ -92,4 +106,4 @@ function addBodyComment(slug: any, idOrRef: any, by: any, body: any, source: any
 }
 
 
-module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, errorReport, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };

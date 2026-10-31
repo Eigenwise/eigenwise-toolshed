@@ -9,7 +9,7 @@ const {
 const store = require('../lib/store');
 const { sidequestMutationFreshness } = require('../lib/plugin-freshness');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
-const { fail, resolveProject, resolveWatchProject } = require('./sidequest-cmd-shared');
+const { fail, errorReport, resolveProject, resolveWatchProject } = require('./sidequest-cmd-shared');
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require('./sidequest-cmd-server');
 const { cmdAdd, cmdList, cmdPulse, cmdCompletion, cmdReleaseRecord, cmdChanges, cmdUpdate, cmdRm } = require('./sidequest-cmd-tickets');
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require('./sidequest-cmd-configuration');
@@ -753,7 +753,4 @@ async function runTableCommand(cmd: string, opts: any, positional: any) {
   else fail(`unknown command "${cmd}". Run "sidequest help".`);
 }
 
-main().catch((err: any) => {
-  console.error(`sidequest: ${(err && err.message) || err}`);
-  process.exit(1);
-});
+main().catch((error: unknown) => fail(errorReport(error)));
