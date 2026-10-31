@@ -300,7 +300,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
-  board_config: { integrationQuality: "enforce(default): measured failures refuse; report: record; off: verify only.", verifyEnvironment: "shared: integration-only verify; default isolated. Frozen per dispatch." },
+  board_config: { integrationQuality: "enforce(default): measured failures refuse; report: record; off: verify only.", verifyEnvironment: "shared: integration-only verify; default isolated. Dispatch-frozen." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."

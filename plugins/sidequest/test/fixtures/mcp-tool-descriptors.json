@@ -1914,7 +1914,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Spawn/token; preparer reason(20+) retires unclaimed; retireOnly=no replacement.",
+    "description": "token and spawn spec; preparer reason(20+) retires unclaimed; retireOnly=no replacement.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2512,7 +2512,7 @@
             "isolated",
             "shared"
           ],
-          "description": "shared: integration-only verify; default isolated. Frozen per dispatch."
+          "description": "shared: integration-only verify; default isolated. Dispatch-frozen."
         },
         "worktreeBase": {
           "type": "string",
