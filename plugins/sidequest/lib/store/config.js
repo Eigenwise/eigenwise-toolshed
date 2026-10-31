@@ -464,7 +464,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const config = boardConfig(slug) || {};
     const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
     const generatedPairs = [...arrayOrEmpty(config.generatedPairs), ...derivedGeneratedPairs(generatedConfig, files)];
-    const generatedRoots = committedBuildPackages(generatedConfig.path, files).flatMap((build) => build.outputs);
+    const generatedRoots = committedBuildPackages(generatedConfig.path, files, true).flatMap((build) => build.outputs);
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
     return Array.from(/* @__PURE__ */ new Set([...files, ...arrayOrEmpty(ticket?.scopeResolution?.granted), ...alwaysInScopeBeside(config, files), ...paired, ...generatedRoots]));
   }

@@ -42,9 +42,14 @@ export function trackedBuildOutputSource(repository: string, file: string, sourc
 
 export type CommittedBuildPackage = Readonly<{ directory: string; outputs: readonly string[] }>;
 
-function committedBuildDirectory(file: string): string | null {
-  const match = /^(?:(.*)\/)?src(?:\/|$)/.exec(normalizeScope(file));
-  return match ? match[1] || '.' : null;
+function committedBuildDirectory(file: string): string {
+  return file.slice(0, -'scripts/build.mjs'.length).replace(/\/$/, '') || '.';
+}
+
+function packageContainsChanges(directory: string, files: readonly string[], sourceOnly: boolean): boolean {
+  const prefix = directory === '.' ? '' : directory + '/';
+  const scope = prefix + (sourceOnly ? 'src/' : '');
+  return files.some((file) => normalizeScope(file).startsWith(scope));
 }
 
 function committedBuildOutputs(directory: string, tracked: readonly string[]): string[] {
@@ -54,12 +59,13 @@ function committedBuildOutputs(directory: string, tracked: readonly string[]): s
     .filter((output) => tracked.some((file) => isInScope(file, [output])));
 }
 
-export function committedBuildPackages(repository: string, files: readonly string[]): CommittedBuildPackage[] {
+export function committedBuildPackages(repository: string, files: readonly string[], sourceOnly = false): CommittedBuildPackage[] {
   const listed = gitResult(repository, ['ls-files', '--full-name', '-z']);
   if (!listed.ok) return [];
   const tracked = listed.value.split('\0');
-  const directories = [...new Set(files.map(committedBuildDirectory).filter((directory): directory is string => directory !== null))];
-  return directories.filter((directory) => committedBuildScriptsTracked(directory, tracked))
+  const directories = tracked.filter((file) => /(?:^|\/)scripts\/build\.mjs$/.test(file)).map(committedBuildDirectory);
+  return directories.filter((directory) => packageContainsChanges(directory, files, sourceOnly))
+    .filter((directory) => committedBuildScriptsTracked(directory, tracked))
     .map((directory) => ({ directory, outputs: committedBuildOutputs(directory, tracked) }))
     .filter((build) => build.outputs.length > 0);
 }
@@ -75,18 +81,61 @@ export function committedBuildCommands(repository: string, files: readonly strin
     ? 'npm run build' : 'npm --prefix ' + JSON.stringify(build.directory) + ' run build');
 }
 
-export function checkCommittedBuilds(repository: string, files: readonly string[], timeoutMilliseconds: number): VerificationResult | null {
-  for (const build of committedBuildPackages(repository, files)) {
-    const command = 'node ' + JSON.stringify(path.join('scripts', 'build-check.mjs'));
-    const result = runProcessVerification({ kind: 'command', evidenceContract: '', command }, {
+function committedOutputSnapshot(repository: string, build: CommittedBuildPackage): Map<string, Buffer | null> {
+  return new Map(indexedPaths(repository).filter((file) => isInScope(file, build.outputs)).map((file) => {
+    const absolute = path.join(repository, file);
+    return [absolute, fs.existsSync(absolute) ? fs.readFileSync(absolute) : null];
+  }));
+}
+
+function restoreCommittedOutputs(snapshot: Map<string, Buffer | null>): void {
+  for (const [file, content] of snapshot) {
+    if (content === null) fs.rmSync(file, { force: true });
+    else {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    }
+  }
+}
+
+function checkCommittedBuild(repository: string, build: CommittedBuildPackage, timeoutMilliseconds: number): VerificationResult {
+  const command = 'node ' + JSON.stringify(path.join('scripts', 'build-check.mjs'));
+  const snapshot = committedOutputSnapshot(repository, build);
+  try {
+    return runProcessVerification({ kind: 'command', evidenceContract: '', command }, {
       cwd: path.resolve(repository, build.directory), timeoutMilliseconds,
     });
-    if (result.status !== 'passed') return {
-      ...result, evidence: 'generated_output_stale: ' + build.directory + '\n' + result.evidence + '\n' + (result.outputTail || ''),
-      failureIdentities: ['generated_output_stale'],
-    };
+  } finally {
+    restoreCommittedOutputs(snapshot);
+  }
+}
+
+function buildFailureEvidence(result: VerificationResult, directory: string): VerificationResult {
+  const output = result.outputTail || '';
+  const stale = output.includes('Generated outputs changed during the build:');
+  const reason = stale ? 'generated_output_stale' : 'generated_output_check_failed';
+  return {
+    ...result, evidence: reason + ': ' + directory + '\n' + result.evidence + '\n' + output,
+    failureIdentities: [reason],
+  };
+}
+
+export function checkCommittedBuilds(repository: string, files: readonly string[], timeoutMilliseconds: number): VerificationResult | null {
+  for (const build of committedBuildPackages(repository, files)) {
+    const result = checkCommittedBuild(repository, build, timeoutMilliseconds);
+    if (result.status !== 'passed') return buildFailureEvidence(result, build.directory);
   }
   return null;
+}
+
+function committedBuildRefusal(repository: string, scopes: readonly string[]) {
+  const changedPaths = workingPaths(repository).filter((file) => isInScope(file, scopes));
+  const failure = checkCommittedBuilds(repository, changedPaths, 300_000);
+  if (!failure) return null;
+  return {
+    ok: false, reason: failure.failureIdentities?.[0], buildFailure: failure,
+    message: failure.evidence + '\nRun ' + committedBuildCommands(repository, changedPaths).join(' && ') + ' before committing.',
+  };
 }
 
 function patchIds(cwd: string, args: readonly string[]): GitResult {
@@ -1029,25 +1078,26 @@ export async function commitScoped(cwd: string, message: unknown, files: unknown
     const root = repoRoot(cwd);
     const resolution = validateScopeResolution(root, scopes);
     if (!resolution.ok) return resolution;
-    const changedSources = workingPaths(root).filter((file) => isInScope(file, scopes));
-    const buildFailure = checkCommittedBuilds(root, changedSources, 300_000);
-    if (buildFailure) return { ok: false, reason: 'generated_output_stale', message: buildFailure.evidence + '\nRun ' + committedBuildCommands(root, changedSources).join(' && ') + ' before committing.', buildFailure };
-    const canonicalScopes = canonicalScopedPaths(root, scopes);
-    const commitScopes = commitScopedPaths(root, canonicalScopes);
-    const missingScopes = canonicalScopes.filter((scope) => !commitScopes.includes(scope));
-    const unscopedPaths = unscopedWorkingPaths(root, scopes);
-    if (!commitScopes.length) {
-      return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
-    }
-    const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
-    const directScopes = commitScopes.filter((scope) => !hasGlob(scope));
-    const stageableScopes = stageableScopedPaths(root, [...new Set([...directScopes, ...concreteGlobPaths])]);
-    const committableScopes = [...new Set([
-      ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
-      ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
-    ])];
-    return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
+    return committedBuildRefusal(root, scopes) || await prepareScopedCommit(root, message, scopes);
   } catch (error) {
     return { ok: false, reason: 'git_error', message: errorMessage(error) };
   }
+}
+
+async function prepareScopedCommit(root: string, message: unknown, scopes: readonly string[]) {
+  const canonicalScopes = canonicalScopedPaths(root, scopes);
+  const commitScopes = commitScopedPaths(root, canonicalScopes);
+  const missingScopes = canonicalScopes.filter((scope) => !commitScopes.includes(scope));
+  const unscopedPaths = unscopedWorkingPaths(root, scopes);
+  if (!commitScopes.length) {
+    return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
+  }
+  const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
+  const directScopes = commitScopes.filter((scope) => !hasGlob(scope));
+  const stageableScopes = stageableScopedPaths(root, [...new Set([...directScopes, ...concreteGlobPaths])]);
+  const committableScopes = [...new Set([
+    ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
+    ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
+  ])];
+  return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
 }

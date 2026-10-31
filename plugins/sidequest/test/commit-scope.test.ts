@@ -43,6 +43,7 @@ interface RangeResult {
 
 const commitScope = require('../lib/commit-scope.js') as {
   commitScoped(cwd: string, message: string, files: string[]): Promise<ScopeResult>;
+  checkCommittedBuilds(repository: string, files: readonly string[], timeoutMilliseconds: number): import('../src/lib/kernel/verification.js').VerificationResult | null;
   commitPaths(cwd: string, commit: string): string[];
   validateCommitScope(cwd: string, commit: string, files: string[]): ScopeResult;
   validateScopeResolution(cwd: string, files: string[], opts?: { inspectDescendants?: boolean }): { ok: boolean; reason: string | null; outside: string[]; indirect: string[] };
@@ -168,7 +169,7 @@ test('the Sidequest build layout expands tracked source paths without granting s
   assert.deepEqual(prepared.ticket.dispatch.declaredFiles, [source, output, `.release/unreleased/${ticket.ref}.md`]);
 });
 
-test('shared hook sources admit every committed build root and reject stale bundles before commit', async () => {
+function bundledBuildFixture(): { root: string; source: string; outputs: string[]; packageRoot: string } {
   const root = repo();
   const source = 'plugins/sidequest/src/hooks/shared/policy.ts';
   const outputs = ['lib/worker.js', 'bin/worker.js', 'hooks/first.js', 'hooks/second.js', 'agents/worker.md'];
@@ -183,6 +184,11 @@ test('shared hook sources admit every committed build root and reject stale bund
   fs.writeFileSync(path.join(packageRoot, 'scripts/build-check.mjs'), "import fs from 'node:fs'; if (fs.readFileSync('hooks/first.js', 'utf8') !== fs.readFileSync('src/hooks/shared/policy.ts', 'utf8')) { console.error('Generated outputs changed during the build: hooks/first.js'); process.exitCode = 1; }\n");
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'committed bundled build']);
+  return { root, source, outputs, packageRoot };
+}
+
+test('shared hook sources admit every committed build root and reject stale bundles before commit', async () => {
+  const { root, source, outputs, packageRoot } = bundledBuildFixture();
   const slug = store.ensureProject(root, 'shared bundle scope').slug;
   const scope = store.effectiveScope(slug, [source]);
   for (const output of outputs) assert.equal(commitScope.isInScope('plugins/sidequest/' + output, scope), true, output);
@@ -191,13 +197,31 @@ test('shared hook sources admit every committed build root and reject stale bund
   fs.writeFileSync(path.join(root, source), 'new');
   const rejected = await commitScope.commitScoped(root, 'stale source', scope);
   assert.equal(rejected.reason, 'generated_output_stale');
-  assert.match(rejected.message || '', /hooks\/first.js/);
-  assert.match(rejected.message || '', /npm --prefix "plugins\/sidequest" run build/);
+  assert.match(rejected.message!, /hooks\/first.js/);
+  assert.match(rejected.message!, /npm --prefix "plugins\/sidequest" run build/);
   assert.equal(git(root, ['log', '-1', '--format=%s']), 'committed bundled build');
   execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: packageRoot });
   const committed = await commitScope.commitScoped(root, 'built source', scope);
-  assert.equal(committed.ok, true, committed.message || '');
+  assert.equal(committed.ok, true, committed.message!);
   assert.deepEqual(committed.paths.sort(), ['plugins/sidequest/hooks/first.js', source].sort());
+});
+
+test('committed build checks detect output-only edits and restore a mutating stale check', () => {
+  const { root, packageRoot } = bundledBuildFixture();
+  fs.writeFileSync(path.join(packageRoot, 'hooks/first.js'), 'hand edited');
+  fs.writeFileSync(path.join(packageRoot, 'scripts/build-check.mjs'), "import fs from 'node:fs'; fs.writeFileSync('hooks/first.js', 'old'); console.error('Generated outputs changed during the build: hooks/first.js'); process.exitCode = 1;");
+  const result = commitScope.checkCommittedBuilds(root, ['plugins/sidequest/hooks/first.js'], 10_000);
+  assert.deepEqual(result?.failureIdentities, ['generated_output_stale']);
+  assert.equal(fs.readFileSync(path.join(packageRoot, 'hooks/first.js'), 'utf8'), 'hand edited');
+});
+
+test('committed build checks preserve tool failures instead of labeling them stale output', () => {
+  const { root, source, packageRoot } = bundledBuildFixture();
+  fs.writeFileSync(path.join(packageRoot, 'scripts/build-check.mjs'), "console.error('Missing build tool'); process.exitCode = 1;");
+  const result = commitScope.checkCommittedBuilds(root, [source], 10_000);
+  assert.deepEqual(result?.failureIdentities, ['generated_output_check_failed']);
+  assert.match(result!.evidence, /Missing build tool/);
+  assert.doesNotMatch(result!.evidence, /generated_output_stale/);
 });
 
 test('ambiguous generated output mappings do not admit a source', () => {

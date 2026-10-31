@@ -43,11 +43,11 @@ function branchOverlapProject(): { repository: string; slug: string } {
 // GH-643: a ticket with no verifier at all fails the gate, so these candidates carry document evidence the gate accepts as supplied.
 const OVERLAP_FIXTURE_EVIDENCE = 'overlap fixture reviewed by hand';
 
-function submitBranchOverlapCandidate(repository: string, slug: string, branch: string, label: string, body = `${label}\n`): string {
+function submitBranchOverlapCandidate(repository: string, slug: string, branch: string, label: string, body = `${label}\n`, files: string[] = ['shared.txt']): string {
   git(repository, ['checkout', branch]);
   const ticket = store.createTicket(slug, {
     title: `overlapping ${label} candidate`, category: 'codebase-exploration',
-    description: 'Exercise recorded branch isolation for overlapping candidates.', files: ['shared.txt'],
+    description: 'Exercise recorded branch isolation for overlapping candidates.', files,
     executorVerifyKind: 'document', executorVerify: OVERLAP_FIXTURE_EVIDENCE,
   });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, integrationMode: 'local', integrationBranch: branch });
@@ -56,8 +56,8 @@ function submitBranchOverlapCandidate(repository: string, slug: string, branch: 
     token: prepared.token, executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   git(repository, ['checkout', '-b', `candidate-${label}`, branch]);
-  fs.writeFileSync(path.join(repository, 'shared.txt'), body);
-  git(repository, ['add', 'shared.txt']);
+  for (const file of files) fs.writeFileSync(path.join(repository, file), body);
+  git(repository, ['add', '--', ...files]);
   git(repository, ['commit', '-m', label]);
   const commit = git(repository, ['rev-parse', 'HEAD']);
   const gitRef = `refs/sidequest/${ticket.ref}`;
@@ -148,6 +148,78 @@ for (const missingDirectory of [false, true]) {
     }
   });
 }
+
+function committedBuildGateFixture(): { repository: string; slug: string; source: string; output: string } {
+  const { repository, slug } = branchOverlapProject();
+  const source = 'plugins/bundled/src/hooks/shared/policy.ts';
+  const output = 'plugins/bundled/hooks/policy.js';
+  const contents = new Map([
+    [source, 'old'], [output, 'old'], ['plugins/bundled/package.json', '{"scripts":{"build":"node scripts/build.mjs"}}'],
+    ['plugins/bundled/scripts/build.mjs', "import fs from 'node:fs'; fs.writeFileSync('hooks/policy.js', fs.readFileSync('src/hooks/shared/policy.ts'));"],
+    ['plugins/bundled/scripts/build-check.mjs', "import fs from 'node:fs'; if (fs.readFileSync('hooks/policy.js','utf8') !== fs.readFileSync('src/hooks/shared/policy.ts','utf8')) { fs.writeFileSync('hooks/policy.js', 'rebuilt'); console.error('Generated outputs changed during the build: hooks/policy.js'); process.exitCode=1; }"],
+  ]);
+  for (const [file, content] of contents) {
+    fs.mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+    fs.writeFileSync(path.join(repository, file), content);
+  }
+  git(repository, ['add', '.']);
+  git(repository, ['commit', '-m', 'committed build gate fixture']);
+  git(repository, ['branch', '-f', 'story-a', 'HEAD']);
+  return { repository, slug, source, output };
+}
+
+function setBuildGateCommand(slug: string, ref: string): void {
+  const ticket = store.getTicket(slug, ref);
+  ticket.dispatch.verificationRequirement = { kind: 'command', command: 'node -e ' + JSON.stringify("throw new Error('verifier must not run')"), evidenceContract: 'must not run' };
+  const database = require('../lib/db.js');
+  database.putRow(database.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status, archived: 0,
+    ord: ticket.order, claim_by: null, data: ticket,
+  });
+}
+
+for (const surface of ['shared-source', 'output-only']) {
+  for (const verifier of ['supplied-document', 'command', 'waived']) {
+    test(`committed builds block stale ${surface} candidates before ${verifier} wave gates`, () => {
+      const { repository, slug, source, output } = committedBuildGateFixture();
+      const changedPath = surface === 'shared-source' ? source : output;
+      const ref = submitBranchOverlapCandidate(repository, slug, 'story-a', 'stale-build', 'changed', [changedPath]);
+      if (verifier === 'command') setBuildGateCommand(slug, ref);
+      const result = store.assembleSubmissionWave(slug, [ref], {
+        verification: store.getTicket(slug, ref).submission.verificationResult,
+        skipVerify: verifier === 'waived',
+        verificationWaiver: { authority: 'fixture-owner', reason: 'Fixture checks build admission before waived verifier', affectedGate: 'assembled-wave', scope: ref },
+      });
+      assert.deepEqual(result.gate.verification.failureIdentities, ['generated_output_stale'], JSON.stringify(result));
+      assert.match(result.gate.verification.evidence, /hooks\/policy.js/);
+      assert.equal(git(repository, ['status', '--porcelain']), '');
+    });
+  }
+}
+
+test('committed builds accept rebuilt shared-source candidates with supplied document evidence', () => {
+  const { repository, slug, source, output } = committedBuildGateFixture();
+  const ref = submitBranchOverlapCandidate(repository, slug, 'story-a', 'built-candidate', 'changed', [source, output]);
+  const result = store.assembleSubmissionWave(slug, [ref], { verification: store.getTicket(slug, ref).submission.verificationResult });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.gate.verification.status, 'passed');
+});
+
+test('committed builds reject a stale recorded delivery and preserve its tracked output', () => {
+  const { repository, slug, source, output } = committedBuildGateFixture();
+  const ref = submitBranchOverlapCandidate(repository, slug, 'story-a', 'recorded-stale', 'changed', [source]);
+  const commit = store.getTicket(slug, ref).submission.commit;
+  git(repository, ['checkout', 'story-a']);
+  git(repository, ['merge', '--ff-only', commit]);
+  const result = store.recordDeliveredSubmission(slug, ref, {
+    target: { mode: 'local', branch: 'story-a', upstream: 'story-a' }, deliveryCommit: commit, deliveryMethod: 'manual', reason: 'Fixture manually landed the submitted source candidate',
+  });
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.ok(result.verify, JSON.stringify(result));
+  assert.deepEqual(result.verify.failureIdentities, ['generated_output_stale'], JSON.stringify(result));
+  assert.equal(fs.readFileSync(path.join(repository, output), 'utf8'), 'old');
+  assert.equal(git(repository, ['status', '--porcelain']), '');
+});
 
 type CandidateOptions = Readonly<{
   baseline?: Baseline;
