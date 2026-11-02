@@ -1,4 +1,8 @@
 'use strict';
+function intakeExemptPatch(args: { intakeExempt?: unknown }): { intakeExempt?: unknown } {
+  return args.intakeExempt === undefined ? {} : { intakeExempt: args.intakeExempt };
+}
+
 
 const {
   path,
@@ -315,6 +319,7 @@ const tools: ToolDefinition[] = [
         by: { type: 'string', description: 'Human-readable update label. It cannot authorize closeout fields on a live claim.' },
         workingTreeDelivery: { type: 'boolean', description: 'Orchestrator-only declaration for a shared-checkout deliverable that forbids commits. true applies to an open sharedTree dispatch, recording a late dirty baseline; isolated dispatches refuse and must submit a commit. Without an open dispatch it applies at the next prepare. commit and submit refuse a working-tree dispatch; done requires pinned-command verify-capture, or explicit done.verify evidence for commandless kinds.' },
         verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification kind for future dispatches. An open dispatch keeps its pinned kind. command, suite and typecheck execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
+        intakeExempt: { anyOf: [{ type: 'object', properties: { reason: { type: 'string', minLength: 20 } }, required: ['reason'] }, { type: 'null' }] },
         storyId: { anyOf: [{ type: 'string' }, { const: 'none' }] },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
@@ -386,6 +391,7 @@ const tools: ToolDefinition[] = [
       if (args.verifyCwd !== undefined) patch.executorVerifyCwd = args.verifyCwd;
       if (args.verifyKind !== undefined) patch.executorVerifyKind = args.verifyKind;
       if (args.attestationArtifact !== undefined) patch.executorAttestationArtifact = args.attestationArtifact;
+      Object.assign(patch, intakeExemptPatch(args));
       if (args.storyId !== undefined) {
         validateStoryId(args.storyId, true);
         patch.storyId = args.storyId;

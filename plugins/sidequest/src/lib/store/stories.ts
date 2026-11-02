@@ -1,4 +1,5 @@
 'use strict';
+const { newStoryIntake } = require('./intake.js') as typeof import('./intake.js');
 
 function createStories(dependencies: any) {
   const {
@@ -381,6 +382,7 @@ function createStory(slug?: any, fields?: any) {
       color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
       executionContract,
       contractRevision: executionContract ? 1 : 0,
+      intake: newStoryIntake(fields.by, now),
       decisionLog: [],
       archivedDecisionLog: [],
       logRevision: 0,

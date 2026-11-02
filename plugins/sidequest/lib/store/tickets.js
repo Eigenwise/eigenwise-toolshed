@@ -1,4 +1,5 @@
 "use strict";
+const { normalizeIntakeExempt } = require("./intake.js");
 const { completionView } = require("./completion.js");
 const { externalReference, originRepository } = require("../external-refs");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, submittedCandidateAttempt, submittedSourceIdentity } = require("../kernel/review-binding");
@@ -17,6 +18,9 @@ function acceptanceCloseoutChange(ticket, patch) {
   if (patch.acceptance === void 0) return [];
   const next = acceptanceField(patch.acceptance).acceptance;
   return JSON.stringify(next) === JSON.stringify(ticket.acceptance) ? [] : ["acceptance"];
+}
+function applyIntakeExemptPatch(ticket, patch) {
+  if (patch.intakeExempt !== void 0) ticket.intakeExempt = normalizeIntakeExempt(patch.intakeExempt);
 }
 function createTickets(dependencies) {
   const {
@@ -266,6 +270,7 @@ function createTickets(dependencies) {
       labels: boundedLabels(fields.labels),
       externalRefs: normalizeExternalRefs(slug, fields.refs),
       highStakes: !!fields.highStakes,
+      intakeExempt: null,
       storyId,
       // the user story this ticket belongs to (null = none)
       storyLogSeenSeq: storyLogRevision(slug, storyId),
@@ -1258,6 +1263,7 @@ function createTickets(dependencies) {
       if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
       if (patch.labels != null) t.labels = boundedLabels(patch.labels);
       if (patch.highStakes !== void 0) t.highStakes = !!patch.highStakes;
+      applyIntakeExemptPatch(t, patch);
       if (patch.storyId !== void 0) {
         const storyId = coerceStoryId(slug, patch.storyId);
         if (storyId !== t.storyId) {
