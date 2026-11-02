@@ -4302,6 +4302,82 @@ test('SQ-2169: integrate records an already delivered reviewed candidate or a re
   }
 });
 
+
+function prepareSharedGateDelivery(command: string, candidate: string, changedPaths: string[], verifyCwd?: string) {
+  const ticket = addTicket('shared recorded-delivery gate', { files: changedPaths });
+  pin(ticket, candidate);
+  assert.equal(store.claimTicket(slug, ticket.ref, ticket.ref, { direct: true, reason: 'Create the recorded-delivery regression fixture.' }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, ticket.ref, { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+  const base = git(['rev-parse', candidate + '^']);
+  Object.assign(submitted.submission, { base, upstream: 'origin/main', upstreamCommit: base, commits: [candidate], changedPaths });
+  submitted.executorVerify = command;
+  submitted.executorVerifyCwd = verifyCwd;
+  const terminalAt = new Date(Date.now() - 60_000).toISOString();
+  submitted.dispatch = {
+    terminalAt,
+    verificationRequirement: { kind: 'command', command, evidenceContract: 'command output', verifyCwd },
+    attempts: [{ outcome: 'submitted', commit: candidate, agentId: ticket.ref, terminalAt }],
+  };
+  persist(submitted);
+  const review = dispatchedIsolatedReview('shared gate review', ticket.ref, candidate, ticket.ref + '-review');
+  completeIsolatedReview(review, true);
+  return { ticket, review };
+}
+
+test('recorded deliveries share an exact clean head gate while distinct commands, cwd, commits and dirty trees keep their own authority', (context: import('node:test').TestContext) => {
+  cleanBranch();
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-recorded-gate-'));
+  const pinnedLog = path.join(evidence, 'pinned').replaceAll('\\', '/');
+  const distinctLog = path.join(evidence, 'distinct').replaceAll('\\', '/');
+  const suiteLog = path.join(evidence, 'suite').replaceAll('\\', '/');
+  const command = (file: string) => 'node -e "require(\'fs\').appendFileSync(\'' + file + '\',\'run\\n\')"';
+  const plugin = 'plugins/shared-recorded-gate';
+  fs.mkdirSync(path.join(PROJECT_DIR, plugin, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(PROJECT_DIR, plugin, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, plugin, 'package.json'), JSON.stringify({ scripts: { 'test:full': command(suiteLog) } }));
+  fs.writeFileSync(path.join(PROJECT_DIR, plugin, 'lib', 'changed.js'), 'module.exports = true;');
+  fs.writeFileSync(path.join(PROJECT_DIR, plugin, 'test', 'changed.test.js'), "require('../lib/changed.js');");
+  fs.writeFileSync(path.join(PROJECT_DIR, plugin, 'test', 'other.test.js'), "require('../lib/changed.js');");
+  git(['add', '.']);
+  git(['commit', '-m', 'composed shared gate candidates']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  const changedPaths = [plugin + '/lib/changed.js'];
+  const prepared = [
+    prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
+    prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
+    prepareSharedGateDelivery(command(distinctLog), candidate, changedPaths),
+    prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths, plugin),
+    prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
+    prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
+  ];
+  const originalConfig = store.boardConfig(slug);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']), integrationTestFileThreshold: 1 });
+  context.after(() => {
+    store.setBoardConfig(slug, originalConfig);
+    for (const { review } of prepared) execFileSync('git', ['worktree', 'remove', '--force', review.worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  });
+  const record = (index: number) => store.recordDeliveredSubmission(slug, prepared[index]!.ticket.ref, {
+    target: store.integrationTarget(slug), deliveryCommit: git(['rev-parse', 'HEAD']), reason: 'Record the composed immutable candidate on this exact target head.',
+  });
+  for (const index of [0, 1, 2, 3]) {
+    const result = record(index);
+    assert.equal(result.ok, true, result.message);
+  }
+  assert.equal(fs.readFileSync(suiteLog, 'utf8'), 'run\n', 'one import-walk full-suite escalation covers all four recorded tickets');
+  assert.equal(fs.readFileSync(pinnedLog, 'utf8'), 'run\nrun\n', 'an identical command is reused only at the identical cwd');
+  assert.equal(fs.readFileSync(distinctLog, 'utf8'), 'run\n', 'a distinct pinned verifier still runs');
+  git(['commit', '--allow-empty', '-m', 'advance composed head']);
+  const advanced = record(4);
+  assert.equal(advanced.ok, true, advanced.message);
+  assert.equal(fs.readFileSync(suiteLog, 'utf8'), 'run\nrun\n', 'a new commit invalidates the shared gate even with identical tree bytes');
+  fs.appendFileSync(path.join(PROJECT_DIR, plugin, 'lib', 'changed.js'), '\n');
+  const dirty = record(5);
+  assert.equal(dirty.ok, true, dirty.message);
+  assert.equal(fs.readFileSync(suiteLog, 'utf8'), 'run\nrun\nrun\n', 'dirty tracked content cannot reuse the clean gate');
+  assert.equal(fs.readFileSync(pinnedLog, 'utf8'), 'run\nrun\nrun\nrun\n', 'new commits and dirty changes rerun the pinned verifier');
+});
+
 test('recorded delivery keeps its verifier sealed while an explicit replacement records only a passing result', () => {
   cleanBranch();
   const ticket = addTicket('recorded delivery verifier replacement', {
