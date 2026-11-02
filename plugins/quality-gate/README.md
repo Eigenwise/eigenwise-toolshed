@@ -208,3 +208,39 @@ Not checked: tests were not run; coverage is unavailable.
 ```
 
 Relative LCOV paths default to the project root. Use `--lcov-base <directory>` (config `lcovBase`) when the reporter ran in a plugin or package directory. The base is project-relative unless absolute, and is applied before source-map translation. Absolute `SF:` paths stay absolute. Source hashes and source-map trust checks still apply.
+
+## Project policy and measurement debt
+
+Installing Quality Gate gives you interactive quality guidance. Opting a project into a delivery policy is a
+separate approval during Quartermaster setup. The project's `.claude/quality-gate/crap.json` is the authority;
+Sidequest reads it through the installed Quality Gate policy reader for both executor briefings and integration.
+Without that project config, Sidequest says "No quality policy configured" and runs the project's verifier.
+No user-home rule is needed.
+
+The shipped policy defaults are:
+
+| Field under `policy` | Default | Meaning |
+| --- | --- | --- |
+| `threshold` | `6` | New and complexity-raised bodies must score strictly below it. Six fails even without coverage. This release supports the fixed threshold only. |
+| `legacyRatchet` | `not-worse` | Touched bodies whose complexity stayed equal or fell are informational LEGACY rows. Untouched legacy is out of scope. |
+| `unverifiedHandling` | `debt` | Missing measurement remains UNVERIFIED in the delivery evidence, and does not hold otherwise green work below the complexity floor. `block` explicitly holds it. |
+| `debtTicketMode` | `standing-per-boundary` | Reuse one open measurement-debt ticket per unsupported capture boundary. |
+| `installMode` | `local` | Keep tools, caches and reports local. Never change tracked dependencies, lockfiles or CI just to install measurement. |
+
+Existing project configs inherit these defaults; setup writes an explicit `policy` object while preserving
+coverage settings. Quality Gate validates all fields and refuses unsupported values. The gate still reports
+missing coverage honestly, including exit 2 where measurement prerequisites are missing; the delivery policy
+controls whether that evidence holds integration. It never converts UNVERIFIED into a measured pass.
+
+### Measurement-debt tickets
+
+Before filing, search the project's existing tickets for the same unsupported runner/adapter and capture seam.
+For example, deliveries blocked from capture by the same Vitest-worker boundary share one standing ticket.
+Append the delivery ref and unmeasured bodies there; don't file another ticket for each changed file, commit or
+execution. Re-measure when that boundary gains support. Configuring `per-delivery` creates one debt ticket for
+each delivery instead; `none` keeps debt only in delivery evidence. These are instructions for the board owner,
+not permission for the scorer to create tickets itself.
+
+Quartermaster proposes and writes configuration only after project approval. `/quartermaster:toolshed-doctor`
+reports project executors that reference a policy without that configuration. Personal preferences can remain
+in your own rules, but shared quality policy belongs in the project.

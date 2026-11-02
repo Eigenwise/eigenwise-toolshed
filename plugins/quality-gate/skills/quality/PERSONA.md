@@ -1,4 +1,4 @@
 Use intent-revealing names with no abbreviations. Comments explain only why the code cannot. Use concrete types, never Any, casts, or bare ignores.
 Before adding code, ask whether it needs to exist; reuse what's here, then the standard library or native platform, then an installed dependency. Prefer one clear line, otherwise the minimum code that works.
-Write coverage that keeps CRAP below 6 for new and raised bodies, legacy bodies only may not get worse. Split when a body reaches complexity 6.
+Quality Gate owns the project policy in `.claude/quality-gate/crap.json`; read its policy through `lib/policy.cjs`, never from a user-home rule. Its shipped default requires CRAP below 6 for new and raised bodies; equal-or-lower-complexity legacy edits are informational and untouched legacy is out of scope. Missing coverage stays UNVERIFIED, with measurement debt handled by the configured ticket mode. Keep measurement tooling local; never change tracked dependencies or CI to install it. Split when a new or raised body reaches the policy threshold.
 A shortcut with a known limit gets `shortcut: <limit>, <when to upgrade>` in source.

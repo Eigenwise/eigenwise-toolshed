@@ -19,6 +19,10 @@ function qualityFixture(directory: string, complexity: number, covered: boolean)
   const row = covered ? { ...measured, coverage: 1, crap: complexity } : { ...measured, unverified: 'no authentic executed source map' };
   const report = { changedMetrics: [row], failures: [], unverified: covered ? [] : [row] };
   fs.writeFileSync(path.join(gate, 'bin', 'quality-gate.js'), `process.stdout.write(${JSON.stringify(JSON.stringify(report))});`);
+  fs.mkdirSync(path.join(gate, 'lib'), { recursive: true });
+  fs.copyFileSync(path.resolve(__dirname, '../../quality-gate/lib/policy.cjs'), path.join(gate, 'lib/policy.cjs'));
+  fs.mkdirSync(path.join(directory, '.claude/quality-gate'), { recursive: true });
+  fs.writeFileSync(path.join(directory, '.claude/quality-gate/crap.json'), '{}');
   fs.writeFileSync(path.join(directory, 'source.js'), 'function candidateBody() { return true; }');
   return { project: directory, registeredProject: directory, directory: path.join(directory, 'board-evidence'), base: 'dispatch-baseline', changedPaths: ['source.js'], timeoutMilliseconds: 20_000 };
 }
@@ -340,4 +344,35 @@ test('board configuration validates integration quality and MCP exposes the same
   assert.equal(JSON.parse(cli.stdout).integrationQuality, 'report');
   const tools = mcp.tools || mcp.TOOLS;
   assert.deepEqual(tools.find((tool: { name: string }) => tool.name === 'board_config').inputSchema.properties.integrationQuality.enum, ['enforce', 'report', 'off']);
+});
+
+
+test('integration uses the owned project debt policy and explicit blocking override', (context) => {
+  const input = withQualityFixture(context, 3, false);
+  const verify = () => ({ kind: 'command' as const, status: 'passed' as const, evidence: 'fixture verifier' });
+  const standing = runIntegrationQuality([input], verify);
+  assert.equal(standing.status, 'passed');
+  assert.equal(standing.quality[0]!.status, 'unverified');
+  assert.equal(standing.quality[0]!.policy!.threshold, 6);
+  assert.match(standing.quality[0]!.debtTicketNote!, /Reuse one standing.*per unsupported capture boundary/);
+  fs.writeFileSync(path.join(input.project, '.claude/quality-gate/crap.json'), JSON.stringify({ policy: { unverifiedHandling: 'block', debtTicketMode: 'per-delivery' } }));
+  const blocked = runIntegrationQuality([input], verify);
+  assert.equal(blocked.status, 'failed_check');
+  assert.match(blocked.evidence, /blocks UNVERIFIED/);
+  assert.match(blocked.quality[0]!.debtTicketNote!, /one measurement-debt ticket for this delivery/);
+  fs.writeFileSync(path.join(input.project, '.claude/quality-gate/crap.json'), JSON.stringify({ policy: { debtTicketMode: 'none' } }));
+  const noTicket = runIntegrationQuality([input], verify);
+  assert.equal(noTicket.status, 'passed');
+  assert.match(noTicket.quality[0]!.debtTicketNote!, /without creating a debt ticket/);
+});
+
+test('an installed gate without project opt-in leaves verification environment unchanged', (context) => {
+  const input = withQualityFixture(context, 7, false);
+  fs.rmSync(path.join(input.project, '.claude/quality-gate/crap.json'));
+  const result = runIntegrationQuality([input], (environment) => {
+    assert.equal(environment.QUALITY_GATE_V8_CAPTURE, undefined);
+    return { kind: 'command', status: 'passed', evidence: 'no project opt-in' };
+  }, {});
+  assert.equal(result.status, 'passed');
+  assert.equal(result.quality[0]!.status, 'none');
 });

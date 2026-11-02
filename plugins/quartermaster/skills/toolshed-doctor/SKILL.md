@@ -95,3 +95,15 @@ write settings, or offer to fix them from the doctor.
 Report all results together. Explain each concrete problem and give the smallest next step. This skill does
 not update, install, uninstall, reload, or edit anything. If freshness is proven stale, tell the user to run
 `/quartermaster:update-toolshed`, then `/reload-plugins` or restart before retrying the blocked work.
+
+## Project quality policy
+
+Run the project-only policy check read-only:
+
+```sh
+node -e "const { qualityPolicyFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/quality-policy.js'); console.log(qualityPolicyFinding(process.cwd()));"
+```
+
+Report a project executor that references a quality policy without a project config. Invalid or unreadable
+configuration and a missing installed policy owner are findings, never a healthy or empty result.
+Offer setup for the named project; do not create configuration, install measurement tools or alter a user rule.

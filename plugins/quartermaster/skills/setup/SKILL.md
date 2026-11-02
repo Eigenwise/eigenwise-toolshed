@@ -134,8 +134,9 @@ handing off implementation. Draw from three sources, in this order:
     codebase, a proposed CRAP gate from [references/crap-gate.md](references/crap-gate.md). Adapt
     them to the project and include them in the approved write list. Skip the CRAP gate for a
     not-a-codebase.
-  - **CRAP gate**: propose it for every codebase, including one short explanation: it scores each
-    function's branching complexity and test coverage together, so big untested functions stand out.
+  - **CRAP gate**: propose it for every codebase with the three-sentence project-policy explanation
+    and approved config writer in [references/crap-gate.md](references/crap-gate.md). Read the
+    defaults from Quality Gate through `lib/quality-policy.js`; preserve existing coverage settings.
     The gate is opt-in; an unconfigured project runs its tests and continues. Show the detected
     stack's LCOV recipe from [references/crap-gate.md](references/crap-gate.md), the proposed
     `.claude/quality-gate/crap.json`, the derived `.claude/live-rules/rules/crap-gate.md`, and the

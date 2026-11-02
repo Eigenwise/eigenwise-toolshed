@@ -154,3 +154,15 @@ test('resupply offers an optional gate and ties requirements to a named user rul
   assert.doesNotMatch(proposal, /apply 6|starts at 6|violation of|your own rule requires it/);
   assert.match(readSkill('setup'), /gate is opt-in/);
 });
+
+
+test('setup and doctor use the shipped project quality policy owner', () => {
+  const setup = readSkill('setup');
+  const doctor = readSkill('toolshed-doctor');
+  const reference = fs.readFileSync(path.join(__dirname, '../skills/setup/references/crap-gate.md'), 'utf8');
+  assert.match(setup, /three-sentence project-policy explanation/);
+  assert.match(reference, /qualityPolicyProposal/);
+  assert.match(reference, /writeApprovedQualityPolicy/);
+  assert.match(reference, /one standing ticket per unsupported capture boundary/);
+  assert.match(doctor, /qualityPolicyFinding/);
+});
