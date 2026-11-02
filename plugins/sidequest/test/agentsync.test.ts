@@ -70,6 +70,7 @@ test('marked intake review briefing carries the bounded evidence-first review co
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-INTAKE', category: { id: 'review-audit' }, labels: ['intake-review'],
   }, 'intake-token');
+  assert.match(briefing, /## Independent intake review\n/);
   const section = briefing.split('## Independent intake review\n')[1].split('\n\n## ')[0];
   assert.ok(Buffer.byteLength(section, 'utf8') < 4000, 'fixed review section stays below 4KB');
   assert.match(section, /Read the linked recon tickets' comments, then the story decision log and current contract/);
