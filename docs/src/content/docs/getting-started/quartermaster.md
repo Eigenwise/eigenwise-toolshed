@@ -22,7 +22,27 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Setup reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. It no longer seeds clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
+Setup works in this order:
+
+1. It assesses the project: stack, existing `CLAUDE.md` and `.claude/`, and recent session history across your projects.
+2. It asks a few short questions, with a one-line reason for each.
+3. It proposes the plan one item at a time, covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item.
+4. It installs the approved plugins and writes the approved files.
+5. It stops at the reload or restart boundary, then continues when you tell it to.
+6. It verifies each piece it installed and records your decisions.
+
+Setup does not seed clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
+
+| Setup does itself | Setup asks you | Setup leaves to you |
+| --- | --- | --- |
+| Reads the project and the bounded history summary. Installs approved plugins at project scope. Writes approved rules, permission entries, and config. Checks that each installed plugin is enabled and usable. Records applied and rejected decisions. | Every plugin, rule, permission entry, and file write. The questions about what the project is for and who works in it. Whether to record local usage. Whether to change a context-window policy. The reload or restart. | The marketplace bootstrap in [Getting started](../), which is the only command you run before setup. `/reload-plugins`. Wiring Model Gateway through its own skill. Committing `.claude/`. Any later update or health check. |
+
+Each Toolshed component is an independent opt-in, and none requires another. Saying yes to one does not sign you up for the rest, so setup does not guarantee the full bundle. Here is what each yes gets you:
+
+- **Sidequest routing:** tickets are classified, routed to a model and effort level, dispatched to executors in isolated git worktrees, gated on a verify command, and integrated back. Routing works across Claude models on its own.
+- **Model Gateway:** your ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker, which also enables Sidequest's non-Claude routes.
+- **Codebase Mapper:** a maintained map under `.claude/.codebase-info/` that starts each session oriented.
+- **Quality Gate:** per-function complexity and coverage scoring for the code Claude writes. See [Keep complex code tested](#keep-complex-code-tested).
 
 Before it names a plugin in that plan, setup can check current sources for whether the plugin is still maintained, whether the description in the local catalog has gone stale, and whether something fits better, including something from a marketplace you have not added yet. Those lookups are bounded to the few candidates that would lead to an install, and searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. With `WebSearch` and `WebFetch` turned off, Claude skips the check and labels the proposals unresearched rather than implying they were verified. What it reads informs the proposal; your approval is still what authorizes the install.
 
@@ -48,7 +68,7 @@ prompts into Pi configuration directories. That makes it a local-fit example, no
 marketplace package. Quartermaster can recommend researching it for a proven delegation gap without
 claiming Quartermaster runs on Pi.
 
-Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
+Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. After that boundary setup runs `claude plugin list --json` to confirm every selected plugin is installed and enabled at its requested scope. It then checks that each piece is usable: it builds the codebase map, confirms live rules are injected, brings up the Sidequest board, and checks that each language server responds. For an approved quality gate it runs the gate once and reports the real result. Setup does not wire Model Gateway itself. If Model Gateway is installed but unwired, it points you to the gateway skill instead.
 
 ### Keep complex code tested
 
@@ -65,9 +85,13 @@ only sets it up. When you approve it, setup installs quality-gate if it is missi
 node "<quality-gate plugin root>/bin/quality-gate.js" crap
 ```
 
-It also shows the coverage command for your stack. A function with complexity 6 or more fails at any
-coverage, so the failure line says to split it rather than add tests. Exit 2 means a prerequisite or
-measurement input is missing. Follow the printed hint, then run the gate again.
+It also shows the coverage command for your stack. A new or complexity-raised function must score strictly
+below 6, and complexity 6 or more fails at any coverage, so the failure line says to split it rather than add
+tests. Without coverage the gate checks complexity only and reports coverage as unverified. Exit 2 means a
+prerequisite or measurement input is missing. Follow the printed hint, then run the gate again.
+
+The commands in this section are for ongoing use after setup. The only gate command setup itself runs is the
+one verification pass after the reload.
 
 `quartermaster crap` is retired. It passes its arguments to the installed quality-gate and exits with
 its code; without quality-gate it scores nothing, prints the install command
@@ -78,13 +102,13 @@ turn until a receipt exists, and if resupply finds one in your settings it recom
 names the file. The gate scores what the session changed since the merge base, so files that came in
 through a merge, rebase, or pull are never demanded.
 
-Quartermaster reports existing `autoCompactWindow` settings, including which file wins, and preserves them. When neither user nor project settings sets a value, an installed Model Gateway owns compaction: doctor reads its saved context-window policy through the gateway's own reader and report formatter, including defaults and saved compact-at limits. Without Model Gateway, compaction follows the model default. Use Model Gateway's `context-window` command to set a backend policy; Quartermaster doesn't recommend a fixed global window.
+The context window is your decision. Quartermaster reports existing `autoCompactWindow` settings, including which file wins, and preserves them. When neither user nor project settings sets a value, an installed Model Gateway owns compaction: doctor reads its saved context-window policy through the gateway's own reader and report formatter, including defaults and saved compact-at limits. Without Model Gateway, compaction follows the model default. Use Model Gateway's `context-window` command to set a backend policy; Quartermaster doesn't recommend a fixed global window.
 
-If you choose local usage recording, Claude hands setup to Observability. Each project stays off until you run `/observability:track on`. `/observability:track status` checks recording; `/observability:track off` stops it and keeps history. `/observability:board` opens the local usage board. You can also decline and continue without recording.
+Local usage recording is also your decision. If you choose it, Claude hands setup to Observability. Each project stays off until you run `/observability:track on`. `/observability:track status` checks recording; `/observability:track off` stops it and keeps history. `/observability:board` opens the local usage board. You can also decline and continue without recording.
 
 ## Keep a workspace current
 
-Tell Claude what you want to do:
+Updating and health checks are maintenance you run after setup, not part of first-time setup. Tell Claude what you want to do:
 
 > Update my Eigenwise Toolshed plugins.
 
