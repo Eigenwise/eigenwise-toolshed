@@ -846,6 +846,68 @@ ${JSON.stringify(quality.unverified)}`,
   function preflightDeliveryVerification(slug, ticket, requirement, opts) {
     return deliveryBuildFailure(slug, ticket, opts) || unexecutedDeliveryVerification(ticket, requirement, opts);
   }
+  function recordedGateIdentity(project, deliveryCommit, threshold) {
+    if (integrationGit(project, ["status", "--porcelain", "--untracked-files=all"])) return "";
+    return JSON.stringify([project, deliveryCommit, integrationGit(project, ["rev-parse", "HEAD", "HEAD^{tree}"]), threshold]);
+  }
+  function readRecordedGate(file) {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      return void 0;
+    }
+  }
+  function recordedGatePaths(slug, ticket) {
+    const participants = listTickets(slug).filter(pendingSubmission);
+    return Array.from(/* @__PURE__ */ new Set([...candidateBuildPaths(participants), ...candidateBuildPaths([ticket])])).sort();
+  }
+  function prepareRecordedGate(slug, ticket, project, deliveryCommit) {
+    const file = path.join(projectDir(slug), "integrations", "recorded-gate.json");
+    const identity = recordedGateIdentity(project, deliveryCommit, boardConfig(slug).integrationTestFileThreshold);
+    const previous = readRecordedGate(file);
+    fs.rmSync(file, { force: true });
+    if (!identity) return void 0;
+    const gate = previous?.identity === identity ? previous : { identity, paths: [], commands: {} };
+    const paths = recordedGatePaths(slug, ticket);
+    if (!paths.every((file2) => gate.paths.includes(file2))) gate.imports = void 0;
+    gate.paths = Array.from(/* @__PURE__ */ new Set([...gate.paths, ...paths]));
+    return { file, gate, project, deliveryCommit };
+  }
+  function recordedDeliveryContext(slug, ticket, project, options) {
+    if (!options?.deliveryCommit) return void 0;
+    return prepareRecordedGate(slug, ticket, project, options.deliveryCommit);
+  }
+  function importingDeliveryPaths(context, participants) {
+    return context?.gate.paths || candidateBuildPaths(participants);
+  }
+  function recordedGateExecution(context) {
+    return (requirement, options) => {
+      if (!context) return runProcessVerification(requirement, options);
+      const key = JSON.stringify([path.resolve(options?.cwd || process.cwd()), requirement.command]);
+      const previous = context.gate.commands[key];
+      if (previous) return { ...previous, kind: requirement.kind };
+      const result = runProcessVerification(requirement, options);
+      if (result.status === "passed") context.gate.commands[key] = result;
+      return result;
+    };
+  }
+  function recordedGateImports(context, pinned, run) {
+    if (!context) return run();
+    if (context.gate.imports) return { ...context.gate.imports, ...pinned };
+    const result = run();
+    if (result.status === "passed") context.gate.imports = result;
+    return result;
+  }
+  function finishRecordedGate(context, result, threshold) {
+    if (!context) return result;
+    if (recordedGateIdentity(context.project, context.deliveryCommit, threshold) !== context.gate.identity) {
+      return { ...result, status: "could_not_run", evidence: "The recorded-delivery checkout changed during verification; rerun on the settled tree." };
+    }
+    if (result.status !== "passed") return result;
+    ensureDir(path.dirname(context.file));
+    fs.writeFileSync(context.file, JSON.stringify(context.gate));
+    return { ...result, recordedDeliveryGate: { identity: context.gate.identity, deliveryCommit: context.deliveryCommit } };
+  }
   function verifyDeliveredSubmission(slug, ticket, opts) {
     const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
     const unexecuted = preflightDeliveryVerification(slug, ticket, requirement, opts);
@@ -863,9 +925,11 @@ ${JSON.stringify(quality.unverified)}`,
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
     const project = String(opts?.cwd || "").trim() || readMeta(slug)?.path;
     const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
+    const sharedGate = recordedDeliveryContext(slug, ticket, project, opts);
+    const execute = recordedGateExecution(sharedGate);
     const verify = (environment) => {
       (0, import_integration_tests.reportIntegrationProgress)("pinned verifier", requirement.command);
-      return runProcessVerification(requirement, {
+      return execute(requirement, {
         cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
         timeoutMilliseconds,
         logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
@@ -874,14 +938,18 @@ ${JSON.stringify(quality.unverified)}`,
       });
     };
     const participants = opts?.qualityTickets || [ticket];
-    const changedPaths = participants.flatMap((participant) => participant.submission.changedPaths || []);
-    const runWithImportingTests = (environment) => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
+    const changedPaths = importingDeliveryPaths(sharedGate, participants);
+    const runWithImportingTests = (environment) => {
+      const pinned = verify(environment);
+      return recordedGateImports(sharedGate, pinned, () => (0, import_integration_tests.runImportingIntegrationTests)(project, changedPaths, pinned, timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold, execute, Boolean(sharedGate)));
+    };
     const runWithQuality = (environment) => {
       const captureEnvironment = (0, import_integration_tests.integrationCaptureEnvironment)(projectDir(slug), environment);
-      const result = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
-      return { ...(0, import_integration_tests.phaseBudgetResult)(result), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
+      const result2 = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
+      return { ...(0, import_integration_tests.phaseBudgetResult)(result2), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
     };
-    return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
+    const result = verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
+    return finishRecordedGate(sharedGate, result, boardConfig(slug).integrationTestFileThreshold);
   }
   function verificationFailureComment(verify) {
     return [
@@ -1996,7 +2064,7 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} delivery refused: verificationSupersession requires a runnable command or suite verifier.`
         };
       }
-      const verify = verifyDeliveredSubmission(slug, ticket, { ...replacementRequirement ? { requirement: replacementRequirement } : {}, cwd: repo });
+      const verify = verifyDeliveredSubmission(slug, ticket, { ...replacementRequirement ? { requirement: replacementRequirement } : {}, cwd: repo, deliveryCommit });
       if (!verificationAccepted(verify)) {
         const failureReason = `${verificationOutcome(verify)}_recorded_delivery`;
         const failureMessage = `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;

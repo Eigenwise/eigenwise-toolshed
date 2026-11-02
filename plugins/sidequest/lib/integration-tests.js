@@ -226,9 +226,9 @@ function phaseBudgetResult(result) {
   if (!/Sidequest .* tests exceeded their \d+ms phase budget/.test(result.outputTail ?? "")) return result;
   return { ...result, evidence: "Phase budget failure. " + result.evidence, failureIdentities: [...result.failureIdentities ?? [], "phase_budget_exceeded"] };
 }
-function runImportBatch(project, batch, logPath, pinned, environment) {
+function runImportBatch(project, batch, logPath, pinned, environment, execute = import_process.runProcessVerification) {
   const started = Date.now();
-  const result = (0, import_process.runProcessVerification)({ kind: "command", command: batch.command, evidenceContract: "Importing tests pass on the merged tree" }, {
+  const result = execute({ kind: "command", command: batch.command, evidenceContract: "Importing tests pass on the merged tree" }, {
     cwd: import_node_path.default.join(project, batch.plugin),
     timeoutMilliseconds: batch.timeoutMilliseconds,
     logPath,
@@ -238,11 +238,11 @@ function runImportBatch(project, batch, logPath, pinned, environment) {
   if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk batch: " + JSON.stringify(receipt) + "\n");
   return receipt;
 }
-function executeImportBatches(project, batches, pinned, environment) {
+function executeImportBatches(project, batches, pinned, environment, execute = import_process.runProcessVerification) {
   if (pinned.status !== "passed") return [];
   for (const [index, batch] of batches.entries()) {
     reportIntegrationProgress("importing tests", `${batch.plugin}/${batch.files.join(", ")}`, { index: index + 1, count: batches.length });
-    const receipt = runImportBatch(project, batch, pinned.logPath + ".import-" + index + ".log", pinned, environment);
+    const receipt = runImportBatch(project, batch, pinned.logPath + ".import-" + index + ".log", pinned, environment, execute);
     if (receipt.status !== "passed") return [receipt];
   }
   return [];
@@ -255,32 +255,36 @@ function claudeCliAvailable(environment) {
   const candidates = environmentPath(environment).split(import_node_path.default.delimiter).filter(Boolean).flatMap((directory) => extensions.map((extension) => import_node_path.default.join(directory, "claude" + extension)));
   return candidates.some((candidate) => import_node_fs.default.existsSync(candidate) && import_node_fs.default.statSync(candidate).isFile());
 }
-function executePluginRunner(project, batch, index, pinned, environment) {
+function executePluginRunner(project, batch, index, pinned, environment, execute = import_process.runProcessVerification) {
   const target = { plugin: batch.plugin, files: batch.files };
   if (!claudeCliAvailable(environment)) return { ...target, command: batch.command, status: "unverified", evidence: "The claude CLI is not on PATH, so these plugin-runner tests did not run here; CI runs them." };
   reportIntegrationProgress("plugin-runner tests", `${batch.plugin}/${batch.files.join(", ")}`);
-  return { ...target, ...runImportBatch(project, batch, pinned.logPath + ".plugin-runner-" + index + ".log", pinned, environment) };
+  return { ...target, ...runImportBatch(project, batch, pinned.logPath + ".plugin-runner-" + index + ".log", pinned, environment, execute) };
 }
 const PLUGIN_RUNNER_NOT_FAILED = /* @__PURE__ */ new Set(["passed", "unverified", "toolchain_missing"]);
 function pluginRunnerFailed(result) {
   return !PLUGIN_RUNNER_NOT_FAILED.has(result.status);
 }
-function executePluginRunners(project, batches, pinned, environment) {
+function executePluginRunners(project, batches, pinned, environment, execute = import_process.runProcessVerification) {
   if (pinned.status !== "passed") return [];
   const results = [];
   for (const [index, batch] of batches.entries()) {
-    const result = executePluginRunner(project, batch, index, pinned, environment);
+    const result = executePluginRunner(project, batch, index, pinned, environment, execute);
     results.push(result);
     if (pluginRunnerFailed(result)) break;
   }
   return results;
 }
-function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment, fileThreshold = 40) {
+function importWalkExclusionCommand(sharedGate, command) {
+  if (sharedGate) return "";
+  return command || "";
+}
+function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment, fileThreshold = 40, execute = import_process.runProcessVerification, sharedGate = false) {
   const started = Date.now();
   const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
-  const batches = integrationTestBatches(project, selections, pinned.command || "", timeoutMilliseconds, fileThreshold);
-  const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== "plugin-runner"), pinned, environment);
-  const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === "plugin-runner"), pinned, environment);
+  const batches = integrationTestBatches(project, selections, importWalkExclusionCommand(sharedGate, pinned.command), timeoutMilliseconds, fileThreshold);
+  const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== "plugin-runner"), pinned, environment, execute);
+  const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === "plugin-runner"), pinned, environment, execute);
   const importingTestResults = [...failures, ...pluginRunnerResults.filter(pluginRunnerFailed)];
   const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: "Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.", pluginRunnerSplit: PLUGIN_RUNNER_SPLIT };
   if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk gate: " + JSON.stringify({ ...importingTestSummary, selections, batches, pluginRunnerResults }) + "\n");
