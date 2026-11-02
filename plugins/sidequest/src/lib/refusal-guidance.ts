@@ -208,7 +208,7 @@ export function routingDisabledMessage(ref: string): string {
 }
 
 export function manualCandidateDeliveryGuidance(): string {
-  return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, run every pinned verifier plus the full composed gate, then groomClose each with its immutable deliveryCommit and deliveryMethod:"manual"; omit integration:true.';
+  return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, then record them together with integrate using comma-separated refs, the same immutable deliveryCommit and deliveryMethod:"manual", or groomClose each at that unchanged clean head; omit integration:true. Recorded deliveries share one import-walk and full composed gate per exact commit and clean tree. Every pinned verifier still runs unless its exact command and cwd already passed in that shared gate, and any commit or dirty change invalidates sharing.';
 }
 
 export function candidateReviewRequiredGuidance(): string {
