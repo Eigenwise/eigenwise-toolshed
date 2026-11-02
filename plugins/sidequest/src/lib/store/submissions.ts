@@ -1088,13 +1088,8 @@ function readRecordedGate(file: string): RecordedGate | undefined {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; }
 }
 
-function candidateComposedAtHead(project: string, participant: QualityTicket): boolean {
-  if (!participant.submission?.commit) return false;
-  return commitIsAncestor(project, participant.submission.commit, 'HEAD');
-}
-
-function recordedGatePaths(slug: string, ticket: QualityTicket, project: string): string[] {
-  const participants: QualityTicket[] = listTickets(slug).filter(pendingSubmission).filter((participant: QualityTicket) => candidateComposedAtHead(project, participant));
+function recordedGatePaths(slug: string, ticket: QualityTicket): string[] {
+  const participants: QualityTicket[] = listTickets(slug).filter(pendingSubmission);
   return Array.from(new Set([...candidateBuildPaths(participants), ...candidateBuildPaths([ticket])])).sort();
 }
 
@@ -1105,7 +1100,7 @@ function prepareRecordedGate(slug: string, ticket: QualityTicket, project: strin
   fs.rmSync(file, { force: true });
   if (!identity) return undefined;
   const gate = previous?.identity === identity ? previous : { identity, paths: [], commands: {} };
-  const paths = recordedGatePaths(slug, ticket, project);
+  const paths = recordedGatePaths(slug, ticket);
   if (!paths.every((file) => gate.paths.includes(file))) gate.imports = undefined;
   gate.paths = Array.from(new Set([...gate.paths, ...paths]));
   return { file, gate, project, deliveryCommit };

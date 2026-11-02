@@ -546,6 +546,50 @@ function scopeGrantChanged(res) {
   if (!res.ok) return null;
   return { granted: scopeList(res.granted), resolution: res.resolution || null };
 }
+function mergeRefGroup(refs, deliveryCommit) {
+  return refs.length > 1 && deliveryCommit == null;
+}
+async function recordDeliveredCandidate(slug, projectPath, args, target, by, verificationWaiver) {
+  const recorded = store.recordDeliveredSubmission(slug, args.ref, {
+    target,
+    deliveryCommit: args.deliveryCommit,
+    deliveryInteractionCommit: args.deliveryInteractionCommit,
+    deliveryMethod: args.deliveryMethod,
+    deliveryRevision: args.deliveryRevision,
+    resolvedPaths: args.resolvedPaths,
+    deliveryBranch: args.deliveryBranch,
+    pullRequests: args.pullRequests,
+    worktree: args.worktree,
+    by,
+    reason: args.reason,
+    skipVerify: args.skipVerify === true,
+    verificationWaiver
+  });
+  if (!recorded.ok) return mutationAck(slug, recorded);
+  const deliveryTicket = recorded.ticket;
+  const closed = store.completeTicketAsControlPlane(slug, args.ref, {
+    by,
+    reason: args.reason,
+    purpose: "integration",
+    deliveryMethod: args.deliveryMethod
+  });
+  if (!closed.ok) return mutationAck(slug, closed);
+  closeDispatchExecutor(recorded.ticket);
+  await cleanupDeliveredWorktree(slug, projectPath, closed.ticket, Boolean(deliveryTicket?.claim?.by));
+  return deliveredAck(slug, closed, recorded.integration, {
+    verify: recorded.integration.verify,
+    completion: closed.ticket.completion
+  });
+}
+async function recordDeliveredCandidates(slug, projectPath, refs, args, target, by, verificationWaiver) {
+  const deliveries = [];
+  for (const ref of refs) {
+    const delivered = await recordDeliveredCandidate(slug, projectPath, { ...args, ref }, target, by, verificationWaiver);
+    if (!delivered.ok) return delivered;
+    deliveries.push(delivered);
+  }
+  return deliveries.length === 1 ? deliveries[0] : { ok: true, project: slug, deliveries };
+}
 const tools = [
   {
     name: "claim",
@@ -1172,7 +1216,7 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        ref: { type: "string", description: "One ticket ref, or a comma-separated group for wave assembly and delivery." },
+        ref: { type: "string", description: "One ticket ref, or a comma-separated group for wave assembly, delivery, or recording one deliveryCommit. Recorded groups share the import gate on the unchanged clean head and preserve every pinned verifier." },
         wave: { type: "object", description: "Wave assembly options: waveId, dependencies, verification, skipVerify, and verificationWaiver. Put group refs in ref, never in an array here." },
         project: PROJECT_PROP,
         by: { type: "string" },
@@ -1211,7 +1255,7 @@ const tools = [
       }
       const failures = [];
       const ticket = store.getTicket(slug, refs[0]);
-      if (refs.length > 1) {
+      if (mergeRefGroup(refs, args.deliveryCommit)) {
         const groupUsesGit = store.submissionUsesGit(ticket);
         if (groupUsesGit) {
           const lock = await publish.publishLockStatus(meta.path);
@@ -1275,7 +1319,7 @@ const tools = [
           });
         }
       }
-      const admitted = store.validateIntegrationSubmission(slug, args.ref, {
+      const admitted = store.validateIntegrationSubmission(slug, refs[0], {
         deliveryInteractionCommit: args.deliveryInteractionCommit,
         deliveryMethod: args.deliveryMethod,
         integrationBranch: args.integrationBranch
@@ -1286,37 +1330,7 @@ const tools = [
       });
       if (failures.length) return mutationAck(slug, combinedRefusal(ticket, failures));
       if (args.deliveryCommit != null) {
-        const recorded = store.recordDeliveredSubmission(slug, args.ref, {
-          target,
-          deliveryCommit: args.deliveryCommit,
-          deliveryInteractionCommit: args.deliveryInteractionCommit,
-          deliveryMethod: args.deliveryMethod,
-          deliveryRevision: args.deliveryRevision,
-          resolvedPaths: args.resolvedPaths,
-          deliveryBranch: args.deliveryBranch,
-          pullRequests: args.pullRequests,
-          worktree: args.worktree,
-          by,
-          reason: args.reason,
-          skipVerify: args.skipVerify === true,
-          verificationWaiver
-        });
-        if (!recorded.ok) return mutationAck(slug, recorded);
-        const deliveryTicket2 = recorded.ticket;
-        const closed2 = store.completeTicketAsControlPlane(slug, args.ref, {
-          by,
-          reason: args.reason,
-          purpose: "integration",
-          deliveryMethod: args.deliveryMethod
-        });
-        if (closed2.ok) {
-          closeDispatchExecutor(recorded.ticket);
-          await cleanupDeliveredWorktree(slug, meta.path, closed2.ticket, Boolean(deliveryTicket2?.claim?.by));
-        }
-        return deliveredAck(slug, closed2, recorded.integration, {
-          verify: recorded.integration.verify,
-          ...closed2.ok ? { completion: closed2.ticket.completion } : {}
-        });
+        return recordDeliveredCandidates(slug, meta.path, refs, args, target, by, verificationWaiver);
       }
       const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
       const delivery = store.integrateSubmission(slug, args.ref, {

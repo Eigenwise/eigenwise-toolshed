@@ -857,12 +857,8 @@ ${JSON.stringify(quality.unverified)}`,
       return void 0;
     }
   }
-  function candidateComposedAtHead(project, participant) {
-    if (!participant.submission?.commit) return false;
-    return commitIsAncestor(project, participant.submission.commit, "HEAD");
-  }
-  function recordedGatePaths(slug, ticket, project) {
-    const participants = listTickets(slug).filter(pendingSubmission).filter((participant) => candidateComposedAtHead(project, participant));
+  function recordedGatePaths(slug, ticket) {
+    const participants = listTickets(slug).filter(pendingSubmission);
     return Array.from(/* @__PURE__ */ new Set([...candidateBuildPaths(participants), ...candidateBuildPaths([ticket])])).sort();
   }
   function prepareRecordedGate(slug, ticket, project, deliveryCommit) {
@@ -872,7 +868,7 @@ ${JSON.stringify(quality.unverified)}`,
     fs.rmSync(file, { force: true });
     if (!identity) return void 0;
     const gate = previous?.identity === identity ? previous : { identity, paths: [], commands: {} };
-    const paths = recordedGatePaths(slug, ticket, project);
+    const paths = recordedGatePaths(slug, ticket);
     if (!paths.every((file2) => gate.paths.includes(file2))) gate.imports = void 0;
     gate.paths = Array.from(/* @__PURE__ */ new Set([...gate.paths, ...paths]));
     return { file, gate, project, deliveryCommit };

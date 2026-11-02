@@ -4060,7 +4060,7 @@ function dispatchedIsolatedReview(title: string, sourceRef: string, commit: stri
   assert.strictEqual(raced.reason, 'worktree_binding_unavailable');
 
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
-  execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  execFileSync('git', ['worktree', 'add', '--detach', worktree, commit], { cwd: PROJECT_DIR, windowsHide: true });
   const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
   worktreeLease.createCheckoutInstanceMarker(path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue));
   assert.strictEqual(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
@@ -4325,12 +4325,13 @@ function prepareSharedGateDelivery(command: string, candidate: string, changedPa
   return { ticket, review };
 }
 
-test('recorded deliveries share an exact clean head gate while distinct commands, cwd, commits and dirty trees keep their own authority', (context: import('node:test').TestContext) => {
+test('recorded deliveries share an exact clean head gate while distinct commands, cwd, commits and dirty trees keep their own authority', async (context: import('node:test').TestContext) => {
   cleanBranch();
   const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-recorded-gate-'));
   const pinnedLog = path.join(evidence, 'pinned').replaceAll('\\', '/');
   const distinctLog = path.join(evidence, 'distinct').replaceAll('\\', '/');
   const suiteLog = path.join(evidence, 'suite').replaceAll('\\', '/');
+  const failureLog = path.join(evidence, 'failure').replaceAll('\\', '/');
   const command = (file: string) => 'node -e "require(\'fs\').appendFileSync(\'' + file + '\',\'run\\n\')"';
   const plugin = 'plugins/shared-recorded-gate';
   fs.mkdirSync(path.join(PROJECT_DIR, plugin, 'lib'), { recursive: true });
@@ -4342,14 +4343,17 @@ test('recorded deliveries share an exact clean head gate while distinct commands
   git(['add', '.']);
   git(['commit', '-m', 'composed shared gate candidates']);
   const candidate = git(['rev-parse', 'HEAD']);
+  const equivalentCandidate = git(['commit-tree', candidate + '^{tree}', '-p', git(['rev-parse', candidate + '^']), '-m', 'submitted candidate before squash']);
+  assert.notEqual(equivalentCandidate, candidate, 'the composed head also contains a candidate without submitted ancestry');
   const changedPaths = [plugin + '/lib/changed.js'];
   const prepared = [
     prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
-    prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
+    prepareSharedGateDelivery(command(pinnedLog), equivalentCandidate, git(['diff', '--name-only', candidate + '^', equivalentCandidate]).split(/\r?\n/)),
     prepareSharedGateDelivery(command(distinctLog), candidate, changedPaths),
     prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths, plugin),
     prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
     prepareSharedGateDelivery(command(pinnedLog), candidate, changedPaths),
+    prepareSharedGateDelivery(command(failureLog).replace(')"', ');process.exit(1)"'), candidate, changedPaths),
   ];
   const originalConfig = store.boardConfig(slug);
   store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']), integrationTestFileThreshold: 1 });
@@ -4360,13 +4364,20 @@ test('recorded deliveries share an exact clean head gate while distinct commands
   const record = (index: number) => store.recordDeliveredSubmission(slug, prepared[index]!.ticket.ref, {
     target: store.integrationTarget(slug), deliveryCommit: git(['rev-parse', 'HEAD']), reason: 'Record the composed immutable candidate on this exact target head.',
   });
-  for (const index of [0, 1, 2, 3]) {
-    const result = record(index);
-    assert.equal(result.ok, true, result.message);
-  }
+  const commandLineDelivery = runCli(['integrate', prepared.slice(0, 2).map(({ ticket }) => ticket.ref).join(','), '--by', 'shared-gate-orchestrator', '--delivery-commit', candidate, '--delivery-method', 'manual', '--reason', 'Record the composed candidates on this exact clean head.', '--json']);
+  assert.equal(commandLineDelivery.status, 0, commandLineDelivery.stderr);
+  const commandLineResult = JSON.parse(commandLineDelivery.stdout);
+  assert.equal(commandLineResult.deliveries.length, 2, 'the real CLI accepts comma-separated recorded deliveries');
+  const { integrateInProcess } = require('../lib/mcp-lifecycle.js');
+  const toolDelivery = await integrateInProcess({ project: PROJECT_DIR, ref: prepared.slice(2, 4).map(({ ticket }) => ticket.ref).join(','), by: 'shared-gate-orchestrator', deliveryCommit: candidate, deliveryMethod: 'manual', reason: 'Record the composed candidates at the unchanged clean head.' });
+  assert.equal(toolDelivery.ok, true, JSON.stringify(toolDelivery));
+  assert.equal(toolDelivery.deliveries.length, 2, 'the real MCP tool records comma-separated candidates without merging a wave');
   assert.equal(fs.readFileSync(suiteLog, 'utf8'), 'run\n', 'one import-walk full-suite escalation covers all four recorded tickets');
   assert.equal(fs.readFileSync(pinnedLog, 'utf8'), 'run\nrun\n', 'an identical command is reused only at the identical cwd');
   assert.equal(fs.readFileSync(distinctLog, 'utf8'), 'run\n', 'a distinct pinned verifier still runs');
+  assert.equal(record(6).ok, false, 'a failed pinned verifier refuses delivery despite a cached import gate');
+  assert.equal(record(6).ok, false, 'a failed pinned verifier is never cached as passing');
+  assert.equal(fs.readFileSync(failureLog, 'utf8'), 'run\nrun\n', 'both failed pinned processes actually ran');
   git(['commit', '--allow-empty', '-m', 'advance composed head']);
   const advanced = record(4);
   assert.equal(advanced.ok, true, advanced.message);
