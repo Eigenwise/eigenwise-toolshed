@@ -111,6 +111,19 @@ test('MCP intake actions persist playback sizing cycles answers delegates approv
   assert.equal(JSON.parse(serialized.content[0].text).story.intake.status, 'reopened');
 });
 
+test('MCP add preserves validated intake exemptions and rejects short reasons', async () => {
+  const reason = 'tiny reversible private fix with a focused check';
+  const added = await call('add', { title: 'exempt at creation', unclassified: true, intakeExempt: { reason } });
+  assert.ok(!added.isError, added.content[0].text);
+  const ticket = JSON.parse(added.content[0].text);
+  assert.deepEqual(store.getTicket(project, ticket.ref).intakeExempt, { reason });
+  const invalid = await call('add', { title: 'invalid exemption', unclassified: true, intakeExempt: { reason: 'short' } });
+  assert.equal(invalid.isError, true);
+  assert.match(invalid.content[0].text, /20/);
+  assert.throws(() => store.createTicket(project, { title: 'invalid direct exemption', intakeExempt: { reason: 'short' } }), /20/);
+  assert.equal(store.createTicket(project, { title: 'no exemption' }).intakeExempt, null);
+});
+
 test('board intake normalization defaults validates and serializes through MCP', async () => {
   assert.deepEqual(store.boardConfig(project).intake, { mode: 'off', reviewCycles: 1 });
   const response = await call('board_config', { intake: { mode: 'stories', reviewCycles: 3 } });

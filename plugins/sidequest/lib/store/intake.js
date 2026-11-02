@@ -29,7 +29,7 @@ function requiredIntakeText(value, name) {
   return value.trim();
 }
 function normalizeIntakeExempt(value) {
-  if (value === null) return null;
+  if (value == null) return null;
   if (typeof value !== "object") throw new Error("intakeExempt must be { reason } or null.");
   const reason = requiredIntakeText(Reflect.get(value, "reason"), "reason");
   if (reason.length < 20) throw new Error("intakeExempt reason must be at least 20 characters and name size, reversibility and stakes.");

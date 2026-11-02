@@ -279,7 +279,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     labels: boundedLabels(fields.labels),
     externalRefs: normalizeExternalRefs(slug, fields.refs),
     highStakes: !!fields.highStakes,
-    intakeExempt: null,
+    intakeExempt: normalizeIntakeExempt(fields.intakeExempt),
     storyId, // the user story this ticket belongs to (null = none)
     storyLogSeenSeq: storyLogRevision(slug, storyId),
     category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,

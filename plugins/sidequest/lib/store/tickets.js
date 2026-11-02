@@ -270,7 +270,7 @@ function createTickets(dependencies) {
       labels: boundedLabels(fields.labels),
       externalRefs: normalizeExternalRefs(slug, fields.refs),
       highStakes: !!fields.highStakes,
-      intakeExempt: null,
+      intakeExempt: normalizeIntakeExempt(fields.intakeExempt),
       storyId,
       // the user story this ticket belongs to (null = none)
       storyLogSeenSeq: storyLogRevision(slug, storyId),

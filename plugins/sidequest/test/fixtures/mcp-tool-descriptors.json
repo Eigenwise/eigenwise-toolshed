@@ -388,6 +388,25 @@
         "highStakes": {
           "type": "boolean"
         },
+        "intakeExempt": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "minLength": 20
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "labels": {
           "type": "array",
           "items": {
@@ -604,6 +623,25 @@
         "highStakes": {
           "type": "boolean"
         },
+        "intakeExempt": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "minLength": 20
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "labels": {
           "type": "array",
           "items": {
@@ -764,25 +802,6 @@
         },
         "by": {
           "type": "string"
-        },
-        "intakeExempt": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "reason": {
-                  "type": "string",
-                  "minLength": 20
-                }
-              },
-              "required": [
-                "reason"
-              ]
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "storyId": {
           "anyOf": [
