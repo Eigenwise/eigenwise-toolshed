@@ -390,6 +390,9 @@ test('standing capture boundary debt appends affected deliveries without duplica
   writeGapReport(input, true);
   const first = verifyDeliveredQuality(input);
   assert.equal(first.debts.length, 1);
+  verifyDeliveredQuality(input, 'enforce', undefined, first.debts);
+  assert.equal(first.debts.length, 1);
+  assert.equal(first.debts[0]!.comments.length, 0);
   const second = verifyDeliveredQuality(input, 'enforce', undefined, first.debts, 'next-candidate');
   assert.equal(second.result.ok, true);
   assert.equal(second.debts.length, 1);
