@@ -192,14 +192,15 @@ function writeGapReport(input: QualityInput, partial: boolean): void {
   fs.writeFileSync(path.join(input.project, 'gate', 'bin', 'quality-gate.js'), 'process.stdout.write(' + JSON.stringify(JSON.stringify(report)) + ');');
 }
 
-function verifyDeliveredQuality(input: QualityInput, mode = 'enforce', filingError?: string) {
+interface DebtRecord { id: string; title: string; files: string[]; description: string; status?: string; comments: { body: string }[] }
+
+function verifyDeliveredQuality(input: QualityInput, mode = 'enforce', filingError?: string, debts: DebtRecord[] = [], commit = 'candidate') {
   const { createSubmissions } = require('../src/lib/store/submissions.js');
   const ticket = {
     id: 'quality-fixture', ref: 'SQ-quality', comments: [],
     executorVerify: 'node -e "process.exit(0)"', executorVerifyKind: 'command',
-    submission: { base: input.base, commit: 'candidate', changedPaths: input.changedPaths, integration: { outcome: 'delivered' } },
+    submission: { base: input.base, commit, changedPaths: input.changedPaths, integration: { outcome: 'delivered' } },
   };
-  const debts: unknown[] = [];
   fs.mkdirSync(path.join(input.project, 'gate', 'lib'), { recursive: true });
   fs.writeFileSync(path.join(input.project, 'gate', 'lib', 'core.mjs'), '');
   const submissions = createSubmissions({
@@ -209,23 +210,29 @@ function verifyDeliveredQuality(input: QualityInput, mode = 'enforce', filingErr
     normalizeIntegrationVerifyTimeoutMs: () => input.timeoutMilliseconds,
     verifyCommandError: () => null, dispatchState: () => ({ evidenceDirectory: input.directory }),
     ensureDir: (directory: string) => fs.mkdirSync(directory, { recursive: true }),
-    listTickets: () => [], createTicket: (_slug: string, debt: unknown) => {
+    listTickets: () => debts, createTicket: (_slug: string, debt: Omit<DebtRecord, 'id' | 'comments'>) => {
       if (filingError) throw new Error(filingError);
-      debts.push(debt);
+      const created = { ...debt, id: 'debt-' + debts.length, comments: [] };
+      debts.push(created);
+      return { ok: true, ticket: created };
     },
     transaction: (callback: () => void) => callback(),
     withTicketLock: (_slug: string, _id: string, callback: () => unknown) => callback(),
-    putTicket: () => {}, queueEventNotification: () => {}, addComment: () => ({ ticket }),
+    putTicket: () => {}, queueEventNotification: () => {}, addComment: (_slug: string, id: string, comment: { body: string }) => {
+      debts.find((debt) => debt.id === id)?.comments.push(comment);
+      return { ticket };
+    },
   });
   return { result: submissions.verifyIntegration('quality-project', ticket.ref), debts };
 }
 
-test('whole-run capture gaps record their reason without filing debt tickets', (context) => {
+test('whole-run capture gaps file standing boundary debt and preserve their reason', (context) => {
   const input = withQualityFixture(context, 2, false);
   writeGapReport(input, false);
   const { result, debts } = verifyDeliveredQuality(input);
   assert.equal(result.ok, true);
-  assert.deepEqual(debts, []);
+  assert.equal(debts.length, 1);
+  assert.match(debts[0]!.title, /capture boundary/);
   const quality = result.verify.quality[0];
   assert.equal(quality.captureGap, captureGapReason);
   const receipt = JSON.parse(fs.readFileSync(quality.receipt, 'utf8'));
@@ -375,4 +382,35 @@ test('an installed gate without project opt-in leaves verification environment u
   }, {});
   assert.equal(result.status, 'passed');
   assert.equal(result.quality[0]!.status, 'none');
+});
+
+
+test('standing capture boundary debt appends affected deliveries without duplicate tickets or comments', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, true);
+  const first = verifyDeliveredQuality(input);
+  assert.equal(first.debts.length, 1);
+  const second = verifyDeliveredQuality(input, 'enforce', undefined, first.debts, 'next-candidate');
+  assert.equal(second.result.ok, true);
+  assert.equal(second.debts.length, 1);
+  assert.equal(second.debts[0]!.comments.length, 1);
+  assert.match(second.debts[0]!.comments[0]!.body, /Affected delivery: SQ-quality at next-candidate/);
+  verifyDeliveredQuality(input, 'enforce', undefined, first.debts, 'next-candidate');
+  assert.equal(first.debts[0]!.comments.length, 1);
+});
+
+test('debt filing follows per-delivery and none project policies', (context) => {
+  const input = withQualityFixture(context, 2, false);
+  writeGapReport(input, true);
+  const configuration = path.join(input.project, '.claude/quality-gate/crap.json');
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { debtTicketMode: 'per-delivery' } }));
+  const first = verifyDeliveredQuality(input);
+  verifyDeliveredQuality(input, 'enforce', undefined, first.debts, 'next-candidate');
+  assert.equal(first.debts.length, 2);
+  assert.match(first.debts[1]!.title, /SQ-quality at next-candidate/);
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { debtTicketMode: 'none' } }));
+  const disabled = verifyDeliveredQuality(input);
+  assert.equal(disabled.result.ok, true);
+  assert.deepEqual(disabled.debts, []);
+  assert.match(disabled.result.verify.quality[0].debtTicketNote, /without creating a debt ticket/);
 });

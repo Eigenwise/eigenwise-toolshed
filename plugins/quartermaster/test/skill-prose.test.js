@@ -26,7 +26,7 @@ test('documents namespaced Quartermaster commands and Live Rules deduplication',
 test('delegates quality guidance to quality-gate', () => {
   const setup = readSkill('setup');
 
-  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade/);
+  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup proposes its project policy and coverage support on approval/);
   assert.doesNotMatch(setup, /clean-code-principles/);
 });
 

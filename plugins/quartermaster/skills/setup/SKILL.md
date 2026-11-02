@@ -129,7 +129,7 @@ handing off implementation. Draw from three sources, in this order:
     subject to the existing approval flow, never from a host policy label alone; starter live rules
     derived from recurring correction themes, using
     [references/rule-templates.md](references/rule-templates.md) as reference material to derive
-    from, never copy (byte-identical output means it was copied; rewrite or drop it). Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade.
+    from, never copy (byte-identical output means it was copied; rewrite or drop it). Quality guidance comes from the quality-gate plugin; setup proposes its project policy and coverage support on approval.
     Every workspace gets the self-improvement rule from [references/self-improvement.md](references/self-improvement.md), and, for every
     codebase, a proposed CRAP gate from [references/crap-gate.md](references/crap-gate.md). Adapt
     them to the project and include them in the approved write list. Skip the CRAP gate for a
