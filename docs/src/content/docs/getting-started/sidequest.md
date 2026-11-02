@@ -156,10 +156,46 @@ When Quality Gate is registered for the project, integration captures the pinned
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
+   _Coming soon: an interactive intake round (story US-87) that asks you the planning questions in one batch._
 2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.` If work belongs on a feature branch, name that branch in the request.
 3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default. Integration keeps that recorded target through submission and delivery; a group with different targets stops before changing either branch.
 5. When a ticket is ready, ask Claude to integrate it if its checks pass. Independent review is required only for a contract-named seam the check cannot exercise or a required high-stakes review. Multiple review lenses need distinct named risks; wave count alone adds no review.
+
+### What happens to a ticket, start to finish
+
+Here is the whole trip in one read. Each step links to the section with the details.
+
+1. **Classify.** Every ticket gets a category, such as `coding.easy` or `debugging`. Claude picks the narrowest one that fits from your board's categories. See [Routing](#how-routing-picks-a-model).
+2. **Route.** The category's route sets the model and effort. The orchestrator never hand-picks one, so you don't either unless you override a single ticket.
+3. **Dispatch.** Claude starts an executor in its own isolated worktree. The executor opens a token-gated briefing with the full task, scope, and pinned check, then claims the ticket. See [Choosing dispatch isolation](#choosing-dispatch-isolation).
+4. **Work and capture.** The executor edits only its declared files and commits them. It then runs the pinned check through the briefing's `verify-capture` wrapper, so the board records which command ran against which commit.
+5. **Submit.** The executor submits that commit with a report and stops. Submit is the end of its job. It never merges or publishes.
+6. **Integrate.** Claude delivers the commit through the merge gate: the pinned check runs on the merged tree, plus tests that import the changed files. A big enough set of changed tests switches to the plugin's full suite, and Claude runs one combined full gate per wave. A red result rolls the delivery back. See [Integration quality receipts](#integration-quality-receipts).
+7. **Land the wave.** Delivered work sits on your integration branch. Where that branch is protected, as `develop` is in this repository, it moves through a pull request.
+8. **Release.** A release cut turns the pending `.release/unreleased/` fragments into version bumps on a release branch, a promotion PR moves them to `main`, and `finalize` tags the result. GitHub Releases publish at most once a day. See [Release process](../../release-process/).
+9. **Read the record.** `completion SQ-12` shows the stage, what was checked, and what is still uncertain. A ticket reads `submitted` or `integrated`, never `released`, until a release record exists. See [Read what a ticket finished](#read-what-a-ticket-finished).
+
+### How routing picks a model
+
+Routing is category-first. Claude never matches a ticket to a model directly. It matches the ticket to a category by the category's description, and the category carries the route.
+
+A **routing profile** is a full set of categories. The starter profiles are `coding`, `creative-music`, `research`, and `writing`; your board points at one. The `coding` profile separates software work by the capability it needs:
+
+- **Cheap and mechanical**: `coding.easy` runs Sonnet at medium effort. Use it when the edit is obvious once you find the spot.
+- **Everyday engineering**: `coding.normal`, `behavior-verification`, `interaction-design-implementation`, `implementation-explanation`, and `general` run Sonnet at high. `review-audit` runs Sonnet at medium.
+- **Open questions and judgment**: `coding.hard`, `debugging`, `spike-investigation`, and `visual-evaluation` run Opus at medium. `experiment` runs Opus at high.
+- **Read-only research**: `codebase-exploration` traces and explains existing code and writes no source. `source-lookup`, `evidence-research`, and `research.evidence` gather external facts. The last collects evidence under evidence roots and never writes to the repository.
+
+Those numbers are the shipped defaults at the time of writing. Your board's live `category_list` is the truth, and `sidequest category list --json` prints it.
+
+Three things worth knowing:
+
+- **Your board can change them.** A board can add a category, override one field of a shipped category, detach a category so later profile updates leave it alone, or disable one. These edits stay on that board.
+- **Claude and Codex.** Out of the box every route runs a Claude model. When [Model Gateway](../model-gateway/) is set up and exposes Codex models, the starter profile also routes some categories to Codex: `coding.easy`, `coding.normal`, `interaction-design-implementation`, and `review-audit` to Terra, and `codebase-exploration`, `implementation-explanation`, `general`, and `behavior-verification` to Luna. The harder categories keep Claude as the first choice and name a Codex model as the fallback. Without the gateway none of that applies, and a ticket whose route model is unavailable falls back to the category fallback, then the global fallback. The starter profiles ship no Grok routes. You can still point a board's category at a model the gateway serves, Grok included.
+- **Name a model for one ticket only as an override.** Ask for it on that ticket and Sidequest stores a per-ticket route. A writable ticket keeps its provider, and an unavailable override refuses dispatch instead of quietly using something weaker. Editing the category would repoint every later ticket in it.
+
+The detailed rules are in the agent-facing routing reference. You rarely need them unless a route looks wrong.
 
 The merged-tree gate can take a while. The board server runs it in a separate delivery process, so the board
 stays usable for every other ticket meanwhile, and Claude Code gets progress updates instead of timing out. If
@@ -579,6 +615,14 @@ A worked example:
 **A read-only ticket cannot start in a new repository.** Claude reports the checkout choice and keeps the ticket read-only. You do not need to commit notes or change board settings.
 
 **Worktree creation reports a busy ticket lock.** The refusal reports the elapsed wait in whole seconds and the recorded holder when available, for example `busy after waiting 30 s for the ticket lock, held by 1234`. The hook already spent its lock-acquisition wait budget before refusing. Retry the dispatch after the holder finishes and releases the lease.
+
+**What an executor means when it asks for scope.** Each ticket declares the files it may write. If the executor needs another path, it sends a scope request and gets an answer at once, with nothing to poll. A path in a source or test folder that the same story already declares is granted automatically and recorded. A different package, wildcards, CI files, credentials, and release machinery are refused, and the ticket comment names the paths. A refused executor commits what it can and hands the rest back so Claude can widen the ticket and redispatch. Only the main thread can grant scope on a live claim.
+
+**Why the executor runs a wrapper instead of your test command.** The briefing gives each executor a `verify-capture` wrapper. It runs the check the ticket pinned and records the ticket, the command, and the exact commit it ran on. An executor that retypes the command, or writes "tests pass" in a comment, leaves nothing the board can tie to that commit, so `completion` shows it as agent-reported and delivery runs the pinned check again anyway. A commit changed after capture needs a fresh run.
+
+**Negative control versus the captured check.** The captured check proves the finished change passes. A negative control proves the new test can fail: the executor reverts the changed source, reruns the wrapper with `--control`, and the new tests must fail by assertion. A control that passes, or fails only on an import error, proves nothing and is recorded that way. New behavior needs one. Docs, annotation-only, fixture-only, and behavior-preserving refactors record that no control was required. See [Work kind and completion oracle](#work-kind-and-completion-oracle).
+
+**A "Planning-depth warning" when you add a ticket.** These warnings are advisory and never block `add`. They flag a ticket that is likely to stall later: a write ticket with no declared files (dispatch refuses it unless you allow an unscoped run), declared source that omits its tracked build output or its direct importers, same-name sibling files the change may reach, a claim about numbers or behavior with no measurement behind it, an unquoted glob in the check command, and a read-only browser review that needs a script it cannot write. Fix the ticket or accept the risk on purpose. See [Choose the planning depth](#choose-the-planning-depth).
 
 **A worktree-isolated executor cannot write.** Ask Claude to redispatch if the recorded checkout is missing or does not match the assigned checkout. Executors launched together can each be recorded against the other's checkout, whatever their executor types. The claim corrects this: when an executor claims with its own dispatch token from inside its checkout, its ticket is leased to that checkout, and the claim result names the corrected path. The claim does not move a checkout that a sibling has already claimed. If both siblings already claimed, the orchestrator can still correct each ticket. It dispatches with `recoveryEvidence`, `claimHolder`, and the executor's real `worktree`. When the two claims were launched together, hold exactly each other's checkouts, and neither checkout has another ticket's commits, the rebind swaps the two records, so both executors can write. Otherwise the rebind is refused while another live ticket holds the checkout and the checkout's HEAD is not this claim's own commit, and the refusal says to release the ticket with kind `handback`. A release made from the executor's own checkout keeps that checkout for the next dispatch. A redispatch never resumes a retained checkout whose commits belong to another ticket. It gets a fresh checkout instead. An executor that stops before it claims never ends a live sibling's ticket: while a sibling launched with it has not claimed yet, Sidequest waits for that claim before it marks the stopped executor's ticket failed. The same holds when an executor's checkout creation fails, or when Claude retires an unclaimed executor with recovery evidence: while a worktree-isolated sibling launched with it on the same board has not claimed, no checkout is removed and the sibling's ticket stays claimable, and the sibling's claim is still leased to the checkout it runs in.
 
