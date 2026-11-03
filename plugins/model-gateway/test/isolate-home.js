@@ -16,6 +16,9 @@ process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
 // Never the real `claude`: a real Claude Code launched by a pin probe rewrote the
 // real settings file. Tests that want a Claude binary set their own fake one.
 process.env.CODEX_GATEWAY_CLAUDE_BIN = path.join(home, 'claude-is-not-installed-in-tests');
+// Never the real OpenCode Go: a developer's key override and the live endpoint stay out of every test.
+delete process.env.CODEX_GATEWAY_OPENCODEGO_KEY;
+process.env.CODEX_GATEWAY_OPENCODEGO_BASE_URL = 'http://127.0.0.1:9';
 process.on('exit', () => {
   try { fs.rmSync(home, { recursive: true, force: true }); } catch {}
 });

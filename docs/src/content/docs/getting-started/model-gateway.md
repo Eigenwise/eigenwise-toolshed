@@ -1,9 +1,9 @@
 ---
 title: Model Gateway
-description: Add ChatGPT/Codex and Grok subscription models to Claude Code.
+description: Add ChatGPT/Codex, Grok and OpenCode Go subscription models to Claude Code.
 ---
 
-Model Gateway adds subscription-backed GPT and Grok models to Claude Code. Claude Code v2.1.129+ can show those gateway models in its `/model` picker. Claude models keep using Anthropic normally.
+Model Gateway adds subscription-backed GPT, Grok and OpenCode Go models to Claude Code. Claude Code v2.1.129+ can show those gateway models in its `/model` picker. Claude models keep using Anthropic normally.
 
 ## Install
 
@@ -63,13 +63,16 @@ with an API-key credential. Model Gateway writes its discovery cache for OAuth s
 new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
 The cache is written only from a model list the proxy actually answered. While the proxy is unreachable,
 for example in the moment after the gateway starts, the gateway serves a short built-in list, keeps the
-previous cache, and `status` reports `fallback catalog (proxy unreachable)`.
+previous cache, and `status` reports `fallback catalog (proxy unreachable)`. When OpenCode Go rows exist, the gateway
+still writes them (and the Grok rows) during that time. The Codex rows in the cache stay as the proxy
+last answered, so an OpenCode Go-only setup without a Codex proxy still reaches `/model`.
 
 Updating Toolshed never wires a project. Only `setup` or `env --write-project` run inside a project wires it.
 
 - `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets.
 - A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead (see [Context window and cost](#context-window-and-cost)). The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The shared synthetic-413 sentry returns Claude Code's compaction signal 40k tokens before that backend limit if the client has not compacted first. The alias is removed before requests reach the backend.
+- `claude-opencodego-*` rows use your OpenCode Go subscription once you save a key; see [OpenCode Go](#opencode-go).
 - Claude models keep using Anthropic.
 
 Codex rejects some JSON Schema regex Unicode property escapes, including `\p{Cc}` and `\P{Cf}`. When a deferred tool resolves, Model Gateway can make a narrow Codex-only compatibility copy of its `input_schema`. It supports a missing dialect or Draft 2020-12, and only a `pattern` on the documented positive paths: `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, and `unevaluatedProperties` or `unevaluatedItems`. Each real property atom has to be a standalone member of a negated character class, with no range, set syntax, capture, backreference, or negative regex context. The lexer consumes every allowed escape as one token, so escaped parentheses, brackets, and backslashes stay literal data rather than group or class structure. The copy removes only that atom and keeps every other regex byte. Unsupported affected schemas return a local 400 with the tool name, JSON Pointer, and reason code, before any request is forwarded or sent to another provider. Claude Code still holds the original tool schema and Anthropic requests stay byte-identical.
@@ -110,6 +113,7 @@ Claude keeps its native 1M window. OpenAI bills Codex input above 272k tokens at
 | Claude | `full` | Native 1M window through `[1m]` aliases; native engine headroom applies |
 | Codex | `272000` | Legacy trigger 187000 unless you save a direct maximum |
 | Grok | `full` | Backend window minus 40000 unless you save a lower direct maximum |
+| OpenCode Go | `full` | Each model's provider-reported window minus 40000 unless you save a lower direct maximum |
 
 Show or set windows:
 
@@ -118,17 +122,18 @@ node ~/.claude/model-gateway/model-gateway.js context-window
 node ~/.claude/model-gateway/model-gateway.js context-window --claude full --codex 272000 --grok full
 ```
 
-The window flags still accept `full` or their supported whole token counts up to 1,000,000. `CODEX_GATEWAY_CONTEXT_WINDOW` applies only when no Codex window is saved. `/v1/models` advertises the window cap and keeps `[1m]` picker ids. Claude Code's discovery cache retains only model ids and names, so the gateway's synthetic-413 sentry enforces Codex and Grok compaction.
+The window flags still accept `full` or their supported whole token counts up to 1,000,000. `CODEX_GATEWAY_CONTEXT_WINDOW` applies only when no Codex window is saved. `/v1/models` advertises the window cap and keeps `[1m]` picker ids. Claude Code's discovery cache retains only model ids and names, so the gateway's synthetic-413 sentry enforces Codex, Grok and OpenCode Go compaction.
 
-Set a direct Codex or Grok maximum before compaction:
+Set a direct Codex, Grok or OpenCode Go maximum before compaction:
 
 ```sh
 node ~/.claude/model-gateway/model-gateway.js context-window --codex-compact-at 242000
 node ~/.claude/model-gateway/model-gateway.js context-window --grok-compact-at 400000
+node ~/.claude/model-gateway/model-gateway.js context-window --opencodego-compact-at 400000
 node ~/.claude/model-gateway/model-gateway.js context-window --codex-compact-at cap
 ```
 
-These flags save positive whole token counts in `compactAt.codex` or `compactAt.grok`. `cap` removes that explicit entry and restores the legacy policy. Changing a window preserves saved maxima. The 242000 example leaves the Codex 272000 cap unchanged. Explicit maxima have no hidden 85000 subtraction: the effective trigger is limited by the requested number, the window cap when present, and the actual backend window minus 40000. `status`, `doctor`, and catalog notes report requested and effective numbers, the backend window, and the limiting source. A saved maximum overrides `CODEX_GATEWAY_COMPACT_TRIGGER`; its ignored value is reported without changing the environment.
+These flags save positive whole token counts in `compactAt.codex`, `compactAt.grok` or `compactAt.opencodego`. `cap` removes that explicit entry and restores the legacy policy. Changing a window preserves saved maxima. The 242000 example leaves the Codex 272000 cap unchanged. Explicit maxima have no hidden 85000 subtraction: the effective trigger is limited by the requested number, the window cap when present, and the actual backend window minus 40000. `status`, `doctor`, and catalog notes report requested and effective numbers, the backend window, and the limiting source. A saved maximum overrides `CODEX_GATEWAY_COMPACT_TRIGGER`; its ignored value is reported without changing the environment.
 
 A direct maximum is a compaction trigger, with one-turn detection delay. The gateway records input usage after each response, per session and agent, and sends a synthetic overflow on that agent's next request when usage passed the trigger. A subagent never inherits its parent's or a sibling's crossing.
 
@@ -174,6 +179,30 @@ If something breaks, describe the symptom:
 
 > Codex fails, but Claude models still work. Repair Model Gateway.
 
+## OpenCode Go
+
+[OpenCode Go](https://opencode.ai) is a monthly subscription that serves DeepSeek, GLM, Kimi, Qwen, MiniMax and other models through one Anthropic Messages endpoint. Model Gateway passes requests through to that endpoint, and OpenCode translates them for each model on its side.
+
+The gateway must be installed and the project wired first, as described in [Install](#install). A ChatGPT sign-in is not required. Without one, `setup` stops before wiring, so wire the project with `node ~/.claude/model-gateway/model-gateway.js env --write-project`.
+
+1. Create a key in the OpenCode Console. It starts with `oc_sk_`.
+2. Save it from your own terminal. The command reads the key from stdin, with hidden input when you type it, and refuses a key given as an argument:
+
+   ```sh
+   node ~/.claude/model-gateway/model-gateway.js login --opencodego
+   ```
+
+   The key is stored in `~/.claude/model-gateway/opencode-go-key` with mode 0600. `CODEX_GATEWAY_OPENCODEGO_KEY` overrides the file, but only for processes that inherit it, and the gateway runs in the background.
+3. In Console › Settings › Privacy, set Regions to **Global**. DeepSeek and other Global-only models answer HTTP 400 without it. Models that train on request data, such as the contributor models, also need "Allow paid endpoints that train on request data". Turning that on makes your code training data.
+4. Fully restart Claude Code. Within about a minute of saving the key, the gateway fetches OpenCode Go's model catalog. Every model that supports tools and text input then appears in `/model` as `<name> (OpenCode Go)`. Without a key, no rows appear and no catalog is fetched.
+
+The catalog is saved under `~/.claude/model-gateway/` and refreshed every six hours. It is also refreshed early when a model turns out to be unavailable. The gateway maps Claude Code's effort setting to the nearest level each model supports. Errors from OpenCode Go reach Claude Code with their original status and the prefix `model-gateway (OpenCode Go): `. An invalid key also names the `login --opencodego` command. `doctor` reports whether a key is present (never the key itself), the catalog's age, how many rows are advertised, and the last error.
+
+Billing notes:
+
+- Keep the Console's "Extra Usage" off unless you want pay-as-you-go charges once the subscription allowance is used up.
+- The observability cost column (Claude Code `/cost`) is meaningless for this backend. Usage records carry backend `opencodego` and OpenCode's own token counts.
+
 ## Troubleshooting model visibility
 
 If GPT-6 Astra is missing from `/model`, check the installed and serving claude-code-proxy version before diagnosing account access. Astra requires version 0.1.36 or newer. Version 0.1.35 does not include its backend allowlist, and the current `doctor` check can still report `PASS` when Astra is the missing row. Ask Claude to rerun `setup`, which fetches the latest GitHub release, then fully restart Claude Code. A `models.json` edit cannot add a backend that the proxy does not allow.
@@ -192,7 +221,7 @@ Remote Control gives each project two choices.
 
 ### Use RC-compatibility mode
 
-RC-compatibility keeps the project's HTTP Model Gateway transport configured. It maps `api.anthropic.com` to loopback in the hosts file and needs the gateway shim to bind port 80. A detected hosts entry or bound listener proves that local HTTP transport only. It also makes Claude Code treat the gateway as first-party, which can enable experimental message threading. Model Gateway refuses Codex and Grok thread continuations locally with HTTP 400 because neither backend has conversation state. Nothing is forwarded or rerouted. A client version that recognizes the refusal drops the threading beta and retries the turn with full message history. The experiment and client version can change that behavior, so do not promise a single refusal per session. On inspected Claude Code 2.1.267, Remote Control session creation uses HTTPS while the compatibility listener is HTTP; the reported 2.1.259 client and the inspected client have no verified end-to-end RC result. Normal gateway mode remains the verified inference path.
+RC-compatibility keeps the project's HTTP Model Gateway transport configured. It maps `api.anthropic.com` to loopback in the hosts file and needs the gateway shim to bind port 80. A detected hosts entry or bound listener proves that local HTTP transport only. It also makes Claude Code treat the gateway as first-party, which can enable experimental message threading. Model Gateway refuses Codex, Grok and OpenCode Go thread continuations locally with HTTP 400 because none of these backends has conversation state. Nothing is forwarded or rerouted. A client version that recognizes the refusal drops the threading beta and retries the turn with full message history. The experiment and client version can change that behavior, so do not promise a single refusal per session. On inspected Claude Code 2.1.267, Remote Control session creation uses HTTPS while the compatibility listener is HTTP; the reported 2.1.259 client and the inspected client have no verified end-to-end RC result. Normal gateway mode remains the verified inference path.
 
 At 2.1.267, the `api.anthropic.com` hostname also disables client gateway discovery, so gateway rows disappear from `/model` in RC-compatibility mode and a cache refresh cannot restore them. Claude Code can accept and persist an explicit id such as `/model claude-gpt-5.6-terra[1m]`, but that client-side action does not prove its later request reaches the gateway. The current cache cleaner preserves canonical `[1m]` ids; it is not a proposed fix for a reported request error.
 

@@ -297,7 +297,7 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
     type: 'error',
     error: {
       type: 'invalid_request_error',
-      message: 'capability_rejected: beta_header:message-threads-2026-08-12; model-gateway Codex and Grok backends hold no conversation state. Resend this turn with the full message history.',
+      message: 'capability_rejected: beta_header:message-threads-2026-08-12; model-gateway Codex, Grok and OpenCode Go backends hold no conversation state. Resend this turn with the full message history.',
       details: { error_code: 'thread_unsupported_request' },
     },
   });

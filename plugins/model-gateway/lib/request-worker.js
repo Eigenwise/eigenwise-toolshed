@@ -15,6 +15,7 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { CONTROL_HEADER, authenticatedControlRequest, ensureControlToken } = require('./control-auth.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
+const opencodego = require('./opencodego-backend.js');
 const { fetchUrl } = require('./process-supervision.js');
 const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
@@ -29,9 +30,9 @@ const {
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   PLUGIN_VERSION, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS,
+  MODEL_WINDOW_POLICY, STATE, readGatewayDiscoveryCache, standInDiscoveryModels, syncGatewayDiscoveryCache, TRACE_HEADERS,
   codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
-  resolveGatewayModelPolicy, CODEX_COMPACT_HEADROOM, effectiveSentryPolicy,
+  resolveGatewayModelPolicy, resolveStableCommandPath, CODEX_COMPACT_HEADROOM, effectiveSentryPolicy,
 } = require('./runtime.js');
 
 const execFileAsync = promisify(execFile);
@@ -206,6 +207,7 @@ function servingVersionIsCurrentOrNewer(servingVersion, installedVersion) {
 }
 
 function displayName(id, backend = 'codex') {
+  if (backend === 'opencodego') return opencodego.clientDisplayName(id);
   if (backend === 'grok') return id.replace(/^grok-/, 'Grok ').replace(/-/g, ' ');
   return id.replace(/^gpt-/, 'GPT-').replace(/\[1m\]$/, '') + ' (Codex)';
 }
@@ -266,7 +268,7 @@ function statelessBackendThreadRefusal(payload) {
     type: 'error',
     error: {
       type: 'invalid_request_error',
-      message: 'capability_rejected: beta_header:message-threads-2026-08-12; model-gateway Codex and Grok backends hold no conversation state. Resend this turn with the full message history.',
+      message: 'capability_rejected: beta_header:message-threads-2026-08-12; model-gateway Codex, Grok and OpenCode Go backends hold no conversation state. Resend this turn with the full message history.',
       details: { error_code: 'thread_unsupported_request' },
     },
   };
@@ -384,6 +386,26 @@ function systemPromptText(system) {
   if (typeof system === 'string') return system;
   if (!Array.isArray(system)) return '';
   return system.map((block) => (block && typeof block.text === 'string' ? block.text : '')).join('\n');
+}
+
+// A stand-in (non-proxy) list persists only through standInDiscoveryModels; null means no write.
+function discoveryModelsToPersist(source, models) {
+  if (source === 'proxy') return models;
+  return standInDiscoveryModels(models, readGatewayDiscoveryCache()?.models);
+}
+
+const COMPLETED_STOP_REASONS = ['end_turn', 'stop_sequence', 'tool_use'];
+
+function completedTurn(stopReason, compaction) {
+  return COMPLETED_STOP_REASONS.includes(stopReason) && !compaction;
+}
+
+function isEventStream(headers) {
+  return String(headers['content-type'] || '').toLowerCase().includes('text/event-stream');
+}
+
+function parseJsonOrNull(text) {
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 function isCompactionRequest(payload) {
@@ -912,8 +934,8 @@ function routeStatus(statusCode, override) {
   return 'ok';
 }
 
-const ROUTE_BACKENDS = new Set(['codex', 'anthropic']);
-const ROUTE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const ROUTE_BACKENDS = new Set(['codex', 'anthropic', 'opencodego']);
+const ROUTE_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const ROUTE_VIAS = new Set(['direct', 'dispatch', 'dispatch-cached']);
 const COMPACT_TERMINAL_CODES = new Set(['message_stop']);
 
@@ -1108,7 +1130,7 @@ function runWorker() {
     source: 'fallback',
     data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
   };
-  const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
+  const counters = { models: 0, codex: 0, grok: 0, opencodego: 0, anthropic: 0 };
   const dispatchRoutes = new DispatchSessionRouteCache({ cachePath: DISPATCH_ROUTE_CACHE_PATH });
   const usageEmitter = createGatewayUsageEmitter();
   const settingsWiring = wiredMode();
@@ -1126,6 +1148,8 @@ function runWorker() {
   let draining = false;
   let activeRequests = 0;
   const anthropicBypass = createHostsBypassResolver();
+  // x-opencode-session for a request that names no Claude Code session: stable for this worker's lifetime.
+  const opencodegoFallbackSession = crypto.randomUUID();
 
   function beginDrain() {
     let remaining = servers.size;
@@ -1255,7 +1279,7 @@ function runWorker() {
     if (isCompactionRequest(JSON.parse(Buffer.concat(requestChunks).toString()))) return false;
     const crossing = crossedContextSentry(sessionId, model);
     if (!crossing) return false;
-    const backendName = resolveGatewayModelPolicy(model)?.backend === 'grok' ? 'Grok' : 'Codex';
+    const backendName = { grok: 'Grok', opencodego: 'OpenCode Go' }[resolveGatewayModelPolicy(model)?.backend] || 'Codex';
     const overflow = contextOverflowDetails(Buffer.concat(requestChunks), 'gateway_sentry', crossing.usage, 'previous_turn_usage', crossing.compactTrigger);
     routeTelemetry.setOverflow(overflow);
     const body = contextOverflowBody(
@@ -1352,12 +1376,17 @@ function runWorker() {
         ...advertisedGrokModels
           .filter(isGrokBackendModel)
           .map((model) => gatewayModel(model.id, 'grok')),
+        // Disk cache only; the network fetch runs on its own timer (scheduleOpenCodeGoCatalog).
+        ...opencodego.advertisedModels()
+          .map((model) => gatewayModel(opencodego.clientModelId(model.id), 'opencodego'))
+          .filter(Boolean),
       ],
     };
     if (logSentryPolicies) logAdvertisedSentryPolicies();
-    if (source !== 'proxy') return;
+    const discoveryModels = discoveryModelsToPersist(source, modelCache.data);
+    if (!discoveryModels) return;
     try {
-      syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
+      syncGatewayDiscoveryCache({ models: discoveryModels, baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
       console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
     }
@@ -1366,6 +1395,69 @@ function runWorker() {
   // A refresh reads cache files synchronously, and one per stale request let a burst of
   // /v1/models calls start one each (issue #238); the handler only ever reads this snapshot.
   setInterval(refreshModels, MODELS_REFRESH_MS).unref();
+
+  // Due CATALOG_REFRESH_MS after the persisted fetch, so a restarted worker neither refetches a fresh catalog nor
+  // waits out a stale one. No key: only re-check the key file; key but no catalog: retry every CATALOG_RETRY_MS.
+  const opencodegoCatalog = { timer: null, inFlight: null, lastAttemptAt: 0 };
+
+  function scheduleOpenCodeGoCatalog(delayMs) {
+    if (opencodegoCatalog.timer) clearTimeout(opencodegoCatalog.timer);
+    opencodegoCatalog.timer = setTimeout(checkOpenCodeGoCatalog, Math.max(0, delayMs));
+    opencodegoCatalog.timer.unref();
+  }
+
+  function runOpenCodeGoCatalogRefresh(reason) {
+    if (opencodegoCatalog.inFlight) return opencodegoCatalog.inFlight;
+    opencodegoCatalog.lastAttemptAt = Date.now();
+    opencodegoCatalog.inFlight = opencodego.refreshCatalog({ reason })
+      .then((result) => {
+        if (!result.ok) console.error(`model-gateway: OpenCode Go catalog refresh (${reason}) failed: ${result.error}`);
+        return result;
+      })
+      .catch((error) => ({ ok: false, reason, error: error.message }))
+      .finally(() => {
+        opencodegoCatalog.inFlight = null;
+        refreshModels();
+      });
+    return opencodegoCatalog.inFlight;
+  }
+
+  function openCodeGoAttemptAllowed() {
+    return !opencodegoCatalog.lastAttemptAt
+      || Date.now() - opencodegoCatalog.lastAttemptAt >= opencodego.CATALOG_RETRY_MS;
+  }
+
+  function dueOpenCodeGoRefreshReason(cache) {
+    if (!opencodego.hasCatalog(cache)) return 'no-cache';
+    return Date.now() - cache.fetchedAt >= opencodego.CATALOG_REFRESH_MS ? 'scheduled' : null;
+  }
+
+  function nextOpenCodeGoCheckDelay() {
+    const current = opencodego.readCatalogCache();
+    const now = Date.now();
+    const due = opencodego.hasCatalog(current) ? current.fetchedAt + opencodego.CATALOG_REFRESH_MS - now : opencodego.CATALOG_RETRY_MS;
+    // A failed attempt leaves the catalog as old as it was; wait out the retry spacing instead of spinning.
+    const retry = opencodegoCatalog.lastAttemptAt + opencodego.CATALOG_RETRY_MS - now;
+    return Math.max(due, retry, 50);
+  }
+
+  async function checkOpenCodeGoCatalog() {
+    opencodegoCatalog.timer = null;
+    if (!opencodego.readKey()) return scheduleOpenCodeGoCatalog(opencodego.CATALOG_RETRY_MS);
+    const reason = dueOpenCodeGoRefreshReason(opencodego.readCatalogCache());
+    if (reason && openCodeGoAttemptAllowed()) await runOpenCodeGoCatalogRefresh(reason);
+    scheduleOpenCodeGoCatalog(nextOpenCodeGoCheckDelay());
+  }
+
+  // Early refreshes keep 403 hides and are spaced CATALOG_RETRY_MS apart, so a model that keeps failing cannot
+  // turn every request into a catalog fetch.
+  function requestEarlyOpenCodeGoRefresh(reason) {
+    if (opencodegoCatalog.inFlight) return;
+    if (Date.now() - opencodegoCatalog.lastAttemptAt < opencodego.CATALOG_RETRY_MS) return;
+    runOpenCodeGoCatalogRefresh(reason);
+  }
+
+  scheduleOpenCodeGoCatalog(0);
 
   const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
   const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
@@ -2118,6 +2210,224 @@ function runWorker() {
     request.end(body);
   }
 
+  function rejectMissingOpenCodeGoKey(clientRes, { goModel, routeTelemetry }) {
+    const errorBody = opencodego.missingKeyBody(resolveStableCommandPath());
+    opencodego.noteRequestError({ status: 401, kind: 'missing-key', message: 'no OpenCode Go key configured', model: goModel });
+    routeTelemetry?.finish(401, 'authentication_error');
+    clientRes.writeHead(401, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
+    clientRes.end(errorBody);
+  }
+
+  // incompleteCapture is the usage capture to mark incomplete on failure, or null when it should not be.
+  function watchOpenCodeGoUpstreamFailure(upRes, clientRes, routeTelemetry, incompleteCapture) {
+    for (const [event, finishCode] of [['error', 'upstream_error'], ['aborted', 'upstream_aborted']]) {
+      upRes.on(event, () => {
+        incompleteCapture?.setResponseComplete(false);
+        routeTelemetry?.finish(upRes.statusCode, finishCode);
+        clientRes.destroy();
+      });
+    }
+  }
+
+  function noteOpenCodeGoUpstreamError(goModel, status, kind, upstreamMessage) {
+    opencodego.noteRequestError({ status, kind, message: upstreamMessage, model: goModel });
+    if (kind === 'outside-opencode') {
+      opencodego.hideModel(goModel, upstreamMessage);
+      refreshModels();
+      requestEarlyOpenCodeGoRefresh('outside-opencode');
+    } else if (kind === 'model-unavailable') {
+      requestEarlyOpenCodeGoRefresh('model-unavailable');
+    }
+  }
+
+  function relayOpenCodeGoError(upRes, clientRes, resHeaders, { goModel, routeTelemetry, usageCapture }) {
+    const chunks = [];
+    upRes.on('data', (chunk) => {
+      usageCapture?.noteResponseBytes(chunk.length);
+      chunks.push(chunk);
+    });
+    watchOpenCodeGoUpstreamFailure(upRes, clientRes, routeTelemetry, null);
+    upRes.on('end', () => {
+      const { kind, upstreamMessage, body: errorBody } = opencodego.upstreamErrorBody(upRes.statusCode, Buffer.concat(chunks), { commandPath: resolveStableCommandPath() });
+      noteOpenCodeGoUpstreamError(goModel, upRes.statusCode, kind, upstreamMessage);
+      routeTelemetry?.finish(upRes.statusCode);
+      delete resHeaders['content-encoding'];
+      resHeaders['content-type'] = 'application/json';
+      resHeaders['content-length'] = errorBody.length;
+      clientRes.writeHead(upRes.statusCode, resHeaders);
+      clientRes.end(errorBody);
+    });
+  }
+
+  function mergeStartUsage(turn, event) {
+    if (event?.type === 'message_start' && event.message?.usage) turn.usage = { ...turn.usage, ...event.message.usage };
+  }
+
+  function deltaStopReason(event, current) {
+    return event.delta?.stop_reason || current;
+  }
+
+  function mergeDeltaUsage(turn, event, { sentrySession, contextModel }) {
+    if (event?.type !== 'message_delta') return;
+    if (event.usage) turn.usage = { ...turn.usage, ...event.usage };
+    turn.stopReason = deltaStopReason(event, turn.stopReason);
+    recordSentryUsage(sentrySession, { type: 'message_delta', usage: turn.usage }, contextModel);
+  }
+
+  // Anthropic streams carry input usage in message_start and the rest in message_delta; the sentry needs both,
+  // so the turn's usage is merged before it is recorded.
+  function relayOpenCodeGoStream(upRes, clientRes, resHeaders, context) {
+    const { sentrySession, contextModel, routeTelemetry, usageCapture } = context;
+    const compaction = isCompactionRequest(context.payload);
+    clientRes.writeHead(upRes.statusCode, resHeaders);
+    keepSseAlive(upRes, clientRes);
+    const turn = { usage: {}, stopReason: null };
+    const observer = createSseEventObserver((event) => {
+      usageCapture?.observeEvent(event);
+      mergeStartUsage(turn, event);
+      mergeDeltaUsage(turn, event, context);
+    }, usageEmitter.maxResponseBytes, () => usageCapture?.markOverflow());
+    upRes.on('data', (chunk) => {
+      usageCapture?.noteResponseBytes(chunk.length);
+      observer.write(chunk);
+      clientRes.write(chunk);
+    });
+    upRes.on('end', () => {
+      observer.end();
+      if (turn.stopReason) recordSentryUsage(sentrySession, { type: 'message_delta', usage: turn.usage }, contextModel, completedTurn(turn.stopReason, compaction));
+      routeTelemetry?.finish(upRes.statusCode, turn.stopReason ? null : 'upstream_error');
+      clientRes.end();
+    });
+    watchOpenCodeGoUpstreamFailure(upRes, clientRes, routeTelemetry, usageCapture);
+  }
+
+  function recordOpenCodeGoJsonUsage(upstreamBody, { sentrySession, contextModel }, compaction) {
+    const response = parseJsonOrNull(upstreamBody.toString());
+    if (response?.type === 'message' && response.usage) {
+      recordSentryUsage(sentrySession, { type: 'message_delta', usage: response.usage }, contextModel,
+        completedTurn(response.stop_reason, compaction));
+    }
+  }
+
+  function relayOpenCodeGoJson(upRes, clientRes, resHeaders, context) {
+    const { routeTelemetry, usageCapture } = context;
+    const compaction = isCompactionRequest(context.payload);
+    const chunks = [];
+    upRes.on('data', (chunk) => chunks.push(chunk));
+    watchOpenCodeGoUpstreamFailure(upRes, clientRes, routeTelemetry, null);
+    upRes.on('end', () => {
+      const upstreamBody = Buffer.concat(chunks);
+      usageCapture?.observeJson(upstreamBody);
+      recordOpenCodeGoJsonUsage(upstreamBody, context, compaction);
+      routeTelemetry?.finish(upRes.statusCode);
+      resHeaders['content-length'] = upstreamBody.length;
+      clientRes.writeHead(upRes.statusCode, resHeaders);
+      clientRes.end(upstreamBody);
+    });
+  }
+
+  function openCodeGoRelay(upRes) {
+    if (!(upRes.statusCode >= 200 && upRes.statusCode < 300)) return relayOpenCodeGoError;
+    return isEventStream(upRes.headers) ? relayOpenCodeGoStream : relayOpenCodeGoJson;
+  }
+
+  function relayOpenCodeGoResponse(upRes, clientRes, context) {
+    const resHeaders = { ...upRes.headers };
+    for (const header of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[header];
+    context.usageCapture?.setResponse(upRes.statusCode, upRes.headers);
+    openCodeGoRelay(upRes)(upRes, clientRes, resHeaders, context);
+  }
+
+  function failOpenCodeGoRequest(error, clientRes, { goModel, routeTelemetry, usageCapture }) {
+    opencodego.noteRequestError({ status: 502, kind: 'network', message: error.message, model: goModel });
+    usageCapture?.setResponseComplete(false);
+    routeTelemetry?.finish(502, 'upstream_error');
+    if (clientRes.headersSent) return clientRes.destroy();
+    const errorBody = opencodego.networkFailureBody(error);
+    clientRes.writeHead(502, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
+    clientRes.end(errorBody);
+  }
+
+  // Passthrough; deliberately separate from forward() so none of its Codex handling applies.
+  function forwardOpenCodeGo(clientReq, clientRes, context) {
+    const credential = opencodego.readKey();
+    if (!credential) return rejectMissingOpenCodeGoKey(clientRes, context);
+    const { body, usageCapture } = context;
+    if (usageCapture) clientRes.once('finish', () => usageCapture.finish());
+    const target = new URL(opencodego.messagesUrl(clientReq.url));
+    const isHttps = target.protocol === 'https:';
+    const headers = opencodego.upstreamHeaders(clientReq.headers, {
+      key: credential.key,
+      session: context.upstreamSession,
+      contentLength: Buffer.byteLength(body),
+    });
+    const upReq = (isHttps ? https : http).request(target, {
+      method: 'POST',
+      headers,
+      agent: isHttps ? httpsAgent : httpAgent,
+    }, (upRes) => relayOpenCodeGoResponse(upRes, clientRes, context));
+    upReq.setTimeout(3600000, () => upReq.destroy(new Error('OpenCode Go upstream timeout')));
+    upReq.on('error', (error) => failOpenCodeGoRequest(error, clientRes, context));
+    upReq.end(body);
+  }
+
+  function claudeSessionIdFor(req, payload) {
+    return requestSessionId(req) || sessionIdFromMetadata(payload.metadata);
+  }
+
+  function refuseOpenCodeGoThread(res, route, threadRefusal, routeTelemetry) {
+    const body = JSON.stringify(threadRefusal);
+    routeTelemetry.setRoute(route);
+    routeTelemetry.finish(400, 'thread_unsupported');
+    res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    return res.end(body);
+  }
+
+  function startOpenCodeGoUsage(req, isMessages, payload, body, route) {
+    if (!(isMessages && usageEmitter.enabled)) return null;
+    return usageEmitter.start({
+      payload,
+      requestBodyBytes: Buffer.byteLength(body),
+      requestHeaders: req.headers,
+      route: { requestedModel: route.selectedModel, effectiveModel: route.effectiveModel, backend: 'opencodego', effort: route.effort, via: 'direct' },
+    });
+  }
+
+  // Runs before the Codex and Grok branches: `claude-opencodego-gpt-*` and `claude-opencodego-grok-*` ids
+  // belong to OpenCode Go, never to the Codex proxy or the Grok CLI backend.
+  function routeOpenCodeGo(req, res, pathOnly, parsed, goModel, routeTelemetry) {
+    const advertisedModel = parsed.model;
+    const contextModel = opencodego.clientModelId(goModel);
+    const levels = opencodego.effortLevels(opencodego.catalogModel(goModel));
+    const { payload, effort } = opencodego.applyEffortRule({ ...parsed, model: goModel }, levels);
+    const route = { selectedModel: advertisedModel, effectiveModel: goModel, backend: 'opencodego', effort, fallback: false, via: 'direct' };
+    const isMessages = pathOnly === '/v1/messages';
+    const threadRefusal = isMessages && statelessBackendThreadRefusal(parsed);
+    if (threadRefusal) return refuseOpenCodeGoThread(res, route, threadRefusal, routeTelemetry);
+    counters.opencodego += 1;
+    requestRouteLog(req, 'opencodego', goModel, pathOnly, 'direct', effort);
+    routeTelemetry.setRoute(route);
+    const sentrySession = sentrySessionId(req);
+    if (isMessages && fireContextSentry(res, sentrySession, contextModel)) {
+      routeTelemetry.finish(413);
+      return;
+    }
+    const body = JSON.stringify(payload);
+    const claudeSessionId = claudeSessionIdFor(req, parsed);
+    recordRequestBodyHighWater(requestSessionId(req), Buffer.byteLength(body));
+    const usageCapture = startOpenCodeGoUsage(req, isMessages, payload, body, route);
+    return forwardOpenCodeGo(req, res, {
+      body,
+      goModel,
+      contextModel,
+      sentrySession,
+      upstreamSession: opencodego.openCodeSessionId(claudeSessionId, opencodegoFallbackSession),
+      routeTelemetry,
+      usageCapture,
+      payload,
+    });
+  }
+
   function handleRequest(req, res) {
     const pathOnly = req.url.split('?')[0];
 
@@ -2192,8 +2502,11 @@ function runWorker() {
       let requestedEffort = null;
       let parsedPayload = null;
       if (raw && pathOnly.startsWith('/v1/messages')) {
-        try {
-          const parsed = JSON.parse(raw.toString());
+        const parsed = parseJsonOrNull(raw.toString());
+        const goModel = opencodego.goModelIdFromPayload(parsed);
+        if (goModel) return routeOpenCodeGo(req, res, pathOnly, parsed, goModel, routeTelemetry);
+        // Invalid JSON and a literal null body skip the Codex branch and fall through to passthrough.
+        if (parsed !== null) try {
           parsedPayload = parsed;
           requestedModel = typeof parsed.model === 'string' ? parsed.model : null;
           requestedEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
