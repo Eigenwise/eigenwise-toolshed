@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { VerificationResult } from './kernel/verification.js';
 import { runProcessVerification } from './ports/process.js';
 
+export type IntegrationExecution = typeof runProcessVerification;
+
 const { resolveSuite } = require('./suite-resolver.js');
 
 export interface IntegrationTestSelection {
@@ -237,9 +239,9 @@ export function phaseBudgetResult(result: VerificationResult): VerificationResul
   return { ...result, evidence: 'Phase budget failure. ' + result.evidence, failureIdentities: [...(result.failureIdentities ?? []), 'phase_budget_exceeded'] };
 }
 
-function runImportBatch(project: string, batch: IntegrationTestBatch, logPath: string, pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult {
+function runImportBatch(project: string, batch: IntegrationTestBatch, logPath: string, pinned: VerificationResult, environment: NodeJS.ProcessEnv, execute: IntegrationExecution = runProcessVerification): VerificationResult {
   const started = Date.now();
-  const result = runProcessVerification({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
+  const result = execute({ kind: 'command', command: batch.command, evidenceContract: 'Importing tests pass on the merged tree' }, {
     cwd: path.join(project, batch.plugin),
     timeoutMilliseconds: batch.timeoutMilliseconds,
     logPath,
@@ -250,11 +252,11 @@ function runImportBatch(project: string, batch: IntegrationTestBatch, logPath: s
   return receipt;
 }
 
-function executeImportBatches(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): VerificationResult[] {
+function executeImportBatches(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv, execute: IntegrationExecution = runProcessVerification): VerificationResult[] {
   if (pinned.status !== 'passed') return [];
   for (const [index, batch] of batches.entries()) {
     reportIntegrationProgress('importing tests', `${batch.plugin}/${batch.files.join(', ')}`, { index: index + 1, count: batches.length });
-    const receipt = runImportBatch(project, batch, pinned.logPath + '.import-' + index + '.log', pinned, environment);
+    const receipt = runImportBatch(project, batch, pinned.logPath + '.import-' + index + '.log', pinned, environment, execute);
     if (receipt.status !== 'passed') return [receipt];
   }
   return [];
@@ -272,11 +274,11 @@ function claudeCliAvailable(environment: NodeJS.ProcessEnv): boolean {
   return candidates.some((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
 }
 
-function executePluginRunner(project: string, batch: IntegrationTestBatch, index: number, pinned: VerificationResult, environment: NodeJS.ProcessEnv): PluginRunnerResult {
+function executePluginRunner(project: string, batch: IntegrationTestBatch, index: number, pinned: VerificationResult, environment: NodeJS.ProcessEnv, execute: IntegrationExecution = runProcessVerification): PluginRunnerResult {
   const target = { plugin: batch.plugin, files: batch.files };
   if (!claudeCliAvailable(environment)) return { ...target, command: batch.command, status: 'unverified', evidence: 'The claude CLI is not on PATH, so these plugin-runner tests did not run here; CI runs them.' };
   reportIntegrationProgress('plugin-runner tests', `${batch.plugin}/${batch.files.join(', ')}`);
-  return { ...target, ...runImportBatch(project, batch, pinned.logPath + '.plugin-runner-' + index + '.log', pinned, environment) };
+  return { ...target, ...runImportBatch(project, batch, pinned.logPath + '.plugin-runner-' + index + '.log', pinned, environment, execute) };
 }
 
 const PLUGIN_RUNNER_NOT_FAILED = new Set(['passed', 'unverified', 'toolchain_missing']);
@@ -285,23 +287,28 @@ function pluginRunnerFailed(result: PluginRunnerResult): result is PluginRunnerR
   return !PLUGIN_RUNNER_NOT_FAILED.has(result.status);
 }
 
-function executePluginRunners(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv): PluginRunnerResult[] {
+function executePluginRunners(project: string, batches: IntegrationTestBatch[], pinned: VerificationResult, environment: NodeJS.ProcessEnv, execute: IntegrationExecution = runProcessVerification): PluginRunnerResult[] {
   if (pinned.status !== 'passed') return [];
   const results: PluginRunnerResult[] = [];
   for (const [index, batch] of batches.entries()) {
-    const result = executePluginRunner(project, batch, index, pinned, environment);
+    const result = executePluginRunner(project, batch, index, pinned, environment, execute);
     results.push(result);
     if (pluginRunnerFailed(result)) break;
   }
   return results;
 }
 
-export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; pluginRunnerResults: PluginRunnerResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string; pluginRunnerSplit: string } } {
+function importWalkExclusionCommand(sharedGate: boolean, command: string | null | undefined): string {
+  if (sharedGate) return '';
+  return command || '';
+}
+
+export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40, execute: IntegrationExecution = runProcessVerification, sharedGate = false): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; pluginRunnerResults: PluginRunnerResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string; pluginRunnerSplit: string } } {
   const started = Date.now();
   const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
-  const batches = integrationTestBatches(project, selections, pinned.command || '', timeoutMilliseconds, fileThreshold);
-  const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== 'plugin-runner'), pinned, environment);
-  const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === 'plugin-runner'), pinned, environment);
+  const batches = integrationTestBatches(project, selections, importWalkExclusionCommand(sharedGate, pinned.command), timeoutMilliseconds, fileThreshold);
+  const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== 'plugin-runner'), pinned, environment, execute);
+  const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === 'plugin-runner'), pinned, environment, execute);
   const importingTestResults = [...failures, ...pluginRunnerResults.filter(pluginRunnerFailed)];
   const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: 'Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.', pluginRunnerSplit: PLUGIN_RUNNER_SPLIT };
   if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches, pluginRunnerResults }) + '\n');

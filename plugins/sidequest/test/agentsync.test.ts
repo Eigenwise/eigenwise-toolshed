@@ -66,6 +66,58 @@ test('briefing discovers the project gate and reports none without inventing a r
   assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token'), /Configured quality gate: none\./);
 });
 
+test('marked intake review briefing carries the bounded evidence-first review contract', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-INTAKE', category: { id: 'review-audit' }, labels: ['intake-review'],
+  }, 'intake-token');
+  assert.match(briefing, /## Independent intake review\n/);
+  const section = briefing.split('## Independent intake review\n')[1].split('\n\n## ')[0];
+  assert.ok(Buffer.byteLength(section, 'utf8') < 4000, 'fixed review section stays below 4KB');
+  assert.match(section, /Read the linked recon tickets' comments, then the story decision log and current contract/);
+  assert.match(section, /Judge the draft on evidence, not its framing/);
+  assert.match(section, /1\. Decided vs ask/);
+  assert.match(section, /2\. Missing gaps/);
+  assert.match(section, /3\. Contested recommendations/);
+  assert.match(section, /4\. Further research: only decision-changing work/);
+  assert.match(section, /5\. Revised human question set: at most four questions/);
+  assert.match(section, /one recommended option and its evidence-based reason, plus Other/);
+  assert.match(section, /Return zero questions when none remain/);
+  assert.match(section, /End with exactly five verdict lines/);
+  assert.match(section, /Ready for human round:/);
+  assert.match(section, /Blocking findings:/);
+  assert.match(section, /Settled decisions to preserve:/);
+  assert.match(section, /Research before asking:/);
+  assert.match(section, /Human choices remaining:/);
+  assert.match(section, /under about 3,000 tokens/);
+  assert.match(section, /Propose no design and write nothing to the repository/);
+  assert.match(section, /this review grants no implementation approval/);
+  assert.ok(briefing.indexOf('## Dispatch, claim') < briefing.indexOf('## Independent intake review'));
+  assert.ok(briefing.indexOf('## Independent intake review') < briefing.indexOf('## This ticket'));
+});
+
+test('intake review requires both the review category and the explicit label', () => {
+  assert.doesNotMatch(agentsync.renderTicketBriefing({
+    ref: 'SQ-REVIEW', categoryId: 'review-audit',
+  }, 'intake-token'), /## Independent intake review/);
+  assert.doesNotMatch(agentsync.renderTicketBriefing({
+    ref: 'SQ-CODING', categoryId: 'coding.normal', labels: ['intake-review'],
+  }, 'intake-token'), /## Independent intake review/);
+  assert.doesNotMatch(agentsync.renderTicketBriefing({
+    ref: 'SQ-ORDINARY', category: {}, labels: [],
+  }, 'intake-token'), /## Independent intake review/);
+  assert.match(agentsync.renderTicketBriefing({
+    ref: 'SQ-REVIEW', categoryId: 'review-audit', labels: ['intake-review'],
+  }, 'intake-token'), /## Independent intake review/);
+});
+
+test('intake review reference documents the existing label and description inputs', () => {
+  const reference = fs.readFileSync(path.join(__dirname, '../skills/sidequest/references/intake.md'), 'utf8');
+  assert.match(reference, /`review-audit` category with `labels: \["intake-review"\]`/);
+  assert.match(reference, /Recon tickets and relevant comments:/);
+  assert.match(reference, /Draft playback:/);
+  assert.match(reference, /Draft questions and recommendations:/);
+});
+
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function git(dir: string, args: string[]) { return spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }); }
 function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) => file.endsWith('.md')).sort(); }
