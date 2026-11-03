@@ -1,8 +1,9 @@
 ---
 name: model-gateway
 description: >-
-  Set up, update, or diagnose the local ChatGPT/Codex gateway for Claude Code's /model picker. Use
-  for gateway setup, login, model visibility, routing, or failures.
+  Set up, update, or diagnose the local ChatGPT/Codex, Grok and OpenCode Go gateway for Claude Code's
+  /model picker. Use for gateway setup, login (including OpenCode Go keys), model visibility, routing,
+  or failures.
 ---
 
 # model-gateway
@@ -14,7 +15,9 @@ for `claude-gpt-*` models are un-prefixed and go to the proxy, everything else p
 to api.anthropic.com with the user's normal claude.ai login. The shim's `/v1/models` advertises
 Codex models with a `claude-` prefix because Claude Code's model discovery drops ids that don't
 start with `claude`/`anthropic`. That prefix is shared with the real Anthropic ids, so the route
-is decided by the backend family segment (`claude-gpt-*`, `claude-grok-*`), never by the prefix.
+is decided by the backend family segment (`claude-opencodego-*`, then `claude-gpt-*`, `claude-grok-*`),
+never by the prefix. `claude-opencodego-*` is checked first, so `claude-opencodego-gpt-6-luna` goes to
+OpenCode Go, not to Codex.
 
 All commands: `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart recreates this stable launcher from Claude Code's installed-plugin registry, so it follows upgrades and falls back to an installed downgrade; it reports a missing install directly.
 
@@ -113,12 +116,12 @@ bring auth back, or you kill the session that was about to use it.
 ## Selecting models
 
 - `/model` picker: rows like "GPT-6.1-sol (Codex)" and "Grok 4.5".
-- Typed: `/model claude-gpt-6.1-sol[1m]` or `/model claude-grok-4.5[1m]`. The picker and Sidequest catalog emit those exact ids. The suffix is stripped before routing to Codex or Grok.
+- Typed: `/model claude-gpt-6.1-sol[1m]` or `/model claude-grok-4.5[1m]`. The picker and Sidequest catalog emit those exact ids. The suffix is stripped before routing to Codex, Grok or OpenCode Go. OpenCode Go rows are `claude-opencodego-<go-model-id>`, with `[1m]` when the window is above 200k; see the OpenCode Go section.
 - `lib/runtime.js`'s exported `MODEL_WINDOW_POLICY` is the sole authority for gateway backend windows, picker aliases, advertised windows, and sentry mode. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets. GPT ids absent from the table are deliberately advertised through its explicitly unmeasured 920k default, rather than silently inheriting a window. Grok 4.5 is a measured 500k row with a `[1m]` picker alias and the shared synthetic-413 sentry.
-- Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). Every `synthetic-413` policy row keeps its backend-window-minus-40000 ceiling. With no saved `compactAt`, the lowest legacy environment trigger or cap-minus-85000 wins. With `compactAt.codex` or `compactAt.grok` saved, the explicit maximum replaces those legacy candidates, is clamped to the cap, and ignores `CODEX_GATEWAY_COMPACT_TRIGGER` without mutating it. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; it does not promise a 1M backend input limit. A lower explicit `autoCompactWindow` still wins. Use `/context` to inspect the selected model and effective cap.
-- **Context window and cost**: `context-window` saves backend windows in `~/.claude/model-gateway/context-window.json` (`--claude <tokens|full> --codex <tokens|full> --grok <tokens|full>`). Defaults stay Claude `full`, Codex `272000`, Grok `full`; existing installs are never auto-migrated. `/v1/models` advertises the cap and keeps `[1m]` ids. With no explicit maximum, the gateway's legacy cap policy subtracts 85000, so Codex still compacts past 187000.
-- **Direct gateway compaction maximum**: `context-window --codex-compact-at <tokens|cap>` and `--grok-compact-at <tokens|cap>` save positive whole counts under `compactAt`; `cap` removes the explicit field and restores the legacy policy. These flags have no 100000 floor. Window-only updates preserve saved maxima. An explicit maximum has no hidden 85000 subtraction; the cap and actual backend window minus 40000 remain authoritative. `status`, `doctor`, and catalog notes report the requested and effective trigger, actual backend window, limiting source, and any ignored `CODEX_GATEWAY_COMPACT_TRIGGER` unchanged. `--codex-compact-at 242000` is an opt-in example that leaves the 272000 cap unchanged. OpenAI bills input above 272k at 2x; the crossing turn and compaction request can still exceed 272k and pay double. Never promise this example keeps every request below the billing boundary.
-- **Sentry lifecycle**: Codex and Grok keep separate sentry state per session, agent, and model. Compaction requests bypass synthetic refusals. After a refusal, retries remain admitted until an ordinary response completes above the trigger; the next ordinary request gets another 413 with that observed count. Stream chunks, failed/incomplete responses, and high-usage compaction completions do not rearm it. Lower usage still resets the latch through the existing headroom watermark. This repairs the persistent latch after failed compaction; the original compaction failure's cause remains UNVERIFIED. Plugin reload does not update the running supervisor. Codex JSON rearms only for ordinary `end_turn`, `stop_sequence`, or `tool_use` responses; a tool handoff completes that assistant response. Null, missing, unknown, truncated, paused, and refused stop reasons leave the current attempt latched. This stop-reason rule applies only to sentry rearming; transport success, readiness recovery, and route telemetry keep their existing semantics.
+- Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). Every `synthetic-413` policy row keeps its backend-window-minus-40000 ceiling. With no saved `compactAt`, the lowest legacy environment trigger or cap-minus-85000 wins. With `compactAt.codex`, `compactAt.grok` or `compactAt.opencodego` saved, the explicit maximum replaces those legacy candidates, is clamped to the cap, and ignores `CODEX_GATEWAY_COMPACT_TRIGGER` without mutating it. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; it does not promise a 1M backend input limit. A lower explicit `autoCompactWindow` still wins. Use `/context` to inspect the selected model and effective cap.
+- **Context window and cost**: `context-window` saves backend windows in `~/.claude/model-gateway/context-window.json` (`--claude <tokens|full> --codex <tokens|full> --grok <tokens|full> --opencodego <tokens|full>`). Defaults stay Claude `full`, Codex `272000`, Grok `full`, OpenCode Go `full`; existing installs are never auto-migrated. `/v1/models` advertises the cap and keeps `[1m]` ids. With no explicit maximum, the gateway's legacy cap policy subtracts 85000, so Codex still compacts past 187000.
+- **Direct gateway compaction maximum**: `context-window --codex-compact-at <tokens|cap>`, `--grok-compact-at <tokens|cap>` and `--opencodego-compact-at <tokens|cap>` save positive whole counts under `compactAt`; `cap` removes the explicit field and restores the legacy policy. These flags have no 100000 floor. Window-only updates preserve saved maxima. An explicit maximum has no hidden 85000 subtraction; the cap and actual backend window minus 40000 remain authoritative. `status`, `doctor`, and catalog notes report the requested and effective trigger, actual backend window, limiting source, and any ignored `CODEX_GATEWAY_COMPACT_TRIGGER` unchanged. `--codex-compact-at 242000` is an opt-in example that leaves the 272000 cap unchanged. OpenAI bills input above 272k at 2x; the crossing turn and compaction request can still exceed 272k and pay double. Never promise this example keeps every request below the billing boundary.
+- **Sentry lifecycle**: Codex, Grok and OpenCode Go keep separate sentry state per session, agent, and model. Compaction requests bypass synthetic refusals. After a refusal, retries remain admitted until an ordinary response completes above the trigger; the next ordinary request gets another 413 with that observed count. Stream chunks, failed/incomplete responses, and high-usage compaction completions do not rearm it. Lower usage still resets the latch through the existing headroom watermark. This repairs the persistent latch after failed compaction; the original compaction failure's cause remains UNVERIFIED. Plugin reload does not update the running supervisor. Codex JSON rearms only for ordinary `end_turn`, `stop_sequence`, or `tool_use` responses; a tool handoff completes that assistant response. Null, missing, unknown, truncated, paused, and refused stop reasons leave the current attempt latched. This stop-reason rule applies only to sentry rearming; transport success, readiness recovery, and route telemetry keep their existing semantics.
 - **Native Claude window**: preserve `--claude <tokens|full>` and existing gateway-owned `autoCompactWindow` synchronization to project-wired `.claude/settings.local.json`; numeric windows require project-scoped wiring. Native engine headroom and exact trigger are unverified. `--claude-compact-at` and `compactAt.claude` are unsupported and refuse without writing. Same-model main/subagent thresholds are unverified; use one backend policy with no role inference. A lower native session window can bound gateway models too. After deliberately adopting a change, restart the gateway (`stop`, then `ensure`) and restart open Claude Code sessions for native-window or picker changes. No automatic 242000 adoption, machine environment mutation, or worker restart during implementation. `CODEX_GATEWAY_CONTEXT_WINDOW` still applies only when no Codex window is saved.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
@@ -158,7 +161,7 @@ bring auth back, or you kill the session that was about to use it.
   Code CLI is the verified path. VS Code success has been reported by users but is not independently
   verified here. This is version-specific and can be revisited if a future Desktop release removes
   the model-family filter.
-- **RC-compat and missing Codex rows**: On inspected Claude Code 2.1.267, RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, which disables gateway model discovery. The rows disappear and cache refresh cannot restore them. Claude Code can accept and persist `/model claude-gpt-5.6-terra[1m]`, but that client-side action does not prove a later request reaches the gateway. The current cleaner preserves canonical `[1m]` ids; do not present it as a fix for a reported request error. RC-compatibility makes Claude Code treat the gateway as first-party and can enable experimental message threading. The shim refuses Codex/Grok thread continuations locally with HTTP 400 because those backends have no conversation state. Nothing is forwarded or rerouted. A recognizing client drops the threading beta and resends the full message history. This is version- and experiment-limited, so do not promise one refusal per session. Normal gateway mode is the verified inference path. The reported 2.1.259 client and inspected 2.1.267 client have no verified end-to-end RC result: inspected session creation uses HTTPS while compatibility transport is HTTP. A detected hosts entry or bound listener proves local HTTP transport only. Sidequest dispatch is unaffected because it resolves its explicit route marker and never uses picker discovery.
+- **RC-compat and missing Codex rows**: On inspected Claude Code 2.1.267, RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, which disables gateway model discovery. The rows disappear and cache refresh cannot restore them. Claude Code can accept and persist `/model claude-gpt-5.6-terra[1m]`, but that client-side action does not prove a later request reaches the gateway. The current cleaner preserves canonical `[1m]` ids; do not present it as a fix for a reported request error. RC-compatibility makes Claude Code treat the gateway as first-party and can enable experimental message threading. The shim refuses Codex/Grok/OpenCode Go thread continuations locally with HTTP 400 because those backends have no conversation state. Nothing is forwarded or rerouted. A recognizing client drops the threading beta and resends the full message history. This is version- and experiment-limited, so do not promise one refusal per session. Normal gateway mode is the verified inference path. The reported 2.1.259 client and inspected 2.1.267 client have no verified end-to-end RC result: inspected session creation uses HTTPS while compatibility transport is HTTP. A detected hosts entry or bound listener proves local HTTP transport only. Sidequest dispatch is unaffected because it resolves its explicit route marker and never uses picker discovery.
 - Claude models keep working normally at the same time (passthrough path). That does not mean a
   subagent invocation can mix in a gateway id freely: the `Agent` tool's own `model` parameter is a
   fixed host enum (`sonnet`/`opus`/`haiku`/`fable`), independent of gateway or plugin state, and a
@@ -186,6 +189,71 @@ bring auth back, or you kill the session that was about to use it.
   concrete id are confirmed; an end-to-end custom-agent spawn through this path has not been verified
   here.
 - **Codex schema compatibility**: Codex rejects some Unicode property escapes such as `\p{Cc}` and `\P{Cf}`. After deferred hydration, the shim changes only a Codex-bound provider hint, never Claude Code's host schema or an Anthropic request. It admits a missing dialect or Draft 2020-12 and only `pattern` instances reached through `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, or `unevaluatedProperties`/`unevaluatedItems`. Each real property atom must stand alone in a negated character class without ranges, set syntax, captures, backreferences, or a negative regex context. The shim removes only that atom and preserves every other regex byte. `not`, conditionals, `oneOf`, `contains`, references, definitions, content schemas, affected pattern-property keys, unknown containers, and unsafe regexes refuse locally with HTTP 400 naming the tool, JSON Pointer, and reason code. Tell the user it was not forwarded or rerouted. Do not claim arbitrary schemas are preserved or try to bypass that diagnostic.
+
+## OpenCode Go
+
+OpenCode Go (opencode.ai, a monthly subscription) serves DeepSeek, GLM, Kimi, Qwen, MiniMax and other
+models. The gateway passes Anthropic Messages requests through to
+`https://opencode.ai/inference/go/anthropic/v1/messages` and changes only four things: the model name
+(`claude-opencodego-<id>[1m]` becomes `<id>`), effort (rule below), an added `x-opencode-session` header, and
+credentials. Only Messages protocol headers plus `Authorization: Bearer <key>` are forwarded; Claude's
+`authorization`, `x-api-key`, `proxy-authorization` and `cookie` never reach OpenCode.
+
+**Setup (the user does this; never ask them to paste the key into the chat):**
+
+0. The gateway must be installed, running and wired (`setup`, as in First-time setup). OpenCode Go needs no
+   ChatGPT sign-in, but without one `setup` stops before wiring: for an OpenCode Go-only user, wire with
+   `env --write-project` instead of pushing them into `login`, and ignore the SessionStart sign-in nudge.
+1. The user creates a key (`oc_sk_...`) in the OpenCode Console.
+2. In their own terminal: `node ~/.claude/model-gateway/model-gateway.js login --opencodego`. It reads the
+   key from stdin (hidden on a TTY; `pbpaste | node … login --opencodego` also works), refuses a key passed
+   as an argument or one not starting with `oc_sk_`, and writes `~/.claude/model-gateway/opencode-go-key`
+   with mode 0600. `CODEX_GATEWAY_OPENCODEGO_KEY` overrides the file only for processes that inherit it, so
+   the file is the dependable source for the background gateway.
+3. Console › Settings › Privacy: set Regions to **Global**, or DeepSeek and other Global-only models answer
+   400. "Contributor" models (and some free ones) train on request data and need "Allow paid endpoints that
+   train on request data"; tell the user this makes their code training data.
+4. Within about a minute the gateway sees the key and fetches the catalog. The user then fully restarts
+   Claude Code (quit and relaunch; a new session in the same process does not re-discover models). Rows
+   appear as "<catalog name> (OpenCode Go)".
+
+**Which rows:** every model in Go's live catalog that supports tools and accepts text input, including
+free, preview, `gpt-*`, `grok-*` and `claude-*` families. No hand-written list, no fallback: no key or no
+successful fetch means no rows. The catalog is cached in `~/.claude/model-gateway/opencode-go-models.json`
+and refreshed every 6 hours, or early after "Model is unavailable" or a genuine "not usable outside
+OpenCode" 403. That 403 hides the row until the next regular refresh; region and training-consent errors
+never hide a row.
+
+**Effort:** order `none < minimal < low < medium < high < xhigh < max`, checked against the catalog's effort
+list for the model. A supported `output_config.effort` passes unchanged; an unsupported one moves to the
+next higher supported level, or the highest if above all. `thinking: {type: "disabled"}` becomes `none` when
+supported; otherwise `thinking` is removed and the lowest supported level is sent (Go answers 400 to
+`disabled` there). A model with no effort list gets neither `output_config.effort` nor `thinking`.
+
+**Windows:** each row's window is the catalog's `limit.context` (provider-reported, unmeasured). The
+`opencodego` default is `full` (no gateway cap); as with Grok, the sentry compacts 40000 below the model's
+own window because Claude Code sees 1M behind `[1m]`. `context-window --opencodego <tokens>` or
+`--opencodego-compact-at <tokens>` sets a cap. Message-thread continuations are refused with the same
+HTTP 400 as Codex and Grok (the gateway holds no conversation state).
+
+**Errors:** Go's status and body pass through with the prefix `model-gateway (OpenCode Go): `.
+- `Upstream request failed: Invalid credential` (401): key wrong or revoked; the gateway adds the
+  `login --opencodego` step.
+- `no OpenCode Go key is configured` (401, from the gateway): no key file and no env override. Run `login --opencodego`.
+- `This Go model requires Global regions…` (400): Console › Settings › Privacy › Regions → Global.
+- `This Go model trains on request data…` (400): enable training-consent endpoints in Privacy, or pick
+  another model.
+- `Model is unavailable.` (400): model gone or renamed; the catalog refreshes early, and a full Claude Code
+  restart shows the current rows.
+- `upstream request failed: …` (502, from the gateway): network failure toward opencode.ai.
+
+**doctor** prints an `opencode go` block: key presence (file or env; never the key, loose file mode flagged),
+catalog path, fetch time and age, rows advertised vs. listed by the live shim, 403-hidden rows, and the last
+catalog and request errors. OpenCode Go is optional, so nothing here fails `doctor`.
+
+**Billing:** usage records carry backend `opencodego` and Go's own token counts; Claude Code's `/cost` is
+meaningless for this backend. Tell the user to keep the Console's "Extra Usage" off unless they want
+pay-as-you-go charges after the subscription allowance runs out.
 
 ## Local gateway records
 
@@ -268,14 +336,15 @@ runs; this is not a globally read-only operation or a transactional guarantee fo
 
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
-date. It includes Codex, Grok, and native Claude pin rows. Its model-id check is useful for stale shim ids,
+date. It includes Codex, Grok, OpenCode Go and native Claude pin rows. Its model-id check is useful for stale shim ids,
 but a `PASS` does not prove every supported model is present. A proxy from 0.1.14 through 0.1.35 can
 omit GPT-6 Astra while this check passes. If Astra is missing, check the installed and serving proxy
 version, rerun `setup` to fetch the latest release, and fully restart Claude Code. Astra requires
 claude-code-proxy 0.1.36 or newer. A `models.json` edit cannot add a backend that the proxy allowlist
 does not support. A `FAIL` naming missing and extra ids means the shim is stale even when its version
 matches: restart it through the normal `ensure` or `setup` path, then restart Claude Code sessions so the
-picker re-discovers the rows.
+picker re-discovers the rows. `claude-opencodego-*` ids come from OpenCode Go's catalog at runtime, so the
+check leaves them out on both sides; they never cause this `FAIL`. Their state is in the `opencode go` lines.
 
 Logs live in `~/.claude/model-gateway/logs/`. `guardian.log` has recovery output; `lifecycle.jsonl`
 has bounded process evidence that `doctor` summarizes. Ports: shim 18764, proxy 18765 (override with

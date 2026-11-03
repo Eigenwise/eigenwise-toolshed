@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const grokBackend = require('./grok-backend.js');
+const opencodego = require('./opencodego-backend.js');
 const { writeFileAtomically } = require('./atomic-file.js');
 
 const WIN = process.platform === 'win32';
@@ -21,6 +22,7 @@ const SHIM_PORT = Number(process.env.CODEX_GATEWAY_WORKER_PORT || PUBLIC_SHIM_PO
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
 const PREFIX = 'claude-';
 const GROK_PREFIX = 'claude-grok-';
+const OPENCODEGO_PREFIX = opencodego.OPENCODEGO_PREFIX;
 const CODEX_FAMILY_RE = /^gpt-/;
 const LEGACY_CODEX_PREFIX = 'claude-codex-';
 const DISPATCH_MODEL_ID = 'claude-codex-auto';
@@ -127,9 +129,9 @@ const CODEX_CONTEXT_WINDOWS = MODEL_WINDOW_POLICY;
 // One persisted setting per backend, shared by the orchestrator and every executor: the gateway sees the same
 // model ids from both, and no request header tells them apart.
 const CONTEXT_WINDOW_PATH = path.join(STATE, 'context-window.json');
-const CONTEXT_WINDOW_BACKENDS = Object.freeze(['claude', 'codex', 'grok']);
-const COMPACT_AT_BACKENDS = Object.freeze(['codex', 'grok']);
-const DEFAULT_CONTEXT_WINDOWS = Object.freeze({ claude: 'full', codex: 272000, grok: 'full' });
+const CONTEXT_WINDOW_BACKENDS = Object.freeze(['claude', 'codex', 'grok', 'opencodego']);
+const COMPACT_AT_BACKENDS = Object.freeze(['codex', 'grok', 'opencodego']);
+const DEFAULT_CONTEXT_WINDOWS = Object.freeze({ claude: 'full', codex: 272000, grok: 'full', opencodego: 'full' });
 const CODEX_BILLING_RULE = 'OpenAI bills input above 272k tokens at 2x';
 const CODEX_DOUBLE_BILLING_THRESHOLD = 272000;
 // One turn of growth: a response plus the tool results that answer it. The sentry keeps this much headroom.
@@ -146,7 +148,12 @@ const CAP_COMPACTION_MARGIN = 2 * CODEX_COMPACT_HEADROOM + COMPACTION_PROMPT_TOK
 const CONTEXT_WINDOW_MAX = 1000000;
 // Claude caps go into Claude Code's own autoCompactWindow, which takes 100k-1M. A gateway cap has to leave the
 // sentry at least 100k to compact past, or a session would compact on its system prompt alone.
-const CONTEXT_WINDOW_MIN = Object.freeze({ claude: 100000, codex: 100000 + CAP_COMPACTION_MARGIN, grok: 100000 + CAP_COMPACTION_MARGIN });
+const CONTEXT_WINDOW_MIN = Object.freeze({
+  claude: 100000,
+  codex: 100000 + CAP_COMPACTION_MARGIN,
+  grok: 100000 + CAP_COMPACTION_MARGIN,
+  opencodego: 100000 + CAP_COMPACTION_MARGIN,
+});
 
 function parseContextWindowValue(backend, value) {
   if (value === 'full') return 'full';
@@ -176,7 +183,7 @@ function parseCompactAtValue(value) {
 function validateCompactAtSettings(compactAt = {}) {
   for (const [backend, value] of Object.entries(compactAt)) {
     if (!COMPACT_AT_BACKENDS.includes(backend)) {
-      throw new Error(`unsupported compactAt.${backend}: direct compaction maxima are supported for Codex and Grok only; use --claude <tokens|full> for the native window`);
+      throw new Error(`unsupported compactAt.${backend}: direct compaction maxima are supported for Codex, Grok and OpenCode Go only; use --claude <tokens|full> for the native window`);
     }
     if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`invalid compactAt.${backend}: use a positive whole token count`);
   }
@@ -259,7 +266,32 @@ function codexContextWindowModelId(id) {
   return baseId || 'default';
 }
 
+// Window comes from Go's persisted catalog. Decided before the family rules: `claude-opencodego-gpt-*` must not
+// resolve as a Codex `gpt-*` id.
+function opencodegoModelPolicy(id) {
+  const goId = opencodego.goModelIdFromClientId(id);
+  if (!goId) return null;
+  const backendId = gatewayBackendModelId(id);
+  const window = opencodego.contextWindow(opencodego.catalogModel(goId));
+  return {
+    backend: 'opencodego',
+    backendId,
+    goModelId: goId,
+    backendWindow: window,
+    measurement: 'provider-reported, unmeasured',
+    pickerAlias: `${PREFIX}${backendId}[1m]`,
+    advertisedWindow: window,
+    // As for Grok: Claude Code cannot see the real window behind a [1m] alias, so the sentry guards it.
+    sentry: window && window > CODEX_COMPACT_HEADROOM ? 'synthetic-413' : 'none',
+  };
+}
+
+function isOpenCodeGoModelId(id) {
+  return opencodego.goModelIdFromClientId(id) !== null;
+}
+
 function resolveGatewayModelPolicy(id) {
+  if (isOpenCodeGoModelId(id)) return opencodegoModelPolicy(id);
   const backendId = gatewayBackendModelId(id);
   const policyId = backendId.startsWith('gpt-') ? backendId.replace(/-fast$/, '') : backendId;
   const policy = MODEL_WINDOW_POLICY[policyId]
@@ -387,6 +419,23 @@ function sameGatewayDiscoveryModels(left, right) {
   ));
 }
 
+function discoveryBackend(id) {
+  return resolveGatewayModelPolicy(id)?.backend || null;
+}
+
+// Only proxy-sourced Codex lists are persisted (GH-297), so an OpenCode Go user without a Codex proxy would get no
+// rows. Persists the real Grok/OpenCode Go rows plus the last proxy-sourced Codex rows; null means no write.
+function standInDiscoveryModels(models, existingModels) {
+  const isOpenCodeGo = (model) => typeof model?.id === 'string' && discoveryBackend(model.id) === 'opencodego';
+  const existing = Array.isArray(existingModels) ? existingModels : [];
+  const current = Array.isArray(models) ? models : [];
+  if (!current.some(isOpenCodeGo) && !existing.some(isOpenCodeGo)) return null;
+  const persistedBackends = new Set(['grok', 'opencodego']);
+  const keptCodexRows = existing.filter((model) => typeof model?.id === 'string' && !persistedBackends.has(discoveryBackend(model.id)));
+  const realRows = current.filter((model) => typeof model?.id === 'string' && persistedBackends.has(discoveryBackend(model.id)));
+  return [...keptCodexRows, ...realRows];
+}
+
 function syncGatewayDiscoveryCache({ models, baseUrl = DEFAULT_BASE_URL, cachePath = GATEWAY_MODELS_CACHE, now = Date.now } = {}) {
   if (baseUrl === COMPAT_BASE_URL) return { state: 'skipped', reason: 'rc-compatibility', cachePath, modelCount: 0 };
   if (baseUrl !== DEFAULT_BASE_URL) return { state: 'skipped', reason: 'gateway-not-wired', cachePath, modelCount: 0 };
@@ -480,7 +529,7 @@ module.exports = {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, BIN_DIR, CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_CONTEXT_WINDOWS,
   CODEX_FAMILY_RE, CODEX_UNKNOWN_MODEL_WINDOW, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT,
   DEFAULT_BASE_URL, MODEL_WINDOW_POLICY,
-  DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GATEWAY_MODELS_CACHE, GROK_ENDPOINT, GROK_PREFIX,
+  DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GATEWAY_MODELS_CACHE, GROK_ENDPOINT, GROK_PREFIX, OPENCODEGO_PREFIX,
   HOSTS_BLOCK_END, HOSTS_BLOCK_LINE, HOSTS_BLOCK_START, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX,
   LEGACY_ENV_BLOCK, LIST_DISPATCH_MODEL, LOGS, MIN_PROXY_VERSION, PIN_ALIASES, PIN_CACHE_PATH,
   PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PLUGIN_VERSION, PREFIX, PROXY_BIN,
@@ -494,6 +543,6 @@ module.exports = {
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
   codexReadinessMessage,
   gatewayAdvertisedWindow, gatewayBackendModelId, gatewayClientModelId, gatewayDiscoveryModels,
-  readGatewayDiscoveryCache, resolveGatewayModelPolicy, resolveNewestInstalledCliPath, resolveStableCommandPath,
-  sameGatewayDiscoveryModels, syncGatewayDiscoveryCache,
+  isOpenCodeGoModelId, readGatewayDiscoveryCache, resolveGatewayModelPolicy, resolveNewestInstalledCliPath, resolveStableCommandPath,
+  sameGatewayDiscoveryModels, standInDiscoveryModels, syncGatewayDiscoveryCache,
 };

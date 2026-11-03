@@ -36,11 +36,12 @@ test('a 272000 Codex cap retains the 187000 legacy trigger and warns about cross
   assert.equal(effectiveSentryPolicy(runtime.resolveGatewayModelPolicy('claude-opus-5-5[1m]'), Number.NaN, 272000), null);
 });
 
-test('the default caps Codex at 272000 and leaves Claude and Grok full', () => {
+test('the default caps Codex at 272000 and leaves Claude, Grok and OpenCode Go full', () => {
   assert.deepEqual(runtime.readContextWindowSettings({ file: path.join(inProcessHome, 'absent.json'), env: {} }), {
     claude: { value: 'full', source: 'default' },
     codex: { value: 272000, source: 'default' },
     grok: { value: 'full', source: 'default' },
+    opencodego: { value: 'full', source: 'default' },
   });
   assert.equal(runtime.gatewayAdvertisedWindow('claude-gpt-5.6-sol[1m]'), 272000);
   assert.equal(runtime.gatewayClientModelId('gpt-5.6-sol'), 'claude-gpt-5.6-sol[1m]');
@@ -57,6 +58,7 @@ test('a saved value beats CODEX_GATEWAY_CONTEXT_WINDOW, which beats the default,
     claude: { value: 'full', source: 'default' },
     codex: { value: 'full', source: 'saved' },
     grok: { value: 400000, source: 'saved' },
+    opencodego: { value: 'full', source: 'default' },
   });
   fs.writeFileSync(file, 'not json');
   assert.equal(runtime.readContextWindowSettings({ file, env: {} }).codex.source, 'default');
@@ -67,8 +69,10 @@ test('context-window updates validate the backend and the token range', () => {
   assert.deepEqual(contextWindowUpdate('--claude', 'full'), { backend: 'claude', field: 'window', value: 'full' });
   assert.match(contextWindowUpdate('--codex', '184999').error, /from 185000 to 1000000/);
   assert.match(contextWindowUpdate('--claude', '99999').error, /from 100000 to 1000000/);
-  assert.match(contextWindowUpdate('codex', '272000').error, /expects --claude, --codex, or --grok/);
-  assert.match(contextWindowUpdate('--haiku', 'full').error, /expects --claude, --codex, or --grok/);
+  assert.match(contextWindowUpdate('codex', '272000').error, /expects --claude, --codex, --grok, or --opencodego/);
+  assert.match(contextWindowUpdate('--haiku', 'full').error, /expects --claude, --codex, --grok, or --opencodego/);
+  assert.deepEqual(contextWindowUpdate('--opencodego', 'full'), { backend: 'opencodego', field: 'window', value: 'full' });
+  assert.deepEqual(contextWindowUpdate('--opencodego-compact-at', '400000'), { backend: 'opencodego', field: 'compactAt', value: 400000 });
   assert.deepEqual(savedContextWindows({
     claude: { value: 'full', source: 'default' },
     codex: { value: 300000, source: 'saved' },

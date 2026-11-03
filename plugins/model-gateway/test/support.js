@@ -718,6 +718,7 @@ function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
     CODEX_GATEWAY_SOCKET_PATH: testSocketPath(home),
     CODEX_GATEWAY_GROK_HOME: path.join(home, '.grok'),
     CODEX_GATEWAY_GROK_ENDPOINT: 'http://127.0.0.1:9/v1/responses',
+    CODEX_GATEWAY_OPENCODEGO_BASE_URL: 'http://127.0.0.1:9',
     CODEX_GATEWAY_ANTHROPIC_UPSTREAM: 'http://127.0.0.1:9',
     CODEX_GATEWAY_CLAUDE_BIN: path.join(home, 'missing-claude'),
     CODEX_GATEWAY_HOSTS_FILE: path.join(home, 'hosts'),

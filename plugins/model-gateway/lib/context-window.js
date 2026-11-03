@@ -10,18 +10,20 @@ const CLAUDE_FULL_WINDOW = 1000000;
 
 function compactAtUpdate(backend, rawValue) {
   if (!COMPACT_AT_BACKENDS.includes(backend)) {
-    return { error: `unsupported compactAt.${backend}: direct compaction maxima are supported for Codex and Grok only; use --claude <tokens|full> for the native window` };
+    return { error: `unsupported compactAt.${backend}: direct compaction maxima are supported for Codex, Grok and OpenCode Go only; use --claude <tokens|full> for the native window` };
   }
   const value = rawValue === 'cap' ? null : parseCompactAtValue(rawValue);
   if (value === null && rawValue !== 'cap') return { error: `invalid ${backend} compact-at "${rawValue}": use cap or a positive whole token count` };
   return { backend, field: 'compactAt', value };
 }
 
+const USAGE_ERROR = 'context-window expects --claude, --codex, --grok, or --opencodego followed by a token count or full; --codex-compact-at, --grok-compact-at or --opencodego-compact-at accepts tokens or cap';
+
 function contextWindowUpdate(option, rawValue) {
   const flag = String(option).replace(/^--/, '');
-  if (option === flag) return { error: 'context-window expects --claude, --codex, or --grok followed by a token count or full; --codex-compact-at or --grok-compact-at accepts tokens or cap' };
+  if (option === flag) return { error: USAGE_ERROR };
   if (flag.endsWith('-compact-at')) return compactAtUpdate(flag.slice(0, -'-compact-at'.length), rawValue);
-  if (!CONTEXT_WINDOW_BACKENDS.includes(flag)) return { error: 'context-window expects --claude, --codex, or --grok followed by a token count or full; --codex-compact-at or --grok-compact-at accepts tokens or cap' };
+  if (!CONTEXT_WINDOW_BACKENDS.includes(flag)) return { error: USAGE_ERROR };
   const value = parseContextWindowValue(flag, rawValue);
   if (value === null) {
     return { error: `invalid ${flag} context window "${rawValue}": use full or a whole number of tokens from ${CONTEXT_WINDOW_MIN[flag]} to ${CONTEXT_WINDOW_MAX}` };
@@ -31,10 +33,10 @@ function contextWindowUpdate(option, rawValue) {
 
 function savedContextWindows(windows) {
   const saved = Object.fromEntries(CONTEXT_WINDOW_BACKENDS
-    .filter((backend) => windows[backend].source === 'saved')
+    .filter((backend) => windows[backend]?.source === 'saved')
     .map((backend) => [backend, windows[backend].value]));
   const compactAt = Object.fromEntries(COMPACT_AT_BACKENDS
-    .filter((backend) => windows[backend].compactAt !== undefined)
+    .filter((backend) => windows[backend] && windows[backend].compactAt !== undefined)
     .map((backend) => [backend, windows[backend].compactAt]));
   if (Object.keys(compactAt).length) saved.compactAt = compactAt;
   return saved;
@@ -53,6 +55,8 @@ function saveContextWindowUpdate(saved, update) {
 
 function gatewayCompactionNote(cap, compactAt, policy, env) {
   if (compactAt === null) return cap ? `compacts past ${gatewayCompactTrigger(cap, null)}` : null;
+  // OpenCode Go has no static policy row: each catalog model brings its own window.
+  if (!policy) return `requested compact-at ${compactAt}; the cap and each model's provider-reported window minus 40000 still limit the effective maximum`;
   const sentry = effectiveSentryPolicy(policy, Number(env.CODEX_GATEWAY_COMPACT_TRIGGER), cap, compactAt);
   return `requested compact-at ${compactAt}; backend window ${sentry.backendWindow}; effective maximum ${sentry.compactTrigger} (${sentry.source}); compacts past ${sentry.compactTrigger}`;
 }
@@ -86,11 +90,16 @@ function claudeWindowLine(setting, autoCompact) {
   return `claude: ${claudeWindowDescription(setting.value)} [${setting.source}]${capNote}; native window ${effective}; exact compaction trigger unverified (native engine headroom applies)`;
 }
 
+function optionalWindowLines(backend, setting) {
+  return setting ? [gatewayWindowLine(backend, setting)] : [];
+}
+
 function contextWindowReport(windows, autoCompact) {
   return [
     claudeWindowLine(windows.claude, autoCompact),
     gatewayWindowLine('codex', windows.codex),
     gatewayWindowLine('grok', windows.grok),
+    ...optionalWindowLines('opencodego', windows.opencodego),
   ];
 }
 

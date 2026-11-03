@@ -1,6 +1,6 @@
 # Model Gateway
 
-Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Claude Code v2.1.129+ can show those gateway models in its `/model` picker. It keeps normal Claude models on Anthropic and routes only the selected gateway models through your subscription.
+Model Gateway adds ChatGPT/Codex, Grok and OpenCode Go subscription models to Claude Code. Claude Code v2.1.129+ can show those gateway models in its `/model` picker. It keeps normal Claude models on Anthropic and routes only the selected gateway models through your subscription.
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/model-gateway/) · [Toolshed marketplace](../../README.md)
 
@@ -16,7 +16,7 @@ Maintenance `setup --preserve-wiring` preserves intentional stop even when acqui
 
 ## Install
 
-Model Gateway uses your supported ChatGPT/Codex or Grok subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.
+Model Gateway uses your supported ChatGPT/Codex, Grok or OpenCode Go subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.
 
 Run these in Claude Code:
 
@@ -52,12 +52,14 @@ with an API-key credential. Model Gateway writes its discovery cache for OAuth s
 new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
 The cache is written only from a model list the proxy actually answered. While the proxy is unreachable
 the shim serves a short built-in list, keeps the previous cache, and `status` reports
-`fallback catalog (proxy unreachable)`.
+`fallback catalog (proxy unreachable)`. When OpenCode Go rows exist, the gateway
+still writes them (and the Grok rows) during that time. The Codex rows in the cache stay as the proxy
+last answered, so an OpenCode Go-only setup without a Codex proxy still reaches `/model`.
 
 - `lib/runtime.js`'s `MODEL_WINDOW_POLICY` is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra were measured at 920,012 accepted and 935,012 refused on 2026-09-05, and GPT-6.1 Sol measured the same on 2026-09-30, so the gateway advertises 920k. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets. Other Codex proxy rows use the table's explicit unmeasured 920k default until measured.
-- A gateway row above Claude Code's 200k unknown-model window gets a `[1m]` picker alias. That alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead. The alias is removed before forwarding to Codex or Grok, and it does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- A gateway row above Claude Code's 200k unknown-model window gets a `[1m]` picker alias. That alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead. The alias is removed before forwarding to Codex, Grok or OpenCode Go, and it does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - Claude models keep using Anthropic normally.
-- `context-window` saves separate backend windows: Claude `full` (1M), Codex `272000`, Grok `full`. Without an explicit maximum, a gateway cap keeps its legacy trigger at cap minus 85000 (Codex 187000). `--codex-compact-at <tokens|cap>` and `--grok-compact-at <tokens|cap>` save a positive whole maximum before compaction; `cap` removes it. Explicit maxima skip that hidden reserve and are limited by the cap and actual backend window minus 40000. Saved maxima survive cap-only changes and override the legacy `CODEX_GATEWAY_COMPACT_TRIGGER`, whose ignored value is reported unchanged.
+- `context-window` saves separate backend windows: Claude `full` (1M), Codex `272000`, Grok `full`, OpenCode Go `full`. Without an explicit maximum, a gateway cap keeps its legacy trigger at cap minus 85000 (Codex 187000). `--codex-compact-at <tokens|cap>`, `--grok-compact-at <tokens|cap>` and `--opencodego-compact-at <tokens|cap>` save a positive whole maximum before compaction; `cap` removes it. Explicit maxima skip that hidden reserve and are limited by the cap and actual backend window minus 40000. Saved maxima survive cap-only changes and override the legacy `CODEX_GATEWAY_COMPACT_TRIGGER`, whose ignored value is reported unchanged.
 - `context-window --codex-compact-at 242000` leaves the 272000 cap unchanged. OpenAI bills input above 272k at 2x; the crossing turn and compaction request can still exceed 272k and pay double. Existing installations keep their defaults until explicitly configured. Restart the gateway (`stop`, then `ensure`) after adoption.
 - The context sentry keeps separate session, agent, and model state. Compaction requests bypass its synthetic refusal. After a refusal, retries stay admitted until an ordinary response actually completes above the trigger, then the next ordinary request gets another 413 with observed usage. Stream chunks, failed/incomplete responses, and high-usage compaction completions do not rearm it; lower usage still resets it through the existing headroom watermark. This repairs the persistent latch after failed compaction, without establishing why that compaction failed. Codex JSON rearms only for ordinary `end_turn`, `stop_sequence`, or `tool_use` responses; a tool handoff completes that assistant response. Null, missing, unknown, truncated, paused, and refused stop reasons leave the current attempt latched. This stop-reason rule applies only to sentry rearming; transport success, readiness recovery, and route telemetry keep their existing semantics.
 - Claude keeps the supported `--claude <tokens|full>` native window and existing project-wired `autoCompactWindow` sync. Native engine headroom applies; the exact trigger and same-model role split are unverified. Claude compact-at flags and saved fields are refused without writing. One backend policy applies to main and subagents. See the setup guide for effective-limit reporting and native-session reloads.
@@ -70,6 +72,23 @@ On Windows, startup uses WMI to launch the supervisor outside the calling termin
 
 SessionStart stops waiting after 12 seconds, well inside its 30-second hook budget. The supervisor keeps starting in the background, and Claude tells you to retry a Codex model in a few seconds if it is not ready yet.
 
+## OpenCode Go
+
+[OpenCode Go](https://opencode.ai) is a monthly subscription that serves DeepSeek, GLM, Kimi, Qwen, MiniMax and other models. Model Gateway passes requests through to Go's Anthropic Messages endpoint. Go translates them server-side, so the gateway has no translation layer of its own.
+
+The gateway must be installed and the project wired first (see Install). A ChatGPT sign-in is not required. Without one, `setup` stops before wiring, so wire the project with `env --write-project`.
+
+1. Create a key in the OpenCode Console (it starts with `oc_sk_`), then run this in your own terminal: `node ~/.claude/model-gateway/model-gateway.js login --opencodego`. The command reads the key from stdin and never from an argument. It saves the key to `~/.claude/model-gateway/opencode-go-key` with mode 0600. `CODEX_GATEWAY_OPENCODEGO_KEY` overrides the file for processes that inherit it.
+2. In Console › Settings › Privacy, set Regions to Global. DeepSeek and other Global-only models need it.
+3. Fully restart Claude Code. Every catalog model that supports tools and text input then appears as `<name> (OpenCode Go)`, with the id `claude-opencodego-<id>`. Without a key, no rows appear and no catalog is fetched.
+
+Notes:
+
+- Keep the Console's "Extra Usage" off unless you want pay-as-you-go charges once the subscription allowance runs out.
+- The observability cost column (Claude Code `/cost`) is meaningless for this backend. Usage records carry backend `opencodego` and Go's own token counts.
+- Turning on "train on request data" (some contributor and free models need it) makes your code training data.
+- `doctor` has an `opencode go` section: key presence (never the key), catalog age, advertised rows, and the last error.
+
 ## Local gateway records
 
 The shim writes request-route metadata to `~/.claude/model-gateway/logs/request-routes.jsonl` by default. Each JSONL record contains the time, backend, model, request path, and, when available, route, effort, session, agent, parent-agent, dispatch-marker length, and session-source fields. It does not write request bodies, prompts, messages, tools, authentication, or arbitrary headers. Set `CODEX_GATEWAY_REQUEST_LOG=0` before the shim starts, then restart the shim through the normal setup or ensure path, to disable this route log. The setting is read by the shim process at startup, not by `/reload-plugins` in an already-running process. The path can be changed with `CODEX_GATEWAY_REQUEST_LOG_PATH`.
@@ -80,7 +99,7 @@ For each session, usage observability also keeps a small high-water file under `
 
 When the gateway disappears or restarts, ask Claude to run `doctor`. It names the lifecycle evidence at `~/.claude/model-gateway/logs/lifecycle.jsonl` and distinguishes an observed supervisor, worker, or proxy exit from no exit evidence. The bounded records identify PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown.
 
-Doctor also prints a model-window table for Codex, Grok, and native Claude pins: backend and picker ids,
+Doctor also prints a model-window table for Codex, Grok, OpenCode Go, and native Claude pins: backend and picker ids,
 backend and advertised windows, Claude Code's client window and unverified native compaction point, sentry mode and effective trigger,
 and the measurement date. It compares the live shim ids with the installed policy when those ids are
 available, but a `PASS` does not prove that every supported model is present. In particular, an older
@@ -90,7 +109,8 @@ requires claude-code-proxy 0.1.36 or newer; 0.1.35 does not include its backend 
 fetches the latest GitHub release. Do not use `models.json` to work around a missing backend allowlist.
 A `FAIL` naming missing or extra ids means the running shim is stale even if its version matches. Have
 Claude restart it through the normal `ensure` or `setup` path, then restart Claude Code sessions so the
-picker re-discovers the rows.
+picker re-discovers the rows. OpenCode Go ids come from Go's catalog at runtime, so the check skips them
+and they never cause this `FAIL`.
 
 Running this plugin's test suite uses its own gateway home and never touches the installed gateway. If Codex sessions dropped while you tested in an earlier version, that was a supervisor cleanup bug fixed in this version. Cleanup kills a recorded PID only when the record's command or start time matches the live process. Windows hides the command line of a process running at a higher privilege level than the session asking, so a record whose start time still matches is accepted on that alone, and a record is discarded only when a command line it *can* read contradicts it. A reused PID is never stopped. When the command line is unavailable, `doctor` says so and names elevation as the likely cause, because `stop` and `setup` then have to run from a session with the same privileges as the one that started the gateway. Proxy recovery treats the shared proxy binary differently: it stops a listener only when the live process tree proves that proxy descends from the recovering supervisor. A matching shared binary alone never proves ownership. Startup, recovery, restart, and drain bound each ownership probe with `CODEX_GATEWAY_PROBE_TIMEOUT_MS` (2 seconds by default, 8 seconds on Windows, where the underlying Win32_Process lookup itself typically takes 1.8-2.4 seconds). When ownership cannot be confirmed, they leave that listener alone and startup records `owner-unknown`; a confirmed foreign owner is refused too. Recovery keeps the listener for its next tick. A failed `/v1/models` check gets one fresh-connection confirmation before recovery can stop an owned listener, so a healthy confirmation resets recovery without a restart. The supervisor owns those probe children too: it kills their tree and waits for them to close before shutdown, so they cannot hold a fixture home open.
 

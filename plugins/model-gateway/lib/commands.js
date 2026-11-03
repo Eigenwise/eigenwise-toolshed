@@ -42,9 +42,10 @@ const { localRequestAllowed, authenticatedControlRequest, controlRequestHeaders,
 const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
+const opencodego = require('./opencodego-backend.js');
 const {
   canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, resolveStableCommandPath,
-  gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
+  gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, isOpenCodeGoModelId, readGatewayDiscoveryCache,
   resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
   syncGatewayDiscoveryCache, CONTEXT_WINDOW_PATH, contextWindowCap, contextWindowCompactAt, readContextWindowSettings,
   writeContextWindowSettings,
@@ -139,6 +140,9 @@ const USAGE = `usage: model-gateway.js <command>
 
   setup            download the claude-code-proxy binary (v-latest) into ${BIN_DIR}
   login [--device] run the ChatGPT OAuth flow (--device for headless device-code)
+  login --opencodego
+                   save an OpenCode Go key (oc_sk_...) read from stdin, never argv, to ${opencodego.keyPath()}
+                   (mode 0600; ${opencodego.KEY_ENV} overrides); fully restart Claude Code to see claude-opencodego-* rows
   start | stop     start/stop the proxy + shim (detached, logs in ${LOGS})
   ensure [--quiet] maintain installed wiring and start unless intentionally stopped
   recover          restore readiness without settings, pin or cache maintenance
@@ -150,11 +154,13 @@ const USAGE = `usage: model-gateway.js <command>
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
   context-window [--claude <tokens|full>] [--codex <tokens|full>] [--grok <tokens|full>]
+                 [--opencodego <tokens|full>]
                    show or persist the context window per backend (${CONTEXT_WINDOW_PATH}); the
                    orchestrator and every executor share it. Defaults: claude full, codex 272000,
-                   grok full. Without compact-at, a gateway cap compacts 85000 below the cap.
-                   --codex-compact-at <tokens|cap> and --grok-compact-at <tokens|cap> set a direct
-                   maximum before compaction (positive whole tokens); cap removes the override.
+                   grok full, opencodego full. Without compact-at, a gateway cap compacts 85000 below
+                   the cap. --codex-compact-at, --grok-compact-at and --opencodego-compact-at
+                   <tokens|cap> set a direct maximum before compaction (positive whole tokens); cap
+                   removes the override.
                    The cap and backend window minus 40000 still limit the effective maximum.
                    A saved compact-at ignores CODEX_GATEWAY_COMPACT_TRIGGER, reported unchanged.
                    Example: --codex-compact-at 242000 leaves the 272000 cap unchanged. OpenAI bills
@@ -168,7 +174,8 @@ const USAGE = `usage: model-gateway.js <command>
                    print the Claude Code env block, or merge/remove wiring
                    (--write-project writes .claude/settings.local.json; --write-user
                    is an opt-in shared fallback in ~/.claude/settings.json)
-  doctor           full health check
+  doctor           full health check (includes an OpenCode Go section: key presence, catalog age,
+                   advertised rows, last error)
   remote-control <enable|disable|doctor> [--confirm]
                    manage the opt-in hosts-file compatibility mode; enable refuses an effective
                    HTTPS api.anthropic.com process URL before hosts changes
@@ -997,7 +1004,7 @@ function contextWindowCommand() {
   writeContextWindowSettings(saved);
   log(`saved context windows to ${CONTEXT_WINDOW_PATH}`);
   reportContextWindows();
-  log('The running gateway serves new Codex and Grok windows after it restarts (stop, then ensure). Restart open Claude Code sessions to pick up a Claude change.');
+  log('The running gateway serves new Codex, Grok and OpenCode Go windows after it restarts (stop, then ensure). Restart open Claude Code sessions to pick up a Claude change.');
 }
 
 // -------------------------------------------------------------- env wiring
@@ -1259,7 +1266,12 @@ function windowValue(value) {
 function evidenceDate(measurement) {
   const date = String(measurement || '').match(/\b\d{4}-\d{2}-\d{2}\b/);
   if (date) return date[0];
-  return String(measurement || '').startsWith('unmeasured') ? 'unmeasured' : 'upstream-managed';
+  return undatedEvidence(String(measurement || ''));
+}
+
+function undatedEvidence(text) {
+  if (text.startsWith('provider-reported')) return 'provider-reported';
+  return text.startsWith('unmeasured') ? 'unmeasured' : 'upstream-managed';
 }
 
 function nativeModelPolicyIds() {
@@ -1293,7 +1305,7 @@ function policyGatewayModelIds(liveIds = []) {
   if (liveIds.length) {
     return [...new Set(liveIds.filter((id) => {
       const policy = resolveGatewayModelPolicy(id);
-      return policy?.backend === 'codex' || policy?.backend === 'grok';
+      return ['codex', 'grok', 'opencodego'].includes(policy?.backend);
     }))];
   }
   return Object.values(MODEL_WINDOW_POLICY)
@@ -1313,9 +1325,12 @@ function expectedShimModelIds(liveIds = []) {
     .map((row) => row.pickerId);
 }
 
-function modelIdDifference(liveIds) {
+// OpenCode Go rows come from Go's runtime catalog, not the static policy, so they are left out of the stale-shim
+// comparison on both sides (doctor reports them in their own section).
+function modelIdDifference(allLiveIds) {
+  const liveIds = allLiveIds.filter((id) => !isOpenCodeGoModelId(id));
   const live = new Set(liveIds);
-  const expected = new Set(expectedShimModelIds(liveIds));
+  const expected = new Set(expectedShimModelIds(liveIds).filter((id) => !isOpenCodeGoModelId(id)));
   return {
     missing: [...expected].filter((id) => !live.has(id)),
     extra: [...live].filter((id) => !expected.has(id)),
@@ -1373,6 +1388,124 @@ function reportRegisteredProjectPinDisagreements() {
   return result.disagreements.length > 0;
 }
 
+function describeAge(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 120) return `${seconds}s`;
+  if (seconds < 7200) return `${Math.floor(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+function describeOpenCodeGoError(label, error) {
+  if (!error) return null;
+  const status = error.status ? `HTTP ${error.status} ` : '';
+  const model = error.model ? ` (${error.model})` : '';
+  return `opencode go ${label}: ${status}${error.kind ? `[${error.kind}] ` : ''}at ${error.at}${model}: ${error.message}`;
+}
+
+function looseKeyFileMode(file) {
+  let mode = null;
+  try { mode = fs.statSync(file).mode & 0o777; } catch {}
+  return !WIN && mode !== null && (mode & 0o077) !== 0 ? mode : null;
+}
+
+function describeOpenCodeGoKey(credential) {
+  if (!credential) return `opencode go key: not configured (optional). Run \`node "${resolveStableCommandPath()}" login --opencodego\` to add OpenCode Go models.`;
+  if (credential.source !== 'file') return `opencode go key: present (${credential.source} environment override)`;
+  const loose = looseKeyFileMode(credential.file);
+  return `opencode go key: present (${credential.file}${loose === null ? '' : `, mode ${loose.toString(8)}: run chmod 600 on it`})`;
+}
+
+function describeOpenCodeGoCatalog(cache, credential) {
+  if (!opencodego.hasCatalog(cache)) {
+    return `opencode go catalog: none yet (${opencodego.catalogPath()})${credential ? '; the running gateway fetches it shortly after it sees a key' : ''}`;
+  }
+  return `opencode go catalog: ${opencodego.catalogPath()}; fetched ${new Date(cache.fetchedAt).toISOString()} (${describeAge(Date.now() - cache.fetchedAt)} old, refresh every ${describeAge(opencodego.CATALOG_REFRESH_MS)}) from ${cache.source || 'unknown'}; ${cache.models.length} catalog models`;
+}
+
+async function liveOpenCodeGoRowCount() {
+  try { return (await fetchShimModels()).filter((model) => isOpenCodeGoModelId(model.id)).length; } catch { return null; }
+}
+
+function describeOpenCodeGoModels(advertisedCount, live, hidden) {
+  const liveText = live === null ? '' : `; live shim lists ${live}`;
+  const hiddenText = hidden.length ? `; hidden until the next catalog refresh: ${hidden.join(', ')}` : '';
+  return `opencode go models: ${advertisedCount} advertised from the catalog${liveText}${hiddenText}`;
+}
+
+function openCodeGoErrorLines(cache) {
+  return [
+    describeOpenCodeGoError('last catalog error', cache?.lastCatalogError),
+    describeOpenCodeGoError('last request error', cache?.lastRequestError),
+  ].filter(Boolean);
+}
+
+// Never prints the key, only where it came from. OpenCode Go is optional, so nothing here fails doctor.
+async function reportOpenCodeGo() {
+  const credential = opencodego.readKey();
+  log(describeOpenCodeGoKey(credential));
+  if (credential && !opencodego.looksLikeKey(credential.key)) log('opencode go key: WARNING: it does not start with oc_sk_; OpenCode Go will likely reject it');
+  const cache = opencodego.readCatalogCache();
+  log(describeOpenCodeGoCatalog(cache, credential));
+  const advertised = opencodego.advertisedModels({ key: credential, cache });
+  const hidden = opencodego.hiddenIds(cache);
+  log(describeOpenCodeGoModels(advertised.length, await liveOpenCodeGoRowCount(), hidden));
+  for (const line of openCodeGoErrorLines(cache)) log(line);
+}
+
+function isLineEnd(character) {
+  return character === '\r' || character === '\n';
+}
+
+function editedSecret(value, character) {
+  return character === '\u007f' || character === '\b' ? value.slice(0, -1) : value + character;
+}
+
+function readSecretFromStdin(input) {
+  if (!input.isTTY || typeof input.setRawMode !== 'function') {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      input.on('data', (chunk) => chunks.push(chunk));
+      input.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      input.on('error', reject);
+    });
+  }
+  // Interactive: read one line without echoing it.
+  process.stderr.write('Paste your OpenCode Go key (input hidden), then press Enter: ');
+  return new Promise((resolve) => {
+    let value = '';
+    input.setRawMode(true);
+    input.resume();
+    input.setEncoding('utf8');
+    const done = (result) => {
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener('data', onData);
+      process.stderr.write('\n');
+      resolve(result);
+    };
+    const onData = (text) => {
+      for (const character of text) {
+        if (isLineEnd(character)) return done(value);
+        if (character === '\u0003') { done(''); process.exit(130); }
+        value = editedSecret(value, character);
+      }
+    };
+    input.on('data', onData);
+  });
+}
+
+async function opencodegoLogin() {
+  const positional = args.filter((argument) => argument !== '--opencodego');
+  if (positional.length) die('login --opencodego reads the key from stdin only; never pass it as an argument (it would land in shell history and process lists). Nothing was saved.', 2);
+  const key = (await readSecretFromStdin(process.stdin)).trim();
+  if (!key) die('no OpenCode Go key on stdin; nothing was saved', 2);
+  let file;
+  try { file = opencodego.writeKey(key); } catch (error) { die(error.message, 2); }
+  log(`saved the OpenCode Go key to ${file} (mode 0600)`);
+  if (process.env[opencodego.KEY_ENV]) log(`note: ${opencodego.KEY_ENV} is set in this shell and overrides the file for processes that inherit it`);
+  log('The running gateway picks the key up within a minute and fetches the OpenCode Go catalog. Then fully restart Claude Code (quit and relaunch) so /model lists the claude-opencodego-* rows.');
+}
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   reportReadinessGate();
   recordedGatewayPids();
@@ -1389,6 +1522,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   } catch (error) {
     log(`grok auth: ${error.message}`);
   }
+  await reportOpenCodeGo();
   const status = await statusReport({ readiness });
   const servingVersion = readiness.checks.servingVersion;
   log(`serving shim version: ${servingVersion || 'unavailable'}`);
@@ -2668,15 +2802,17 @@ function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
   return 'signed in; run setup once more to finish wiring Claude Code';
 }
 
+async function codexLogin() {
+  if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
+  const mode = flag('--device') ? 'device' : 'login';
+  const result = spawnSync(PROXY_BIN, ['codex', 'auth', mode], { stdio: 'inherit', windowsHide: true });
+  if (result.status === 0) log(loginSuccessMessage({ health: await fetchShimHealth() }));
+  process.exitCode = result.status == null ? 1 : result.status;
+}
+
 const commands = {
   setup: () => withLifecycleLock(() => setup({ preserveWiring: flag('--preserve-wiring') })),
-  login: async () => {
-    if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
-    const mode = flag('--device') ? 'device' : 'login';
-    const result = spawnSync(PROXY_BIN, ['codex', 'auth', mode], { stdio: 'inherit', windowsHide: true });
-    if (result.status === 0) log(loginSuccessMessage({ health: await fetchShimHealth() }));
-    process.exitCode = result.status == null ? 1 : result.status;
-  },
+  login: () => (flag('--opencodego') ? opencodegoLogin() : codexLogin()),
   start: () => withLifecycleLock(async () => {
     const result = await startAll({ lifecycleOperation: 'start', resumeIntent: true });
     if (!result.ok) die(result.reason);
@@ -2778,6 +2914,7 @@ commands.ensure = () => automaticLifecycle(ensureCommand);
 
 module.exports = {
   commands,
+  readSecretFromStdin,
   recoverGateway,
   migrateReadinessGates,
   startupFailureFor,

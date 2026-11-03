@@ -1,0 +1,853 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "deepseek-v4.1-flash",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "DeepSeek V4.1 Flash",
+   "canonical_id": "deepseek/deepseek-v4.1-flash",
+   "type": "chat",
+   "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+   "family": "deepseek-flash",
+   "open_weights": true,
+   "knowledge": "2025-05",
+   "release_date": "2026-09-10",
+   "last_updated": "2026-09-10",
+   "modalities": {
+    "input": [
+     "text",
+     "image/jpeg",
+     "image/png",
+     "image/gif",
+     "image/webp"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "effort": [
+      "low",
+      "high",
+      "max"
+     ]
+    },
+    "structured_output": true,
+    "temperature": true,
+    "top_p": true,
+    "top_k": true,
+    "system_updates": true,
+    "effort_updates": false
+   },
+   "limit": {
+    "context": 1000000,
+    "output": 384000
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0.15,
+      "cache": {
+       "read": 0.003
+      }
+     },
+     "output": {
+      "price": 0.6
+     }
+    },
+    "multipliers": [
+     {
+      "when": {
+       "utc_days": {
+        "in": [
+         "mon",
+         "tue",
+         "wed",
+         "thu",
+         "fri"
+        ]
+       },
+       "any": [
+        {
+         "all": [
+          {
+           "utc_hours": {
+            "gte": "01:00"
+           }
+          },
+          {
+           "utc_hours": {
+            "lt": "04:00"
+           }
+          }
+         ]
+        },
+        {
+         "all": [
+          {
+           "utc_hours": {
+            "gte": "06:00"
+           }
+          },
+          {
+           "utc_hours": {
+            "lt": "10:00"
+           }
+          }
+         ]
+        }
+       ]
+      },
+      "factor": 2
+     }
+    ]
+   },
+   "api": {
+    "chat-completions": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai-compatible",
+      "opencodeai": "@opencode/ai/providers/openai-compatible"
+     },
+     "compatibility": {
+      "reasoning_field": "reasoning_content"
+     },
+     "capabilities": {
+      "tools": {
+       "choice": [
+        "auto",
+        "none",
+        "required",
+        "tool"
+       ],
+       "updates": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "deepseek-v4-pro",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "DeepSeek V4 Pro (New)",
+   "canonical_id": "deepseek/deepseek-v4-pro",
+   "type": "chat",
+   "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
+   "family": "deepseek-thinking",
+   "open_weights": true,
+   "knowledge": "2025-05",
+   "release_date": "2026-04-24",
+   "last_updated": "2026-04-24",
+   "modalities": {
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "effort": [
+      "high",
+      "max"
+     ]
+    },
+    "structured_output": true,
+    "temperature": true,
+    "top_p": true,
+    "top_k": true,
+    "system_updates": false,
+    "effort_updates": false
+   },
+   "limit": {
+    "context": 1000000,
+    "output": 384000
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0.66,
+      "cache": {
+       "read": 0.022
+      }
+     },
+     "output": {
+      "price": 1.98
+     }
+    },
+    "multipliers": [
+     {
+      "when": {
+       "utc_days": {
+        "in": [
+         "mon",
+         "tue",
+         "wed",
+         "thu",
+         "fri"
+        ]
+       },
+       "any": [
+        {
+         "all": [
+          {
+           "utc_hours": {
+            "gte": "01:00"
+           }
+          },
+          {
+           "utc_hours": {
+            "lt": "04:00"
+           }
+          }
+         ]
+        },
+        {
+         "all": [
+          {
+           "utc_hours": {
+            "gte": "06:00"
+           }
+          },
+          {
+           "utc_hours": {
+            "lt": "10:00"
+           }
+          }
+         ]
+        }
+       ]
+      },
+      "factor": 2
+     }
+    ]
+   },
+   "api": {
+    "chat-completions": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai-compatible",
+      "opencodeai": "@opencode/ai/providers/openai-compatible"
+     },
+     "compatibility": {
+      "reasoning_field": "reasoning_content"
+     },
+     "capabilities": {
+      "tools": {
+       "choice": [
+        "auto",
+        "none",
+        "required",
+        "tool"
+       ],
+       "updates": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "grok-4.7",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "Grok 4.7",
+   "canonical_id": "xai/grok-4.7",
+   "type": "chat",
+   "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+   "family": "grok",
+   "open_weights": false,
+   "knowledge": "2026-05",
+   "release_date": "2026-09-21",
+   "last_updated": "2026-09-21",
+   "modalities": {
+    "input": [
+     "text",
+     "image/jpeg",
+     "image/png",
+     "application/pdf"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "effort": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ]
+    },
+    "structured_output": true,
+    "temperature": true,
+    "top_p": true,
+    "top_k": true,
+    "system_updates": true,
+    "effort_updates": false
+   },
+   "limit": {
+    "context": 500000,
+    "output": 500000
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 2,
+      "cache": {
+       "read": 0.5
+      },
+      "overrides": [
+       {
+        "when": {
+         "context": {
+          "gt": 200000
+         }
+        },
+        "price": 4,
+        "cache": {
+         "read": 1
+        }
+       }
+      ]
+     },
+     "output": {
+      "price": 6,
+      "overrides": [
+       {
+        "when": {
+         "context": {
+          "gt": 200000
+         }
+        },
+        "price": 12
+       }
+      ]
+     }
+    }
+   },
+   "api": {
+    "responses": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai",
+      "opencodeai": "@opencode/ai/providers/openai/responses"
+     },
+     "capabilities": {
+      "tools": {
+       "choice": [
+        "auto",
+        "none",
+        "required",
+        "tool"
+       ],
+       "updates": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "gpt-6-luna",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "GPT-6 Luna",
+   "canonical_id": "openai/gpt-6-luna",
+   "type": "chat",
+   "description": "OpenAI's most efficient model for focused, high-volume tasks",
+   "family": "gpt-luna",
+   "open_weights": false,
+   "knowledge": "2026-05-18",
+   "release_date": "2026-09-22",
+   "last_updated": "2026-09-22",
+   "modalities": {
+    "input": [
+     "text",
+     "image/jpeg",
+     "image/png",
+     "image/gif",
+     "image/webp",
+     "application/pdf"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "effort": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ]
+    },
+    "structured_output": true,
+    "temperature": false,
+    "top_p": false,
+    "top_k": false,
+    "system_updates": true,
+    "effort_updates": true
+   },
+   "limit": {
+    "context": 1050000,
+    "input": 922000,
+    "output": 128000
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0.1,
+      "cache": {
+       "read": 0.01,
+       "write": 0.125
+      },
+      "overrides": [
+       {
+        "when": {
+         "context": {
+          "gt": 272000
+         }
+        },
+        "price": 0.2,
+        "cache": {
+         "read": 0.02,
+         "write": 0.25
+        }
+       }
+      ]
+     },
+     "output": {
+      "price": 0.5,
+      "overrides": [
+       {
+        "when": {
+         "context": {
+          "gt": 272000
+         }
+        },
+        "price": 0.75
+       }
+      ]
+     }
+    }
+   },
+   "api": {
+    "responses": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai",
+      "opencodeai": "@opencode/ai/providers/openai/responses"
+     },
+     "capabilities": {
+      "tools": {
+       "strict": true,
+       "choice": [
+        "auto",
+        "none",
+        "required",
+        "tool"
+       ],
+       "search": true,
+       "freeform": [
+        "text",
+        "lark",
+        "regex"
+       ],
+       "updates": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "claude-haiku-5-5",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "Claude Haiku 5.5",
+   "canonical_id": "anthropic/claude-haiku-5-5",
+   "type": "chat",
+   "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+   "family": "claude-haiku",
+   "open_weights": false,
+   "knowledge": "2026-06",
+   "release_date": "2026-10-07",
+   "last_updated": "2026-10-07",
+   "modalities": {
+    "input": [
+     "text",
+     "image/jpeg",
+     "image/png",
+     "image/gif",
+     "image/webp",
+     "application/pdf"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "toggle": true,
+     "effort": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ]
+    },
+    "structured_output": true,
+    "temperature": false,
+    "top_p": false,
+    "top_k": false,
+    "system_updates": true,
+    "effort_updates": true
+   },
+   "limit": {
+    "context": 1000000,
+    "output": 128000
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0.1,
+      "cache": {
+       "read": 0.01,
+       "write": 0.125
+      },
+      "overrides": [
+       {
+        "when": {
+         "context": {
+          "gt": 100000
+         }
+        },
+        "price": 0.5,
+        "cache": {
+         "read": 0.05,
+         "write": 0.625
+        }
+       }
+      ]
+     },
+     "output": {
+      "price": 0.5,
+      "overrides": [
+       {
+        "when": {
+         "context": {
+          "gt": 100000
+         }
+        },
+        "price": 2.5
+       }
+      ]
+     }
+    }
+   },
+   "api": {
+    "messages": {
+     "base_url": "https://opencode.ai/inference/go/anthropic/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/anthropic",
+      "opencodeai": "@opencode/ai/providers/anthropic"
+     },
+     "capabilities": {
+      "tools": {
+       "strict": true,
+       "choice": [
+        "auto",
+        "none",
+        "required",
+        "tool"
+       ],
+       "search": true,
+       "updates": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "hy3",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "Hy3",
+   "canonical_id": "tencent/hy3",
+   "type": "chat",
+   "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+   "family": "Hy",
+   "open_weights": true,
+   "release_date": "2026-07-06",
+   "last_updated": "2026-07-06",
+   "modalities": {
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "effort": [
+      "none",
+      "low",
+      "high"
+     ]
+    },
+    "temperature": true,
+    "top_p": true,
+    "top_k": true,
+    "system_updates": false,
+    "effort_updates": false
+   },
+   "limit": {
+    "context": 256000,
+    "input": 192000,
+    "output": 128000
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0.14,
+      "cache": {
+       "read": 0.035
+      }
+     },
+     "output": {
+      "price": 0.58
+     }
+    }
+   },
+   "api": {
+    "chat-completions": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai-compatible",
+      "opencodeai": "@opencode/ai/providers/openai-compatible"
+     },
+     "capabilities": {
+      "tools": {
+       "updates": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "kimi-k2.7-code",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "Kimi K2.7 Code",
+   "canonical_id": "moonshotai/kimi-k2.7-code",
+   "type": "chat",
+   "description": "Coding-focused Kimi model, stronger on long-horizon repo work with less overthinking",
+   "family": "kimi-k2",
+   "open_weights": true,
+   "knowledge": "2025-01",
+   "release_date": "2026-06-12",
+   "last_updated": "2026-06-12",
+   "modalities": {
+    "input": [
+     "text",
+     "image/jpeg",
+     "image/png",
+     "image/gif",
+     "image/webp",
+     "image/bmp",
+     "image/heic",
+     "image/heif",
+     "video/mp4",
+     "video/mpeg",
+     "video/mov",
+     "video/avi",
+     "video/x-flv",
+     "video/mpg",
+     "video/webm",
+     "video/wmv",
+     "video/3gpp"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true
+    },
+    "structured_output": true,
+    "temperature": false,
+    "top_p": false,
+    "top_k": false,
+    "system_updates": true,
+    "effort_updates": false
+   },
+   "limit": {
+    "context": 262144,
+    "output": 262144
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0.95,
+      "cache": {
+       "read": 0.19
+      }
+     },
+     "output": {
+      "price": 4
+     }
+    }
+   },
+   "api": {
+    "chat-completions": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai-compatible",
+      "opencodeai": "@opencode/ai/providers/openai-compatible"
+     },
+     "compatibility": {
+      "reasoning_field": "reasoning_content"
+     },
+     "capabilities": {
+      "tools": {
+       "strict": true,
+       "choice": [
+        "auto",
+        "none"
+       ],
+       "updates": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "beam-free",
+   "object": "model",
+   "created": 1793712315,
+   "owned_by": "opencode",
+   "name": "Beam Free",
+   "canonical_id": "reflection/beam-1.0-501b-a23b",
+   "type": "chat",
+   "description": "Sparse mixture-of-experts reasoning model with 23B active parameters for coding and agentic workflows",
+   "family": "beam",
+   "open_weights": true,
+   "knowledge": "2026-06-30",
+   "release_date": "2026-10-05",
+   "last_updated": "2026-10-16",
+   "modalities": {
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "capabilities": {
+    "tools": {
+     "supported": true
+    },
+    "reasoning": {
+     "supported": true,
+     "effort": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ]
+    },
+    "structured_output": true,
+    "temperature": true,
+    "top_p": true,
+    "top_k": true,
+    "system_updates": false,
+    "effort_updates": false
+   },
+   "limit": {
+    "context": 1048576,
+    "output": 131072
+   },
+   "cost": {
+    "text": {
+     "input": {
+      "price": 0,
+      "cache": {
+       "read": 0
+      }
+     },
+     "output": {
+      "price": 0
+     }
+    }
+   },
+   "api": {
+    "chat-completions": {
+     "base_url": "https://opencode.ai/inference/go/openai/v1",
+     "sdk": {
+      "aisdk": "@ai-sdk/openai-compatible",
+      "opencodeai": "@opencode/ai/providers/openai-compatible"
+     },
+     "compatibility": {
+      "reasoning_field": "reasoning_content"
+     },
+     "capabilities": {
+      "tools": {
+       "strict": true,
+       "choice": [
+        "auto",
+        "none",
+        "required",
+        "tool"
+       ],
+       "updates": false
+      }
+     }
+    }
+   }
+  }
+ ]
+}

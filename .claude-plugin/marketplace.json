@@ -33,7 +33,7 @@
     {
       "name": "model-gateway",
       "source": "./plugins/model-gateway",
-      "description": "Your ChatGPT/Codex and Grok subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, and Grok mid-session like any other model. No API keys.",
+      "description": "Your ChatGPT/Codex, Grok and OpenCode Go subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, claude-opencodego-* models to OpenCode Go, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, Grok, and OpenCode Go models mid-session like any other model.",
       "version": "0.55.3",
       "author": {
         "name": "Eigenwise"
