@@ -1,12 +1,14 @@
 'use strict';
 
 const { HostBridge } = require('./host-bridge.js');
+const { CLAUDE_ADAPTER } = require('./agent-handoff.js');
 
 const project = { type: 'string', description: 'Absolute project directory. Omit to use the server-pinned project. A different project is refused; this is a routing boundary, not a filesystem sandbox.' };
 const conversationId = { type: 'string', description: 'Bridge-owned conversation UUID returned by start. Existing TUI or arbitrary Claude session IDs are not accepted.' };
 const jobId = { type: 'string', description: 'Bridge-owned job UUID. Omit to select the conversation’s latest job.' };
 const turnProperties = {
   project,
+  adapter: { type: 'string', enum: [CLAUDE_ADAPTER], description: 'Optional receiver adapter; defaults to claude-code. Only that adapter is implemented. Unsupported adapters are refused without fallback; existing provider/model settings remain unchanged.' },
   requestId: { type: 'string', description: 'Client-generated UUIDv4 idempotency key. Retry the exact same request with this ID after an uncertain call; it returns the original job. Reuse with a different payload is refused.' },
   prompt: { type: 'string', minLength: 1, maxLength: 131072, description: 'Message to the real Claude orchestrator; passed as stdin. Do not ask this bridge to impersonate a native Agent executor.' },
   profile: { type: 'string', enum: ['plan', 'work'], description: 'plan: native plan permissions and Read/Glob/Grep built-ins only. work: preserve the project’s current Claude permission policy. Both deny actions that would prompt; neither enables bypass. Installed plugins/hooks/MCP and provider still load normally.' },
@@ -40,7 +42,7 @@ function createMcp(options = {}) {
     if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') return { jsonrpc: '2.0', id: message?.id ?? null, error: { code: -32600, message: 'Invalid JSON-RPC request.' } };
     if (message.id == null) return null;
     const response = (result) => ({ jsonrpc: '2.0', id: message.id, result });
-    if (message.method === 'initialize') return response({ protocolVersion: message.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'quartermaster-host-bridge', version: '1.0.0' }, instructions: 'One project-pinned native Claude orchestrator bridge. Default plan. Host turn success does not establish accepted task delivery. Existing TUI sessions are never attached.' });
+    if (message.method === 'initialize') return response({ protocolVersion: message.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'quartermaster-host-bridge', version: '1.0.0' }, instructions: 'One project-pinned native Claude orchestrator bridge. Default plan. Every job response includes the additive eigenwise.agent-handoff v1 receipt: terminal alone does not mean the receiver stopped; use handoff.hostStopped and handoff.safeToResume. Host turn success does not establish accepted task delivery. Only adapter claude-code is implemented; no provider/model fallback. Existing TUI sessions are never attached.' });
     if (message.method === 'ping') return response({});
     if (message.method === 'tools/list') return response({ tools: tools.map(({ operation, ...descriptor }) => descriptor) });
     if (message.method !== 'tools/call') return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Method not found.' } };

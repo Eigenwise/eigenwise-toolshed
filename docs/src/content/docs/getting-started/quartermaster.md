@@ -20,6 +20,8 @@ Activate it with `/reload-plugins` or start a new Claude Code session.
 
 Quartermaster's [host bridge](https://github.com/Eigenwise/eigenwise-toolshed/blob/main/plugins/quartermaster/HOST-BRIDGE.md) provides a command and MCP route into a real Claude Code orchestrator. The bridge owns new, resumable conversations and returns status/results to the caller. It does not inject messages into an existing terminal or treat Sidequest's board protocol as a native agent launcher.
 
+Each response includes a versioned, provider-neutral handoff receipt for ownership, request/turn identity and lifecycle status. Claude Code is the first supported receiver adapter; other adapters are refused without fallback. A receipt describes the named turn, while current conversation locks still govern follow-up. Host completion remains separate from verified work delivery.
+
 Use the guide matching the installed Quartermaster version. Connecting the MCP server is a separate activation step; a configured server is not proof that the current Codex session loaded its tools. The command route can be used directly. The receiver keeps its installed plugins and current permissions, with planning as the default. A successful host response still needs artifact or board verification before it counts as delivered work.
 
 ## Set up a workspace

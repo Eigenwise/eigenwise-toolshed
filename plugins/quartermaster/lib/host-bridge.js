@@ -4,6 +4,7 @@ const { spawn, execFile } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { BridgeStore, SCHEMA_VERSION, TERMINAL, identifier, canonicalProject, projectKey } = require('./host-bridge-store.js');
+const { normalizeAdapter, handoffReceipt } = require('./agent-handoff.js');
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -29,6 +30,7 @@ function childEnvironment(source) {
 
 function requestOptions(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('Bridge request must be an object.');
+  normalizeAdapter(request.adapter);
   if (typeof request.prompt !== 'string' || !request.prompt.trim() || Buffer.byteLength(request.prompt) > MAX_PROMPT_BYTES) throw new Error(`prompt must contain text and be at most ${MAX_PROMPT_BYTES} UTF-8 bytes.`);
   const profile = request.profile || 'plan';
   if (!['plan', 'work'].includes(profile)) throw new Error('profile must be plan or work.');
@@ -37,7 +39,7 @@ function requestOptions(request) {
 
 function summary(job) {
   const { result, ...status } = job;
-  return status;
+  return { ...status, handoff: handoffReceipt(job, { terminal: TERMINAL.has(job.state) }) };
 }
 
 class HostBridge {

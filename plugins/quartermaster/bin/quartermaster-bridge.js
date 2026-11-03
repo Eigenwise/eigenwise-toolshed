@@ -3,11 +3,12 @@
 
 const fs = require('node:fs');
 const { HostBridge, MAX_PROMPT_BYTES } = require('../lib/host-bridge.js');
+const { normalizeAdapter } = require('../lib/agent-handoff.js');
 
 const USAGE = `quartermaster-bridge — project-bound Claude orchestrator conversations
 
-  node quartermaster-bridge.js start --project <absolute-directory> --request <uuid> [--message-file <file>] [--profile plan|work] [--timeout-ms <n>] [--max-turns <n>]
-  node quartermaster-bridge.js followup --project <absolute-directory> --request <uuid> --conversation <uuid> [--message-file <file>] [--profile plan|work]
+  node quartermaster-bridge.js start --project <absolute-directory> --request <uuid> [--message-file <file>] [--adapter claude-code] [--profile plan|work] [--timeout-ms <n>] [--max-turns <n>]
+  node quartermaster-bridge.js followup --project <absolute-directory> --request <uuid> --conversation <uuid> [--message-file <file>] [--adapter claude-code] [--profile plan|work]
   node quartermaster-bridge.js status|result|cancel --project <absolute-directory> --conversation <uuid> [--job <uuid>]
 
 Without --message-file, start/followup read the message from stdin. They print a queued
@@ -24,6 +25,10 @@ provider/model override, --bare, native executor replacement or live TUI attachm
 Normal Claude plugins/hooks/MCP/auth still load. Project binding is not a sandbox.
 Host success remains unverified task delivery. State: QUARTERMASTER_BRIDGE_HOME or
 <Quartermaster state>/host-bridge. Host binary: QUARTERMASTER_BRIDGE_CLAUDE or claude.
+Responses retain their native fields and add an eigenwise.agent-handoff v1 receipt.
+Check handoff.hostStopped and handoff.safeToResume: terminal alone does not prove
+the host stopped. The optional adapter is claude-code; unsupported adapters refuse
+without fallback. This adapter selection does not change the model or provider.
 `;
 
 function message(file) {
@@ -49,11 +54,15 @@ function parse(argv) {
   const flags = {};
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index];
-    if (!['--project', '--request', '--conversation', '--job', '--message-file', '--profile', '--timeout-ms', '--max-turns'].includes(flag) || args[index + 1] == null || Object.hasOwn(flags, flag)) throw new Error(`Invalid or repeated bridge option: ${flag}`);
+    if (!['--project', '--request', '--conversation', '--job', '--message-file', '--adapter', '--profile', '--timeout-ms', '--max-turns'].includes(flag) || args[index + 1] == null || Object.hasOwn(flags, flag)) throw new Error(`Invalid or repeated bridge option: ${flag}`);
     flags[flag] = args[index + 1];
   }
   if (!flags['--project']) throw new Error('--project is required.');
-  const request = { project: flags['--project'], ...(flags['--request'] ? { requestId: flags['--request'] } : {}), ...(flags['--conversation'] ? { conversationId: flags['--conversation'] } : {}), ...(flags['--job'] ? { jobId: flags['--job'] } : {}), ...(flags['--profile'] ? { profile: flags['--profile'] } : {}), ...(flags['--timeout-ms'] ? { timeoutMs: Number(flags['--timeout-ms']) } : {}), ...(flags['--max-turns'] ? { maxTurns: Number(flags['--max-turns']) } : {}) };
+  if (Object.hasOwn(flags, '--adapter')) {
+    if (!['start', 'followup'].includes(operation)) throw new Error('--adapter is supported only for start and followup.');
+    normalizeAdapter(flags['--adapter']);
+  }
+  const request = { project: flags['--project'], ...(flags['--request'] ? { requestId: flags['--request'] } : {}), ...(flags['--conversation'] ? { conversationId: flags['--conversation'] } : {}), ...(flags['--job'] ? { jobId: flags['--job'] } : {}), ...(Object.hasOwn(flags, '--adapter') ? { adapter: flags['--adapter'] } : {}), ...(flags['--profile'] ? { profile: flags['--profile'] } : {}), ...(flags['--timeout-ms'] ? { timeoutMs: Number(flags['--timeout-ms']) } : {}), ...(flags['--max-turns'] ? { maxTurns: Number(flags['--max-turns']) } : {}) };
   if (['start', 'followup'].includes(operation)) request.prompt = message(flags['--message-file']);
   return { operation, request };
 }

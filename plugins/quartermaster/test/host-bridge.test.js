@@ -118,6 +118,60 @@ test('idempotent request replays in another owner return the original job and re
   assert.equal(f.calls().length, 2);
 });
 
+test('all bridge operations expose the same versioned handoff identity and conservative receiver lifecycle', async (t) => {
+  const f = fixture(t);
+  const first = f.bridge.start(f.request('hang'));
+  const identity = (receipt, turn) => {
+    assert.equal(receipt.contract, 'eigenwise.agent-handoff'); assert.equal(receipt.version, 1); assert.equal(receipt.adapter, 'claude-code');
+    assert.equal(receipt.project, f.project); assert.equal(receipt.requestId, turn.requestId); assert.equal(receipt.conversationId, first.conversationId); assert.equal(receipt.turnId, turn.id);
+    assert.equal(receipt.receiver.ownership, 'bridge-owned'); assert.equal(receipt.receiver.sessionId, first.claudeSessionId);
+    assert.equal(receipt.workOutcome, 'unverified'); assert.ok(receipt.acceptedAt);
+    assert.ok(!Object.hasOwn(receipt, 'prompt')); assert.ok(!Object.hasOwn(receipt, 'result')); assert.ok(!Object.hasOwn(receipt, 'toolUse'));
+  };
+  identity(first.handoff, first); assert.equal(first.handoff.safeToResume, false);
+  assert.equal(first.handoff.hostStopped, null); assert.equal(first.handoff.receiver.observed, false);
+  await until(() => f.bridge.status(f.lookup(first)).hostStarted);
+  const status = f.bridge.status(f.lookup(first));
+  identity(status.handoff, first); assert.equal(status.handoff.hostStopped, false); assert.equal(status.handoff.safeToResume, false);
+  assert.ok(status.handoff.startedAt);
+  const cancelled = f.bridge.cancel(f.lookup(first)); identity(cancelled.handoff, first);
+  assert.equal(cancelled.handoff.safeToResume, false);
+  const stopped = await done(f, first); identity(stopped.handoff, first);
+  assert.equal(stopped.handoff.hostStopped, true); assert.equal(stopped.handoff.terminal, true); assert.ok(stopped.handoff.finishedAt);
+  const follow = f.bridge.followup(f.request('success', { conversationId: first.conversationId, adapter: 'claude-code' }));
+  identity(follow.handoff, follow); assert.notEqual(follow.handoff.turnId, first.handoff.turnId);
+  const final = await done(f, follow); identity(final.handoff, follow);
+  assert.equal(final.handoff.safeToResume, true); assert.equal(final.handoff.hostStopped, true);
+});
+
+test('default adapter remains compatible with prior replay hashes and unsupported adapters never launch', async (t) => {
+  const f = fixture(t);
+  const request = f.request();
+  const first = f.bridge.start(request); await done(f, first);
+  const { createHash } = require('node:crypto');
+  const originalHash = createHash('sha256').update(JSON.stringify({ project: f.project, operation: 'start', conversationId: null, prompt: request.prompt, profile: null, timeoutMs: 120000, maxTurns: 12 })).digest('hex');
+  assert.equal(f.bridge.store.readRequest(f.project, request.requestId).payloadHash, originalHash);
+  assert.equal(f.bridge.start({ ...request, adapter: 'claude-code' }).id, first.id);
+  assert.throws(() => f.bridge.start({ ...request, adapter: 'codex' }), /Unsupported agent adapter/);
+  assert.throws(() => f.bridge.followup(f.request('success', { conversationId: first.conversationId, adapter: 'pi' })), /Unsupported agent adapter/);
+  assert.equal(f.calls().length, 1);
+  const args = f.calls()[0].args;
+  for (const flag of ['--adapter', '--model', '--provider']) assert.ok(!args.includes(flag), flag);
+});
+
+test('receipt resume assessment describes its named turn while the current conversation lock remains authoritative', async (t) => {
+  const f = fixture(t);
+  const first = f.bridge.start(f.request()); await done(f, first);
+  const next = f.bridge.followup(f.request('hang', { conversationId: first.conversationId }));
+  await until(() => f.bridge.status(f.lookup(next)).hostStarted);
+  const earlierReceipt = f.bridge.result(f.lookup(first)).handoff;
+  assert.equal(earlierReceipt.hostStopped, true);
+  assert.equal(earlierReceipt.safeToResume, true);
+  assert.equal(f.bridge.status(f.lookup(next)).handoff.safeToResume, false);
+  assert.throws(() => f.bridge.followup(f.request('success', { conversationId: first.conversationId })), /active turn/);
+  f.bridge.cancel(f.lookup(next)); await done(f, next);
+});
+
 test('project pins, owned IDs and serialized conversation turns reject crossed routing', async (t) => {
   const f = fixture(t);
   assert.throws(() => f.bridge.start(f.request('success', { project: f.other })), /bound to another project/);
@@ -204,6 +258,10 @@ test('unconfirmed termination is a bounded failure retaining child ownership and
     assert.equal(status.state, 'failed');
     assert.equal(status.error.code, 'termination_unconfirmed');
     assert.equal(status.terminationPending, true);
+    assert.equal(status.handoff.terminal, true);
+    assert.equal(status.handoff.hostStopped, null);
+    assert.equal(status.handoff.resumeBlocked, true);
+    assert.equal(status.handoff.safeToResume, false);
     assert.equal(processAlive(child.pid), true);
     assert.equal(f.bridge.active.has(job.id), true);
     assert.throws(() => f.bridge.followup(f.request('success', { conversationId: job.conversationId })), /active turn/);
@@ -322,12 +380,18 @@ test('MCP validates schemas, returns nonblocking job handles and exposes only th
   const listed = await mcp.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   assert.equal(listed.result.tools.length, 5);
   assert.ok(listed.result.tools[0].inputSchema.required.includes('requestId'));
+  assert.deepEqual(listed.result.tools[0].inputSchema.properties.adapter.enum, ['claude-code']);
   const invalid = await call('quartermaster_bridge_start', { prompt: 'x', requestId: randomUUID(), permissionMode: 'bypassPermissions' });
   assert.equal(invalid.result.isError, true);
+  const unsupported = await call('quartermaster_bridge_start', { prompt: 'x', requestId: randomUUID(), adapter: 'codex' });
+  assert.equal(unsupported.result.isError, true);
   const request = f.request('hang'); delete request.project;
+  request.adapter = 'claude-code';
   const response = await call('quartermaster_bridge_start', request);
   const job = JSON.parse(response.result.content[0].text);
   assert.equal(job.state, 'queued');
+  assert.equal(job.handoff.contract, 'eigenwise.agent-handoff');
+  assert.equal(job.handoff.adapter, 'claude-code');
   const cancelled = await call('quartermaster_bridge_cancel', { conversationId: job.conversationId, jobId: job.id });
   assert.equal(cancelled.result.isError, false);
   await f.bridge.wait(job.id);
@@ -392,7 +456,7 @@ test('CLI runs the same bridge and returns queued plus terminal JSON with stdin 
   const preload = path.join(f.root, 'cli-preload.cjs');
   fs.writeFileSync(preload, `const bridgeModule = require(${JSON.stringify(LIB)}); const Base = bridgeModule.HostBridge; bridgeModule.HostBridge = class extends Base { constructor(options) { super({ ...options, command: process.execPath, prefixArguments: [${JSON.stringify(f.script)}] }); } };`);
   const request = f.request();
-  const child = spawn(process.execPath, ['--require', preload, CLI, 'start', '--project', f.project, '--request', request.requestId], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...f.environment, QUARTERMASTER_BRIDGE_HOME: f.home } });
+  const child = spawn(process.execPath, ['--require', preload, CLI, 'start', '--project', f.project, '--request', request.requestId, '--adapter', 'claude-code'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...f.environment, QUARTERMASTER_BRIDGE_HOME: f.home } });
   let output = ''; let errors = '';
   child.stdout.on('data', (chunk) => { output += chunk; }); child.stderr.on('data', (chunk) => { errors += chunk; });
   const exit = new Promise((resolve) => child.once('close', resolve));
@@ -400,7 +464,20 @@ test('CLI runs the same bridge and returns queued plus terminal JSON with stdin 
   assert.equal(await exit, 0, errors);
   const lines = output.trim().split('\n').map(JSON.parse);
   assert.equal(lines.length, 2); assert.equal(lines[0].state, 'queued'); assert.equal(lines[1].state, 'succeeded');
+  assert.equal(lines[0].handoff.adapter, 'claude-code'); assert.equal(lines[1].handoff.safeToResume, true);
   assert.equal(f.calls()[0].input, request.prompt);
+});
+
+test('CLI refuses an unsupported adapter before reading a message or launching any host', async (t) => {
+  const f = fixture(t);
+  const child = spawn(process.execPath, [CLI, 'start', '--project', f.project, '--request', randomUUID(), '--adapter', 'codex', '--message-file', path.join(f.root, 'does-not-exist')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...f.environment, QUARTERMASTER_BRIDGE_HOME: f.home } });
+  let output = ''; let errors = '';
+  child.stdout.on('data', (chunk) => { output += chunk; }); child.stderr.on('data', (chunk) => { errors += chunk; });
+  const exit = new Promise((resolve) => child.once('close', resolve));
+  child.stdin.end();
+  assert.equal(await exit, 1);
+  assert.equal(output, ''); assert.match(errors, /Unsupported agent adapter.*no fallback/);
+  assert.equal(f.calls().length, 0);
 });
 
 test('CLI exact replays succeed for a previous owner’s completed turn and honestly accept a pending turn', async (t) => {

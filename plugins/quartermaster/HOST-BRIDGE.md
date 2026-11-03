@@ -56,6 +56,18 @@ Codex must load the new server before its native MCP tools are available. Config
 
 The MCP surface provides `quartermaster_bridge_start`, `quartermaster_bridge_followup`, `quartermaster_bridge_status`, `quartermaster_bridge_result` and `quartermaster_bridge_cancel`. Start and follow-up return immediately. Poll status/result for the exact returned job; do not resubmit a task with a new request ID merely because its first response was delayed.
 
+## Common handoff receipt
+
+Every start, follow-up, status, result and cancellation response retains its existing fields and adds a compact `handoff` object with `contract: "eigenwise.agent-handoff"` and `version: 1`. The receipt describes the communication and receiver lifecycle using the same fields for command and MCP callers. Claude Code is the first implemented adapter; this does not claim support for other agent hosts.
+
+The receipt includes `adapter`, the canonical `project`, `requestId`, `conversationId`, `turnId`, the bridge-owned receiver `sessionId` and whether that session was observed, accepted/started/updated/finished timestamps, and `state`/`terminal`. It contains no prompt, answer, tool arguments or tool results. `workOutcome` remains `"unverified"`, including after a successful host turn.
+
+Check `hostStopped` independently of `terminal`: `true` means recorded closure or a turn that ended before starting a host, `false` means a running host was observed, and `null` means closure is unknown. A failed termination can therefore be terminal while its receiver is still unsafe. `terminationPending`, `resumeBlocked` and `safeToResume` make that distinction explicit. `safeToResume` is true only for a terminal turn with a confirmed stopped host, an observed owned session and no uncertainty/block; it does not grant permission or verify the requested work. Old interrupted records without closure evidence remain conservatively unsafe in this receipt. A failed process-tree kill also keeps the receipt unsafe even if a fallback stopped the host itself, because descendant termination was not established.
+
+These fields conservatively assess the named turn, not the conversation's current availability: a newer turn may already be active. The existing follow-up ownership lock and active-turn checks remain authoritative.
+
+Start and follow-up optionally accept `adapter: "claude-code"` over MCP or `--adapter claude-code` on the CLI. Omit it for the same default behavior. Unsupported adapters are refused before launch, without provider/model fallback. Omitted and explicit default adapter values preserve existing request replay hashes, so adding the receipt does not invalidate earlier bridge-owned conversations or requests. No new state store or lifecycle is introduced.
+
 ## What a result proves
 
 Keep these states separate:
