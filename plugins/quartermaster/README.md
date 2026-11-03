@@ -56,6 +56,14 @@ Setup installs the approved plugins and writes the approved workspace files. It 
 
 ## CLI
 
+### Communicate from another host
+
+The [host bridge](HOST-BRIDGE.md) lets Codex or another command/MCP-capable host send a task to a real Claude Code orchestrator, read its result, and continue the same bridge-owned conversation. It preserves Claude's installed Toolshed tools and current permission/provider policy. It does not attach to an existing live terminal or replace Sidequest's native Agent execution. Plan is the default; verify actual artifacts separately from host success.
+
+The bridge's command entry is `bin/quartermaster-bridge.js`; its project-pinned MCP entry is `bin/quartermaster-bridge-mcp.js`. Both use durable request IDs so an uncertain retry does not start another task. See the bridge guide for setup, activation, permission limits and cancellation.
+
+### Existing project commands
+
 ```text
 node bin/quartermaster.js mine [--project <path>] [--days 30] [--sessions 40] [--all-projects] [--no-subagents]
 node bin/quartermaster.js status [--project <path>]

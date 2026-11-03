@@ -28,6 +28,16 @@ uncertain. Do not run or suggest Claude-specific commands as evidence about anot
 installation or configuration change still needs its own explicit approval. After approval, stop at
 the host's reload or restart boundary, then verify the capability is live before calling it ready.
 
+## Quartermaster host bridge
+
+For a proven need to use Claude-hosted Toolshed tools from Codex, check the packaged
+[host bridge](../../../HOST-BRIDGE.md) before recommending a new third-party extension.
+Its CLI/MCP entry points start a real bridge-owned Claude orchestrator and preserve its
+native Agent execution. They do not make the current Codex host a Claude runtime or attach
+to an existing live terminal session. Configuration, loaded transport, successful host
+response and independently verified task delivery remain separate checks. User approval
+already covering this specific bridge installation need not be requested again.
+
 ## Checked Pi example
 
 The Pi coding-agent repository's [Subagent Example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent)
