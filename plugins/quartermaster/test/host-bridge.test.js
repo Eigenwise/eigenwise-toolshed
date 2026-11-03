@@ -50,6 +50,34 @@ process.stdin.on('end', () => {
  if (prompt.mode === 'overflow') { process.stdout.write('x'.repeat(20000)); return; }
  if (prompt.mode === 'exit') { process.stderr.write('token=private-fixture-token'); process.exitCode = 3; return; }
  if (prompt.mode === 'session') { send({ type: 'result', subtype: 'success', is_error: false, session_id: '00000000-0000-4000-8000-000000000001', result: 'wrong session' }); return; }
+ if (prompt.mode.startsWith('stream-')) {
+  const make = (index, extra = {}) => ({ type: 'result', subtype: 'success', is_error: false, session_id: session, uuid: require('node:crypto').randomUUID(), result_index: index, terminal_reason: 'completed', stop_reason: 'end_turn', origin: { kind: index === 0 ? 'human' : 'task-notification' }, user_message_uuid: '11111111-1111-4111-8111-111111111111', num_turns: 1, queued_turn_count: 0, result: index === 0 ? 'initial response' : 'final response', permission_denials: [], ...extra });
+  const mode = prompt.mode.slice(7);
+  let frames = [make(0), make(1)];
+  if (mode === 'pending') { send(make(0)); setInterval(() => {}, 1000); return; }
+  if (mode === 'earlier-error') frames[0] = make(0, { subtype: 'error_during_execution', is_error: true, errors: ['token=private-earlier-token native error'] });
+  if (mode === 'earlier-denial') frames[0] = make(0, { permission_denials: [{ tool_name: 'Write', tool_input: { file_path: 'PRIVATE DENIED INPUT' } }] });
+  if (mode === 'legacy-first') frames[0] = make(undefined);
+  if (mode === 'legacy-last') frames[1] = make(undefined);
+  if (mode === 'legacy-duplicate') frames = [make(undefined), make(undefined)];
+  if (mode === 'gap') frames[1] = make(2);
+  if (mode === 'duplicate') frames[1] = make(0);
+  if (mode === 'repeated-uuid') frames[1].uuid = frames[0].uuid.toUpperCase();
+  if (mode === 'invalid-index-denial') frames[1] = make(0, { permission_denials: [{ tool_name: 'Write', tool_input: { file_path: 'PRIVATE DENIED INPUT' } }] });
+  if (mode === 'nonmonotonic') frames.push(make(0));
+  if (mode === 'first-gap') frames = [make(1)];
+  if (mode === 'noninteger') frames = [make(0.5)];
+  if (mode === 'negative') frames = [make(-1)];
+  if (mode === 'index-null') frames = [make(null)];
+  if (mode === 'index-string') frames = [make('0')];
+  if (mode === 'crossed-session') frames[1] = make(1, { session_id: '22222222-2222-4222-8222-222222222222' });
+  if (mode === 'missing-session') frames[1] = make(1, { session_id: undefined });
+  if (mode === 'invalid-envelope') frames = [make(0, { is_error: 'false' })];
+  if (mode === 'limit') frames = Array.from({ length: 33 }, (_, index) => make(index));
+  if (mode === 'private-metadata') frames = [make(0, { uuid: 'PRIVATE UUID', origin: { kind: 'PRIVATE ORIGIN', subkind: 'PRIVATE SUBKIND', body: 'PRIVATE BODY' }, user_message_uuid: 'PRIVATE USER UUID', user_message_uuids: ['PRIVATE USER UUID'], result: 'PRIVATE ANSWER' })];
+  frames.forEach(send);
+  return;
+ }
  const denied = prompt.mode === 'denied';
  const error = prompt.mode === 'error';
  send({ type: 'result', subtype: error ? 'error_max_turns' : 'success', is_error: error, session_id: session, result: JSON.stringify({ text: prompt.text || 'fixture result', prior: prior && JSON.parse(prior.input).text, resumed: args.includes('--resume') }), errors: error ? ['budget or turn limit reached'] : [], permission_denials: denied ? [{ tool_name: 'Bash', tool_input: { command: 'PRIVATE COMMAND' } }] : [] });
@@ -208,6 +236,68 @@ for (const [mode, state, code] of [['error', 'failed', 'host_error'], ['denied',
     assert.ok(!JSON.stringify(result).includes('private-fixture-token'));
   });
 }
+
+test('documented indexed per-turn results complete only after host closure and preserve the final response', async (t) => {
+  const f = fixture(t);
+  const result = await done(f, f.bridge.start(f.request('stream-success')));
+  assert.equal(result.state, 'succeeded'); assert.equal(result.result.text, 'final response');
+  assert.equal(result.result.hostTurnSucceeded, true);
+  assert.equal(result.resultDiagnostics.format, 'indexed'); assert.equal(result.resultDiagnostics.valid, 2);
+  assert.deepEqual(result.resultDiagnostics.frames.map((frame) => frame.resultIndex), [0, 1]);
+  assert.deepEqual(result.resultDiagnostics.frames.map((frame) => frame.origin.kind), ['human', 'task-notification']);
+  assert.ok(result.resultDiagnostics.frames.every((frame) => frame.sessionId === result.claudeSessionId));
+  assert.equal(result.handoff.workOutcome, 'unverified');
+  const pending = f.bridge.start(f.request('stream-pending'));
+  await until(() => f.bridge.status(f.lookup(pending)).resultDiagnostics?.valid === 1);
+  const status = f.bridge.result(f.lookup(pending));
+  assert.equal(status.terminal, false); assert.equal(status.state, 'running'); assert.equal(status.result, null);
+  f.bridge.cancel(f.lookup(pending));
+  const cancelled = await done(f, pending);
+  assert.equal(cancelled.state, 'cancelled'); assert.equal(cancelled.result.text, 'initial response');
+  assert.equal(cancelled.result.hostTurnSucceeded, false);
+});
+
+test('a clean final indexed response cannot erase an earlier native error or permission denial', async (t) => {
+  const f = fixture(t);
+  const error = await done(f, f.bridge.start(f.request('stream-earlier-error')));
+  assert.equal(error.state, 'failed'); assert.equal(error.error.code, 'host_error');
+  assert.equal(error.result.text, 'final response'); assert.equal(error.result.hostTurnSucceeded, false);
+  assert.equal(error.resultDiagnostics.failedResults, 1); assert.equal(error.resultErrors[0].resultIndex, 0);
+  assert.match(error.resultErrors[0].messages[0], /native error/);
+  assert.ok(!JSON.stringify(error.resultErrors).includes('private-earlier-token'));
+  const denied = await done(f, f.bridge.start(f.request('stream-earlier-denial')));
+  assert.equal(denied.state, 'blocked_permissions'); assert.equal(denied.error.code, 'permission_denied');
+  assert.equal(denied.result.text, 'final response'); assert.equal(denied.result.hostTurnSucceeded, false);
+  assert.deepEqual(denied.permissionDenials, [{ tool: 'Write' }]);
+  assert.equal(denied.resultDiagnostics.frames[0].permissionDenialCount, 1);
+  assert.equal(denied.resultDiagnostics.frames[1].permissionDenialCount, 0);
+  assert.ok(!JSON.stringify(denied).includes('PRIVATE DENIED INPUT'));
+  const corruptDenial = await done(f, f.bridge.start(f.request('stream-invalid-index-denial')));
+  assert.equal(corruptDenial.error.code, 'result_index_invalid');
+  assert.deepEqual(corruptDenial.permissionDenials, [{ tool: 'Write' }]);
+});
+
+for (const [mode, code] of [['legacy-first', 'mixed_result_format'], ['legacy-last', 'mixed_result_format'], ['legacy-duplicate', 'duplicate_result'], ['gap', 'result_index_invalid'], ['duplicate', 'result_index_invalid'], ['repeated-uuid', 'duplicate_result_uuid'], ['nonmonotonic', 'result_index_invalid'], ['first-gap', 'result_index_invalid'], ['noninteger', 'result_index_invalid'], ['negative', 'result_index_invalid'], ['index-null', 'result_index_invalid'], ['index-string', 'result_index_invalid'], ['crossed-session', 'session_mismatch'], ['missing-session', 'session_mismatch'], ['invalid-envelope', 'invalid_result'], ['limit', 'result_limit']]) {
+  test(`corrupt ${mode} result streams fail with bounded diagnostic receipts`, async (t) => {
+    const f = fixture(t);
+    const result = await done(f, f.bridge.start(f.request(`stream-${mode}`)));
+    assert.equal(result.state, 'failed'); assert.equal(result.error.code, code);
+    assert.ok(result.resultDiagnostics.received > 0); assert.ok(result.resultDiagnostics.frames.length <= 32);
+    assert.ok(result.resultDiagnostics.frames.every((frame) => /^[0-9a-f]{64}$/.test(frame.envelopeSha256)));
+    assert.notEqual(result.result?.hostTurnSucceeded, true);
+  });
+}
+
+test('diagnostic metadata is bounded and excludes arbitrary native origin/UUID text and response content', async (t) => {
+  const f = fixture(t);
+  const result = await done(f, f.bridge.start(f.request('stream-private-metadata')));
+  assert.equal(result.state, 'succeeded'); assert.equal(result.result.text, 'PRIVATE ANSWER');
+  assert.ok(!JSON.stringify(result.resultDiagnostics).includes('PRIVATE'));
+  const frame = result.resultDiagnostics.frames[0];
+  assert.equal(frame.uuid, '[invalid-id]'); assert.equal(frame.origin.kind, '[other]');
+  assert.equal(frame.resultTextBytes, Buffer.byteLength('PRIVATE ANSWER'));
+  assert.match(frame.resultTextSha256, /^[0-9a-f]{64}$/);
+});
 
 test('timeout, output limit, cancellation and orderly owner close terminate only live owned children', async (t) => {
   const f = fixture(t, { maxOutputBytes: 4096 });

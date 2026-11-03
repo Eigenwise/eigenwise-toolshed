@@ -5,6 +5,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { BridgeStore, SCHEMA_VERSION, TERMINAL, identifier, canonicalProject, projectKey } = require('./host-bridge-store.js');
 const { normalizeAdapter, handoffReceipt } = require('./agent-handoff.js');
+const { createResultCollector } = require('./host-bridge-results.js');
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -158,7 +159,7 @@ class HostBridge {
     let buffer = '';
     const decoder = new StringDecoder('utf8');
     let bytes = 0;
-    let terminalEnvelope = null;
+    const results = createResultCollector({ sessionId: job.claudeSessionId, sanitizeText: redact });
     let stderr = '';
     let parseError = false;
     const persist = () => {
@@ -169,6 +170,15 @@ class HostBridge {
     const fail = (code, message) => this.stop(active, 'failed', { code, message });
     const event = (value) => {
       if (!value || typeof value !== 'object') { parseError = true; return; }
+      if (value.type === 'result') {
+        const error = results.record(value);
+        job.resultDiagnostics = results.diagnostics;
+        job.resultErrors = results.errors;
+        job.permissionDenials = results.permissionDenials;
+        persist();
+        if (error) fail(error.code, error.message);
+        return;
+      }
       if (value.session_id && value.session_id !== job.claudeSessionId) { fail('session_mismatch', 'Claude returned a different session ID; this bridge will not resume it.'); return; }
       if (value.type === 'system' && value.subtype === 'init') {
         job.hostStarted = true;
@@ -186,10 +196,6 @@ class HostBridge {
           if (Object.hasOwn(job.toolUse.byName, name) || Object.keys(job.toolUse.byName).length < 100) job.toolUse.byName[name] = Math.min(100000, (job.toolUse.byName[name] || 0) + 1);
         }
         persist();
-      }
-      if (value.type === 'result') {
-        if (terminalEnvelope) { fail('duplicate_result', 'Claude emitted more than one terminal result.'); return; }
-        terminalEnvelope = value;
       }
     };
     child.once('spawn', () => {
@@ -216,19 +222,19 @@ class HostBridge {
     child.once('close', (exitCode, signal) => {
       clearTimeout(active.timer);
       job.exitCode = exitCode; job.signal = signal;
-      if (active.stopping) { this.finish(active, active.stopping.state, active.stopping.error); return; }
       buffer += decoder.end();
       if (buffer.trim()) { try { event(JSON.parse(buffer)); } catch { parseError = true; } }
+      const result = results.lastResult;
+      if (result) {
+        job.hostStarted = job.hostStarted || Boolean(result.session_id);
+        job.result = { subtype: redact(result.subtype, 100), text: redact(result.result, this.maxOutputBytes), errors: results.errors.flatMap((entry) => entry.messages).slice(0, 20), sessionId: result.session_id, hostTurnSucceeded: !active.stopping && !parseError && !results.hasErrors && !results.hasDenials && result.subtype === 'success' && result.is_error === false && exitCode === 0, taskOutcome: 'unverified' };
+      }
       if (active.stopping) { this.finish(active, active.stopping.state, active.stopping.error); return; }
       if (active.spawnError) { this.finish(active, 'failed', { code: 'spawn_error', message: `Could not start Claude (${active.spawnError}).` }); return; }
       if (stderr) job.diagnostic = redact(stderr, 2000);
-      if (parseError || !terminalEnvelope) { this.finish(active, 'failed', { code: parseError ? 'invalid_output' : 'missing_result', message: 'Claude did not produce one valid terminal result envelope.' }); return; }
-      const result = terminalEnvelope;
-      job.hostStarted = job.hostStarted || Boolean(result.session_id);
-      job.permissionDenials = Array.isArray(result.permission_denials) ? result.permission_denials.slice(0, 100).map((denial) => ({ tool: redact(denial?.tool_name || denial?.tool || 'unknown', 120) })) : [];
-      job.result = { subtype: redact(result.subtype, 100), text: redact(result.result, this.maxOutputBytes), errors: Array.isArray(result.errors) ? result.errors.slice(0, 20).map((error) => redact(error, 2000)) : [], sessionId: result.session_id || null, hostTurnSucceeded: result.subtype === 'success' && result.is_error === false && exitCode === 0, taskOutcome: 'unverified' };
-      if (job.permissionDenials.length) { this.finish(active, 'blocked_permissions', { code: 'permission_denied', message: 'Claude reported tool permission denials. The bridge did not escalate permissions.' }); return; }
-      if (exitCode !== 0 || result.subtype !== 'success' || result.is_error !== false || result.session_id !== job.claudeSessionId) { this.finish(active, 'failed', { code: 'host_error', message: 'Claude reported an unsuccessful host turn. See the bounded result and errors; task outcome remains unverified.' }); return; }
+      if (parseError || !result) { this.finish(active, 'failed', { code: parseError ? 'invalid_output' : 'missing_result', message: 'Claude did not produce a valid terminal result envelope.' }); return; }
+      if (results.hasDenials) { this.finish(active, 'blocked_permissions', { code: 'permission_denied', message: 'Claude reported tool permission denials in one or more results. The bridge did not escalate permissions.' }); return; }
+      if (exitCode !== 0 || results.hasErrors || result.subtype !== 'success' || result.is_error !== false) { this.finish(active, 'failed', { code: 'host_error', message: 'Claude reported an unsuccessful host turn in one or more results. See the bounded final response and per-result errors; task outcome remains unverified.' }); return; }
       this.finish(active, 'succeeded');
     });
     child.stdin.end(prompt);

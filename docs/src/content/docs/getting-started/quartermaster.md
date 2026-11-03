@@ -22,6 +22,8 @@ Quartermaster's [host bridge](https://github.com/Eigenwise/eigenwise-toolshed/bl
 
 Each response includes a versioned, provider-neutral handoff receipt for ownership, request/turn identity and lifecycle status. Claude Code is the first supported receiver adapter; other adapters are refused without fallback. A receipt describes the named turn, while current conversation locks still govern follow-up. Host completion remains separate from verified work delivery.
 
+Native background continuations can emit several indexed results. The bridge validates their order and session, retains bounded diagnostic metadata, and waits for the host to close. A later clean result cannot erase an earlier error or permission denial.
+
 Use the guide matching the installed Quartermaster version. Connecting the MCP server is a separate activation step; a configured server is not proof that the current Codex session loaded its tools. The command route can be used directly. The receiver keeps its installed plugins and current permissions, with planning as the default. A successful host response still needs artifact or board verification before it counts as delivered work.
 
 ## Set up a workspace

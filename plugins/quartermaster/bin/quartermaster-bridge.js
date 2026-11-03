@@ -29,6 +29,9 @@ Responses retain their native fields and add an eigenwise.agent-handoff v1 recei
 Check handoff.hostStopped and handoff.safeToResume: terminal alone does not prove
 the host stopped. The optional adapter is claude-code; unsupported adapters refuse
 without fallback. This adapter selection does not change the model or provider.
+Native indexed results must be contiguous from 0; legacy streams permit one result.
+The latest response is finalized only after host closure, with earlier native errors
+and permission denials preserved. A final clean response cannot hide earlier failures.
 `;
 
 function message(file) {
