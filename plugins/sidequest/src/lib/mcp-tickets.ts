@@ -1,4 +1,8 @@
 'use strict';
+function intakeExemptPatch(args: { intakeExempt?: unknown }): { intakeExempt?: unknown } {
+  return args.intakeExempt === undefined ? {} : { intakeExempt: args.intakeExempt };
+}
+
 
 const {
   path,
@@ -192,6 +196,7 @@ const TICKET_FIELD_PROPS = {
   description: { type: 'string' },
   priority: { type: 'string', enum: store.VALID_PRIORITY },
   highStakes: { type: 'boolean' },
+  intakeExempt: { anyOf: [{ type: 'object', properties: { reason: { type: 'string', minLength: 20 } }, required: ['reason'] }, { type: 'null' }] },
   labels: LABELS_PROP,
   refs: { type: 'array', items: { type: 'string' }, description: 'External issue or pull references.' },
   files: FILES_PROP,
@@ -267,6 +272,7 @@ const tools: ToolDefinition[] = [
         priority: args.priority,
         status: args.status,
         highStakes: args.highStakes,
+        intakeExempt: args.intakeExempt,
         labels: args.labels,
         refs: args.refs,
         files: args.files,
@@ -386,6 +392,7 @@ const tools: ToolDefinition[] = [
       if (args.verifyCwd !== undefined) patch.executorVerifyCwd = args.verifyCwd;
       if (args.verifyKind !== undefined) patch.executorVerifyKind = args.verifyKind;
       if (args.attestationArtifact !== undefined) patch.executorAttestationArtifact = args.attestationArtifact;
+      Object.assign(patch, intakeExemptPatch(args));
       if (args.storyId !== undefined) {
         validateStoryId(args.storyId, true);
         patch.storyId = args.storyId;

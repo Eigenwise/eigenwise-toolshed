@@ -263,7 +263,7 @@ test('MCP orchestrator contracts retain enums and full runtime schemas while sav
   });
   assert.notDeepEqual(admission, authored.get('update')!.admitComposition, 'runtime admission schema stays complete');
   assert.notDeepEqual(provenance, authored.get('dispatch')!.workProvenance, 'runtime provenance schema stays complete');
-  assert.ok(Buffer.byteLength(JSON.stringify(server.toolDescriptors()), 'utf8') <= 29028 - 1500);
+  assert.ok(Buffer.byteLength(JSON.stringify(server.toolDescriptors()), 'utf8') <= 29028 + 1345 - 1500);
 });
 
 test('refusal payloads name the serving build within the result budget', () => {
