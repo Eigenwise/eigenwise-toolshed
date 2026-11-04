@@ -42,6 +42,10 @@ const { localRequestAllowed, authenticatedControlRequest, controlRequestHeaders,
 const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
+const antigravity = require('./antigravity-contract.js');
+const { reservedRequest, relayAntigravityWorker } = require('./antigravity-supervisor.js');
+const { fetchCapabilities, createDiscoveryTracker, reconcileCatalog } = require('./antigravity-discovery.js');
+const onboarding = require('./onboarding.js');
 const {
   canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, resolveStableCommandPath,
   gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
@@ -137,8 +141,19 @@ const LEGACY_ENV_BLOCK = {
 
 const USAGE = `usage: model-gateway.js <command>
 
-  setup            download the claude-code-proxy binary (v-latest) into ${BIN_DIR}
+  setup [--provider codex|antigravity] [--preserve-wiring]
+                   download a verified proxy into ${BIN_DIR}; provider selects onboarding guidance only
+                   (missing preference means Codex). Never enables a backend or imports credentials.
+                   Antigravity requires compatible native support, explicit enablement and local auth/project configuration.
+                   Required native compatibility is checked on the staged candidate before replacement or restart.
   login [--device] run the ChatGPT OAuth flow (--device for headless device-code)
+  auth antigravity login [--manual]|status [--json]|logout
+                   native Antigravity auth only, available while inference is disabled; no device flow.
+                   --manual keeps native terminal input/output for hosted completion and local code pasteback.
+                   Status reports local readiness, not Google access; exit 0 can mean unready.
+                   Read configuration_ready; refresh_required alone does not require a new login.
+                   live_verified=false is the local inspector's fixed value, not a login failure.
+                   Use a fresh session for Antigravity model, tier, selector spelling or profile changes.
   start | stop     start/stop the proxy + shim (detached, logs in ${LOGS})
   ensure [--quiet] maintain installed wiring and start unless intentionally stopped
   recover          restore readiness without settings, pin or cache maintenance
@@ -407,108 +422,177 @@ async function restartProxyIfOutdated({
   return { restarted, onDisk, serving };
 }
 
-async function restartSetupProxy({ previousVersion }) {
-  if (intentionallyStopped()) return false;
-  return restartProxyForVersionChange({ previousVersion });
+function proxyAssetName({ platform = process.platform, architecture = process.arch } = {}) {
+  const arch = architecture === 'arm64' ? 'arm64' : 'amd64';
+  const plat = { win32: 'windows', darwin: 'darwin' }[platform] || 'linux';
+  return `claude-code-proxy-${plat}-${arch}.${platform === 'win32' ? 'zip' : 'tar.gz'}`;
 }
 
-async function restartAfterSetup(proxyRecoveryHandoff) {
+async function downloadProxyArchive(assetName, { fetch = fetchUrl, download = downloadVerifiedArchive, report = log } = {}) {
+  report(`fetching latest release of ${REPO}...`);
+  const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+  if (response.status !== 200) throw new Error(`GitHub API returned ${response.status}`);
+  return download(JSON.parse(response.body.toString()), assetName, { fetchUrl: fetch, log: report });
+}
+
+function tarExecutable({ platform = process.platform, systemRoot = process.env.SystemRoot } = {}) {
+  return platform === 'win32' ? path.win32.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+}
+
+function assertExtracted(result) {
+  if (result.status !== 0) throw new Error(`extract failed: ${result.stderr || result.status}`);
+}
+
+function extractProxyCandidate(stage, assetName, archive, { run = spawnSync } = {}) {
+  const archiveFile = path.join(stage, assetName);
+  fs.writeFileSync(archiveFile, archive);
+  assertExtracted(run(tarExecutable(), ['-xf', archiveFile], { encoding: 'utf8', cwd: stage, windowsHide: true }));
+  const staged = fs.readdirSync(stage, { recursive: true }).map(String).find((file) => path.basename(file) === path.basename(PROXY_BIN));
+  if (!staged) throw new Error(`extracted, but ${path.basename(PROXY_BIN)} not found in ${BIN_DIR}`);
+  return path.join(stage, staged);
+}
+
+function binarySemver(binary, { run = spawnSync } = {}) {
+  const result = run(binary, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  return parseSemver((result.stdout || '').trim());
+}
+
+function candidateVersions(stagedProxy, { version = binarySemver } = {}) {
+  const currentVersion = version(PROXY_BIN);
+  const stagedVersion = version(stagedProxy);
+  const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
+  return { currentVersion, stagedVersion, proxyChanged };
+}
+
+async function stageLatestProxy({ download = downloadProxyArchive, extract = extractProxyCandidate, versions = candidateVersions } = {}) {
+  mkdirs();
+  const assetName = proxyAssetName();
+  const archive = await download(assetName);
+  const stage = fs.mkdtempSync(path.join(BIN_DIR, 'stage-'));
+  try {
+    const stagedProxy = extract(stage, assetName, archive);
+    if (!WIN) fs.chmodSync(stagedProxy, 0o755);
+    return { stage, stagedProxy, ...versions(stagedProxy) };
+  } catch (error) { fs.rmSync(stage, { recursive: true, force: true }); throw error; }
+}
+
+function installSetupCandidate(candidate, selection) {
+  if (selection.explicit) onboarding.writeOnboarding(selection.provider);
+  sweepOldProxyBinaries();
+  if (candidate.proxyChanged) replaceProxyBinary({ stagedPath: candidate.stagedProxy, currentVersion: candidate.currentVersion });
+  else log('model-gateway: proxy unchanged; keeping its authenticated process running.');
+}
+
+function pendingProxyRestartMessage(candidate, previousVersion) {
+  const installedVersion = proxyVersion(candidate.stagedVersion) || 'unknown';
+  return `proxy on disk: ${installedVersion}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``;
+}
+
+async function restartSetupProxy(candidate, { restart = restartProxyForVersionChange, report = log } = {}) {
+  if (!candidate.proxyChanged || intentionallyStopped()) return false;
+  const previousVersion = proxyVersion(candidate.currentVersion);
+  const handoff = await restart({ previousVersion });
+  if (!handoff) report(pendingProxyRestartMessage(candidate, previousVersion));
+  return handoff;
+}
+
+function assertRestartResult(result, component) {
+  if (result && !result.ok && !result.stillStarting) throw new Error(`could not restart shim ${component}: ${result.reason}`);
+}
+
+async function restartSetupShim(proxyRecoveryHandoff, { supervisor = restartShimIfOutdated, worker = restartWorkerWithDrain } = {}) {
   if (proxyRecoveryHandoff || intentionallyStopped()) return null;
-  const supervisorRestart = await restartShimIfOutdated({ operation: 'setup' });
-  if (supervisorRestart) return supervisorRestart;
-  const restarting = await restartWorkerWithDrain();
-  if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
+  const result = await supervisor({ operation: 'setup' });
+  assertRestartResult(result, 'supervisor');
+  if (result) return result;
+  assertRestartResult(await worker(), 'worker');
   return null;
 }
 
-async function setup({ preserveWiring = false } = {}) {
+async function activateSetupCandidate(candidate, required, selection, {
+  install = installSetupCandidate, restartProxy = restartSetupProxy, restartShim = restartSetupShim, run = spawnSync,
+} = {}) {
+  const handoff = await onboarding.installCompatibleCandidate({ required, staged: candidate.stagedProxy, run,
+    install: () => install(candidate, selection), restart: () => restartProxy(candidate) });
+  return { handoff, supervisorRestart: await restartShim(handoff) };
+}
+
+function versionOutput(result, fallback = '') {
+  return (result.stdout || result.stderr || '').trim() || fallback;
+}
+
+function reportInstalledProxy() {
+  const version = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  log(`installed: ${versionOutput(version, PROXY_BIN)}`);
+}
+
+function acceptSetupStartup(result) {
+  if (result.stillStarting) { warnShimStillStarting(result); return false; }
+  if (!result.ok) throw new Error(result.reason);
+  return true;
+}
+
+async function startAfterSetup(activation, { start = startAll, reportInstalled = reportInstalledProxy } = {}) {
+  reportInstalled();
+  if (activation.supervisorRestart?.stillStarting) return acceptSetupStartup(activation.supervisorRestart);
+  const result = await start({ lifecycleOperation: 'setup', resumeIntent: activation.resumeIntent, preserveRunningSupervisor: activation.handoff });
+  return acceptSetupStartup(result);
+}
+
+async function setupProviderReady(provider, { auth = isAuthed, readiness = getGatewayReadiness, report = log } = {}) {
+  if (provider === 'codex') {
+    clearUpstreamBlocked(); clearUpstreamUnavailable();
+    if (auth()) { report('ChatGPT auth: valid'); return true; }
+    report(`next: node "${resolveStableCommandPath()}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
+    return false;
+  }
+  const selected = await readiness({ provider });
+  report(selected.message);
+  return selected.ready;
+}
+
+function refreshExistingSetupWiring(mode, { read = wiredMode, write = writeEnv, report = log } = {}) {
+  const current = read();
+  if (!current?.scope) {
+    report(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${resolveStableCommandPath()}" env --write-project\` to write this project's .claude/settings.local.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
+    return;
+  }
+  write(current.scope, false, { mode, quiet: true });
+  report(current.mode !== mode
+    ? `model-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`
+    : 'already wired; refreshed Claude alias pins. Restart Claude Code and open /model');
+}
+
+async function finishSetupWiring(selection, {
+  providerReady = setupProviderReady, refreshPins = refreshDetectedPinsAndWiring, preserve = finishUpdateWithoutWiring,
+  intended = resolveIntendedMode, alreadyWired = isWired, refreshExisting = refreshExistingSetupWiring,
+  write = writeEnv, catalog = writeCatalog, status = statusReport,
+} = {}) {
+  if (!await providerReady(selection.provider)) return;
+  await refreshPins({ force: true });
+  if (selection.preserveWiring) return preserve();
+  const { mode } = await intended();
+  if (alreadyWired()) refreshExisting(mode);
+  else {
+    write(selectedWiringScope(), false, { mode });
+    await catalog().catch(() => {});
+  }
+  await status();
+}
+
+async function setup({ selection = onboarding.prepareSetup(args), stage = stageLatestProxy,
+  requires = () => onboarding.compatibilityRequired({ provider: selection.provider, port: PROXY_PORT }),
+  activate = activateSetupCandidate, start = startAfterSetup, finish = finishSetupWiring } = {}) {
   mkdirs();
   migrateReadinessGates();
-  sweepOldProxyBinaries();
-  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
-  const plat = WIN ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
-  const ext = WIN ? 'zip' : 'tar.gz';
-  const assetName = `claude-code-proxy-${plat}-${arch}.${ext}`;
-
-  log(`fetching latest release of ${REPO}...`);
-  const rel = await fetchUrl(`https://api.github.com/repos/${REPO}/releases/latest`);
-  if (rel.status !== 200) die(`GitHub API returned ${rel.status}`);
-  const release = JSON.parse(rel.body.toString());
-  let archive;
-  try { archive = await downloadVerifiedArchive(release, assetName, { fetchUrl, log }); }
-  catch (error) { die(error.message); }
-
-  const stage = fs.mkdtempSync(path.join(BIN_DIR, 'stage-'));
-  const archiveFile = path.join(stage, assetName);
-  fs.writeFileSync(archiveFile, archive);
-  const tarBin = WIN
-    ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
-    : 'tar';
-  const tar = spawnSync(tarBin, ['-xf', archiveFile], { encoding: 'utf8', cwd: stage, windowsHide: true });
-  if (tar.status !== 0) die(`extract failed: ${tar.stderr || tar.status}`);
-  const staged = fs.readdirSync(stage, { recursive: true })
-    .map(String).find((file) => path.basename(file) === path.basename(PROXY_BIN));
-  if (!staged) die(`extracted, but ${path.basename(PROXY_BIN)} not found in ${BIN_DIR}`);
-  const stagedProxy = path.join(stage, staged);
-  if (!WIN) fs.chmodSync(stagedProxy, 0o755);
-  const currentVersion = parseSemver((spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
-  const stagedVersion = parseSemver((spawnSync(stagedProxy, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
-  const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
-
-  const maintenanceStopped = preserveWiring && intentionallyStopped();
-  let proxyRecoveryHandoff = false;
-  if (proxyChanged) {
-    const previousVersion = proxyVersion(currentVersion);
-    const installedVersion = proxyVersion(stagedVersion);
-    replaceProxyBinary({ stagedPath: stagedProxy, currentVersion });
-    proxyRecoveryHandoff = await restartSetupProxy({ previousVersion });
-    if (!proxyRecoveryHandoff) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
-  } else {
-    log('model-gateway: proxy unchanged; keeping its authenticated process running.');
-  }
-  fs.rmSync(stage, { recursive: true, force: true });
+  const required = await requires();
+  const maintenanceStopped = selection.preserveWiring && intentionallyStopped();
+  const candidate = await stage();
+  let activation;
+  try { activation = await activate(candidate, required, selection); }
+  finally { fs.rmSync(candidate.stage, { recursive: true, force: true }); }
   if (maintenanceStopped) return log('Model Gateway updated; intentional stop preserved. Run start to resume.');
-  const supervisorRestart = await restartAfterSetup(proxyRecoveryHandoff);
-  if (supervisorRestart && !supervisorRestart.ok && !supervisorRestart.stillStarting) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
-
-  const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
-  log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
-
-  if (supervisorRestart?.stillStarting) return warnShimStillStarting(supervisorRestart);
-  // one-shot: start everything, and finish the wiring when auth already works
-  const r = await startAll({ lifecycleOperation: 'setup', resumeIntent: !preserveWiring, preserveRunningSupervisor: proxyRecoveryHandoff });
-  if (r.stillStarting) return warnShimStillStarting(r);
-  if (!r.ok) die(r.reason);
-  clearUpstreamBlocked();
-  clearUpstreamUnavailable();
-  if (!isAuthed()) {
-    log(`next: node "${resolveStableCommandPath()}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
-    return;
-  }
-  log('ChatGPT auth: valid');
-  await refreshDetectedPinsAndWiring({ force: true });
-  if (preserveWiring) return finishUpdateWithoutWiring();
-  const { mode } = await resolveIntendedMode();
-  if (isWired()) {
-    const current = wiredMode();
-    if (!current || !current.scope) {
-      // Refusing to copy an environment value into settings is deliberate (it may point at someone's dev
-      // instance), but saying only that left no route forward, so setup skipped the write on every run and the
-      // machine stayed permanently wired by one terminal (SQ-1901). Name the command that does converge it.
-      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${resolveStableCommandPath()}" env --write-project\` to write this project's .claude/settings.local.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
-    } else if (current.mode !== mode) {
-      writeEnv(current.scope, false, { mode, quiet: true });
-      log(`model-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
-    } else {
-      writeEnv(current.scope, false, { mode, quiet: true });
-      log('already wired; refreshed Claude alias pins. Restart Claude Code and open /model');
-    }
-    await statusReport();
-    return;
-  }
-  writeEnv(selectedWiringScope(), false, { mode });
-  await writeCatalog().catch(() => { /* advisory only; Claude Code can retry on the next ensure */ });
-  await statusReport();
+  if (await start({ ...activation, resumeIntent: !selection.preserveWiring })) await finish(selection);
 }
 
 // ------------------------------------------------------- process management
@@ -937,17 +1021,33 @@ function reportCompatibilityListener(compat) {
   log('  Remote Control transport: this reports local HTTP listener status only, not end-to-end Remote Control.');
 }
 
+function getGatewayReadiness({ provider = onboarding.readOnboarding(), codex = null, snapshot = null } = {}) {
+  return onboarding.gatewayReadiness({ provider, port: PROXY_PORT, snapshot,
+    getCodexReadiness: () => codex ? Promise.resolve(codex) : getCodexReadiness() });
+}
+
+function reportSelectedReadiness(selected) {
+  const codex = selected.codexReadiness || selected;
+  if (selected.onboardingProvider === 'antigravity') {
+    log(`Codex readiness (not required for Antigravity): ${codex.state}`);
+    log(`Antigravity readiness: ${selected.state}`);
+    log(selected.message);
+    return;
+  }
+  log(`Codex readiness: ${codex.state}`);
+  if (!codex.ready) log(codex.message);
+}
+
 async function statusReport({ readiness = null, probeShim = probeShimState } = {}) {
-  const codex = readiness || await getCodexReadiness();
-  const { checks, health } = codex;
+  const selected = readiness || await getGatewayReadiness();
+  const { checks, health } = selected;
   log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
   if (checks.shimRunning) reportAdvertisedModels(health);
   reportShimState(await probeShim({ fetchHealth: async () => health }));
   reportCompatibilityListener(health?.compat);
-  log(`Codex readiness: ${codex.state}`);
-  if (!codex.ready) log(codex.message);
+  reportSelectedReadiness(selected);
   reportContextWindows();
-  return { ok: codex.ready, health, readiness: codex };
+  return { ok: selected.ready, health, readiness: selected };
 }
 
 function reportContextWindows() {
@@ -1293,11 +1393,11 @@ function policyGatewayModelIds(liveIds = []) {
   if (liveIds.length) {
     return [...new Set(liveIds.filter((id) => {
       const policy = resolveGatewayModelPolicy(id);
-      return policy?.backend === 'codex' || policy?.backend === 'grok';
+      return ['codex', 'grok', 'antigravity'].includes(policy?.backend);
     }))];
   }
   return Object.values(MODEL_WINDOW_POLICY)
-    .filter((policy) => policy.backendId !== 'default' && policy.backend !== 'anthropic')
+    .filter((policy) => policy.backendId !== 'default' && ['codex', 'grok'].includes(policy.backend))
     .map((policy) => policy.backendId);
 }
 
@@ -1322,6 +1422,10 @@ function modelIdDifference(liveIds) {
   };
 }
 
+function backendWindowLabel(row) {
+  return row.backend === 'antigravity' ? 'unverified (unmeasured)' : windowValue(row.backendWindow);
+}
+
 function reportModelWindowPolicy(liveIds = []) {
   const autoCompact = configuredAutoCompactWindow();
   log(`model window policy: ${autoCompact
@@ -1332,7 +1436,7 @@ function reportModelWindowPolicy(liveIds = []) {
     log([
       row.backendId,
       row.pickerId,
-      windowValue(row.backendWindow),
+      backendWindowLabel(row),
       windowValue(row.advertisedWindow),
       row.clientWindow,
       row.clientCompactPoint,
@@ -1373,113 +1477,136 @@ function reportRegisteredProjectPinDisagreements() {
   return result.disagreements.length > 0;
 }
 
-async function doctor({ readiness: suppliedReadiness = null } = {}) {
-  reportReadinessGate();
-  recordedGatewayPids();
-  const readiness = suppliedReadiness || await getCodexReadiness();
+function reportDoctorBinary(readiness) {
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
-  if (readiness.checks.proxyBinary) {
-    const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
-    log(`version: ${(v.stdout || v.stderr || '').trim()}`);
-    log(`codex auth: ${readiness.checks.codexAuth ? 'authenticated' : 'MISSING'}`);
-  }
-  try {
-    grokBackend.readGrokAuth();
-    log(`grok auth: present (${grokBackend.readGrokVersion()})`);
-  } catch (error) {
-    log(`grok auth: ${error.message}`);
-  }
-  const status = await statusReport({ readiness });
-  const servingVersion = readiness.checks.servingVersion;
-  log(`serving shim version: ${servingVersion || 'unavailable'}`);
-  log(`lifecycle evidence: ${lifecycleLogPath()}`);
-  const observedExit = latestObservedLifecycleExit();
-  if (observedExit) {
-    const identity = observedExit.child || { component: observedExit.component, pid: observedExit.pid };
-    const exitCode = Object.hasOwn(observedExit, 'exitCode') ? observedExit.exitCode : 'unavailable';
-    log(`lifecycle exit evidence: observed ${identity.component} PID ${identity.pid}; exit code ${exitCode}; signal ${observedExit.signal || 'none'}`);
-  } else {
-    log('lifecycle exit evidence: no observed exit record. A force-killed supervisor or OS termination may leave no final record.');
-  }
-  const hookWaitCutShort = latestHookWaitCutShort();
-  if (hookWaitCutShort) {
-    log(`lifecycle startup evidence: SessionStart started the supervisor and stopped waiting after ${QUIET_STARTUP_WAIT_MS / 1000}s; it kept starting in the background (${hookWaitCutShort.at}).`);
+  if (!readiness.checks.proxyBinary) return;
+  const version = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  log(`version: ${versionOutput(version)}`);
+  log(`codex auth: ${readiness.checks.codexAuth ? 'authenticated' : 'MISSING'}`);
+}
+
+function reportDoctorGrokAuth() {
+  try { grokBackend.readGrokAuth(); log(`grok auth: present (${grokBackend.readGrokVersion()})`); }
+  catch (error) { log(`grok auth: ${error.message}`); }
+}
+
+function reportObservedExit(observedExit) {
+  if (!observedExit) { log('lifecycle exit evidence: no observed exit record. A force-killed supervisor or OS termination may leave no final record.'); return; }
+  const identity = observedExit.child || { component: observedExit.component, pid: observedExit.pid };
+  const exitCode = Object.hasOwn(observedExit, 'exitCode') ? observedExit.exitCode : 'unavailable';
+  log(`lifecycle exit evidence: observed ${identity.component} PID ${identity.pid}; exit code ${exitCode}; signal ${observedExit.signal || 'none'}`);
+}
+
+function reportFallbackDiagnostic(provider) {
+  if (provider === 'antigravity') {
+    log('Antigravity uses fixed direct model/tier/profile sessions, without automatic resend or another-provider fallback. Local readiness does not verify Google access.'); return;
   }
   log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
-  if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
-    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${resolveStableCommandPath()}" ensure to replace the stale supervisor.`);
-  }
+}
+
+function reportDoctorLifecycle(readiness) {
+  log(`serving shim version: ${readiness.checks.servingVersion || 'unavailable'}`);
+  log(`lifecycle evidence: ${lifecycleLogPath()}`);
+  reportObservedExit(latestObservedLifecycleExit());
+  const cutShort = latestHookWaitCutShort();
+  if (cutShort) log(`lifecycle startup evidence: SessionStart started the supervisor and stopped waiting after ${QUIET_STARTUP_WAIT_MS / 1000}s; it kept starting in the background (${cutShort.at}).`);
+  reportFallbackDiagnostic(readiness.onboardingProvider);
+  if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${readiness.checks.servingVersion}. Run node "${resolveStableCommandPath()}" ensure to replace the stale supervisor.`);
+}
+
+async function reportDoctorCatalog() {
   const catalog = readCatalog();
-  log(catalog && Array.isArray(catalog.models)
+  log(Array.isArray(catalog?.models)
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
   reportEffectivePins('Claude ', ' pin');
   if (reportRegisteredProjectPinDisagreements()) process.exitCode = 1;
   await reportLiveShimModelPolicy();
-  const activeScope = selectedWiringScope();
+}
+
+const WIRING_LABELS = { env: 'process env', 'project-local': 'project settings.local.json', 'project-shared': 'project settings.json', user: 'user settings.json' };
+const WIRING_SCOPES = { 'project-local': 'project', 'project-shared': 'project', user: 'user' };
+function modeForBase(base) { return base === COMPAT_BASE_URL ? 'compat' : base === DEFAULT_BASE_URL ? 'default' : null; }
+function wiringLocation(effective) { return effective.source ? `${WIRING_LABELS[effective.source]}${effective.file ? ` (${effective.file})` : ''}` : 'none'; }
+
+function wiringSource(source) {
+  if (source === 'env') return { file: null, base: process.env.ANTHROPIC_BASE_URL };
+  const file = settingsPath(source === 'project-local' ? 'project' : source);
+  return { file, base: readSettingsIfPresent(file)?.env?.ANTHROPIC_BASE_URL };
+}
+
+function wiringTags(source, effective, activeScope) {
+  return (source === effective.source ? ' [effective]' : '') + (WIRING_SCOPES[source] === activeScope ? ' [default write target]' : '');
+}
+
+function reportWiringSource(source, effective, activeScope) {
+  const { file, base } = wiringSource(source);
+  const labels = { compat: ' [RC-compatibility mode]', default: ' [default mode]' };
+  const label = labels[modeForBase(base)] || '';
+  log(`${WIRING_LABELS[source]}: ${ourBaseUrls().includes(base) ? 'wired' + label : 'not wired'}${file ? ` (${file})` : ''}${wiringTags(source, effective, activeScope)}`);
+}
+
+function reportWiringBypass(effective) {
+  const bypass = processEnvGatewayBypass(effective);
+  if (!bypass) return false;
+  console.error(`model-gateway: ERROR: process env ANTHROPIC_BASE_URL (${effective.value}) bypasses model-gateway and shadows wired ${bypass.shadowedWiring.file}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`);
+  process.exitCode = 1; return true;
+}
+
+function reportUnwired(effective) {
+  const bypass = reportWiringBypass(effective);
+  if (ourBaseUrls().includes(effective.value)) return;
+  if (!bypass) console.error('model-gateway: ERROR: wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
+  process.exitCode = 1;
+}
+
+function modeResolution(effective, shadowedLocation) {
+  if (effective.source === 'project-local') return `Project settings.local.json wins. Make the modes agree with env --write-project or remove ANTHROPIC_BASE_URL from ${shadowedLocation}.`;
+  if (effective.source === 'env') return 'Process env wins. Update or remove its ANTHROPIC_BASE_URL before changing settings.';
+  return `The highest-precedence setting wins. Make the modes agree with env --write-project or remove ANTHROPIC_BASE_URL from ${shadowedLocation}.`;
+}
+
+function reportModeContradiction(effective) {
+  const effectiveMode = modeForBase(effective.value);
+  if (!effectiveMode) return;
+  const shadowed = effective.shadowed.find((definition) => modeForBase(definition.value) && modeForBase(definition.value) !== effectiveMode);
+  if (!shadowed) return;
+  const shadowedLocation = shadowed.file || 'process env ANTHROPIC_BASE_URL';
+  const effectiveLocation = effective.file || 'process env ANTHROPIC_BASE_URL';
+  console.error(`model-gateway: ERROR: effective ${effectiveLocation} uses ${effectiveMode} mode, but shadowed ${shadowedLocation} uses ${modeForBase(shadowed.value)} mode. ${modeResolution(effective, shadowedLocation)} Restart Claude Code.`);
+  process.exitCode = 1;
+}
+
+function reportDoctorWiring() {
   const effective = effectiveBaseUrl();
-  const modeFor = (base) => (base === COMPAT_BASE_URL ? 'compat' : base === DEFAULT_BASE_URL ? 'default' : null);
-  const labelFor = {
-    env: 'process env',
-    'project-local': 'project settings.local.json',
-    'project-shared': 'project settings.json',
-    user: 'user settings.json',
-  };
-  const scopeFor = { 'project-local': 'project', 'project-shared': 'project', user: 'user' };
-  const effectiveWired = ourBaseUrls().includes(effective.value);
-  const effectiveLocation = effective.source
-    ? `${labelFor[effective.source]}${effective.file ? ` (${effective.file})` : ''}`
-    : 'none';
-  log(`wiring: effective ${effectiveLocation}${effectiveWired ? ' [model-gateway]' : ''}`);
+  const activeScope = selectedWiringScope();
+  log(`wiring: effective ${wiringLocation(effective)}${ourBaseUrls().includes(effective.value) ? ' [model-gateway]' : ''}`);
   log('default wiring target: this project\'s .claude/settings.local.json');
-  for (const source of ['env', 'project-local', 'project-shared', 'user']) {
-    const scope = scopeFor[source];
-    const file = source === 'env' ? null : settingsPath(source === 'project-local' ? 'project' : source);
-    let base = source === 'env' ? process.env.ANTHROPIC_BASE_URL : null;
-    if (file) {
-      try { base = JSON.parse(fs.readFileSync(file, 'utf8')).env?.ANTHROPIC_BASE_URL; } catch {}
-    }
-    const wired = ourBaseUrls().includes(base);
-    const mode = modeFor(base);
-    const tags = [source === effective.source ? ' [effective]' : '', scope === activeScope ? ' [default write target]' : ''].join('');
-    const modeLabel = mode === 'compat' ? ' [RC-compatibility mode]' : mode === 'default' ? ' [default mode]' : '';
-    log(`${labelFor[source]}: ${wired ? 'wired' + modeLabel : 'not wired'}${file ? ` (${file})` : ''}${tags}`);
-  }
-  if (effective.source === 'project-local' && effective.shadowed.some(({ source }) => source === 'user')) {
-    log('wiring precedence: project settings.local.json wins over user settings.json.');
-  }
-  const processEnvBypass = processEnvGatewayBypass(effective);
-  if (processEnvBypass) {
-    console.error(`model-gateway: ERROR: process env ANTHROPIC_BASE_URL (${effective.value}) bypasses model-gateway and shadows wired ${processEnvBypass.shadowedWiring.file}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`);
-    process.exitCode = 1;
-  }
-  if (!effectiveWired) {
-    if (!processEnvBypass) console.error('model-gateway: ERROR: wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
-    process.exitCode = 1;
-  }
-  const effectiveMode = modeFor(effective.value);
-  const shadowedMode = effective.shadowed.find((definition) => {
-    const mode = modeFor(definition.value);
-    return mode && mode !== effectiveMode;
-  });
-  if (effectiveMode && shadowedMode) {
-    const shadowedLocation = shadowedMode.file || 'process env ANTHROPIC_BASE_URL';
-    const effectiveLocation = effective.file || 'process env ANTHROPIC_BASE_URL';
-    const resolution = effective.source === 'project-local'
-      ? `Project settings.local.json wins. Make the modes agree with env --write-project or remove ANTHROPIC_BASE_URL from ${shadowedLocation}.`
-      : effective.source === 'env'
-        ? `Process env wins. Update or remove its ANTHROPIC_BASE_URL before changing settings.`
-        : `The highest-precedence setting wins. Make the modes agree with env --write-project or remove ANTHROPIC_BASE_URL from ${shadowedLocation}.`;
-    console.error(`model-gateway: ERROR: effective ${effectiveLocation} uses ${effectiveMode} mode, but shadowed ${shadowedLocation} uses ${modeFor(shadowedMode.value)} mode. ${resolution} Restart Claude Code.`);
-    process.exitCode = 1;
-  }
-  const scope = installScope();
-  if (scope === 'project-only') {
-    log('install scope: project (expected for project-local wiring)');
-  } else if (scope === 'user') {
-    log('install scope: user (shared installation)');
-  }
+  for (const source of Object.keys(WIRING_LABELS)) reportWiringSource(source, effective, activeScope);
+  if (effective.source === 'project-local' && effective.shadowed.some(({ source }) => source === 'user')) log('wiring precedence: project settings.local.json wins over user settings.json.');
+  reportUnwired(effective);
+  reportModeContradiction(effective);
+}
+
+function reportInstallScope() {
+  const labels = { 'project-only': 'project (expected for project-local wiring)', user: 'user (shared installation)' };
+  const label = labels[installScope()];
+  if (label) log(`install scope: ${label}`);
+}
+
+async function doctor({ readiness: suppliedReadiness = null } = {}) {
+  reportReadinessGate();
+  const provider = onboarding.readOnboarding();
+  recordedGatewayPids();
+  const readiness = await getGatewayReadiness({ provider, codex: suppliedReadiness });
+  reportDoctorBinary(readiness);
+  reportDoctorGrokAuth();
+  const status = await statusReport({ readiness });
+  reportDoctorLifecycle(readiness);
+  await reportDoctorCatalog();
+  reportDoctorWiring();
+  reportInstallScope();
   if (!status.ok) process.exitCode = 1;
 }
 
@@ -1582,16 +1709,18 @@ function labelFor(base) {
   return `GPT-${ver}${suffixLabel}`;
 }
 
+function grokCatalogDetails(id) {
+  if (typeof id !== 'string' || !id.startsWith(GROK_PREFIX)) return null;
+  const base = id.slice(PREFIX.length).replace(/\[1m\]$/, '');
+  return { provider: 'grok', base, label: displayName(base, 'grok') };
+}
+
 function modelCatalogDetails(id) {
+  const nativeId = antigravity.resolveModel(id);
+  if (nativeId) return { provider: 'antigravity', base: nativeId.replace('/', '-'), label: antigravity.displayName(nativeId) };
   const codexBase = codexBaseFromId(id);
-  if (codexBase && codexBase !== 'auto') {
-    return { provider: 'codex', base: codexBase, label: labelFor(codexBase) };
-  }
-  if (typeof id === 'string' && id.startsWith(GROK_PREFIX)) {
-    const base = id.slice(PREFIX.length).replace(/\[1m\]$/, '');
-    return { provider: 'grok', base, label: displayName(base, 'grok') };
-  }
-  return null;
+  if (codexBase && codexBase !== 'auto') return { provider: 'codex', base: codexBase, label: labelFor(codexBase) };
+  return grokCatalogDetails(id);
 }
 
 function unavailableProviderReadiness(provider) {
@@ -1628,6 +1757,7 @@ function providerCatalogReadiness(provider, readiness) {
 }
 
 function catalogContextWindow(id, provider) {
+  if (provider === 'antigravity') return { contextWindow: 200000, contextWindowNote: 'Conservative unmeasured client advertisement; native backend window unverified. Fixed model, tier and profile; fresh session for changes. No [1m] support.' };
   const contextWindow = gatewayAdvertisedWindow(id);
   if (!contextWindow) return {};
   const contextWindowNote = gatewayWindowNote(provider, contextWindowCap(provider), contextWindowCompactAt(provider), resolveGatewayModelPolicy(id));
@@ -1699,13 +1829,14 @@ function mergeSubsetCatalog(existing, catalog) {
   return { ...catalog, models, providers, codexReadiness: providers.codex ?? null };
 }
 
-function writeCatalogFile(catalogPath, catalog) {
-  const existing = readJsonFile(catalogPath);
+function assertWritableCatalogSchema(existing, catalogPath) {
   const storedVersion = catalogSchemaVersion(existing);
   if (storedVersion != null && storedVersion > CATALOG_SCHEMA_VERSION) {
     throw new Error(`refusing to overwrite catalog schema ${storedVersion} at ${catalogPath}; this gateway supports schema ${CATALOG_SCHEMA_VERSION}, upgrade required`);
   }
-  const nextCatalog = mergeSubsetCatalog(existing, catalog);
+}
+
+function replaceCatalogFile(catalogPath, nextCatalog) {
   try {
     writeFileAtomically(catalogPath, JSON.stringify(nextCatalog, null, 2) + '\n');
   } catch (error) {
@@ -1713,6 +1844,26 @@ function writeCatalogFile(catalogPath, catalog) {
     throw error;
   }
   return nextCatalog;
+}
+
+function applyCurrentProviderReadiness(catalog, currentReadiness) {
+  if (!currentReadiness) return catalog;
+  const present = new Set(catalog.models.map((model) => model.provider));
+  const providers = { ...catalog.providers };
+  for (const [provider, readiness] of Object.entries(currentReadiness)) {
+    if (present.has(provider)) providers[provider] = providerReadiness(readiness);
+  }
+  return { ...catalog, providers, codexReadiness: providers.codex ?? null };
+}
+
+function writeCatalogFile(catalogPath, catalog, { antigravitySnapshot = null, currentReadiness = null } = {}) {
+  const existing = readJsonFile(catalogPath);
+  assertWritableCatalogSchema(existing, catalogPath);
+  const reconciled = reconcileCatalog(existing, catalog, antigravitySnapshot);
+  const retained = mergeSubsetCatalog(reconciled.existing, reconciled.catalog);
+  // Model identity retention is not readiness evidence. A provider omitted from
+  // the fresh model list may still have retained rows, but uses its current probe.
+  return replaceCatalogFile(catalogPath, applyCurrentProviderReadiness(retained, currentReadiness));
 }
 
 async function fetchShimModels() {
@@ -1767,18 +1918,48 @@ async function reportGatewayDiscoveryCache() {
   }
 }
 
+function catalogHasAntigravity(catalog) {
+  return Array.isArray(catalog?.models) && catalog.models.some((row) => antigravity.isReservedModel(row.id));
+}
+
+async function catalogAntigravitySnapshot(ids, existing) {
+  const tracker = createDiscoveryTracker({ port: PROXY_PORT, file: path.join(STATE, 'antigravity-discovery.json') });
+  const snapshot = await tracker.observe(ids, { force: catalogHasAntigravity(existing) });
+  return snapshot;
+}
+
+function catalogIdsForSnapshot(ids, snapshot) {
+  const admitted = new Set(snapshot.models.map(antigravity.pickerId));
+  return ids.filter((id) => !antigravity.isReservedModel(id) || admitted.has(antigravity.pickerId(id)));
+}
+
+function authoritativeAntigravityRemoval(snapshot, existing) {
+  if (!snapshot.authoritative || !catalogHasAntigravity(existing)) return false;
+  const listed = new Set(snapshot.models.map(antigravity.pickerId));
+  return existing.models.some((row) => antigravity.isReservedModel(row.id) && !listed.has(antigravity.pickerId(row.id)));
+}
+
+function assertCatalogHasModels(ids, snapshot, existing, shimCount) {
+  if (ids.length || authoritativeAntigravityRemoval(snapshot, existing)) return;
+  throw new Error(`shim advertised ${shimCount} model(s), none of them a gateway id`);
+}
+
 async function writeCatalog() {
   const shimModels = await fetchShimModels();
-  writeGatewayDiscoveryCache(shimModels, (await fetchShimHealth())?.catalog);
-  const ids = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
-  // A zero-model catalog would merge straight back to the stored models with a fresh timestamp, so
-  // publishing it would make a shim that advertises nothing routable look like a successful refresh.
-  // Refusing is right; returning null was not, because every caller read that as "nothing to do".
-  if (!ids.length) throw new Error(`shim advertised ${shimModels.length} model(s), none of them a gateway id`);
+  const health = await fetchShimHealth();
+  const existing = readCatalog();
+  const requestedIds = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
+  const snapshot = await catalogAntigravitySnapshot(requestedIds, existing);
+  const ids = catalogIdsForSnapshot(requestedIds, snapshot);
+  assertCatalogHasModels(ids, snapshot, existing, shimModels.length);
   const readiness = await getCodexReadiness();
-  const catalog = buildCatalog(ids, readiness);
+  const agyReadiness = antigravity.readiness(snapshot, { shimReady: readiness.checks.shimRunning && readiness.checks.servingVersionMatches });
+  const catalog = buildCatalog(ids, { codex: readiness, antigravity: agyReadiness });
+  const models = shimModels.filter((model) => !antigravity.isReservedModel(model.id) || ids.includes(model.id));
+  writeGatewayDiscoveryCache(models, health?.catalog);
   mkdirs();
-  return writeCatalogFile(CATALOG_PATH, catalog);
+  return writeCatalogFile(CATALOG_PATH, catalog, { antigravitySnapshot: { ...snapshot, readiness: agyReadiness },
+    currentReadiness: { codex: readiness, antigravity: agyReadiness } });
 }
 
 // setup --preserve-wiring ends here. The stable updater runs from whatever directory
@@ -2073,6 +2254,7 @@ function createShimRelay({
   agent,
   getHealthMetadata = () => ({}),
   onWorkerRequestLost = () => {},
+  antigravityLimits,
 } = {}) {
   // A worker that already took the body may have spent it upstream, so only
   // the loss of that worker justifies sending the request again: a resend to a
@@ -2179,6 +2361,9 @@ function createShimRelay({
   async function relay(req, res) {
     const body = await readShimRequestBody(req, res);
     if (body === null) return;
+    if (reservedRequest(body)) return relayAntigravityWorker(req, res, body, {
+      httpClient, getWorker, getWorkerPort, agent, onWorkerRequestLost, limits: antigravityLimits,
+    });
     try {
       relayWorkerResponse(req, res, await requestWorker(req, body));
     } catch (error) {
@@ -2641,24 +2826,39 @@ function runShim() {
 }
 
 
-function sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings }) {
-  const processEnvBypass = processEnvGatewayBypass(effectiveWiring);
-  if (processEnvBypass) {
-    return `Model Gateway is bypassed: process env ANTHROPIC_BASE_URL (${effectiveWiring.value}) shadows wired ${processEnvBypass.shadowedWiring.file}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`;
-  }
-  if (!readiness.checks.codexAuth) {
-    return 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.';
-  }
+function bypassWiringNotice(effectiveWiring) {
+  const bypass = processEnvGatewayBypass(effectiveWiring);
+  if (!bypass) return null;
+  return `Model Gateway is bypassed: process env ANTHROPIC_BASE_URL (${effectiveWiring.value}) shadows wired ${bypass.shadowedWiring.file}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`;
+}
+
+function localWiringNotice(effectiveWiring) {
   const locallyWired = effectiveWiring.source === 'project-local' && ourBaseUrls().includes(effectiveWiring.value);
-  if (locallyWired) {
-    return `Claude Code is wired to model-gateway through project settings.local.json (${effectiveWiring.file}).`;
-  }
+  return locallyWired ? `Claude Code is wired to model-gateway through project settings.local.json (${effectiveWiring.file}).` : null;
+}
+
+function unwiredSessionNotice(provider, projectWirings) {
   const currentProjectFile = path.resolve(settingsPath('project'));
-  const siblingWiring = projectWirings.find(({ file }) => path.resolve(file) !== currentProjectFile);
-  if (siblingWiring) {
-    return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. A recorded project-local wiring exists at ${siblingWiring.file}; run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
-  }
-  return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
+  const sibling = projectWirings.find(({ file }) => path.resolve(file) !== currentProjectFile);
+  const prefix = `Claude Code is not wired to model-gateway, so your ${provider} models are missing from /model. `;
+  const action = `Run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
+  return prefix + (sibling ? `A recorded project-local wiring exists at ${sibling.file}; ${action.replace(/^Run/, 'run')}` : action);
+}
+
+function antigravityWiringNotice({ readiness, effectiveWiring, projectWirings }) {
+  if (!readiness.ready) return readiness.message;
+  return localWiringNotice(effectiveWiring) || unwiredSessionNotice('Antigravity', projectWirings) + ` ${antigravity.FRESH_SESSION}`;
+}
+
+function providerWiringNotice(context) {
+  const { readiness, effectiveWiring, projectWirings } = context;
+  if (readiness.onboardingProvider === 'antigravity') return antigravityWiringNotice(context);
+  if (!readiness.checks.codexAuth) return 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.';
+  return localWiringNotice(effectiveWiring) || unwiredSessionNotice('ChatGPT/Codex', projectWirings);
+}
+
+function sessionStartWiringNotice(context) {
+  return bypassWiringNotice(context.effectiveWiring) || providerWiringNotice(context);
 }
 
 function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
@@ -2668,8 +2868,76 @@ function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
   return 'signed in; run setup once more to finish wiring Claude Code';
 }
 
+function ensureProvider(finish) {
+  try { return onboarding.readOnboarding(); }
+  catch (error) { noticeForUser(error.message, { toStderr: true }); finish(1); }
+}
+
+function ensureMissingBinary(context, readiness) {
+  if (context.wired) {
+    const message = context.provider === 'antigravity'
+      ? 'Antigravity native proxy binary is missing. Run setup --provider antigravity with a compatible native backend; provider enablement and credentials are unchanged.'
+      : readiness.message;
+    noticeForUser(message, { toStderr: true }); context.finish(1); return;
+  }
+  const guidance = context.provider === 'antigravity'
+    ? 'model-gateway is installed but not set up for Antigravity. Setup --provider antigravity requires a compatible explicitly enabled native backend and local Antigravity auth/project configuration, not ChatGPT login. See the model-gateway skill.'
+    : 'model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.';
+  noticeForUser(guidance); context.finish(0);
+}
+
+async function startForEnsure(context) {
+  const initial = await getGatewayReadiness({ provider: context.provider });
+  if (!initial.checks.proxyBinary) return ensureMissingBinary(context, initial);
+  const result = await ensureWiredGateway(context.wired, context.quiet);
+  if (!result.ok) return onboarding.reportStartupFailure(context, result, {
+    notice: noticeForUser, record: recordGatewayLifecycle, command: resolveStableCommandPath,
+  });
+  return getGatewayReadiness({ provider: context.provider });
+}
+
+function noticeShellOnlyWiring(wiring) {
+  if (wiring.source !== 'env' || wiring.shadowed.some((definition) => definition.file)) return;
+  noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${resolveStableCommandPath()}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
+}
+
+async function syncEnsureWiring(context, readiness) {
+  const effectiveWiring = effectiveBaseUrl();
+  if (!context.wired) {
+    noticeForUser(sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings: registeredProjectWirings() }));
+    await syncUnwiredPins(); return;
+  }
+  noticeShellOnlyWiring(effectiveWiring);
+  await syncCompatMode();
+  await syncGatewayWiring();
+}
+
+async function finishEnsure(context, readiness) {
+  if (context.quiet && !readiness.ready) noticeForUser(readiness.message, { toStderr: true });
+  if (context.provider === 'codex') warnIfProxyOutdated();
+  await syncEnsureWiring(context, readiness);
+  if (!context.quiet) await statusReport({ readiness });
+  flushHookOutput();
+}
+
+async function ensureWithProvider() {
+  const quiet = flag('--quiet');
+  if (quiet) bufferedHookLines = [];
+  const finish = (code) => { flushHookOutput(); process.exit(quiet ? 0 : code); };
+  const provider = ensureProvider(finish);
+  migrateReadinessGates();
+  cleanLegacyEnvSettings(); cleanLegacyGatewayModelCache(); sweepOldProxyBinaries();
+  const context = { quiet, finish, provider, wired: isWired() };
+  const readiness = await startForEnsure(context);
+  if (readiness) await finishEnsure(context, readiness);
+}
+
 const commands = {
-  setup: () => withLifecycleLock(() => setup({ preserveWiring: flag('--preserve-wiring') })),
+  setup: () => {
+    onboarding.validateSetupArguments(args);
+    return withLifecycleLock(() => setup());
+  },
+  auth: () => { process.exitCode = onboarding.runAuth(args); },
   login: async () => {
     if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
     const mode = flag('--device') ? 'device' : 'login';
@@ -2678,6 +2946,7 @@ const commands = {
     process.exitCode = result.status == null ? 1 : result.status;
   },
   start: () => withLifecycleLock(async () => {
+    onboarding.readOnboarding();
     const result = await startAll({ lifecycleOperation: 'start', resumeIntent: true });
     if (!result.ok) die(result.reason);
     await statusReport();
@@ -2694,69 +2963,7 @@ const commands = {
     }
     log('stopped');
   }),
-  ensure: async () => {
-    const quiet = flag('--quiet');
-    if (quiet) bufferedHookLines = [];
-    // The hook path exits 0 even on a refusal state, because Claude Code reads a hook's stdout JSON only on a
-    // zero exit: exiting nonzero there trades the one user-visible line for a bare "hook failed" badge, which is
-    // this ticket's whole complaint (SQ-1901). A direct `ensure` still fails loudly for the updater and for a
-    // person running it by hand.
-    const finish = (code) => { flushHookOutput(); process.exit(quiet ? 0 : code); };
-    migrateReadinessGates();
-    cleanLegacyEnvSettings();
-    cleanLegacyGatewayModelCache();
-    sweepOldProxyBinaries();
-    const wired = isWired();
-    const initialReadiness = await getCodexReadiness();
-    if (!initialReadiness.checks.proxyBinary) {
-      if (wired) {
-        noticeForUser(initialReadiness.message, { toStderr: true });
-        finish(1);
-      }
-      noticeForUser('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
-      finish(0);
-    }
-    const result = await ensureWiredGateway(wired, quiet);
-    if (!result.ok) {
-      if (quiet && result.waitCutShort) {
-        if (result.started?.includes('shim')) {
-          recordGatewayLifecycle('ensure-hook-wait-cut-short', {
-            component: 'SessionStart',
-            pid: process.pid,
-            outcome: 'supervisor-started',
-          });
-        }
-        noticeForUser('model-gateway is still starting; retry the Codex model in a few seconds', { toStderr: true });
-        finish(0);
-      }
-      noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${resolveStableCommandPath()}" doctor\` to see which part is down.`, { toStderr: true });
-      finish(1);
-    }
-    const readiness = await getCodexReadiness();
-    if (quiet && !readiness.ready) noticeForUser(readiness.message, { toStderr: true });
-    warnIfProxyOutdated();
-    const effectiveWiring = effectiveBaseUrl();
-    if (!wired) {
-      noticeForUser(sessionStartWiringNotice({
-        readiness,
-        effectiveWiring,
-        projectWirings: registeredProjectWirings(),
-      }));
-      await syncUnwiredPins();
-    } else {
-      // isWired() accepts a base URL exported by the shell, which is how a machine ends up routed only in the
-      // terminal that exported it: background sessions and executor worktrees start unwired, and the only place
-      // that said so was a per-request stderr line in the worker.
-      const wiring = effectiveWiring;
-      if (wiring.source === 'env' && !wiring.shadowed.some((definition) => definition.file)) {
-        noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${resolveStableCommandPath()}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
-      }
-      await syncCompatMode();
-      await syncGatewayWiring();
-    }
-    if (!quiet) await statusReport({ readiness });
-    flushHookOutput();
-  },
+  ensure: () => ensureWithProvider(),
   status: async () => { process.exitCode = (await statusReport()).ok ? 0 : 1; },
   models: async () => {
     const result = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 })
@@ -2782,6 +2989,9 @@ module.exports = {
   migrateReadinessGates,
   startupFailureFor,
   writeStartupFailure,
+  setup, getGatewayReadiness, setupProviderReady, finishSetupWiring,
+  proxyAssetName, tarExecutable, downloadProxyArchive, extractProxyCandidate, binarySemver, candidateVersions, stageLatestProxy,
+  installSetupCandidate, restartSetupProxy, restartSetupShim, activateSetupCandidate, startAfterSetup, refreshExistingSetupWiring,
   usage: USAGE,
   parseHostsCompatEntry,
   parseHostsCompatBlock,

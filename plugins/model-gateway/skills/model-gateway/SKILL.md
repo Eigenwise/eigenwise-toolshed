@@ -1,7 +1,7 @@
 ---
 name: model-gateway
 description: >-
-  Set up, update, or diagnose the local ChatGPT/Codex gateway for Claude Code's /model picker. Use
+  Set up, update, or diagnose the local Codex/Grok gateway and experimental native Antigravity frontend for Claude Code's /model picker. Use
   for gateway setup, login, model visibility, routing, or failures.
 ---
 
@@ -10,7 +10,8 @@ description: >-
 Two local processes give Claude Code native access to the user's ChatGPT subscription models:
 `claude-code-proxy` (does OpenAI OAuth and translates Anthropic Messages API to the Codex
 backend) and a shim router this plugin owns. `ANTHROPIC_BASE_URL` points at the shim: requests
-for `claude-gpt-*` models are un-prefixed and go to the proxy, everything else passes through
+for `claude-gpt-*` models are un-prefixed and go to the proxy. Exact experimental Antigravity
+selectors use the separate native path below; reserved malformed selectors fail locally. Ordinary Claude requests pass through
 to api.anthropic.com with the user's normal claude.ai login. The shim's `/v1/models` advertises
 Codex models with a `claude-` prefix because Claude Code's model discovery drops ids that don't
 start with `claude`/`anthropic`. That prefix is shared with the real Anthropic ids, so the route
@@ -96,7 +97,7 @@ built-in list, keeps the previous cache, retries the proxy on its next refresh t
 wires the directory it runs from.
 
 Restart remains necessary to surface new rows in `/model`: Claude Code reads the picker cache once at
-session start. `/reload-plugins` does not reload it. Restoring or refreshing auth on an already-wired
+session start. `/reload-plugins` does not reload it. Restoring or refreshing Codex auth on an already-wired
 install needs no restart of the current Claude Code process: the proxy is a separate process, so once `login` + `setup` re-authenticate it,
 the next request routes through cleanly. Settings, discovery-cache, plugin, or model-row changes do need a full restart of the affected project process. Keep these two recovery paths separate. The shim supervisor also probes the proxy's `/v1/models` endpoint
 while it runs, confirming a failed probe through a fresh connection before restarting an unavailable proxy with single-flight bounded backoff. It leaves a healthy proxy
@@ -186,6 +187,38 @@ bring auth back, or you kill the session that was about to use it.
   concrete id are confirmed; an end-to-end custom-agent spawn through this path has not been verified
   here.
 - **Codex schema compatibility**: Codex rejects some Unicode property escapes such as `\p{Cc}` and `\P{Cf}`. After deferred hydration, the shim changes only a Codex-bound provider hint, never Claude Code's host schema or an Anthropic request. It admits a missing dialect or Draft 2020-12 and only `pattern` instances reached through `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, or `unevaluatedProperties`/`unevaluatedItems`. Each real property atom must stand alone in a negated character class without ranges, set syntax, captures, backreferences, or a negative regex context. The shim removes only that atom and preserves every other regex byte. `not`, conditionals, `oneOf`, `contains`, references, definitions, content schemas, affected pattern-property keys, unknown containers, and unsafe regexes refuse locally with HTTP 400 naming the tool, JSON Pointer, and reason code. Tell the user it was not forwarded or rerouted. Do not claim arbitrary schemas are preserved or try to bypass that diagnostic.
+
+## Experimental Antigravity: fixed direct sessions only
+
+Do not infer native support from a proxy version, an old binary, or a `models.json` row. The serving proxy must confirm schema-v1 supported/native/enabled capabilities and list the exact native ID. The companion native contribution is under review at https://github.com/raine/claude-code-proxy/pull/185; setup's latest release download must not be assumed to contain it. Consumer acceptance requires its DAILY routing update; that is not a universal origin policy for unrelated GCP projects, and explicit native origin overrides remain intact. Frontend fixtures do not verify live Google access. Sidequest's requested-provider refresh/missing-row update is a separate dependency; do not claim its final consumer gate passed merely because the generic pinned-executor fixture passes.
+
+The only mappings are:
+
+- `claude-antigravity-gemini-4-argon-low` → `antigravity/gemini-4-argon-low`
+- `claude-antigravity-gemini-4-argon-medium` → `antigravity/gemini-4-argon-medium`
+- `claude-antigravity-gemini-4-argon-high` → `antigravity/gemini-4-argon-high`
+
+Both exact forms route directly; discovery emits picker IDs and responses retain the exact requested form. Catalog `id` is the routable picker alias, not its slug (medium has a hash-shortened slug). Keep model, tier, selector spelling and profile fixed. **Start a fresh session before changing any of them.** Never route Antigravity through `claude-codex-auto`, route markers or cached/inherited dispatch targets. Reserved user markers, including malformed slash/bracket targets in older history, return a handled 400 before fallback or persistence. Fresh-session/direct-ID recovery is required. Tool results, assistant text and bare prose are not route authority; a direct AGY request ignores misleading markers and stays pinned.
+
+Commands:
+
+- `auth antigravity login [--manual]`, `auth antigravity status [--json]`, and `auth antigravity logout` invoke only native auth, including while inference is disabled. Manual login forwards exactly one `--manual` with native terminal stdio intact; the user completes hosted consent and pastes the code in their own foreground terminal, never chat or logs. Unknown/repeated options and device flow refuse before invocation. No credential import, backend enablement or model selection occurs.
+- Native schema-v1 status has nested `configuration`, string `auth`, `project`, `configuration_ready`, and fixed `live_verified: false`. Exit 0 can report unready state. With valid configuration and a stored project, `auth: "ready"` and `auth: "refresh_required"` can both be locally ready. The fixed false field is not a login failure; never demand fresh login merely to bypass normal credential refresh. Honor native `configuration_ready`, not a recomputation from auth/project enums: `refresh_required` may remain supported but locally `configuration-unready` when required application configuration is absent. Serving capabilities, local readiness and real Google acceptance remain separate.
+- `setup --provider codex|antigravity` explicitly chooses onboarding guidance. Missing `~/.claude/model-gateway/onboarding.json` means Codex without a write; explicit setup writes only `{ "schemaVersion": 1, "provider": "antigravity" }` or its `codex` equivalent. Plain setup/updates/`--preserve-wiring` preserve the preference. Invalid/future records remain intact and refuse before effects. Do not use retired `wiring.json` or add an environment duplicate.
+- AGY-only setup/status/doctor/ensure/SessionStart follow Antigravity readiness without requiring ChatGPT login. Codex readiness remains separate. AGY still requires a compatible explicitly enabled serving backend and locally usable auth/project configuration; setup never enables it secretly.
+- When compatibility is required by onboarding, explicit configuration or confirmed serving support, setup checks the **staged candidate's** bounded read-only native status contract before replacement/drain/restart. It does not require candidate authentication or enabled=true. Refusal preserves the installed binary/services. Never bypass this gate or treat ordinary setup/update as a safe overwrite of a locally pinned prerelease.
+
+Native inference is experimental/default **off**. Only explicit `CCP_ANTIGRAVITY_ENABLED=1` or `antigravity.enabled: true` on the intended native process enables it; onboarding never writes those settings or imports another profile.
+
+Native User-Agent precedence is `CCP_ANTIGRAVITY_USER_AGENT` → `antigravity.userAgent` → native `claude-code-proxy/<package version>` default; `CCP_USER_AGENT` is not inherited. The file's `userAgent` is type-checked as a string before environment overlay. Valid environment values can replace invalid file-string contents, never nonstring file values. Selected overrides must be 1–4096 printable ASCII bytes with no outer spaces, controls or non-ASCII bytes. A defined empty/invalid environment value refuses rather than falling back or being trimmed. Gateway preflight validates this supported key without writing it, enabling inference or replacing an explicit `CCP_ANTIGRAVITY_BASE_URL` / `antigravity.baseUrl`. Never ship a personal User-Agent or route as a public default. Select the low/medium/high tier with its exact model ID, not an effort override.
+
+AGY has a conservative unmeasured 200k client advertisement and an unverified native backend window. No Codex cap/override, synthetic sentry, compaction rule, billing note or `[1m]` alias applies. Raw `[1m]` and context-1m beta requests fail before normalization on Messages and count_tokens. OpenAI-compatible endpoints are unsupported. The gateway changes only the top-level request model token, preserves tool schemas, plan tools and opaque carriers, and delegates replay/argument validation to native code. Response rewriting is limited to JSON message.model and SSE message_start.message.model, never nested tool data. Incoming auth, cookies and internal control tokens are excluded by an explicit header allowlist.
+
+Generation has no automatic resend, fallback or Codex recovery conversion through either local hop. Cancellation propagates only to owned requests; it cannot undo charges already incurred. An ambiguous failure uses `x-should-retry: false`; retry manually only if another generation is intended. Bounds are 16 MiB per SSE frame, 24 MiB nonstream body, 32 MiB total streamed wire bytes and 900,000 ms elapsed relay time. Truncated/error streams remain failures without synthetic stop/text. The real `message_stop` and bounded following tail are released only after clean HTTP-body EOF, not socket close; a terminal-finishing client must not miss a later error or truncation. Multiline SSE data prefixes and line endings stay intact during identity rewriting. Legacy Codex/Grok behavior is unchanged.
+
+Capability discovery is optional for ordinary providers and read-only when AGY IDs, prior confirmed snapshots or explicit AGY operations require it. Auth missing alone does not remove implemented models. Authoritative disable/model removal reconciles stale AGY rows; malformed/transient/invalid-configuration observations cannot refresh readiness or falsely claim authoritative disablement. An empty shim model list refuses catalog refresh without changing its timestamp unless a validated AGY removal is actually observed. Retaining a Codex model row never restores historical ready:true over its current readiness probe. Public schema 4 retains only `ready`, `state`, `message` per provider and Codex-only `codexReadiness`. Local readiness does not verify Google access. Native credential refresh can retain profile/session identity; manual login/logout/account/project changes may require a fresh session.
+
+Telemetry is aggregate-only for AGY, with supplied validated usage and actual wire bytes. Carrier bytes are not tokens. Do not invent per-tool/section cache attribution, cache TTL promises or subscription prices; do not log carriers, signatures, auth output or raw provider errors. Existing consent controls remain authoritative.
 
 ## Local gateway records
 
@@ -284,7 +317,7 @@ agree).
 
 ## Failure modes worth knowing
 
-- **Client disconnects during upload**: the public shim relay and `/internal/rc-compatibility` discard aborted or failed body reads without stopping the supervisor or interrupting sibling streams. Aborted uploads are not forwarded or counted as worker failures, and the application does not write to a disconnected response. Other read failures return a non-retryable HTTP 400 only while the response is writable. Both readers enforce a 64 MiB body cap (HTTP 413). This protects incoming uploads only; do not infer that disconnecting after a completed upload cancels provider work or prevents charges.
+- **Client disconnects during upload**: the public shim relay and `/internal/rc-compatibility` discard aborted or failed body reads without stopping the supervisor or interrupting sibling streams. Aborted uploads are not forwarded or counted as worker failures, and the application does not write to a disconnected response. Other read failures return a non-retryable HTTP 400 only while the response is writable. Both readers enforce a 64 MiB body cap (HTTP 413). For legacy providers this protects incoming uploads only. Antigravity additionally propagates cancellation after upload through both owned HTTP hops, but cancellation cannot undo provider work or charges already incurred.
 
 - **Every request fails after wiring**: a SessionStart hook can time out while it starts the shim. Claude Code cancels that hook, and a directly spawned supervisor can die with its process tree before it records an exit. Model Gateway launches the supervisor outside that tree and stops waiting before the hook budget, but if this is an older install or it still repeats, run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.
