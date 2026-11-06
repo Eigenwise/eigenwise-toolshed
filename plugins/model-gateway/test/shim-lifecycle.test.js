@@ -10,7 +10,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { describeShimState, probeShimState } = require('../lib/shim-state.js');
 const { PLUGIN_VERSION, compatibilityPortOwnerIdentifiers, processAlive, startAll, statusReport } = require('../lib/commands.js');
-const { createProxyRecovery, portListening, processOwningPort, proxyModelsAnswering } = require('../lib/process-supervision.js');
+const { createProxyRecovery, portListening, processOwningPort, proxyModelsAnswering, spawnSupervisedProxy } = require('../lib/process-supervision.js');
 const { spawnGatewayProcessSync } = require('./support.js');
 
 test('supervisor waits out a slow-starting proxy child instead of racing it (#251)', async (t) => {
@@ -457,4 +457,26 @@ test('status reports the RC-compatibility listener for each hosts and bind outco
     'RC-compatibility hosts entry: detected (127.0.0.1 api.anthropic.com)',
     '  127.0.0.1:80 bound: yes',
   ]);
+});
+
+test('spawnSupervisedProxy forwards CODEX_GATEWAY_REQUEST_COMPRESSION without overriding explicit CCP_CODEX_REQUEST_COMPRESSION', (t) => {
+  const logs = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-proxy-env-'));
+  t.after(() => fs.rmSync(logs, { recursive: true, force: true }));
+  const spawned = [];
+  const spawnProcess = (command, args, options) => {
+    spawned.push({ command, args, options });
+    return new EventEmitter();
+  };
+
+  spawnSupervisedProxy({ command: 'proxy-bin', port: 18765, logs, spawnProcess, env: { CODEX_GATEWAY_REQUEST_COMPRESSION: '1' } });
+  assert.equal(spawned.at(-1).options.env.CCP_CODEX_REQUEST_COMPRESSION, '1');
+
+  spawnSupervisedProxy({
+    command: 'proxy-bin',
+    port: 18765,
+    logs,
+    spawnProcess,
+    env: { CODEX_GATEWAY_REQUEST_COMPRESSION: '1', CCP_CODEX_REQUEST_COMPRESSION: '0' },
+  });
+  assert.equal(spawned.at(-1).options.env.CCP_CODEX_REQUEST_COMPRESSION, '0');
 });
