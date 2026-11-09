@@ -5,6 +5,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeCommandsOnPath } = require('../hooks/freshness-helpers.js');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
 const LEGACY_GATEWAY_PLUGIN = `codex-gateway@${GATEWAY_MARKETPLACE}`;
@@ -48,7 +49,8 @@ their recorded project directory so Claude Code updates the right scope.
   --confirm-sessions-closed
                 Required with --migrate-model-gateway because migration moves shared gateway state
   --claude      Claude Code command to run. By default, the updater tries claude on PATH,
-                then known desktop-app install locations. Use an absolute path to override discovery.`;
+                including Windows claude.exe, claude.cmd and claude.ps1, then desktop-app locations.
+                Use an absolute path to override discovery.`;
 }
 
 function registryPath(home = os.homedir()) {
@@ -395,9 +397,38 @@ function commandText(command) {
   return [command.command, ...command.args].map((part) => JSON.stringify(part)).join(' ');
 }
 
+function quoteBatchArgument(value) {
+  if (/["%!\x00-\x1f]/.test(value)) throw new Error('Cannot safely pass quotes, %, !, or control characters to a Claude batch command. Use a native claude.exe path with --claude.');
+  return '"' + value + '"';
+}
+
+function windowsScriptCommand(command) {
+  if (/\.(cmd|bat)$/i.test(command.command)) {
+    return {
+      command: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'),
+      args: ['/d', '/v:off', '/s', '/c', '"' + [command.command, ...command.args].map(quoteBatchArgument).join(' ') + '"'],
+      windowsVerbatimArguments: true,
+    };
+  }
+  if (/\.ps1$/i.test(command.command)) {
+    return {
+      command: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      args: ['-NoProfile', '-NonInteractive', '-File', command.command, ...command.args],
+    };
+  }
+  return command;
+}
+
 function defaultRun(command) {
-  const result = childProcess.spawnSync(command.command, command.args, {
+  let launch;
+  try {
+    launch = process.platform === 'win32' ? windowsScriptCommand(command) : command;
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  const result = childProcess.spawnSync(launch.command, launch.args, {
     cwd: command.cwd,
+    windowsVerbatimArguments: launch.windowsVerbatimArguments,
     encoding: 'utf8',
     shell: false,
     windowsHide: true,
@@ -464,7 +495,7 @@ function preflightClaude(options, run, report, platform = process.platform, envi
   const explicit = hasExplicitClaudeCommand(options);
   const candidates = explicit
     ? [options.claude]
-    : ['claude', ...desktopClaudeCandidates(platform, environment)];
+    : [...claudeCommandsOnPath(platform, environment), ...desktopClaudeCandidates(platform, environment)];
   let failedCandidate;
 
   for (const candidate of candidates) {
@@ -485,7 +516,7 @@ function preflightClaude(options, run, report, platform = process.platform, envi
   } else {
     report(`Toolshed update stopped: no runnable Claude Code executable was found (${detail}).`);
   }
-  report('Retry with --claude <absolute claude.exe path> if Claude Code is installed elsewhere.');
+  report('Looked for claude.exe and claude.cmd (also claude.ps1) on Windows PATH. Retry with --claude <absolute path> if Claude Code is installed elsewhere.');
   return false;
 }
 
