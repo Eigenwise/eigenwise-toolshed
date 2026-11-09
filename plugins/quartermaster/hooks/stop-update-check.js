@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeDir } = require('../lib/paths.js');
 const {
   cacheIsCurrent,
   readCache,
@@ -13,7 +14,6 @@ const {
 const {
   MARKETPLACE,
   activeInstances,
-  availableVersionsKey,
   installedVersionsKey,
   loadedPluginVersion,
   newerInstalledVersion,
@@ -40,7 +40,7 @@ function readStdin(fileSystem = fs) {
 function activeToolshedInstances(input, options) {
   const fileSystem = options.fileSystem || fs;
   const home = options.home || os.homedir();
-  const registryFile = options.registryFile || path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+  const registryFile = options.registryFile || path.join(claudeDir(process.env, home), 'plugins', 'installed_plugins.json');
   return activeInstances(readJson(fileSystem, registryFile) || {}, input.cwd, MARKETPLACE, options.platform);
 }
 
@@ -63,14 +63,15 @@ async function decide(input, options = {}) {
       cache = { checkedAt: new Date(now).toISOString(), manifest };
       writeCache(cache, fileSystem, home);
     } catch {
-      cache = null;
+      cache = { checkedAt: new Date(now).toISOString(), unavailable: true };
+      writeCache(cache, fileSystem, home);
     }
   }
 
   const instances = activeToolshedInstances(input, options);
   const messages = [];
   const updates = remoteUpdates(instances, cache?.manifest);
-  if (updates.length && warnOnce(input, 'stop-remote', options, availableVersionsKey(updates))) {
+  if (updates.length && warnOnce(input, 'remote', options)) {
     messages.push(remoteWarning(instances, cache, now));
   }
 
@@ -82,12 +83,12 @@ async function decide(input, options = {}) {
     pluginRoot,
   });
   const installedVersion = newerInstalledVersion(instances, loadedVersion);
-  if (installedVersion && warnOnce(input, 'stop-reload', options, `quartermaster@${installedVersion}`)) {
+  if (installedVersion && warnOnce(input, 'reload', options, `quartermaster@${installedVersion}`)) {
     messages.push(reloadWarning(installedVersion, loadedVersion));
   }
 
   const reportedUpdates = reportedReloads(instances, input, options);
-  if (reportedUpdates.length && warnOnce(input, 'stop-reload', options, installedVersionsKey(reportedUpdates))) {
+  if (reportedUpdates.length && warnOnce(input, 'reload', options, installedVersionsKey(reportedUpdates))) {
     messages.push(reportedReloadWarning(reportedUpdates));
   }
 

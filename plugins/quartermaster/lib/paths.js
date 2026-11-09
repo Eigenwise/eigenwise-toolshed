@@ -3,8 +3,8 @@
 const os = require('node:os');
 const path = require('node:path');
 
-function claudeDir(env = process.env) {
-  return env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+function claudeDir(env = process.env, home = os.homedir()) {
+  return env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
 }
 
 function projectsRoot(env = process.env) {

@@ -5,6 +5,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeDir } = require('../lib/paths.js');
 const { claudeCommandsOnPath } = require('../hooks/freshness-helpers.js');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
@@ -54,7 +55,7 @@ their recorded project directory so Claude Code updates the right scope.
 }
 
 function registryPath(home = os.homedir()) {
-  return path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+  return path.join(claudeDir(process.env, home), 'plugins', 'installed_plugins.json');
 }
 
 function readRegistry(file) {
@@ -164,7 +165,7 @@ function healStatuslineFile(filePath, dryRun) {
 function healStaleStatuslines(instances, options = {}) {
   const home = options.home || os.homedir();
   const projects = [...new Set(instances.map((instance) => instance.projectPath).filter(Boolean))];
-  const files = [path.join(home, '.claude', 'settings.json')];
+  const files = [path.join(claudeDir(process.env, home), 'settings.json')];
   for (const projectPath of projects) files.push(path.join(projectPath, '.claude', 'settings.json'), path.join(projectPath, '.claude', 'settings.local.json'));
   return files.map((file) => healStatuslineFile(file, options.dryRun)).filter((result) => result.healed);
 }
@@ -218,8 +219,8 @@ function gatewayMigrationInstruction() {
 }
 
 function moveLegacyGatewayState(home, options) {
-  const legacyState = path.join(home, '.claude', 'codex-gateway');
-  const modelState = path.join(home, '.claude', 'model-gateway');
+  const legacyState = path.join(claudeDir(process.env, home), 'codex-gateway');
+  const modelState = path.join(claudeDir(process.env, home), 'model-gateway');
   if (!fs.existsSync(legacyState)) return { moved: false, legacyState, modelState };
   if (fs.existsSync(modelState)) {
     throw new Error(`Refusing to merge legacy gateway state into existing ${modelState}. Move it aside after checking it, then retry the migration.`);
@@ -317,7 +318,7 @@ function marketplaceCommand(marketplace, claude) {
 function gatewayUpdateCommand(home = os.homedir()) {
   return {
     command: process.execPath,
-    args: [path.join(home, '.claude', 'model-gateway', 'update.js')],
+    args: [path.join(claudeDir(process.env, home), 'model-gateway', 'update.js')],
     label: 'model-gateway update',
   };
 }
@@ -355,7 +356,7 @@ function gatewayCommand(instances, action, currentProject = process.cwd(), repor
 
 function gatewayWiringMode(home = os.homedir()) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'wiring.json'), 'utf8')).mode === 'global'
+    return JSON.parse(fs.readFileSync(path.join(claudeDir(process.env, home), 'model-gateway', 'wiring.json'), 'utf8')).mode === 'global'
       ? 'global'
       : 'local';
   } catch { return 'local'; }
@@ -572,7 +573,7 @@ function runModelGatewayMigration({ registryFile = registryPath(), home = os.hom
     return { ok: false, failures };
   }
   if (options.dryRun) {
-    report(`Would move gateway-owned state from ${path.join(home, '.claude', 'codex-gateway')} to ${path.join(home, '.claude', 'model-gateway')}, then run model-gateway setup, ensure, doctor, and retire codex-gateway.`);
+    report(`Would move gateway-owned state from ${path.join(claudeDir(process.env, home), 'codex-gateway')} to ${path.join(claudeDir(process.env, home), 'model-gateway')}, then run model-gateway setup, ensure, doctor, and retire codex-gateway.`);
     return { ok: true, failures: [] };
   }
 
