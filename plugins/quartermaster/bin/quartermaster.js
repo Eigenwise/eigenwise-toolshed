@@ -16,7 +16,7 @@ const {
   removeDecision,
   statusFor,
   updateDecision,
-  verifyDecisions,
+  verificationReport,
 } = require('../lib/state.js');
 
 const USAGE = `quartermaster - mine recent Claude Code sessions for what would make the work easier
@@ -262,7 +262,7 @@ async function main(argv = process.argv.slice(2)) {
       runDecisionsRemove(options);
       return;
     case 'verify':
-      printJson(verifyDecisions(options.projectPath));
+      printJson(verificationReport(options.projectPath));
       return;
     case 'allowlist': {
       const result = await applyPermissionAllowlist(options);

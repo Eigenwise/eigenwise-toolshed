@@ -2,10 +2,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 
-const { projectsRoot, slugForProject } = require('./paths.js');
+const { checkoutPaths, projectsRoot, slugForProject } = require('./paths.js');
 
 const DEFAULT_DAYS = 30;
 const DEFAULT_SESSIONS = 40;
@@ -33,19 +32,6 @@ function resolveSlug(projectPath, root) {
   const wanted = slug.toLowerCase();
   const match = safeReaddir(root).find((name) => name.toLowerCase() === wanted);
   return match ?? slug;
-}
-
-function checkoutPaths(projectPath) {
-  const project = path.resolve(projectPath);
-  try {
-    const listing = execFileSync('git', ['-C', project, 'worktree', 'list', '--porcelain', '-z'], {
-      encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return [...new Set([project, ...listing.split('\0')
-      .filter((field) => field.startsWith('worktree ')).map((field) => field.slice(9))])];
-  } catch {
-    return [project];
-  }
 }
 
 function* transcriptLines(file) {

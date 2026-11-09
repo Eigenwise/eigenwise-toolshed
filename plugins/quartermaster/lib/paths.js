@@ -1,5 +1,6 @@
 'use strict';
 
+const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -47,4 +48,21 @@ function normalizeProjectPath(value) {
   return normalized.replace(/\/$/, '');
 }
 
-module.exports = { claudeDir, normalizeProjectPath, pluginsDir, projectsRoot, slugForProject, stateRoot };
+function checkoutPaths(projectPath) {
+  const project = path.resolve(projectPath);
+  try {
+    const listing = execFileSync('git', ['-C', project, 'worktree', 'list', '--porcelain', '-z'], {
+      encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return [...new Set([...listing.split('\0')
+      .filter((field) => field.startsWith('worktree ')).map((field) => field.slice(9)), project])];
+  } catch {
+    return [project];
+  }
+}
+
+function mainProjectPath(projectPath) {
+  return checkoutPaths(projectPath)[0];
+}
+
+module.exports = { checkoutPaths, mainProjectPath, claudeDir, normalizeProjectPath, pluginsDir, projectsRoot, slugForProject, stateRoot };

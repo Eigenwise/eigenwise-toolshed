@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { stateRoot } = require('./paths.js');
+const { checkoutPaths, mainProjectPath, stateRoot } = require('./paths.js');
 const { countTranscriptsSince } = require('./scan.js');
 
 const MAX_TRACKED_SESSIONS = 200;
@@ -55,7 +55,7 @@ function resupplyThresholds(env = process.env) {
   };
 }
 
-function canonicalProjectDir(projectDir) {
+function canonicalCheckoutDir(projectDir) {
   const resolved = path.resolve(String(projectDir).replace(/\r/g, ''));
   let canonical = resolved;
   try {
@@ -65,6 +65,10 @@ function canonicalProjectDir(projectDir) {
   }
   canonical = canonical.replace(/\\/g, '/');
   return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+function canonicalProjectDir(projectDir) {
+  return canonicalCheckoutDir(mainProjectPath(projectDir));
 }
 
 function projectKey(projectDir) {
@@ -222,7 +226,7 @@ function migrateLegacyProjectState(projectDir, env = process.env) {
     const file = path.join(directory, entry.name);
     const state = readJson(file, null);
     if (!state || typeof state.projectDir !== 'string') continue;
-    if (canonicalProjectDir(state.projectDir) !== projectDir) continue;
+    if (canonicalCheckoutDir(state.projectDir) !== projectDir) continue;
     legacyFiles.push(file);
     legacyStates.push(state);
   }
@@ -233,6 +237,23 @@ function migrateLegacyProjectState(projectDir, env = process.env) {
   writeJsonAtomic(projectStateFile(projectDir, env), migrated);
   for (const file of legacyFiles) fs.rmSync(file, { force: true });
   return migrated;
+}
+
+function worktreeSessions(projectDir, env) {
+  let entries;
+  try {
+    entries = fs.readdirSync(projectStateDirectory(env));
+  } catch {
+    return [];
+  }
+  const linkedDirectories = new Set(checkoutPaths(projectDir).map(canonicalCheckoutDir));
+  linkedDirectories.delete(projectDir);
+  return entries.filter((name) => name.endsWith('.json'))
+    .map((name) => readJson(path.join(projectStateDirectory(env), name), null))
+    .filter((state) => typeof state?.projectDir === 'string')
+    .filter((state) => linkedDirectories.has(canonicalCheckoutDir(state.projectDir)))
+    .filter((state) => Array.isArray(state.sessions))
+    .flatMap((state) => state.sessions.map((session) => ({ ...session, sourceProjectDir: state.projectDir })));
 }
 
 function readProjectState(projectDir, env = process.env) {
@@ -255,13 +276,16 @@ function readProjectState(projectDir, env = process.env) {
   }
   if (!Array.isArray(state.sessions)) state.sessions = [];
   delete state.lastRetroAt;
-  return state;
+  const inheritedSessions = worktreeSessions(canonicalDir, env).filter((session) => session.tally?.prompts >= 2);
+  const merged = mergeProjectStates(canonicalDir, [{ sessions: inheritedSessions }, state]);
+  return merged;
 }
 
 function recordSessionTally(projectDir, sessionId, tally, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
+  if (!(tally.prompts >= 2)) return state;
   state.sessions = state.sessions.filter((session) => session.sessionId !== sessionId);
-  state.sessions.push({ sessionId, endedAt: new Date(now).toISOString(), tally });
+  state.sessions.push({ sessionId, endedAt: new Date(now).toISOString(), tally, sourceProjectDir: path.resolve(projectDir) });
   if (state.sessions.length > MAX_TRACKED_SESSIONS) {
     state.sessions = state.sessions.slice(-MAX_TRACKED_SESSIONS);
   }
@@ -308,6 +332,7 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
   return {
     projectDir: state.projectDir,
     trackedSessions: state.sessions.length,
+    worktreeSessions: countWorktreeSessions(state),
     unanalyzedSessions,
     frictionEvents: friction,
     lastResupplyAt: state.lastResupplyAt,
@@ -420,6 +445,15 @@ function rejectedFingerprints(env = process.env, projectDir = null) {
   return { rejected: [...rejected], applied: [...applied] };
 }
 
+function countWorktreeSessions(state) {
+  return state.sessions.filter((session) => session.sourceProjectDir && canonicalCheckoutDir(session.sourceProjectDir) !== state.projectDir).length;
+}
+
+function verificationReport(projectDir, env = process.env) {
+  const state = readProjectState(projectDir, env);
+  return { window: { sessions: state.sessions.length, worktreeSessions: countWorktreeSessions(state) }, decisions: verifyDecisions(projectDir, env) };
+}
+
 /**
  * Compares per-session friction before and after each applied decision, using the tallies the
  * SessionEnd hook has been recording. This is what turns the recommendations from "plausible"
@@ -479,4 +513,5 @@ module.exports = {
   statusFor,
   updateDecision,
   verifyDecisions,
+  verificationReport,
 };
