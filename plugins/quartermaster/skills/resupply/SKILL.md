@@ -127,7 +127,12 @@ the workspace could not deliver it. Start there.
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" verify --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-Open with one line per earlier decision that has a verdict. Ask two things of each: is it being
+The output has `decisions` and a `window` with `sessions` and `worktreeSessions`. Human-driven
+linked-worktree sessions (at least two real prompts) count toward the main project for verification,
+the nudge, and the resupply offer. Existing worktree tally files are merged on read without rewriting
+them; session ids are deduplicated. Only currently registered worktrees can be resolved.
+
+Open with one line per earlier decision in `decisions` that has a verdict. Ask two things of each: is it being
 used (`attribution`), and did what it targeted actually get cheaper. Name the three verdicts out
 loud: **keep** when it is used and helping, **improve** when it is used but underperforming, and
 **roll back** when it is unused or making no difference. Being honest about a recommendation that
