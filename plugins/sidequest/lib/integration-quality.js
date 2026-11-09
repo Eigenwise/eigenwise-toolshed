@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var integration_quality_exports = {};
 __export(integration_quality_exports, {
+  DEFAULT_QUALITY_POLICY: () => DEFAULT_QUALITY_POLICY,
   configuredIntegrationGate: () => configuredIntegrationGate,
   configuredProjectQualityPolicy: () => configuredProjectQualityPolicy,
   runIntegrationQuality: () => runIntegrationQuality
@@ -38,11 +39,50 @@ var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
 var import_node_url = require("node:url");
 var import_process = require("./ports/process.js");
+const DEFAULT_QUALITY_POLICY = Object.freeze({
+  threshold: 6,
+  legacyRatchet: "not-worse",
+  unverifiedHandling: "debt",
+  debtTicketMode: "standing-per-boundary",
+  installMode: "local"
+});
+const qualityPolicyChoices = {
+  threshold: [6],
+  legacyRatchet: ["not-worse"],
+  unverifiedHandling: ["debt", "block"],
+  debtTicketMode: ["standing-per-boundary", "per-delivery", "none"],
+  installMode: ["local"]
+};
+function qualityPolicyObject(value) {
+  if (Object.prototype.toString.call(value) !== "[object Object]") throw new Error("Quality Gate config and policy must be JSON objects");
+}
+function qualityPolicyOrDefault(project) {
+  const configuration = import_node_path.default.join(project, ".claude/quality-gate/crap.json");
+  if (!import_node_fs.default.existsSync(configuration)) return { ...DEFAULT_QUALITY_POLICY, source: "default" };
+  const contents = JSON.parse(import_node_fs.default.readFileSync(configuration, "utf8"));
+  qualityPolicyObject(contents);
+  const policy = contents.policy === void 0 ? {} : contents.policy;
+  qualityPolicyObject(policy);
+  for (const [name, value] of Object.entries(policy)) validateQualityPolicyChoice(name, value);
+  return { ...DEFAULT_QUALITY_POLICY, ...policy, source: "project" };
+}
+function validateQualityPolicyChoice(name, value) {
+  if (!Object.hasOwn(qualityPolicyChoices, name)) throw new Error("Unknown quality policy field: " + name);
+  if (!qualityPolicyChoices[name].includes(value)) throw new Error("policy." + name + " must be one of: " + qualityPolicyChoices[name].join(", "));
+}
+function debtTicketInstruction(policy) {
+  return {
+    "standing-per-boundary": "Reuse one standing measurement-debt ticket per unsupported capture boundary; append affected deliveries to that ticket. Create it only when none exists.",
+    "per-delivery": "File one measurement-debt ticket for this delivery.",
+    none: "Report measurement debt in the delivery evidence without creating a debt ticket."
+  }[policy.debtTicketMode];
+}
 function configuredProjectQualityPolicy(project, registeredProject = project) {
   const gate = configuredIntegrationGate(registeredProject);
   if (!gate && !import_node_fs.default.existsSync(import_node_path.default.join(project, ".claude/quality-gate/crap.json"))) return void 0;
   if (!gate) throw new Error("Project quality policy exists but Quality Gate is not installed for this project");
-  const owner = require(import_node_path.default.join(gate, "lib", "policy.cjs"));
+  const ownerPath = import_node_path.default.join(gate, "lib", "policy.cjs");
+  const owner = import_node_fs.default.existsSync(ownerPath) ? require(ownerPath) : { qualityPolicyOrDefault, debtTicketInstruction };
   const policy = owner.qualityPolicyOrDefault(project);
   return { policy, debtInstruction: owner.debtTicketInstruction(policy) };
 }
@@ -234,6 +274,7 @@ function enforceQuality(result, mode) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  DEFAULT_QUALITY_POLICY,
   configuredIntegrationGate,
   configuredProjectQualityPolicy,
   runIntegrationQuality

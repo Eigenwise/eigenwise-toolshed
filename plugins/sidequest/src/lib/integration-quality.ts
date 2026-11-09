@@ -14,6 +14,50 @@ export interface ProjectQualityPolicy {
   source: 'project' | 'default';
 }
 
+export const DEFAULT_QUALITY_POLICY = Object.freeze({
+  threshold: 6,
+  legacyRatchet: 'not-worse',
+  unverifiedHandling: 'debt',
+  debtTicketMode: 'standing-per-boundary',
+  installMode: 'local',
+} as const);
+
+const qualityPolicyChoices: Record<string, readonly unknown[]> = {
+  threshold: [6],
+  legacyRatchet: ['not-worse'],
+  unverifiedHandling: ['debt', 'block'],
+  debtTicketMode: ['standing-per-boundary', 'per-delivery', 'none'],
+  installMode: ['local'],
+};
+
+function qualityPolicyObject(value: unknown): asserts value is Record<string, unknown> {
+  if (Object.prototype.toString.call(value) !== '[object Object]') throw new Error('Quality Gate config and policy must be JSON objects');
+}
+
+function qualityPolicyOrDefault(project: string): ProjectQualityPolicy {
+  const configuration = path.join(project, '.claude/quality-gate/crap.json');
+  if (!fs.existsSync(configuration)) return { ...DEFAULT_QUALITY_POLICY, source: 'default' };
+  const contents: unknown = JSON.parse(fs.readFileSync(configuration, 'utf8'));
+  qualityPolicyObject(contents);
+  const policy = contents.policy === undefined ? {} : contents.policy;
+  qualityPolicyObject(policy);
+  for (const [name, value] of Object.entries(policy)) validateQualityPolicyChoice(name, value);
+  return { ...DEFAULT_QUALITY_POLICY, ...policy, source: 'project' };
+}
+
+function validateQualityPolicyChoice(name: string, value: unknown): void {
+  if (!Object.hasOwn(qualityPolicyChoices, name)) throw new Error('Unknown quality policy field: ' + name);
+  if (!qualityPolicyChoices[name]!.includes(value)) throw new Error('policy.' + name + ' must be one of: ' + qualityPolicyChoices[name]!.join(', '));
+}
+
+function debtTicketInstruction(policy: ProjectQualityPolicy): string {
+  return {
+    'standing-per-boundary': 'Reuse one standing measurement-debt ticket per unsupported capture boundary; append affected deliveries to that ticket. Create it only when none exists.',
+    'per-delivery': 'File one measurement-debt ticket for this delivery.',
+    none: 'Report measurement debt in the delivery evidence without creating a debt ticket.',
+  }[policy.debtTicketMode];
+}
+
 interface QualityPolicyOwner {
   qualityPolicyOrDefault(project: string): ProjectQualityPolicy;
   debtTicketInstruction(policy: ProjectQualityPolicy): string;
@@ -23,7 +67,8 @@ export function configuredProjectQualityPolicy(project: string, registeredProjec
   const gate = configuredIntegrationGate(registeredProject);
   if (!gate && !fs.existsSync(path.join(project, '.claude/quality-gate/crap.json'))) return undefined;
   if (!gate) throw new Error('Project quality policy exists but Quality Gate is not installed for this project');
-  const owner: QualityPolicyOwner = require(path.join(gate, 'lib', 'policy.cjs'));
+  const ownerPath = path.join(gate, 'lib', 'policy.cjs');
+  const owner: QualityPolicyOwner = fs.existsSync(ownerPath) ? require(ownerPath) : { qualityPolicyOrDefault, debtTicketInstruction };
   const policy = owner.qualityPolicyOrDefault(project);
   return { policy, debtInstruction: owner.debtTicketInstruction(policy) };
 }

@@ -388,6 +388,45 @@ test('an installed gate without a project file enforces shipped defaults and rec
 });
 
 
+test('Sidequest compatibility defaults equal the Quality Gate shipped policy', () => {
+  const { DEFAULT_QUALITY_POLICY } = require('../lib/integration-quality.js');
+  const { DEFAULT_POLICY } = require('../../quality-gate/lib/policy.cjs');
+  assert.deepEqual(DEFAULT_QUALITY_POLICY, DEFAULT_POLICY);
+});
+
+test('an older installed gate enforces defaults without a policy owner or project file', (context) => {
+  const input = withQualityFixture(context, 7, false);
+  fs.rmSync(path.join(input.project, 'gate/lib/policy.cjs'));
+  fs.rmSync(path.join(input.project, '.claude/quality-gate/crap.json'));
+  const result = runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'older installed gate' }));
+  assert.equal(result.status, 'failed_check');
+  assert.match(result.evidence, /candidateBody cc=7/);
+  assert.equal(result.quality[0]!.policy!.source, 'default');
+  assert.equal(JSON.parse(fs.readFileSync(result.quality[0]!.receipt!, 'utf8')).policy.source, 'default');
+  assert.match(result.quality[0]!.debtTicketNote!, /Reuse one standing.*per unsupported capture boundary/);
+});
+
+test('an older installed gate honors and validates explicit project policy overrides', (context) => {
+  const input = withQualityFixture(context, 3, false);
+  fs.rmSync(path.join(input.project, 'gate/lib/policy.cjs'));
+  const configuration = path.join(input.project, '.claude/quality-gate/crap.json');
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { unverifiedHandling: 'block', debtTicketMode: 'per-delivery' } }));
+  const result = runIntegrationQuality([input], () => ({ kind: 'command', status: 'passed', evidence: 'explicit policy' }));
+  assert.equal(result.status, 'failed_check');
+  assert.equal(result.quality[0]!.policy!.source, 'project');
+  assert.equal(result.quality[0]!.policy!.unverifiedHandling, 'block');
+  assert.match(result.quality[0]!.debtTicketNote!, /one measurement-debt ticket for this delivery/);
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { threshold: 7 } }));
+  const { configuredProjectQualityPolicy } = require('../lib/integration-quality.js');
+  assert.throws(() => configuredProjectQualityPolicy(input.project), /policy.threshold must be one of: 6/);
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { invented: true } }));
+  assert.throws(() => configuredProjectQualityPolicy(input.project), /Unknown quality policy field: invented/);
+  fs.writeFileSync(configuration, '[]');
+  assert.throws(() => configuredProjectQualityPolicy(input.project), /must be JSON objects/);
+  fs.writeFileSync(configuration, JSON.stringify({ policy: null }));
+  assert.throws(() => configuredProjectQualityPolicy(input.project), /must be JSON objects/);
+});
+
 test('standing capture boundary debt appends affected deliveries without duplicate tickets or comments', (context) => {
   const input = withQualityFixture(context, 2, false);
   writeGapReport(input, true);
