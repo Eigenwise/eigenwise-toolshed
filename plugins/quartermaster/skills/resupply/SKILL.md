@@ -281,7 +281,7 @@ Until the project opts in, that command only reports what it would add: it consi
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-The marker and every learned rule stay in the project's `.claude/settings.local.json`, never a user, global, or shared setting. With no marker, the SessionStart hook exits immediately.
+The marker and every learned rule stay in the project's `.claude/settings.local.json`, never a user, global, or shared setting. With no marker, the SessionStart hook exits immediately. After opt-in, permission learning runs in the background; learned rules land at the next session start after that pass.
 
 Now the friction: repeated denials on the same safe pattern, corrections clustering on one theme,
 tool errors concentrated in one tool, hook errors. Each is real and each has a cheap fix; they just
