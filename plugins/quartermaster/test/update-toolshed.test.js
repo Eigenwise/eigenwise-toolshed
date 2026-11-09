@@ -87,7 +87,7 @@ test('runs the gateway doctor in the older registered project instead of the new
   }
 });
 
-test('unregistered current project reports and checks the selected registered project', () => {
+test('registered older current project is reported as doctor target', () => {
   const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-current-'));
   const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
   try {
