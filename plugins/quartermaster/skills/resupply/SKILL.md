@@ -43,7 +43,11 @@ question rather than the question itself.
 
 ## Process
 
-If the user declines a SessionStart nudge or Stop-time offer before the round starts, record that whole-round decline, then stop. Run:
+If the user declines a SessionStart nudge or Stop-time offer before the round starts, record that whole-round decline, then stop. When the user replies `no resupply` to a Stop-time offer, run this command using the hook-provided project and plugin paths, then stop:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"
+```
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"

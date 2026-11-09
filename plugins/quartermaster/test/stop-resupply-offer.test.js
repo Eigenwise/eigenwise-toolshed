@@ -98,9 +98,9 @@ test('Stop offer advises the user with the resupply skill and decline command', 
 
   const output = JSON.parse(runHook(projectDir, stateDir));
   assert.equal(output.decision, undefined);
-  assert.match(output.systemMessage, /\/quartermaster:resupply/);
-  assert.match(output.systemMessage, /decline-resupply/);
-  assert.match(output.systemMessage, /without clearing the evidence window/);
+  assert.match(output.systemMessage, /Reply `resupply` to start a round, or `no resupply` to back off for a while/);
+  assert.doesNotMatch(output.systemMessage, /\$\{/);
+  assert.doesNotMatch(output.systemMessage, /node /);
   assert.match(output.systemMessage, /4 sessions/);
   assert.ok(Buffer.byteLength(JSON.stringify(output)) <= 512, 'Stop guidance stays inside the hook output budget');
 });
