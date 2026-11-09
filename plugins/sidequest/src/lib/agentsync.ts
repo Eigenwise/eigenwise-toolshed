@@ -4,6 +4,7 @@ const { DEMONSTRATIONS_FILE } = require('./store/completion.js');
 'use strict';
 
 import { committedBuildCommands } from './commit-scope.js';
+import { configuredProjectQualityPolicy } from './integration-quality.js';
 import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
 /**
  * sidequest - runtime exec agent sync (SQ-158)
@@ -991,13 +992,12 @@ function briefingCommentBody(comments?: any) {
 
 function configuredQualityGateBody(projectPath?: string, slug?: string) {
   const project = projectPath || store.readMeta(slug)?.path;
-  if (!project) return 'Configured quality gate: none.';
-  const qualityGateConfig = path.join(project, '.claude', 'quality-gate', 'crap.json');
-  const quartermasterConfig = path.join(project, '.claude', 'quartermaster', 'crap.json');
-  const configPath = fs.existsSync(qualityGateConfig) ? qualityGateConfig : quartermasterConfig;
-  if (!fs.existsSync(configPath)) return 'Configured quality gate: none.';
-  const { command = 'node "<quality-gate plugin root>/bin/quality-gate.js" crap', max = 'gate-owned', threshold = max, base = 'gate-selected default' } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}. Legacy bodies whose complexity did not rise are informational and never fail.`;
+  if (!project) return 'No quality policy configured.';
+  const configured = configuredProjectQualityPolicy(project);
+  if (!configured) return 'No quality policy configured.';
+  const origins = { default: 'shipped defaults, no project file', project: 'project file' };
+  const handling = configured.policy.unverifiedHandling === 'debt' ? 'UNVERIFIED coverage is measurement debt, not a delivery hold; keep the delivery marked UNVERIFIED.' : 'UNVERIFIED measurement blocks delivery.';
+  return `Configured quality policy: ${JSON.stringify(configured.policy)} (${origins[configured.policy.source]}). New and complexity-raised bodies must score strictly below ${configured.policy.threshold}; complexity at the threshold fails even without coverage. Legacy bodies whose complexity did not rise are informational and never fail. Untouched legacy bodies are out of scope. ${handling} ${configured.debtInstruction} Keep measurement tooling local; never change tracked dependencies or CI to install it.`;
 }
 
 function legacyVerificationText(value?: string | null): string {

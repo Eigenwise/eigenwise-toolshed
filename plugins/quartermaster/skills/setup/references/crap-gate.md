@@ -115,5 +115,29 @@ priority: 85
 ---
 Before calling a change done, run `node "<quality-gate plugin root>/bin/quality-gate.js" crap`.
 Use the gate's threshold and report per-function rows honestly; unmeasured bodies stay unmeasured, no averages. Untouched legacy functions are out of scope. Block only on new complexity the change introduced; a touched legacy function whose complexity did not rise is reported with its number as informational, never as a failure.
-Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
+Exit 2 means a prerequisite or measurement is missing. Record UNVERIFIED rows and follow the project policy for debt handling; do not claim a measured pass. A coverage gap does not hold delivery under the default debt policy.
 ```
+
+## Project quality policy
+
+Quality Gate owns shipped defaults, which apply whenever the gate is installed. An explicit `.claude/quality-gate/crap.json` overrides those defaults; creating that file still needs approval.
+Propose it with these three sentences, filling the threshold from Quality Gate's proposal:
+
+> New and complexity-raised functions must keep CRAP strictly below the proposed threshold, using measured complexity and coverage.
+> Touched legacy functions whose complexity stays equal or falls are informational; untouched legacy functions are outside the scoring scope.
+> Missing coverage stays UNVERIFIED and becomes measurement debt with one standing ticket per unsupported capture boundary, while measurement tools stay local and installation never changes tracked dependencies or CI.
+
+Read the installed owner's defaults and preserve existing coverage settings with this read-only proposal:
+
+```sh
+node -e "const { qualityPolicyProposal } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/quality-policy.js'); console.log(JSON.stringify(qualityPolicyProposal(process.cwd()), null, 2));"
+```
+
+Show the proposed config, gate command and execution cost in the approval list. After explicit project approval,
+write that same proposal with `writeApprovedQualityPolicy(process.cwd(), true)` from the same module.
+Do not write it on installation alone. Quality Gate owns the supported policy fields and defaults; keep them
+in the config instead of a user-home rule. Debt-ticket modes are `standing-per-boundary`, `per-delivery` and
+`none`. For the default, search for the existing boundary ticket before filing; add affected deliveries there.
+A boundary identifies the unsupported runner/adapter and capture seam, rather than a delivery or source hash.
+The delivery still records UNVERIFIED rows, and a new or raised body's complexity at the threshold still fails.
+An explicit `unverifiedHandling: "block"` opts into holding unverified measurement instead.
