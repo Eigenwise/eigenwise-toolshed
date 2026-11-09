@@ -75,14 +75,14 @@ const COMMAND_FLAGS = {
   "native-agent": ["prompt", "shared-tree", "unverified-transport", "session", "dir", "name"],
   models: ["full"],
   route: ["ticket"],
-  "board-config": ["github-sync", "jira-base-url", "name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-quality", "integration-branch", "delivery", "integration-verify-timeout-ms", "integration-test-file-threshold", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
+  "board-config": ["intake-mode", "intake-review-cycles", "github-sync", "jira-base-url", "name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-quality", "integration-branch", "delivery", "integration-verify-timeout-ms", "integration-test-file-threshold", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
   board: [],
   projects: ["archived"],
   routing: ["enabled", "disabled"],
   "archive-board": [],
   "unarchive-board": [],
   merge: ["dry-run"],
-  story: ["title", "desc", "description", "color", "body", "body-file", "ref", "by", "rotate", "full"],
+  story: ["text", "size", "reason", "options", "id", "answer", "assumption", "review", "findings", "research", "named-by", "title", "desc", "description", "color", "body", "body-file", "ref", "by", "rotate", "full"],
   dashboard: ["port", "open"],
   // --handoff-pid is undocumented on purpose: server.ts passes it when a running
   // dashboard relaunches itself onto a newer install. Refusing it kills the upgrade.
@@ -144,7 +144,7 @@ const MUTATING_COMMANDS = /* @__PURE__ */ new Set([
   "global-fallback",
   "global_fallback"
 ]);
-const BOARD_CONFIG_MUTATING_OPTIONS = ["github-sync", "jira-base-url", "name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-quality", "integration-branch", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"];
+const BOARD_CONFIG_MUTATING_OPTIONS = ["intake-mode", "intake-review-cycles", "github-sync", "jira-base-url", "name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-quality", "integration-branch", "worktree-isolation", "verify-environment", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"];
 function namedEntitySubcommandMutates(positional) {
   return positional.length > 0 && !["list", "ls", "get", "show"].includes(String(positional[0]).toLowerCase());
 }
@@ -163,7 +163,7 @@ const SUBCOMMAND_MUTATES = {
   profiles: namedEntitySubcommandMutates,
   category: namedEntitySubcommandMutates,
   categories: namedEntitySubcommandMutates,
-  story: (positional) => ["add", "update", "edit", "log", "rotate"].includes(String(positional[0]).toLowerCase()),
+  story: (positional) => ["add", "update", "edit", "log", "rotate", "intake"].includes(String(positional[0]).toLowerCase()),
   "board-config": boardConfigOptionsMutate,
   board_config: boardConfigOptionsMutate
 };
@@ -520,6 +520,8 @@ User stories (a lightweight grouping tickets can belong to):
   sidequest story contract US-n [-m text|--body-file path]  read or set its execution contract
   sidequest story log US-n [-m text|--body-file path] [--ref SQ-n] [--by who] [--rotate]  read, append, or rotate its decision log
   sidequest story update US-n [-t] [-d] [--color]  edit a story
+  sidequest story intake US-n <playback|sizing|question add|question answer|cycle|approve|delegate|reopen|exempt SQ-n> --by who  record intake (options via --text, --size, --reason, --options JSON, --id, --answer, --assumption, --review, --findings, --research SQ-n,..., --named-by)
+  sidequest board-config --intake-mode <off|stories> --intake-review-cycles <1|2|3>
   sidequest story rm US-n                           delete a story (member tickets are detached)
   sidequest add ... --story <US-n>                 file a ticket straight into a story
   sidequest update <id|SQ-n> --story <US-n|none>   move a ticket into a story, or "none" to clear

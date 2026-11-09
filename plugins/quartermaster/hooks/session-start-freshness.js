@@ -16,6 +16,7 @@ const {
   reportLoadedPluginVersion,
 } = require('./freshness-helpers.js');
 const { localGatewayCheck, parseGatewayDoctorOutput } = require('../lib/gateway-health.js');
+const { MINUTE_MS, cachedGatewayCheck, comparisonAge, createProbeCache } = require('../lib/freshness-probe-cache.js');
 
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_CLAUDE_CODE_VERSION = '2.1.0';
@@ -422,6 +423,12 @@ function audit(options = {}) {
   const manifestFor = options.manifestFor || ((_name, entry) => marketplaceManifest(entry));
   const gitFreshness = options.gitFreshness || sourceFreshness;
   const checkGateway = options.checkGateway || localGatewayCheck;
+  const gatewayChecks = new Map();
+  const checkGatewayOnce = (gateway) => {
+    if (!gatewayChecks.has(gateway.installPath)) gatewayChecks.set(gateway.installPath, checkGateway(gateway));
+    return gatewayChecks.get(gateway.installPath);
+  };
+  const { compareInstalled = installedFreshness } = options;
   const versions = options.versions || {
     node: process.version,
     claude: runVersion(options.claudeCommand || 'claude', ['--version']),
@@ -430,8 +437,8 @@ function audit(options = {}) {
   const mappings = boardMappings(boards, instances, home);
   const updates = [];
   const problems = [
-    ...installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness, updates),
-    ...gatewayFreshness(instances, checkGateway),
+    ...compareInstalled(instances, marketplaces, now, manifestFor, gitFreshness, updates),
+    ...observedGatewayFreshness(instances, checkGatewayOnce),
     ...requiredVersions(versions),
     ...mappings.problems,
   ];
@@ -439,8 +446,8 @@ function audit(options = {}) {
   const projectBoards = boards.filter((board) => isCurrentProjectPath(board.path, options.currentProject));
   const projectUpdates = [];
   const projectProblems = options.currentProject ? [
-    ...installedFreshness(projectInstances, marketplaces, now, manifestFor, gitFreshness, projectUpdates),
-    ...gatewayFreshness(projectInstances, checkGateway),
+    ...compareInstalled(projectInstances, marketplaces, now, manifestFor, gitFreshness, projectUpdates),
+    ...observedGatewayFreshness(projectInstances, checkGatewayOnce),
     ...boardMappings(projectBoards, instances, home).problems,
     ...mapMaintenance(options.currentProject, instances, home),
   ] : [];
@@ -538,12 +545,51 @@ function sessionInput() {
   }
 }
 
+function observedGatewayFreshness(instances, checkGateway) {
+  const gateway = newestGatewayInstance(instances);
+  if (!gateway) return [];
+  const check = checkGateway(gateway);
+  if (check?.checking) return [finding(check.checking)];
+  return gatewayFreshness(instances, () => check);
+}
+
+function cachedComparisons(cache, environment) {
+  return (instances, marketplaces, now, manifestFor, gitFreshness, updates) => {
+    const result = cache.readProbe('marketplace comparison', [instances, marketplaces], comparisonAge(environment), () => {
+      const available = [];
+      const problems = installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness, available);
+      return { problems, updates: available };
+    }, () => {
+      const available = [];
+      const problems = installedFreshness(instances, marketplaces, now, manifestFor, () => 'unknown', available);
+      return { problems, updates: available };
+    });
+    updates.push(...result.updates);
+    return result.problems;
+  };
+}
+
+function sessionAuditOptions(cache, environment = process.env) {
+  return {
+    checkGateway: (gateway) => cachedGatewayCheck(cache, gateway, localGatewayCheck),
+    versions: { node: process.version, claude: cache.readProbe('Claude Code', environment.PATH, 60 * MINUTE_MS, () => runVersion('claude', ['--version']), () => '') },
+    listProcesses: () => cache.readProbe('process inventory', process.platform, 60 * MINUTE_MS, () => windowsProcesses(childProcess.spawnSync), () => []),
+    compareInstalled: cachedComparisons(cache, environment),
+  };
+}
+
+function refreshSessionProbes(input, options = {}) {
+  const cache = createProbeCache({ ...options, refresh: true });
+  audit({ ...sessionAuditOptions(cache, options.environment), currentProject: input.cwd });
+}
+
 function main() {
   try {
     const input = sessionInput();
     const loadedVersion = loadedPluginVersion();
     reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', loadedVersion, { pluginRoot: process.env.CLAUDE_PLUGIN_ROOT });
-    const result = audit({ currentProject: input.cwd });
+    const cache = createProbeCache();
+    const result = audit({ ...sessionAuditOptions(cache), currentProject: input.cwd });
     const context = [
       projectWarning(result.projectProblems),
       ...result.staleProcesses.map((process) => `Stale worktree process: pid ${process.pid}, started ${process.startTime || 'unknown'}, path ${process.stalePath}`),
@@ -553,8 +599,9 @@ function main() {
       userActionNotice(result.projectProblems),
     ].filter(Boolean).join(' ');
     if (context || notice) {
+      const ages = `Cached probe ages: ${[...cache.ages].map(([name, age]) => `${name} ${age}`).join('; ')}.`;
       const output = {};
-      if (context) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: context };
+      if (context) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: `${context}\n${ages}` };
       if (notice) output.systemMessage = notice;
       process.stdout.write(JSON.stringify(output));
     }
@@ -571,6 +618,8 @@ module.exports = {
   MIN_NODE_VERSION,
   OFFICIAL_MARKETPLACE,
   audit,
+  refreshSessionProbes,
+  sessionAuditOptions,
   autoUpdateEnabled,
   boardMappings,
   compareVersions,

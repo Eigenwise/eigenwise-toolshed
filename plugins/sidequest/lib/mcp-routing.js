@@ -1,5 +1,5 @@
 "use strict";
-const BOARD_CONFIG_PATCH_KEYS = /* @__PURE__ */ new Set(["githubSync", "jiraBaseUrl", "name", "alwaysInScope", "investigationDataRoots", "readOnlyDeniedTools", "deniedTools", "generatedPairs", "integrationMode", "integrationQuality", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "integrationTestFileThreshold", "worktreeIsolation", "verifyEnvironment", "worktreeBase", "notIntegratedSalvageAgeHours", "worktreeRecoveryRetentionAgeHours", "autoApproveTestScope", "autoApproveScope", "workingTreeDeliveryCategories", "worktreeSetup", "worktreeDependencyPaths"]);
+const BOARD_CONFIG_PATCH_KEYS = /* @__PURE__ */ new Set(["intake", "githubSync", "jiraBaseUrl", "name", "alwaysInScope", "investigationDataRoots", "readOnlyDeniedTools", "deniedTools", "generatedPairs", "integrationMode", "integrationQuality", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "integrationTestFileThreshold", "worktreeIsolation", "verifyEnvironment", "worktreeBase", "notIntegratedSalvageAgeHours", "worktreeRecoveryRetentionAgeHours", "autoApproveTestScope", "autoApproveScope", "workingTreeDeliveryCategories", "worktreeSetup", "worktreeDependencyPaths"]);
 const BOARD_CONFIG_NULL_LEAVES_ALONE = /* @__PURE__ */ new Set(["alwaysInScope", "integrationMode", "integrationQuality", "integrationBranch", "delivery", "integrationVerifyTimeoutMs", "verifyEnvironment"]);
 function boardConfigPatchAccepts(key, value) {
   if (!BOARD_CONFIG_PATCH_KEYS.has(key) || value === void 0) return false;
@@ -432,6 +432,7 @@ const tools = [
       type: "object",
       properties: {
         project: PROJECT_PROP,
+        intake: { type: "object", properties: { mode: { type: "string", enum: ["off", "stories"] }, reviewCycles: { type: "integer", enum: [1, 2, 3] } }, description: "Default off, one review cycle. stories enables the story intake gate." },
         name: { type: "string" },
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
         investigationDataRoots: { type: "array", items: { type: "string" }, description: "Replace investigation data roots. Paths must exist, be absolute, and lie outside the repository, including after resolving symlinks." },

@@ -5,6 +5,18 @@ const { VERIFICATION_ENVIRONMENTS } = require("../kernel/verification.js");
 const { canonicalPath } = require("../kernel/worktree.js");
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
+function normalizeIntake(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("intake must be { mode, reviewCycles }.");
+  return { mode: intakeMode(Reflect.get(value, "mode")), reviewCycles: intakeReviewCycles(Reflect.get(value, "reviewCycles")) };
+}
+function intakeMode(value = "off") {
+  if (value === "off" || value === "stories") return value;
+  throw new Error("intake.mode must be off or stories.");
+}
+function intakeReviewCycles(value = 1) {
+  if (value === 1 || value === 2 || value === 3) return value;
+  throw new Error("intake.reviewCycles must be 1, 2 or 3.");
+}
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
   function defaultProjectName(absPath) {
     return path.basename(path.resolve(absPath)) || "project";
@@ -360,6 +372,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const layer = getProjectCategories(slug);
     const byKind = Object.fromEntries(["ADD", "OVERRIDE", "DETACH", "DISABLE"].map((kind) => [kind, layer.rows.filter((row) => row.kind === kind).length]));
     return {
+      intake: normalizeIntake(meta.intake),
       name: meta.name,
       jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
       githubSync: normalizeGithubSync(meta.githubSync),
@@ -410,6 +423,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     throw new Error("githubSync must be off, comment or close. Enabling it authorizes GitHub comments, and close also authorizes closing issues after publication.");
   }
   const BOARD_CONFIG_NORMALIZERS = {
+    intake: normalizeIntake,
     investigationDataRoots: normalizeInvestigationDataRoots,
     name: normalizeBoardName,
     jiraBaseUrl: normalizeJiraBaseUrl,

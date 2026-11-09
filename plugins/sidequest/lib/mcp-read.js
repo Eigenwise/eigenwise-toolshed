@@ -257,13 +257,14 @@ const tools = [
   },
   {
     name: "story",
-    description: "Manage user stories: add, list, show, update, or rm.",
+    description: "Manage user stories: add, list, show, update, or rm. add.by records the intake requester (default orchestrator).",
     inputSchema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["add", "list", "show", "update", "rm"] },
         project: PROJECT_PROP,
         story: { type: "string", description: "Story ref or id for show, update, or rm." },
+        by: { type: "string" },
         title: { type: "string", description: "Required for add." },
         description: { type: "string" },
         color: { type: "string" }
@@ -278,7 +279,7 @@ const tools = [
       }
       if (action === "add") {
         if (!args.title) throw new Error('story add: --title/-t is required, e.g. sidequest story add -t "Auth revamp" [--color teal]');
-        const story = store.createStory(slug, { title: args.title, description: args.description, color: args.color });
+        const story = store.createStory(slug, { by: args.by, title: args.title, description: args.description, color: args.color });
         return { ok: true, project: slug, projectName: meta.name, story };
       }
       if (action === "list") {

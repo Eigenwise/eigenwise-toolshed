@@ -7,7 +7,7 @@ const { hooks } = require('../hooks/hooks.json');
 
 require('./stop-resupply-offer.test.js');
 
-test('keeps startup-only and startup-or-resume hooks separate with their existing timeouts', () => {
+test('keeps startup-only and startup-or-resume hooks separate with a one-second freshness deadline and async probe refresh', () => {
   assert.deepEqual(hooks, {
     SessionStart: [
       {
@@ -31,7 +31,7 @@ test('keeps startup-only and startup-or-resume hooks separate with their existin
           {
             type: 'command',
             command: 'node --no-warnings "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-freshness.js"',
-            timeout: 5,
+            timeout: 1,
           },
           {
             type: 'command',
@@ -41,6 +41,11 @@ test('keeps startup-only and startup-or-resume hooks separate with their existin
           {
             type: 'command',
             command: 'node --no-warnings "${CLAUDE_PLUGIN_ROOT}/hooks/marketplace-freshness-cache.js"',
+            timeout: 2,
+          },
+          {
+            type: 'command',
+            command: 'node --no-warnings "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-probes.js"',
             timeout: 2,
           },
         ],
