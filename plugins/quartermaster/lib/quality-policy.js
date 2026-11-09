@@ -36,10 +36,12 @@ function executorPolicyReferences(project) {
 
 function qualityPolicyFinding(project, env = process.env) {
   const configuration = path.join(project, '.claude/quality-gate/crap.json');
-  if (fs.existsSync(configuration)) {
-    const policy = qualityPolicyOwner(env).readQualityPolicy(project);
-    return 'Project quality policy configured: ' + JSON.stringify(policy);
+  if (installedQualityGateBin(env)) {
+    const policy = qualityPolicyOwner(env).qualityPolicyOrDefault(project);
+    const origin = policy.source === 'default' ? 'shipped defaults, no project file' : 'project file';
+    return 'Project quality policy configured: ' + JSON.stringify(policy) + ' (' + origin + ')';
   }
+  if (fs.existsSync(configuration)) qualityPolicyOwner(env);
   const references = executorPolicyReferences(project);
   if (references.length) return 'Project executors reference a quality policy that is not configured: ' + references.join(', ') + '. Propose /quartermaster:setup for this project; do not write a policy without approval.';
   return 'No quality policy configured; no project executor policy references found.';

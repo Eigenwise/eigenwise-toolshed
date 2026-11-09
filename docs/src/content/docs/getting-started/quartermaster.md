@@ -212,5 +212,5 @@ The [generated Quartermaster reference](../../reference/quartermaster/) contains
 For each codebase, setup proposes Quality Gate's [project delivery policy](/getting-started/quality-gate/#project-delivery-policy):
 CRAP strictly below the owned threshold for new and raised bodies, informational not-worse legacy rows,
 and UNVERIFIED-as-debt with one standing ticket per unsupported capture boundary. It shows the project config,
-local measurement setup and execution cost, then writes only after approval. The policy is per project;
+local measurement setup and execution cost, then writes only after approval. An installed gate uses shipped defaults until a project file overrides them; doctor reports that source. The policy is per project;
 installing Quartermaster or Quality Gate alone never opts every project in.

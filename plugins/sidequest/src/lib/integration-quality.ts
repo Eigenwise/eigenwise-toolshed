@@ -11,20 +11,20 @@ export interface ProjectQualityPolicy {
   unverifiedHandling: 'debt' | 'block';
   debtTicketMode: 'standing-per-boundary' | 'per-delivery' | 'none';
   installMode: 'local';
+  source: 'project' | 'default';
 }
 
 interface QualityPolicyOwner {
-  readQualityPolicy(project: string): ProjectQualityPolicy | undefined;
+  qualityPolicyOrDefault(project: string): ProjectQualityPolicy;
   debtTicketInstruction(policy: ProjectQualityPolicy): string;
 }
 
 export function configuredProjectQualityPolicy(project: string, registeredProject = project): { policy: ProjectQualityPolicy; debtInstruction: string } | undefined {
-  if (!fs.existsSync(path.join(project, '.claude/quality-gate/crap.json'))) return undefined;
   const gate = configuredIntegrationGate(registeredProject);
+  if (!gate && !fs.existsSync(path.join(project, '.claude/quality-gate/crap.json'))) return undefined;
   if (!gate) throw new Error('Project quality policy exists but Quality Gate is not installed for this project');
   const owner: QualityPolicyOwner = require(path.join(gate, 'lib', 'policy.cjs'));
-  const policy = owner.readQualityPolicy(project);
-  if (!policy) return undefined;
+  const policy = owner.qualityPolicyOrDefault(project);
   return { policy, debtInstruction: owner.debtTicketInstruction(policy) };
 }
 
@@ -100,7 +100,6 @@ function applicableInstall(install: GateInstall, project: string): boolean {
 }
 
 export function configuredIntegrationGate(project: string): string | undefined {
-  if (!fs.existsSync(path.join(project, '.claude/quality-gate/crap.json'))) return undefined;
   const home = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
   const registryPath = path.join(home, 'plugins', 'installed_plugins.json');
   if (!fs.existsSync(registryPath)) return undefined;

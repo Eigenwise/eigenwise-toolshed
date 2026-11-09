@@ -120,7 +120,7 @@ Exit 2 means a prerequisite or measurement is missing. Record UNVERIFIED rows an
 
 ## Project quality policy
 
-Quality Gate owns the policy and validates it from this project's `.claude/quality-gate/crap.json`.
+Quality Gate owns shipped defaults, which apply whenever the gate is installed. An explicit `.claude/quality-gate/crap.json` overrides those defaults; creating that file still needs approval.
 Propose it with these three sentences, filling the threshold from Quality Gate's proposal:
 
 > New and complexity-raised functions must keep CRAP strictly below the proposed threshold, using measured complexity and coverage.

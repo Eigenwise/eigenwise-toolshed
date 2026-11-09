@@ -39,12 +39,11 @@ var import_node_path = __toESM(require("node:path"));
 var import_node_url = require("node:url");
 var import_process = require("./ports/process.js");
 function configuredProjectQualityPolicy(project, registeredProject = project) {
-  if (!import_node_fs.default.existsSync(import_node_path.default.join(project, ".claude/quality-gate/crap.json"))) return void 0;
   const gate = configuredIntegrationGate(registeredProject);
+  if (!gate && !import_node_fs.default.existsSync(import_node_path.default.join(project, ".claude/quality-gate/crap.json"))) return void 0;
   if (!gate) throw new Error("Project quality policy exists but Quality Gate is not installed for this project");
   const owner = require(import_node_path.default.join(gate, "lib", "policy.cjs"));
-  const policy = owner.readQualityPolicy(project);
-  if (!policy) return void 0;
+  const policy = owner.qualityPolicyOrDefault(project);
   return { policy, debtInstruction: owner.debtTicketInstruction(policy) };
 }
 function sameProject(left, right) {
@@ -55,7 +54,6 @@ function applicableInstall(install, project) {
   return typeof install.projectPath === "string" && sameProject(install.projectPath, project);
 }
 function configuredIntegrationGate(project) {
-  if (!import_node_fs.default.existsSync(import_node_path.default.join(project, ".claude/quality-gate/crap.json"))) return void 0;
   const home = process.env.SIDEQUEST_CLAUDE_HOME || import_node_path.default.join(import_node_os.default.homedir(), ".claude");
   const registryPath = import_node_path.default.join(home, "plugins", "installed_plugins.json");
   if (!import_node_fs.default.existsSync(registryPath)) return void 0;

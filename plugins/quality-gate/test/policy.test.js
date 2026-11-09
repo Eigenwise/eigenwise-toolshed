@@ -54,3 +54,16 @@ test('debt instructions distinguish standing boundaries deliveries and no ticket
   assert.match(debtTicketInstruction({ debtTicketMode: 'per-delivery' }), /one measurement-debt ticket for this delivery/);
   assert.match(debtTicketInstruction({ debtTicketMode: 'none' }), /without creating a debt ticket/);
 });
+
+
+test('effective policy records shipped defaults without writing a project file', (context) => {
+  const project = policyProject(context);
+  assert.deepEqual(owner.qualityPolicyOrDefault(project), { ...DEFAULT_POLICY, source: 'default' });
+  assert.equal(fs.existsSync(path.join(project, '.claude/quality-gate/crap.json')), false);
+});
+
+test('explicit project policy overrides shipped defaults and records its source', (context) => {
+  const project = policyProject(context);
+  fs.writeFileSync(path.join(project, '.claude/quality-gate/crap.json'), JSON.stringify({ policy: { unverifiedHandling: 'block', debtTicketMode: 'none' } }));
+  assert.deepEqual(owner.qualityPolicyOrDefault(project), { ...DEFAULT_POLICY, unverifiedHandling: 'block', debtTicketMode: 'none', source: 'project' });
+});

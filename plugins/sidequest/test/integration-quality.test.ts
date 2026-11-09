@@ -361,6 +361,7 @@ test('integration uses the owned project debt policy and explicit blocking overr
   assert.equal(standing.status, 'passed');
   assert.equal(standing.quality[0]!.status, 'unverified');
   assert.equal(standing.quality[0]!.policy!.threshold, 6);
+  assert.equal(standing.quality[0]!.policy!.source, 'project');
   assert.match(standing.quality[0]!.debtTicketNote!, /Reuse one standing.*per unsupported capture boundary/);
   fs.writeFileSync(path.join(input.project, '.claude/quality-gate/crap.json'), JSON.stringify({ policy: { unverifiedHandling: 'block', debtTicketMode: 'per-delivery' } }));
   const blocked = runIntegrationQuality([input], verify);
@@ -373,15 +374,17 @@ test('integration uses the owned project debt policy and explicit blocking overr
   assert.match(noTicket.quality[0]!.debtTicketNote!, /without creating a debt ticket/);
 });
 
-test('an installed gate without project opt-in leaves verification environment unchanged', (context) => {
+test('an installed gate without a project file enforces shipped defaults and records their source', (context) => {
   const input = withQualityFixture(context, 7, false);
   fs.rmSync(path.join(input.project, '.claude/quality-gate/crap.json'));
   const result = runIntegrationQuality([input], (environment) => {
-    assert.equal(environment.QUALITY_GATE_V8_CAPTURE, undefined);
-    return { kind: 'command', status: 'passed', evidence: 'no project opt-in' };
+    assert.ok(environment.QUALITY_GATE_V8_CAPTURE);
+    return { kind: 'command', status: 'passed', evidence: 'shipped defaults' };
   }, {});
-  assert.equal(result.status, 'passed');
-  assert.equal(result.quality[0]!.status, 'none');
+  assert.equal(result.status, 'failed_check');
+  assert.equal(result.quality[0]!.status, 'failed');
+  assert.equal(result.quality[0]!.policy!.source, 'default');
+  assert.equal(JSON.parse(fs.readFileSync(result.quality[0]!.receipt!, 'utf8')).policy.source, 'default');
 });
 
 

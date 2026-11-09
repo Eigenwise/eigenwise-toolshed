@@ -49,6 +49,7 @@ test('briefing reads the shipped project policy without inventing a home-rule re
   fs.writeFileSync(path.join(project, 'claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: {
     'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: path.resolve(__dirname, '../../quality-gate') }],
   } }));
+  assert.match(render(), /shipped defaults, no project file/);
   fs.mkdirSync(path.join(project, '.claude/quality-gate'), { recursive: true });
   const configuration = path.join(project, '.claude/quality-gate/crap.json');
   fs.writeFileSync(configuration, '{}');

@@ -104,6 +104,6 @@ Run the project-only policy check read-only:
 node -e "const { qualityPolicyFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/quality-policy.js'); console.log(qualityPolicyFinding(process.cwd()));"
 ```
 
-Report a project executor that references a quality policy without a project config. Invalid or unreadable
+With Quality Gate installed and no project config, report "shipped defaults, no project file". Without the gate, report project executor references that have no policy owner. Invalid or unreadable
 configuration and a missing installed policy owner are findings, never a healthy or empty result.
 Offer setup for the named project; do not create configuration, install measurement tools or alter a user rule.

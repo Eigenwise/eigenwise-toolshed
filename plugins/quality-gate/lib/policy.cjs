@@ -40,6 +40,11 @@ function readQualityPolicy(project) {
   return qualityPolicy(contents);
 }
 
+function qualityPolicyOrDefault(project) {
+  const configured = readQualityPolicy(project);
+  return { ...(configured ?? DEFAULT_POLICY), source: configured ? 'project' : 'default' };
+}
+
 function debtTicketInstruction(policy) {
   const instructions = {
     'standing-per-boundary': 'Reuse one standing measurement-debt ticket per unsupported capture boundary; append affected deliveries to that ticket. Create it only when none exists.',
@@ -49,4 +54,4 @@ function debtTicketInstruction(policy) {
   return instructions[policy.debtTicketMode];
 }
 
-module.exports = { DEFAULT_POLICY, qualityPolicy, readQualityPolicy, debtTicketInstruction };
+module.exports = { DEFAULT_POLICY, qualityPolicy, readQualityPolicy, qualityPolicyOrDefault, debtTicketInstruction };

@@ -38,12 +38,12 @@ test('approved project policy preserves coverage setup and writes owned defaults
   assert.match(qualityPolicyFinding(project, env), /Project quality policy configured:/);
 });
 
-test('doctor reports an executor policy reference without project configuration', (context) => {
+test('doctor reports shipped defaults without creating project configuration', (context) => {
   const { project, env } = policyFixture(context);
-  assert.match(qualityPolicyFinding(project, env), /No quality policy configured/);
+  assert.match(qualityPolicyFinding(project, env), /shipped defaults, no project file/);
   fs.mkdirSync(path.join(project, '.claude/agents'), { recursive: true });
   fs.writeFileSync(path.join(project, '.claude/agents/executor.md'), 'Configured quality policy: threshold from Quality Gate');
-  assert.match(qualityPolicyFinding(project, env), /executors reference a quality policy that is not configured/);
+  assert.match(qualityPolicyFinding(project, env), /shipped defaults, no project file/);
   assert.equal(fs.existsSync(path.join(project, '.claude/quality-gate/crap.json')), false);
 });
 

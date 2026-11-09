@@ -211,11 +211,11 @@ Relative LCOV paths default to the project root. Use `--lcov-base <directory>` (
 
 ## Project policy and measurement debt
 
-Installing Quality Gate gives you interactive quality guidance. Opting a project into a delivery policy is a
-separate approval during Quartermaster setup. The project's `.claude/quality-gate/crap.json` is the authority;
-Sidequest reads it through the installed Quality Gate policy reader for both executor briefings and integration.
-Without that project config, Sidequest says "No quality policy configured" and runs the project's verifier.
-No user-home rule is needed.
+Installing Quality Gate enables its shipped delivery defaults. Sidequest reads the installed Quality Gate
+policy owner for both executor briefings and integration. Without `.claude/quality-gate/crap.json`, receipts
+record `policy.source: "default"` and briefings say "shipped defaults, no project file". An explicit project
+file takes precedence and records `policy.source: "project"`. Without an installed gate, verification runs
+without quality measurement. No user-home rule is needed.
 
 The shipped policy defaults are:
 
@@ -242,5 +242,5 @@ each delivery instead; `none` keeps debt only in delivery evidence. These are in
 not permission for the scorer to create tickets itself.
 
 Quartermaster proposes and writes configuration only after project approval. `/quartermaster:toolshed-doctor`
-reports project executors that reference a policy without that configuration. Personal preferences can remain
+reports shipped defaults when the gate is installed without a project file. Personal preferences can remain
 in your own rules, but shared quality policy belongs in the project.

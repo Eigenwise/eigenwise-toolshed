@@ -729,8 +729,9 @@ function configuredQualityGateBody(projectPath, slug) {
   if (!project) return "No quality policy configured.";
   const configured = (0, import_integration_quality.configuredProjectQualityPolicy)(project);
   if (!configured) return "No quality policy configured.";
+  const origins = { default: "shipped defaults, no project file", project: "project file" };
   const handling = configured.policy.unverifiedHandling === "debt" ? "UNVERIFIED coverage is measurement debt, not a delivery hold; keep the delivery marked UNVERIFIED." : "UNVERIFIED measurement blocks delivery.";
-  return `Configured quality policy: ${JSON.stringify(configured.policy)}. New and complexity-raised bodies must score strictly below ${configured.policy.threshold}; complexity at the threshold fails even without coverage. Legacy bodies whose complexity did not rise are informational and never fail. Untouched legacy bodies are out of scope. ${handling} ${configured.debtInstruction} Keep measurement tooling local; never change tracked dependencies or CI to install it.`;
+  return `Configured quality policy: ${JSON.stringify(configured.policy)} (${origins[configured.policy.source]}). New and complexity-raised bodies must score strictly below ${configured.policy.threshold}; complexity at the threshold fails even without coverage. Legacy bodies whose complexity did not rise are informational and never fail. Untouched legacy bodies are out of scope. ${handling} ${configured.debtInstruction} Keep measurement tooling local; never change tracked dependencies or CI to install it.`;
 }
 function legacyVerificationText(value) {
   return String(value || "").trim();
