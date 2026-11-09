@@ -373,7 +373,7 @@ function shellCannotParsePosixSyntax(logPath: string, exitCode: number, shell: S
 // plugin's CLAUDE_PLUGIN_ROOT. A project suite that locates its own files through that variable would
 // read the Sidequest install instead.
 export function verifierEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^(?:CLAUDE_PLUGIN_|CLAUDE_CODE_SESSION_ID$|CLAUDE_SESSION_ID$|SIDEQUEST_SESSION$)/i.test(name)));
 }
 
 // GH-189: a shell that never started leaves no output, so the spawn error is the only text that says why.

@@ -9,6 +9,8 @@ Every task saved as a ticket survives context compaction and new sessions. Its i
 
 ## Integration under executor load
 
+Verifier child processes run without the caller's `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` or `SIDEQUEST_SESSION`. This applies to integration, recorded-delivery, wave gates and verify-capture, so fixture CLI calls cannot pick up the orchestrator's live dispatch session. The board still records delivery identity from its own process.
+
 Integration counts PID-live ordinary verification captures on the same board before launching its gate and records `liveVerifyCaptureCount` in the result. The full-suite runner stretches its phase budget for that count, capped at 40 minutes; its unloaded base and CI sibling-count behavior stay unchanged. The outer `integrationVerifyTimeoutMs` deadline still applies. Phase exhaustion adds `phase_budget_exceeded` to the failure identities so it can be distinguished from assertion failures.
 
 ## Catch up on changed tickets
