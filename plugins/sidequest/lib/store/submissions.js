@@ -766,27 +766,42 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       quality.debtTicketNote += "; receipt update failed: " + integrationGitError(error);
     }
   }
+  function qualityDebtTitle(ticket, quality) {
+    if (quality.policy?.debtTicketMode === "per-delivery") return `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
+    const reasons = [...new Set(quality.unverified.map((row) => row.unverified))].sort();
+    const boundary = crypto.createHash("sha256").update(JSON.stringify(reasons)).digest("hex");
+    return "Quality measurement debt for capture boundary " + boundary;
+  }
+  function appendQualityDebtDelivery(slug, existing, ticket, quality) {
+    const delivery = `Affected delivery: ${ticket.ref} at ${ticket.submission.commit}`;
+    if (existing.description?.startsWith(delivery + "\n")) return;
+    if (existing.comments?.some((comment) => comment.body.startsWith(delivery + "\n"))) return;
+    addComment(slug, existing.id, { by: "integration-quality", source: "integration-quality", body: delivery + "\nReceipt: " + quality.receipt + "\n" + JSON.stringify(quality.unverified) });
+  }
+  function fileQualityDebt(slug, ticket, quality, files) {
+    const title = qualityDebtTitle(ticket, quality);
+    const existing = listTickets(slug).find((candidate) => candidate.title === title && candidate.status !== "done");
+    if (existing) return appendQualityDebtDelivery(slug, existing, ticket, quality);
+    dependencies.createTicket(slug, {
+      title,
+      description: `Affected delivery: ${ticket.ref} at ${ticket.submission.commit}
+Receipt: ${quality.receipt}
+${JSON.stringify(quality.unverified)}`,
+      category: "coding.normal",
+      complexity: 2,
+      complexityWhy: "Capture missing native quality evidence for an existing candidate",
+      files,
+      executorVerifyKind: "manual",
+      executorVerify: "Native quality-gate receipt resolves every recorded UNVERIFIED row",
+      source: "integration-quality"
+    });
+  }
   function recordQualityDebt(slug, ticket, quality) {
-    if (!quality.unverified.length || quality.captureGap) return;
+    if (!quality.unverified.length || quality.policy?.debtTicketMode === "none") return;
     const files = qualityDebtFiles(ticket, quality);
     if (!files.length) return noteQualityDebt(quality, "no candidate source/test paths have unverified rows");
-    const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
     try {
-      transaction(() => {
-        if (listTickets(slug).some((existing) => existing.title === title)) return;
-        dependencies.createTicket(slug, {
-          title,
-          description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}
-${JSON.stringify(quality.unverified)}`,
-          category: "coding.normal",
-          complexity: 2,
-          complexityWhy: "Capture missing native quality evidence for an existing candidate",
-          files,
-          executorVerifyKind: "manual",
-          executorVerify: "Native quality-gate receipt resolves every recorded UNVERIFIED row",
-          source: "integration-quality"
-        });
-      });
+      transaction(() => fileQualityDebt(slug, ticket, quality, files));
     } catch (error) {
       noteQualityDebt(quality, integrationGitError(error));
     }
