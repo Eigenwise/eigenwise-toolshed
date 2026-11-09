@@ -1,30 +1,8 @@
 # Stack → installable plugin catalog
 
-Use this catalog to build the workspace bootstrap plan. It contains only plugins with a current,
-reproducible marketplace source. The bootstrap helper installs plugins with `claude plugin install`;
+Use this catalog to propose stack plugins that fit the project. Each plugin is independently opt-in.
+Install approved selections with `claude plugin install <name>@<marketplace> --scope project`;
 do not copy these IDs into `enabledPlugins` yourself.
-
-## Core
-
-Select these for every codebase:
-
-| Plugin | Marketplace source | Role |
-|---|---|---|
-| `codebase-mapper@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Codebase map and injected index |
-| `live-rules@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Scoped, live workspace rules |
-| `sidequest@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Local work board and board-first orchestration loop: routes category-classified tickets to the right model and effort, then dispatches token-gated executors |
-
-The helper installs the toolshed marketplace at project scope. Preserve its portable
-`extraKnownMarketplaces` declaration only when the plugin CLI did not already make it visible in
-`.claude/settings.json`:
-
-```json
-{
-  "eigenwise-toolshed": {
-    "source": { "source": "github", "repo": "Eigenwise/eigenwise-toolshed" }
-  }
-}
-```
 
 ## Official marketplace
 
@@ -81,7 +59,7 @@ servers are already part of the project.
 
 ### Backend / library
 
-Start with the core and `context7`; offer the relevant official LSP from the table below. Do not add
+Consider `context7`; offer the relevant official LSP from the table below. Do not add
 plugins merely because a stack is technically present.
 
 ### Not a codebase
@@ -145,8 +123,7 @@ commands, dependencies, and maintenance checks that people actually run.
 
 ## Official LSP plugins and binary preflight
 
-Each official LSP plugin needs its language-server executable on `PATH`. Add the matching
-`preflight` entry to the bootstrap plan, run its check before installation, and only report the hint.
+Each official LSP plugin needs its language-server executable on `PATH`. Run the matching check before installation, and only report the hint.
 Never install system packages or run a package manager for the user.
 
 | Language | Plugin ID | Check | Install hint |
@@ -167,16 +144,16 @@ A missing binary is a warning, not an automatic installer failure. The user can 
 knowing the LSP cannot work until the binary exists, or drop the plugin. After reload, confirm the
 binary is still on `PATH` and that the language server responds.
 
-Do not install `typescript-lsp@claude-plugins-official`: its push diagnostics are process-global and
-blind to which agent owns them, so diagnostics from parallel isolated worktrees leak into the wrong
-transcript. If it is already installed, recommend removing it with
-`/plugin uninstall typescript-lsp@claude-plugins-official`. Preflight for a TypeScript project instead:
-TypeScript 7 resolvable in the project (`npm install -D typescript@latest`), or
-`typescript-language-server --version` for TypeScript 5 projects.
+When Sidequest parallel executors were selected, recommend avoiding
+`typescript-lsp@claude-plugins-official`: its push diagnostics are process-global and blind to
+which agent owns them, so parallel isolated worktrees can leak diagnostics into the wrong transcript.
+If already installed, propose `/plugin uninstall typescript-lsp@claude-plugins-official` for approval.
+This guidance applies only to that parallel-executor setup. The alternative uses the project's TypeScript if present; check resolution without changing dependencies.
+For TypeScript 5 projects, check `typescript-language-server --version` when relevant.
 
 ## Portable marketplace sources
 
-Use only these sources in bootstrap plans. They are reproducible and safe to write for collaborators:
+Use only these sources in setup proposals. They are reproducible and safe to write for collaborators:
 
 | Marketplace | Source |
 |---|---|
@@ -186,12 +163,12 @@ Use only these sources in bootstrap plans. They are reproducible and safe to wri
 | `claude-community` | `anthropics/claude-plugins-community` |
 | `claude-plugins-official` | Automatically available; no source declaration |
 
-Do not recommend a plugin whose marketplace source is unavailable to the bootstrap helper. Do not
+Do not recommend a plugin whose marketplace source cannot be verified. Do not
 create an ad hoc local marketplace during workspace initialization.
 
 ## Non-plugin settings
 
-The plan's `settingsMerge` can carry settings that the plugin CLI does not own:
+Propose non-plugin settings separately from plugin installation:
 
 - **`$schema`**: `"https://json.schemastore.org/claude-code-settings.json"` for editor validation.
 - **`hooks`**: project hooks the user already wants. the quartermaster setup skill itself adds no project hooks.
@@ -199,7 +176,7 @@ The plan's `settingsMerge` can carry settings that the plugin CLI does not own:
   servers the user selected.
 
 Keep `permissions` in `settings.local.json` (per-user and gitignored), not in the team-shared plan.
-Merge these non-plugin settings only after the helper reports a successful install. Preserve existing
+Merge approved non-plugin settings after successful plugin installation. Preserve existing
 user values instead of replacing them.
 
 ## Scope

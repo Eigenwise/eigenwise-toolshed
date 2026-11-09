@@ -11,18 +11,19 @@ const { recordSessionTally } = require('../lib/state.js');
 
 const HOOK = path.join(__dirname, '..', 'hooks', 'session-start-nudge.js');
 
-function runHook(projectDir, stateDir) {
+function runHook(projectDir, stateDir, environment = {}) {
   const result = spawnSync(process.execPath, [HOOK], {
     env: {
       ...process.env,
       CLAUDE_PROJECT_DIR: projectDir,
       QUARTERMASTER_STATE_DIR: stateDir,
+      ...environment,
     },
     input: JSON.stringify({ source: 'startup', cwd: projectDir }),
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
-  return JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
+  return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput.additionalContext : '';
 }
 
 test('session-start proactively offers an optimization round and waits for approval', () => {
@@ -39,4 +40,34 @@ test('session-start proactively offers an optimization round and waits for appro
   assert.match(context, /after they say yes, or automatically if they have explicitly given standing permission/i);
   assert.match(context, /each recommendation still needs separate approval unless their standing permission also covers that exact class of change/i);
   assert.match(context, /existing skill misfires, under-triggers, or needs manual correction/i);
+});
+
+
+test('a leftover self-improvement rule keeps the charter without a matching Live Rules install', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-live-rules-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const projectDir = path.join(directory, 'project');
+  const stateDir = path.join(directory, 'state');
+  const configDir = path.join(directory, 'config');
+  const rule = path.join(projectDir, '.claude', 'live-rules', 'rules', 'self-improvement.md');
+  const registry = path.join(configDir, 'plugins', 'installed_plugins.json');
+  fs.mkdirSync(path.dirname(rule), { recursive: true });
+  fs.writeFileSync(rule, 'Self improvement');
+  fs.mkdirSync(path.dirname(registry), { recursive: true });
+  const environment = { CLAUDE_CONFIG_DIR: configDir };
+  assert.match(runHook(projectDir, stateDir, environment), /watch for capability gaps/);
+  fs.writeFileSync(registry, JSON.stringify({ plugins: {
+    'live-rules@eigenwise-toolshed': [{ scope: 'project', projectPath: path.join(directory, 'other') }],
+  } }));
+  assert.match(runHook(projectDir, stateDir, environment), /watch for capability gaps/);
+  fs.writeFileSync(registry, JSON.stringify({ plugins: {
+    'live-rules@eigenwise-toolshed': [{ scope: 'project', projectPath: projectDir }],
+  } }));
+  assert.equal(runHook(projectDir, stateDir, environment), '');
+  fs.writeFileSync(registry, JSON.stringify({ plugins: {
+    'live-rules@eigenwise-toolshed': [{ scope: 'user' }],
+  } }));
+  assert.equal(runHook(projectDir, stateDir, environment), '');
+  fs.unlinkSync(rule);
+  assert.match(runHook(projectDir, stateDir, environment), /watch for capability gaps/);
 });

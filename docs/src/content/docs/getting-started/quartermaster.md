@@ -31,11 +31,13 @@ Setup works in this order:
 5. It stops at the reload or restart boundary, then continues when you tell it to.
 6. It verifies each piece it installed and records your decisions.
 
+The self-improvement rule is offered only with Live Rules. Without that plugin, Quartermaster keeps its SessionStart capability charter active, even if a leftover rule file exists.
+
 Setup does not seed clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
 
 | Setup does itself | Setup asks you | Setup leaves to you |
 | --- | --- | --- |
-| Reads the project and the bounded history summary. Installs approved plugins at project scope. Writes approved rules, permission entries, and config. Checks that each installed plugin is enabled and usable. Records applied and rejected decisions. | Every plugin, rule, permission entry, and file write. The questions about what the project is for and who works in it. Whether to record local usage. Whether to change a context-window policy. The reload or restart. | The marketplace bootstrap in [Getting started](../), which is the only command you run before setup. `/reload-plugins`. Wiring Model Gateway through its own skill. Committing `.claude/`. Any later update or health check. |
+| Reads the project and the bounded history summary. Installs approved plugins at project scope. Writes approved rules only for selected Live Rules, learned permission entries in per-user, gitignored `.claude/settings.local.json`, and approved config. Checks that each installed plugin is enabled and usable. Records applied and rejected decisions. | Every plugin, rule, permission entry, and file write. The questions about what the project is for and who works in it. Whether to record local usage. Whether to change a context-window policy. The reload or restart. | The marketplace bootstrap in [Getting started](../), which is the only command you run before setup. `/reload-plugins`. Wiring Model Gateway through its own skill. Committing `.claude/`. Any later update or health check. |
 
 Each Toolshed component is an independent opt-in, and none requires another. Saying yes to one does not sign you up for the rest, so setup does not guarantee the full bundle. Here is what each yes gets you:
 
@@ -68,7 +70,7 @@ prompts into Pi configuration directories. That makes it a local-fit example, no
 marketplace package. Quartermaster can recommend researching it for a proven delegation gap without
 claiming Quartermaster runs on Pi.
 
-Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. After that boundary setup runs `claude plugin list --json` to confirm every selected plugin is installed and enabled at its requested scope. It then checks that each piece is usable: it builds the codebase map, confirms live rules are injected, brings up the Sidequest board, and checks that each language server responds. For an approved quality gate it runs the gate once and reports the real result. Setup does not wire Model Gateway itself. If Model Gateway is installed but unwired, it points you to the gateway skill instead.
+Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. After that boundary setup runs `claude plugin list --json` to confirm every selected plugin is installed and enabled at its requested scope. It then checks that each piece is usable: it builds the codebase map, syncs approved live-rule files with Live Rules' own script and confirms injection only when Live Rules was selected, brings up the Sidequest board, and checks that each language server responds. For an approved quality gate it runs the gate once and reports the real result. Setup does not wire Model Gateway itself. If Model Gateway is installed but unwired, it points you to the gateway skill instead.
 
 ### Keep complex code tested
 

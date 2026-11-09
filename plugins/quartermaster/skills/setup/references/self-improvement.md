@@ -1,6 +1,6 @@
 # The self-improvement loop
 
-Every workspace gets a baked-in self-improvement loop. It's a starting point that keeps sharpening
+When live-rules is approved, offer a self-improvement rule. It's a starting point that keeps sharpening
 itself instead of a static scaffold that goes stale. The mechanism is deliberately simple: a global
 live rule plus the on-demand `resupply` skill. It uses the existing live-rules mechanism, with no
 new hook or background process.
@@ -12,9 +12,9 @@ rule that asked about errors would miss them.
 
 ## Install this atomic rule
 
-Ship it on every workspace as `.claude/live-rules/rules/self-improvement.md`, global scope,
-`priority: 40`. Include its path, SHA-256 hash, and frontmatter metadata in
-`.claude/live-rules/manifest.json` as described in `rule-templates.md`:
+Only when live-rules is approved, write `.claude/live-rules/rules/self-improvement.md`, global scope,
+`priority: 40`. After reload, generate the manifest with live-rules' own sync script as described
+in `rule-templates.md`, or hand off to `/live-rules:add-rule`. Never hand-write the manifest:
 
 ```markdown
 ---
@@ -46,7 +46,7 @@ Keep it to one evidenced improvement. If existing capabilities hold up, say so e
 Quartermaster's own SessionStart hook injects a condensed version of this charter once per session
 in any project that does not have this rule file at
 `.claude/live-rules/rules/self-improvement.md`. Seeding the rule supersedes the hook line: the
-hook checks for that exact path and stays silent when it exists. The seeded rule follows the project's
+hook stays silent only when that exact path exists and live-rules has an install row applying to this project. Without live-rules, the charter remains active. The seeded rule follows the project's
 live-rules matching and deduplication behavior.
 
 ## Why a rule and not a hook

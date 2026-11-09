@@ -44,16 +44,22 @@ test('enables agent teams without replacing project environment settings', (t) =
 });
 
 test('warns only when a project environment masks agent teams', (t) => {
-  const { projectDir } = temporaryProject(t);
+  const { directory, projectDir } = temporaryProject(t);
   const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+  const globalSettingsPath = path.join(directory, 'user-settings.json');
+  const options = { globalSettingsPath };
 
-  assert.equal(agentTeamsWarning(projectDir), null);
+  assert.equal(agentTeamsWarning(projectDir, options), null);
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify({ env: { KEEP_ME: 'yes' } }));
-  assert.match(agentTeamsWarning(projectDir), /CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS/);
+  assert.equal(agentTeamsWarning(projectDir, options), null);
+  fs.writeFileSync(globalSettingsPath, JSON.stringify({ env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '0' } }));
+  assert.equal(agentTeamsWarning(projectDir, options), null);
+  fs.writeFileSync(globalSettingsPath, JSON.stringify({ env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } }));
+  assert.match(agentTeamsWarning(projectDir, options), /CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS/);
 
   enableAgentTeams(projectDir);
-  assert.equal(agentTeamsWarning(projectDir), null);
+  assert.equal(agentTeamsWarning(projectDir, options), null);
 });
 
 test('reports the effective compaction window and its winning settings file', (t) => {
