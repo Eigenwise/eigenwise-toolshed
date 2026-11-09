@@ -68,14 +68,53 @@ test('routes project and local updates through the recorded project directory', 
   assert.equal(user.cwd, undefined);
 });
 
-test('uses the stable model-gateway updater for upgrades and the installed command for checks', () => {
+test('runs the gateway doctor in the older registered project instead of the newer project', () => {
+  const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-older-'));
+  const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
+  try {
+    const projects = [
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: newerProject, installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: olderProject, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
+    ];
+    const lines = [];
+    const doctor = gatewayCommand(projects, 'doctor', olderProject, (line) => lines.push(line));
+
+    assert.equal(doctor.cwd, olderProject);
+    assert.equal(doctor.args[0], path.join('C:/cache/older', 'bin', 'model-gateway.js'));
+    assert.match(lines.join('\n'), /current project/);
+  } finally {
+    fs.rmSync(olderProject, { recursive: true, force: true });
+    fs.rmSync(newerProject, { recursive: true, force: true });
+  }
+});
+
+test('registered older current project is reported as doctor target', () => {
+  const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-current-'));
+  const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
+  try {
+    const projects = [
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: newerProject, installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: olderProject, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
+    ];
+    const lines = [];
+    const doctor = gatewayCommand(projects, 'doctor', olderProject, (line) => lines.push(line));
+
+    assert.equal(doctor.cwd, olderProject);
+    assert.equal(lines.join('\n'), `Running model-gateway doctor for current project ${olderProject}.`);
+  } finally {
+    fs.rmSync(olderProject, { recursive: true, force: true });
+    fs.rmSync(newerProject, { recursive: true, force: true });
+  }
+});
+
+test('uses the stable model-gateway updater for upgrades and the installed command for checks', () => withRegistry(registry, (registryFile) => {
   const installs = installedPlugins(registry);
   const update = gatewayUpdateCommand('C:/Users/example');
   const doctor = gatewayCommand(installs, 'doctor');
 
   assert.deepEqual(update.args, [path.join('C:/Users/example', '.claude', 'model-gateway', 'update.js')]);
   assert.equal(doctor.args.at(-1), 'doctor');
-});
+}));
 
 test('preflights Claude Code once before update mutations and preserves an explicit path', () => withRegistry(registry, (registryFile) => {
   const calls = [];
@@ -236,20 +275,23 @@ test('update and check modes touch only Toolshed installs', () => withRegistry(r
 
   const checkCalls = [];
   const lines = [];
+  const projectRegistry = structuredClone(registry);
+  projectRegistry.plugins['model-gateway@eigenwise-toolshed'] = [
+    { scope: 'project', projectPath: 'C:/projects/newer', installPath: 'C:/cache/newer', version: '1.0.0', lastUpdated: '2026-07-18T12:00:00Z' },
+    { scope: 'project', projectPath: process.cwd(), installPath: 'C:/cache/current', version: '1.0.0', lastUpdated: '2026-07-17T12:00:00Z' },
+  ];
+  fs.writeFileSync(registryFile, JSON.stringify(projectRegistry));
   runUpdate({
     registryFile,
     options: { claude: 'claude', dryRun: false, check: true },
-    run: (command) => {
-      checkCalls.push(command);
-      return { ok: true };
-    },
+    run: (command) => { checkCalls.push(command); return { ok: true }; },
     report: (line) => lines.push(line),
   });
 
   assert.equal(checkCalls.length, 1);
-  assert.equal(checkCalls[0].args.at(-1), 'doctor');
-  assert.equal(checkCalls[0].args.join(' ').includes('another-marketplace'), false);
-  assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
+  assert.equal(checkCalls[0].cwd, process.cwd());
+  assert.equal(checkCalls[0].args[0], path.join('C:/cache/current', 'bin', 'model-gateway.js'));
+  assert.match(lines.join('\n'), /current project/);
 }));
 
 test('legacy codex-gateway installs stop before stale updates, setup, or wiring', () => {

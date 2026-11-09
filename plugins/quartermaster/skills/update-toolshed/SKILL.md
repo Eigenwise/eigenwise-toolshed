@@ -16,9 +16,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 It reads Claude Code's installed-plugin registry, refreshes the Eigenwise Toolshed marketplace, and
 updates every active Toolshed install recorded there at its recorded scope and project directory. That
 includes user, project, and local installs across projects, not only the project where this skill is
-invoked. It does not inspect, refresh, or update third-party marketplaces or plugins. When Model Gateway
-is installed, it runs its stable updater, `node ~/.claude/model-gateway/update.js`, and surfaces that
-command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to
+invoked. It does not inspect, refresh, or update third-party marketplaces or plugins. During `--check` and
+`--dry-run`, it runs the Model Gateway doctor for the current project when registered; otherwise it reports
+and checks a registered project instead. During updates, it runs the stable updater, `node ~/.claude/model-gateway/update.js`, and surfaces that command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to
 close sessions, restarts it when it can, and reports the resulting state. Claude Code's registry has
 versions but not release notes or commit history, so the updater says that plainly instead of guessing at
 a changelog. Gateway wiring stays as recorded: the stable updater runs `setup --preserve-wiring`, which
