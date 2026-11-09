@@ -765,7 +765,7 @@ test('SQ-2237: project settings without a codebase-mapper install report a dead 
   assert.doesNotMatch(output().systemMessage, /hooks are not running/);
 });
 
-test('SQ-2237: user settings without a user codebase-mapper install report a dead flag', (t) => {
+test('SQ-2237 user settings without a user codebase-mapper install report a dead flag', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-home-'));
   const project = mappedProject(t);
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -807,7 +807,7 @@ test('SQ-2211: a Toolshed marketplace declaration with auto-update on is not rep
   assert.equal(output(), null);
 });
 
-test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t) => {
+test('SQ-2237 settings-only Sidequest enablement reports a board dead flag', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-board-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
