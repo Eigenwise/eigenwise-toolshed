@@ -92,7 +92,7 @@ test('does not request the marketplace when the cache is current', async (testCo
   assert.equal(requests, 0);
 });
 
-test('leaves an existing stale cache untouched when refreshing fails', async (testContext) => {
+test('records a failed refresh for the hourly cache lifetime', async (testContext) => {
   const home = tempDirectory();
   testContext.after(() => fs.rmSync(home, { recursive: true, force: true }));
   writeRegistry(home);
@@ -104,10 +104,13 @@ test('leaves an existing stale cache untouched when refreshing fails', async (te
   }));
 
   assert.equal(output, '');
-  assert.deepEqual(readCache(fs, home), staleCache);
+  assert.deepEqual(readCache(fs, home), { checkedAt: new Date(NOW).toISOString(), unavailable: true });
+  assert.equal(await decide(input(), options(home, {
+    requestManifest: async () => { assert.fail('failed fetch must be cached for an hour'); },
+  })), '');
 });
 
-test('reports each distinct available version once per session without blocking', async (testContext) => {
+test('reports available updates once per session without blocking', async (testContext) => {
   const home = tempDirectory();
   testContext.after(() => fs.rmSync(home, { recursive: true, force: true }));
   writeRegistry(home);
@@ -118,9 +121,7 @@ test('reports each distinct available version once per session without blocking'
   assert.match(first.systemMessage, /quartermaster 1\.0\.0 → 2\.0\.0/);
   assert.equal(await decide(input(), { ...sharedOptions, cache: cacheAt(NOW, '2.0.0') }), '');
 
-  const newer = JSON.parse(await decide(input(), { ...sharedOptions, cache: cacheAt(NOW, '3.0.0') }));
-  assert.equal(newer.decision, undefined);
-  assert.match(newer.systemMessage, /quartermaster 1\.0\.0 → 3\.0\.0/);
+  assert.equal(await decide(input(), { ...sharedOptions, cache: cacheAt(NOW, '3.0.0') }), '');
 });
 
 test('reports newer installed Quartermaster versions once without blocking', async (testContext) => {
@@ -136,8 +137,7 @@ test('reports newer installed Quartermaster versions once without blocking', asy
   const first = JSON.parse(await decide(input('reload-version-change'), sharedOptions));
   assert.equal(first.decision, undefined);
   assert.match(first.systemMessage, /Quartermaster 2\.0\.0 is installed, but this session loaded 1\.0\.0/);
-  const promptOutput = JSON.parse(decideUserPrompt({ ...input('reload-version-change'), prompt: 'continue' }, sharedOptions));
-  assert.match(promptOutput.hookSpecificOutput.additionalContext, /Quartermaster 2\.0\.0 is installed/);
+  assert.equal(decideUserPrompt({ ...input('reload-version-change'), prompt: 'continue' }, sharedOptions), '');
   assert.equal(await decide(input('reload-version-change'), sharedOptions), '');
 
   writeRegistry(home, '3.0.0');
@@ -201,7 +201,7 @@ test('reports newer installed versions reported by other Toolshed plugins', asyn
   assert.match(newer.systemMessage, /sidequest: loaded 1\.0\.0, installed 3\.0\.0/);
 });
 
-test('still lets the next user prompt report the refreshed update', async (testContext) => {
+test('keeps the next user prompt silent after Stop reports the update', async (testContext) => {
   const home = tempDirectory();
   testContext.after(() => fs.rmSync(home, { recursive: true, force: true }));
   writeRegistry(home);
@@ -209,8 +209,7 @@ test('still lets the next user prompt report the refreshed update', async (testC
   const cache = cacheAt(NOW, '2.0.0');
 
   assert.match(JSON.parse(await decide(input(), { ...sharedOptions, cache })).systemMessage, /2\.0\.0/);
-  const promptOutput = JSON.parse(decideUserPrompt({ ...input(), prompt: 'continue' }, { ...sharedOptions, cache }));
-  assert.match(promptOutput.hookSpecificOutput.additionalContext, /2\.0\.0/);
+  assert.equal(decideUserPrompt({ ...input(), prompt: 'continue' }, { ...sharedOptions, warnedStates: new Set(), cache }), '');
 });
 
 test('is silent for stop-hook re-entry and a freshness bypass', async (testContext) => {

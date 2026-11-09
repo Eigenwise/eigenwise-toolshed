@@ -6,6 +6,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeDir } = require('../lib/paths.js');
+const { warnOnce } = require('./user-prompt-freshness.js');
 const {
   canonicalPath,
   compareSemver: compareVersions,
@@ -83,7 +85,7 @@ function runVersion(command, args, timeout = 1000) {
 }
 
 function sidequestBoards(home) {
-  const databaseFile = path.join(home, '.claude', 'sidequest', 'sidequest.db');
+  const databaseFile = path.join(claudeDir(process.env, home), 'sidequest', 'sidequest.db');
   if (!fs.existsSync(databaseFile)) return [];
   try {
     const { DatabaseSync } = require('node:sqlite');
@@ -100,7 +102,7 @@ function sidequestWorktreeRoot(project, home, configuredHome = process.env.SIDEQ
   const normalized = normalizedPath(project);
   const name = path.basename(normalized).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'project';
   const hash = crypto.createHash('sha1').update(normalized).digest('hex').slice(0, 8);
-  return path.join(configuredHome || path.join(home, '.claude', 'sidequest'), 'worktrees', `${name}-${hash}`);
+  return path.join(configuredHome || path.join(claudeDir(process.env, home), 'sidequest'), 'worktrees', `${name}-${hash}`);
 }
 
 function worktreeRoots(project, home, configuredHome) {
@@ -204,7 +206,7 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
       problems.push(finding(`${name} marketplace is not registered locally`, BLOCKS_THE_USER));
       continue;
     }
-    if (!autoUpdateEnabled(name, entry)) problems.push(finding(`${name} auto-update is off`, DRIFTING_ON_THE_USER));
+    if (!autoUpdateEnabled(name, entry)) problems.push(finding(`${name} auto-update is off`));
 
     const age = Date.parse(entry.lastUpdated || '');
     if (!Number.isFinite(age) || now - age > CACHE_MAX_AGE_MS) {
@@ -298,7 +300,7 @@ function requiredVersions(versions) {
 // flag, so its plugin hooks never load. Later layers win, so an explicit false in a higher-precedence file
 // disables what a lower one enabled.
 function settingsLayers(projectPath, home) {
-  const layers = [['user', path.join(home, '.claude', 'settings.json')]];
+  const layers = [['user', path.join(claudeDir(process.env, home), 'settings.json')]];
   if (projectPath) {
     layers.push(['project', path.join(projectPath, '.claude', 'settings.json')]);
     layers.push(['project', path.join(projectPath, '.claude', 'settings.local.json')]);
@@ -320,14 +322,16 @@ function settingsActivationScope(pluginId, projectPath, home) {
 }
 
 function settingsFileLabel(file, projectPath, home) {
-  if (normalizedPath(file) === normalizedPath(path.join(home, '.claude', 'settings.json'))) return '~/.claude/settings.json';
+  if (normalizedPath(file) === normalizedPath(path.join(claudeDir(process.env, home), 'settings.json'))) return path.join(claudeDir(process.env, home), 'settings.json');
   return path.relative(projectPath, file).split(path.sep).join('/');
 }
 
 function deadEnabledPluginFinding(subject, pluginName, activation, projectPath, home) {
   const settingsFile = settingsFileLabel(activation.file, projectPath, home);
+  const removal = path.basename(activation.file) === 'settings.local.json'
+    ? ` or remove the dead enabledPlugins entry from ${settingsFile}` : '';
   return finding(
-    `${subject} has ${pluginName} enabled in ${settingsFile} but no matching ${activation.scope} install, so its hooks are not running; install ${pluginName} at ${activation.scope} scope or remove the dead enabledPlugins entry from ${settingsFile}`,
+    `${subject} has ${pluginName} enabled in ${settingsFile} but no matching ${activation.scope} install, so its hooks are not running; install ${pluginName} at ${activation.scope} scope${removal}`,
     BLOCKS_THE_USER,
   );
 }
@@ -415,8 +419,8 @@ function currentProjectInstances(instances, currentProject) {
 
 function audit(options = {}) {
   const home = options.home || os.homedir();
-  const registry = options.registry || readJson(path.join(home, '.claude', 'plugins', 'installed_plugins.json')) || {};
-  const registeredMarketplaces = options.marketplaces || readJson(path.join(home, '.claude', 'plugins', 'known_marketplaces.json')) || {};
+  const registry = options.registry || readJson(path.join(claudeDir(process.env, home), 'plugins', 'installed_plugins.json')) || {};
+  const registeredMarketplaces = options.marketplaces || readJson(path.join(claudeDir(process.env, home), 'plugins', 'known_marketplaces.json')) || {};
   const marketplaces = withDeclaredAutoUpdate(registeredMarketplaces, options.currentProject, home);
   const now = options.now ?? Date.now();
   const instances = pluginInstances(registry);
@@ -518,6 +522,15 @@ function systemMessage(result, loadedVersion) {
   return update ? `Toolshed update available (cached): ${update.name} ${update.installed} → ${update.available} — /update-toolshed, then /reload-plugins.` : '';
 }
 
+function sessionUpdateNotice(input, result, loadedVersion, options = {}) {
+  const message = systemMessage(result, loadedVersion);
+  if (!message) return '';
+  const installedVersion = newerQuartermasterVersion(result.instances, loadedVersion);
+  const kind = installedVersion ? 'reload' : 'remote';
+  const versions = installedVersion ? `quartermaster@${installedVersion}` : '';
+  return warnOnce(input, kind, options, versions) ? message : '';
+}
+
 function projectWarning(problems) {
   const shown = findingText(problems).slice(0, 3);
   const extra = problems.length > shown.length ? `; +${problems.length - shown.length} more` : '';
@@ -595,7 +608,7 @@ function main() {
       ...result.staleProcesses.map((process) => `Stale worktree process: pid ${process.pid}, started ${process.startTime || 'unknown'}, path ${process.stalePath}`),
     ].filter(Boolean).join('\n');
     const notice = [
-      systemMessage({ instances: result.projectInstances, updates: result.projectUpdates }, loadedVersion),
+      sessionUpdateNotice(input, { instances: result.projectInstances, updates: result.projectUpdates }, loadedVersion),
       userActionNotice(result.projectProblems),
     ].filter(Boolean).join(' ');
     if (context || notice) {
@@ -638,6 +651,7 @@ module.exports = {
   sourceFreshness,
   staleWorktreeProcesses,
   systemMessage,
+  sessionUpdateNotice,
   userActionNotice,
   warning,
 };

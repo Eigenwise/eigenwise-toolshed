@@ -5,13 +5,14 @@ const fs = require('node:fs');
 const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeDir } = require('../lib/paths.js');
 
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const MARKETPLACE_URL = 'https://raw.githubusercontent.com/Eigenwise/eigenwise-toolshed/main/.claude-plugin/marketplace.json';
 const REQUEST_TIMEOUT_MS = 5_000;
 
 function cacheFile(home = os.homedir()) {
-  return path.join(home, '.claude', 'eigenwise-toolshed', 'marketplace-freshness.json');
+  return path.join(claudeDir(process.env, home), 'eigenwise-toolshed', 'marketplace-freshness.json');
 }
 
 function readCache(fileSystem = fs, home = os.homedir()) {
@@ -27,7 +28,10 @@ function cacheIsCurrent(cache, now = Date.now()) {
   return Number.isFinite(checkedAt) && now - checkedAt >= 0 && now - checkedAt < CACHE_MAX_AGE_MS;
 }
 
-function requestManifest(request = https.get, timeoutMs = REQUEST_TIMEOUT_MS) {
+function requestManifest(request = https.get, timeoutMs = REQUEST_TIMEOUT_MS, environment = process.env) {
+  if (['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'].some((name) => environment[name])) {
+    return Promise.reject(new Error('background freshness check skipped: proxy configured'));
+  }
   return new Promise((resolve, reject) => {
     const response = request(MARKETPLACE_URL, { headers: { accept: 'application/json' } }, (incoming) => {
       let body = '';

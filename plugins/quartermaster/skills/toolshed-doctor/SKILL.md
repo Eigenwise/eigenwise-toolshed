@@ -24,8 +24,8 @@ For Model Gateway, report the audit finding exactly. It distinguishes a missing 
 
 An `enabledPlugins` entry only selects an installed plugin. If the audit says a plugin's hooks are not running,
 that settings file enables a plugin with no matching install row. Offer to install it at the reported project or
-user scope, or remove the dead `enabledPlugins` entry from the named file. Do not call that plugin configured or
-healthy until one of those actions is complete.
+user scope. Only for `.claude/settings.local.json`, also offer to remove the dead `enabledPlugins` entry. Never suggest removing a shared `.claude/settings.json` entry. Do not call that plugin configured or
+healthy until the matching install exists or the local entry is removed.
 
 When `staleProcesses` has rows, report each PID, start time, and stale worktree path. They are read-only findings: do not kill any process from the doctor.
 

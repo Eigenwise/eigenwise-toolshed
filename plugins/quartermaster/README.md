@@ -32,7 +32,7 @@ The updater and the freshness hooks have different jobs. `/quartermaster:update-
 
 ## Privacy and the history summary
 
-Quartermaster's local script reads Claude Code transcript files from the machine and emits a bounded JSON aggregate. The active model sees that aggregate when the setup or resupply skill reads it. Raw transcript files are not loaded into model context, and the skills are explicitly forbidden from opening them. The scripts make no network calls for this catalog and mining flow.
+Quartermaster's local script reads Claude Code transcript files from the machine and emits a bounded JSON aggregate. The active model sees that aggregate when the setup or resupply skill reads it. Raw transcript files are not loaded into model context, and the skills are explicitly forbidden from opening them. The scripts make no network calls for this catalog and mining flow. The advisory freshness hooks fetch only the public marketplace version manifest from raw.githubusercontent.com at most hourly, send no project data, and skip this background check when HTTPS_PROXY or HTTP_PROXY (including lowercase forms) is configured; fetch failures stay silent.
 
 The aggregate is more than counts. It can include:
 
