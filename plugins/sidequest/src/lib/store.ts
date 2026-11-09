@@ -62,6 +62,7 @@ const { createDispatchSnapshot } = require('./store/dispatch-snapshot.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
+const { createIntake } = require('./store/intake.js') as typeof import('./store/intake.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
 const { createReviewCorrections, pendingOracleVerdictRefusal } = require('./store/review-corrections.js');
@@ -4940,6 +4941,8 @@ const {
   updateStory,
 } = stories;
 
+const { intakeDispatchRefusal, storyIntake } = createIntake({ boardConfig, getStory, getCategory, putStory, transaction, updateTicket });
+
 projectsLayer = createProjects({
   assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
   deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
@@ -4992,6 +4995,8 @@ function completeTicket(slug: string, ref: string, by: string, opts: Parameters<
 const { completionPayload, storyCompletionPayload } = createCompletion({ getTicket, getStory, listTickets, openBlockers, negativeControlResult, projectDir, readMeta });
 
 module.exports = {
+  intakeDispatchRefusal,
+  storyIntake,
   normalizeIntegrationVerifyTimeoutMs,
   VALID_STATUS,
   VALID_PRIORITY,

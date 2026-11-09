@@ -466,7 +466,9 @@ test('writes a project-scoped health warning to SessionStart context', () => {
     input: { cwd: 'C:/work/current/subdirectory' },
   });
 
-  assert.equal(output.hookSpecificOutput.additionalContext, 'Toolshed project health: sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0.');
+  // The process inventory probe only runs on Windows, so its age is absent on other platforms.
+  const processInventoryAge = process.platform === 'win32' ? '; process inventory unknown age' : '';
+  assert.equal(output.hookSpecificOutput.additionalContext, `Toolshed project health: sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0.\nCached probe ages: Claude Code unknown age; marketplace comparison unknown age${processInventoryAge}.`);
   assert.equal(output.systemMessage, 'Toolshed update available (cached): sidequest 1.0.0 → 1.1.0 — /update-toolshed, then /reload-plugins.');
 });
 
@@ -508,6 +510,7 @@ test('hooks.json registers the freshness hooks and nothing observability owns', 
   const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
   const commandsFor = (event) => (hooks[event] || []).flatMap((group) => group.hooks.map((h) => h.command)).join(' ');
   assert.ok(commandsFor('SessionStart').includes('session-start-freshness.js'));
+  assert.ok(commandsFor('SessionStart').includes('session-start-probes.js'));
   assert.ok(commandsFor('SessionStart').includes('billing-path-check.js'));
   assert.ok(commandsFor('SessionStart').includes('marketplace-freshness-cache.js'));
   assert.ok(commandsFor('UserPromptSubmit').includes('user-prompt-freshness.js'));
