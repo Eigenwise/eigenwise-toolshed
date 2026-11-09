@@ -31,6 +31,7 @@ async function cmdStory(opts, positional) {
       if (!title) fail('story add: --title/-t is required, e.g. sidequest story add -t "Auth revamp" [--color teal]');
       const story = store.createStory(slug, {
         title,
+        by: workerId(opts),
         description: opts.desc != null ? opts.desc : opts.description,
         color: opts.color
       });
@@ -182,7 +183,42 @@ async function cmdStory(opts, positional) {
       return;
     }
     default:
-      fail(`story: unknown action "${positional[0] || ""}". Use add | list | show | contract | log | update | rm. Run "sidequest help".`);
+      fail(`story: unknown action "${positional[0] || ""}". Use add | list | show | contract | log | intake | update | rm. Run "sidequest help".`);
   }
 }
-module.exports = { cmdStory };
+function intakeCliAction(positional) {
+  if (positional[2] === "question" && positional[3] === "answer") return "answer";
+  return positional[2];
+}
+function intakeResearchRefs(value) {
+  return value === void 0 ? void 0 : String(value).split(",");
+}
+async function cmdStoryIntake(opts, positional) {
+  const { slug } = await resolveProject(opts);
+  const idOrRef = positional[1];
+  const intakeAction = intakeCliAction(positional);
+  const result = store.storyIntake(slug, {
+    action: intakeAction,
+    story: idOrRef,
+    ref: positional[3],
+    by: workerId(opts),
+    namedBy: opts["named-by"],
+    text: opts.text,
+    size: opts.size,
+    reason: opts.reason,
+    options: opts.options === void 0 ? void 0 : JSON.parse(String(opts.options)),
+    id: opts.id,
+    answer: opts.answer,
+    assumption: opts.assumption === true,
+    review: opts.review,
+    findings: opts.findings,
+    research: intakeResearchRefs(opts.research)
+  });
+  process.stdout.write(JSON.stringify({ ok: true, project: slug, result }, null, 2) + "\n");
+  return;
+}
+async function cmdStoryWithIntake(opts, positional) {
+  if (positional[0] === "intake") return cmdStoryIntake(opts, positional);
+  return cmdStory(opts, positional);
+}
+module.exports = { cmdStory: cmdStoryWithIntake };

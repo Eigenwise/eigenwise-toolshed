@@ -281,7 +281,12 @@ function parseBoardConfigJsonOption(option, raw, shape) {
     return fail(`board-config: --${option} must be ${shape}.`);
   }
 }
-function boardConfigPatch(opts) {
+function intakePolicyPatch(opts, slug) {
+  if (opts["intake-mode"] === void 0 && opts["intake-review-cycles"] === void 0) return {};
+  const current = store.boardConfig(slug).intake;
+  return { intake: { mode: opts["intake-mode"] ?? current.mode, reviewCycles: Number(opts["intake-review-cycles"] ?? current.reviewCycles) } };
+}
+function boardConfigPatch(opts, slug) {
   const patch = {};
   for (const [option, key] of Object.entries(BOARD_CONFIG_OPTION_PATCH_KEYS)) {
     if (opts[option] != null) patch[key] = opts[option];
@@ -289,7 +294,7 @@ function boardConfigPatch(opts) {
   for (const [option, { key, shape }] of Object.entries(BOARD_CONFIG_JSON_OPTIONS)) {
     if (opts[option] != null) patch[key] = parseBoardConfigJsonOption(option, opts[option], shape);
   }
-  return patch;
+  return Object.assign(patch, intakePolicyPatch(opts, slug));
 }
 function listOrNone(values) {
   return values.length ? values.join(", ") : "(none)";
@@ -305,6 +310,7 @@ function dependencyPathLabel(dependency) {
 }
 function printBoardConfig(payload) {
   console.log(`board name: ${payload.name}`);
+  console.log(`intake: ${payload.intake.mode}, review cycles: ${payload.intake.reviewCycles}`);
   console.log(`Jira base URL: ${payload.jiraBaseUrl}`);
   console.log(`always in scope: ${listOrNone(payload.alwaysInScope)}`);
   console.log(`generated pairs: ${listOrNone(payload.generatedPairs.map(generatedPairLabel))}`);
@@ -326,7 +332,7 @@ function printBoardConfig(payload) {
 }
 async function cmdBoardConfig(opts) {
   const { slug, meta } = await resolveProject(Object.assign({}, opts, { name: void 0 }));
-  const patch = boardConfigPatch(opts);
+  const patch = boardConfigPatch(opts, slug);
   const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
   const payload = Object.assign({ project: slug, projectName: result.config.name }, result.config);
