@@ -8,6 +8,21 @@ const { canonicalPath } = require('../kernel/worktree.js');
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 
+type IntakePolicy = { mode: 'off' | 'stories'; reviewCycles: 1 | 2 | 3 };
+function normalizeIntake(value: unknown = {}): IntakePolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('intake must be { mode, reviewCycles }.');
+  return { mode: intakeMode(Reflect.get(value, 'mode')), reviewCycles: intakeReviewCycles(Reflect.get(value, 'reviewCycles')) };
+}
+
+function intakeMode(value: unknown = 'off'): IntakePolicy['mode'] {
+  if (value === 'off' || value === 'stories') return value;
+  throw new Error('intake.mode must be off or stories.');
+}
+function intakeReviewCycles(value: unknown = 1): IntakePolicy['reviewCycles'] {
+  if (value === 1 || value === 2 || value === 3) return value;
+  throw new Error('intake.reviewCycles must be 1, 2 or 3.');
+}
+
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
 function defaultProjectName(absPath?: any) {
   return path.basename(path.resolve(absPath)) || 'project';
@@ -413,6 +428,7 @@ function boardConfig(slug?: any) {
   const layer = getProjectCategories(slug);
   const byKind = Object.fromEntries(['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].map((kind?: any) => [kind, layer.rows.filter((row?: any) => row.kind === kind).length]));
   return {
+    intake: normalizeIntake(meta.intake),
     name: meta.name,
     jiraBaseUrl: normalizeJiraBaseUrl(meta.jiraBaseUrl),
     githubSync: normalizeGithubSync(meta.githubSync),
@@ -466,6 +482,7 @@ function normalizeGithubSync(value: unknown = 'off'): 'off' | 'comment' | 'close
 }
 
 const BOARD_CONFIG_NORMALIZERS: Record<string, (value?: any, repository?: string) => any> = {
+  intake: normalizeIntake,
   investigationDataRoots: normalizeInvestigationDataRoots,
   name: normalizeBoardName,
   jiraBaseUrl: normalizeJiraBaseUrl,

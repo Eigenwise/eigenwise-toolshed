@@ -155,6 +155,9 @@
         "story": {
           "type": "string"
         },
+        "by": {
+          "type": "string"
+        },
         "title": {
           "type": "string"
         },
@@ -262,6 +265,104 @@
     }
   },
   {
+    "name": "story_intake",
+    "description": "Record intake once before implementation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "playback",
+            "sizing",
+            "question",
+            "answer",
+            "cycle",
+            "approve",
+            "delegate",
+            "reopen",
+            "exempt"
+          ]
+        },
+        "story": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "namedBy": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "one-ticket",
+            "one-wave",
+            "multi-wave"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "recommended": {
+                "const": true
+              }
+            },
+            "required": [
+              "label",
+              "reason"
+            ]
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        },
+        "assumption": {
+          "type": "boolean"
+        },
+        "review": {
+          "type": "string"
+        },
+        "findings": {
+          "type": "string"
+        },
+        "research": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "action",
+        "by"
+      ]
+    }
+  },
+  {
     "name": "add",
     "inputSchema": {
       "type": "object",
@@ -286,6 +387,25 @@
         },
         "highStakes": {
           "type": "boolean"
+        },
+        "intakeExempt": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "minLength": 20
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "labels": {
           "type": "array",
@@ -502,6 +622,25 @@
         },
         "highStakes": {
           "type": "boolean"
+        },
+        "intakeExempt": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "minLength": 20
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "labels": {
           "type": "array",
@@ -2448,6 +2587,26 @@
       "properties": {
         "project": {
           "type": "string"
+        },
+        "intake": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "off",
+                "stories"
+              ]
+            },
+            "reviewCycles": {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            }
+          }
         },
         "name": {
           "type": "string"
