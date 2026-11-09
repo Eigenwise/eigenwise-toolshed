@@ -407,11 +407,18 @@ function setAsideSkipped(candidates, options, projectDir) {
   return candidates.filter((entry) => entry.skipReason);
 }
 
-async function applyPermissionAllowlist(options = {}) {
+async function learnPermissionAllowlist(options = {}) {
   const projectDir = path.resolve(options.projectPath ?? process.cwd());
   const collected = await collectPermissionDecisions({ ...options, projectPath: projectDir });
   const candidates = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0 && !entry.hookBlocks);
   const hookBlocked = collected.decisions.filter((entry) => entry.hookBlocks).length;
+  for (const entry of candidates) ruleIsBlocked(entry);
+  return { candidates, hookBlocked, window: collected.window };
+}
+
+function applyLearnedPermissionAllowlist(learning, options = {}) {
+  const projectDir = path.resolve(options.projectPath ?? process.cwd());
+  const { candidates, hookBlocked } = learning;
   const skipped = setAsideSkipped(candidates, options, projectDir);
   const proposable = candidates.filter((entry) => !entry.skipReason);
   const blocked = proposable.filter(ruleIsBlocked);
@@ -420,7 +427,7 @@ async function applyPermissionAllowlist(options = {}) {
   // enabled the marker only ever gets the report. Without this, `quartermaster
   // allowlist` silently granted permissions in any project it was run in.
   if (!permissionAutomationEnabled(projectDir)) {
-    return { projectDir, additions: [], blocked, eligible, skipped, hookBlocked, applied: false, scanned: collected.window.files.length };
+    return { projectDir, additions: [], blocked, eligible, skipped, hookBlocked, applied: false, scanned: learning.window.files.length };
   }
   const writable = eligible.filter((entry) => !ruleIsBlocked(entry));
   const added = appendRulesToSettings(projectDir, writable.map((entry) => ruleFor(entry.fingerprint)));
@@ -438,10 +445,17 @@ async function applyPermissionAllowlist(options = {}) {
       approvals: entry.approvals,
     }, options.env);
   }
-  return { projectDir, additions, blocked, eligible, skipped, hookBlocked, applied: true, scanned: collected.window.files.length };
+  return { projectDir, additions, blocked, eligible, skipped, hookBlocked, applied: true, scanned: learning.window.files.length };
+}
+
+async function applyPermissionAllowlist(options = {}) {
+  const learning = await learnPermissionAllowlist(options);
+  return applyLearnedPermissionAllowlist(learning, options);
 }
 
 module.exports = {
+  applyLearnedPermissionAllowlist,
+  learnPermissionAllowlist,
   ENABLED_SETTING,
   MIN_APPROVALS,
   appendRulesToSettings,
