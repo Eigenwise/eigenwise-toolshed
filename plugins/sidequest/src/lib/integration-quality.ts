@@ -5,6 +5,74 @@ import { pathToFileURL } from 'node:url';
 import type { VerificationResult } from './kernel/verification.js';
 import { runProcessVerification } from './ports/process.js';
 
+export interface ProjectQualityPolicy {
+  threshold: number;
+  legacyRatchet: 'not-worse';
+  unverifiedHandling: 'debt' | 'block';
+  debtTicketMode: 'standing-per-boundary' | 'per-delivery' | 'none';
+  installMode: 'local';
+  source: 'project' | 'default';
+}
+
+export const DEFAULT_QUALITY_POLICY = Object.freeze({
+  threshold: 6,
+  legacyRatchet: 'not-worse',
+  unverifiedHandling: 'debt',
+  debtTicketMode: 'standing-per-boundary',
+  installMode: 'local',
+} as const);
+
+const qualityPolicyChoices: Record<string, readonly unknown[]> = {
+  threshold: [6],
+  legacyRatchet: ['not-worse'],
+  unverifiedHandling: ['debt', 'block'],
+  debtTicketMode: ['standing-per-boundary', 'per-delivery', 'none'],
+  installMode: ['local'],
+};
+
+function qualityPolicyObject(value: unknown): asserts value is Record<string, unknown> {
+  if (Object.prototype.toString.call(value) !== '[object Object]') throw new Error('Quality Gate config and policy must be JSON objects');
+}
+
+function qualityPolicyOrDefault(project: string): ProjectQualityPolicy {
+  const configuration = path.join(project, '.claude/quality-gate/crap.json');
+  if (!fs.existsSync(configuration)) return { ...DEFAULT_QUALITY_POLICY, source: 'default' };
+  const contents: unknown = JSON.parse(fs.readFileSync(configuration, 'utf8'));
+  qualityPolicyObject(contents);
+  const policy = contents.policy === undefined ? {} : contents.policy;
+  qualityPolicyObject(policy);
+  for (const [name, value] of Object.entries(policy)) validateQualityPolicyChoice(name, value);
+  return { ...DEFAULT_QUALITY_POLICY, ...policy, source: 'project' };
+}
+
+function validateQualityPolicyChoice(name: string, value: unknown): void {
+  if (!Object.hasOwn(qualityPolicyChoices, name)) throw new Error('Unknown quality policy field: ' + name);
+  if (!qualityPolicyChoices[name]!.includes(value)) throw new Error('policy.' + name + ' must be one of: ' + qualityPolicyChoices[name]!.join(', '));
+}
+
+function debtTicketInstruction(policy: ProjectQualityPolicy): string {
+  return {
+    'standing-per-boundary': 'Reuse one standing measurement-debt ticket per unsupported capture boundary; append affected deliveries to that ticket. Create it only when none exists.',
+    'per-delivery': 'File one measurement-debt ticket for this delivery.',
+    none: 'Report measurement debt in the delivery evidence without creating a debt ticket.',
+  }[policy.debtTicketMode];
+}
+
+interface QualityPolicyOwner {
+  qualityPolicyOrDefault(project: string): ProjectQualityPolicy;
+  debtTicketInstruction(policy: ProjectQualityPolicy): string;
+}
+
+export function configuredProjectQualityPolicy(project: string, registeredProject = project): { policy: ProjectQualityPolicy; debtInstruction: string } | undefined {
+  const gate = configuredIntegrationGate(registeredProject);
+  if (!gate && !fs.existsSync(path.join(project, '.claude/quality-gate/crap.json'))) return undefined;
+  if (!gate) throw new Error('Project quality policy exists but Quality Gate is not installed for this project');
+  const ownerPath = path.join(gate, 'lib', 'policy.cjs');
+  const owner: QualityPolicyOwner = fs.existsSync(ownerPath) ? require(ownerPath) : { qualityPolicyOrDefault, debtTicketInstruction };
+  const policy = owner.qualityPolicyOrDefault(project);
+  return { policy, debtInstruction: owner.debtTicketInstruction(policy) };
+}
+
 interface GateInstall {
   scope?: string;
   projectPath?: string;
@@ -44,6 +112,7 @@ export interface IntegrationQuality {
   unverified: QualityRow[];
   captureGap?: string;
   debtTicketNote?: string;
+  policy?: ProjectQualityPolicy;
   coverageSupport?: string;
   mode?: IntegrationQualityMode;
   worstBody?: QualityRow;
@@ -135,9 +204,9 @@ function unverifiedRows(report: NativeReport): QualityRow[] {
   return [...new Map(rows.map((row) => [`${row.relativePath}:${row.line}:${row.name}`, row])).values()];
 }
 
-function reportQuality(report: NativeReport, base: string): IntegrationQuality {
+function reportQuality(report: NativeReport, base: string, threshold: number): IntegrationQuality {
   const enforced = (report.changedMetrics ?? []).filter((row) => row.classification !== 'legacy-unchanged');
-  const floorFailures = enforced.filter((row) => (row.complexity ?? 0) >= 6).map((row) => `${row.relativePath}:${row.line} ${row.name} cc=${row.complexity} (complexity floor)`);
+  const floorFailures = enforced.filter((row) => (row.complexity ?? 0) >= threshold).map((row) => `${row.relativePath}:${row.line} ${row.name} cc=${row.complexity} (complexity floor)`);
   const failures = [...report.failures, ...floorFailures];
   const unverified = unverifiedRows(report);
   const measured = { ...emptyQuality('measured'), baseline: base, enforced: enforced.length, failures, unverified, sourceMapTranslations: report.sourceMapTranslations, sourceMapRefusals: report.sourceMapRefusals };
@@ -191,22 +260,24 @@ function measurementCommand(input: QualityInput, files: string[], captureDirecto
 }
 
 function measuredQuality(gate: string, input: QualityInput, captureDirectory: string): IntegrationQuality {
+  const configured = configuredProjectQualityPolicy(input.project, input.registeredProject);
+  if (!configured) return emptyQuality('none');
   const files = sourceFiles(input);
   if (!files.length) return emptyQuality('measured');
   const command = measurementCommand(input, files, captureDirectory);
   const report = runNativeReport(gate, input, command, command[0]!);
-  const quality = reportQuality(report, input.base);
-  if (!report.changedMetrics?.length) return missingMeasurement(gate, input, files, report, quality);
+  const quality = reportQuality(report, input.base, configured.policy.threshold);
+  if (!report.changedMetrics?.length) return missingMeasurement(gate, input, files, report, quality, configured.policy.threshold);
   return { ...quality, measurementPath: command[0] === 'crap' ? 'crap' : 'measure' };
 }
 
-function missingMeasurement(gate: string, input: QualityInput, files: string[], report: NativeReport, quality: IntegrationQuality): IntegrationQuality {
+function missingMeasurement(gate: string, input: QualityInput, files: string[], report: NativeReport, quality: IntegrationQuality, threshold: number): IntegrationQuality {
   const inventory = runNativeReport(gate, input, ['crap', '--json', '--project', input.project, '--base', input.base, '--cc-only', '--receipts-dir', input.directory, ...files.flatMap((file) => ['--source', file])], 'complexity');
   const count = inventory.changedMetrics?.length ?? 0;
   const reason = report.nothingToScoreReason ?? report.unverified[0]?.unverified ?? 'Native coverage report returned no changed bodies';
   const measurementSummary = `0 of ${count} changed bodies measured: ${reason}`;
   if (!count) return { ...quality, measurementSummary };
-  return { ...reportQuality(inventory, input.base), status: 'failed', measurementSummary, failures: [measurementSummary], unverified: inventory.changedMetrics!.map((row) => ({ ...row, crap: undefined, unverified: reason })) };
+  return { ...reportQuality(inventory, input.base, threshold), status: 'failed', measurementSummary, failures: [measurementSummary], unverified: inventory.changedMetrics!.map((row) => ({ ...row, crap: undefined, unverified: reason })) };
 }
 
 function persistQuality(input: QualityInput, quality: IntegrationQuality): IntegrationQuality {
@@ -226,10 +297,20 @@ function participantQuality(gate: string, input: QualityInput, captureDirectory:
   let quality: IntegrationQuality;
   try {
     quality = measuredQuality(gate, input, captureDirectory);
+    const configured = configuredProjectQualityPolicy(input.project, input.registeredProject);
+    if (configured) quality = applyQualityPolicy(quality, configured);
   } catch (error) {
     quality = unverifiedQuality(error);
   }
   return persistQuality(input, { ...quality, mode });
+}
+
+function applyQualityPolicy(quality: IntegrationQuality, configured: { policy: ProjectQualityPolicy; debtInstruction: string }): IntegrationQuality {
+  const recorded = { ...quality, policy: configured.policy };
+  if (!quality.unverified.length) return recorded;
+  const debtTicketNote = configured.debtInstruction;
+  if (configured.policy.unverifiedHandling === 'debt') return { ...recorded, debtTicketNote };
+  return { ...recorded, debtTicketNote, status: 'failed', failures: [...quality.failures, 'Project quality policy blocks UNVERIFIED measurement'] };
 }
 
 function unavailableQuality(inputs: QualityInput[], verify: (environment: NodeJS.ProcessEnv) => VerificationResult, error: unknown, environment: NodeJS.ProcessEnv, mode: IntegrationQualityMode) {

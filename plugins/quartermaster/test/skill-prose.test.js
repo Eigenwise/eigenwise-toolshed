@@ -26,7 +26,7 @@ test('documents namespaced Quartermaster commands and Live Rules deduplication',
 test('delegates quality guidance to quality-gate', () => {
   const setup = readSkill('setup');
 
-  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade/);
+  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup proposes its project policy and coverage support on approval/);
   assert.doesNotMatch(setup, /clean-code-principles/);
 });
 
@@ -187,4 +187,15 @@ test('skill snippets use host-substituted plugin paths instead of missing shell 
     .filter((filePath) => /process\.env\.CLAUDE_(?:PLUGIN_ROOT|PROJECT_DIR)/.test(fs.readFileSync(filePath, 'utf8')))
     .map((filePath) => path.relative(skillsDirectory, filePath));
   assert.deepEqual(offenders, []);
+});
+
+test('setup and doctor use the shipped project quality policy owner', () => {
+  const setup = readSkill('setup');
+  const doctor = readSkill('toolshed-doctor');
+  const reference = fs.readFileSync(path.join(__dirname, '../skills/setup/references/crap-gate.md'), 'utf8');
+  assert.match(setup, /three-sentence project-policy explanation/);
+  assert.match(reference, /qualityPolicyProposal/);
+  assert.match(reference, /writeApprovedQualityPolicy/);
+  assert.match(reference, /one standing ticket per unsupported capture boundary/);
+  assert.match(doctor, /qualityPolicyFinding/);
 });

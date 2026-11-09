@@ -212,3 +212,11 @@ A SessionEnd hook tallies each session locally in one streamed pass. The due che
 Tallies and decisions live under `~/.claude/quartermaster-state/`: per-session counters and a decision ledger with fingerprints. The bounded aggregate is the model-facing summary for setup and resupply. Raw transcripts are not loaded into model context, and the resupply skill must not open them. Transcript-derived text in the aggregate is clipped, and scratch directories are dropped from path areas.
 
 The [generated Quartermaster reference](../../reference/quartermaster/) contains the agent-facing skill and command details. See [contributing](../../contributing/) for maintainer workflows and the separate [support page](https://eigenwise.github.io/eigenwise-toolshed/support/) for ways to help.
+
+## Quality policy proposal
+
+For each codebase, setup proposes Quality Gate's [project delivery policy](/getting-started/quality-gate/#project-delivery-policy):
+CRAP strictly below the owned threshold for new and raised bodies, informational not-worse legacy rows,
+and UNVERIFIED-as-debt with one standing ticket per unsupported capture boundary. It shows the project config,
+local measurement setup and execution cost, then writes only after approval. An installed gate uses shipped defaults until a project file overrides them; doctor reports that source. The policy is per project;
+installing Quartermaster or Quality Gate alone never opts every project in.
