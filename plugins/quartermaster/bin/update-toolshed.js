@@ -331,15 +331,22 @@ function installGatewayUpdateLauncher(instances, home = os.homedir()) {
   return writeUpdateLauncher({ home });
 }
 
-function gatewayCommand(instances, action) {
+function gatewayCommand(instances, action, currentProject = process.cwd(), report = () => {}) {
   const gateways = activeProjectInstances(instances).filter((instance) => instance.id === MODEL_GATEWAY_PLUGIN && instance.installPath);
   if (gateways.length === 0) return null;
 
   const newest = gateways.sort((left, right) => String(right.lastUpdated ?? '').localeCompare(String(left.lastUpdated ?? '')))[0];
+  const currentProjectGateway = gateways.find((instance) => instance.projectPath === currentProject);
+  const selected = currentProjectGateway ?? newest;
+  if (!currentProjectGateway) {
+    report(`Current project ${currentProject} is not registered with model-gateway; checking registered project ${selected.projectPath ?? 'user scope'} instead.`);
+  } else {
+    report(`Running model-gateway ${action} for current project ${currentProject}.`);
+  }
   return {
     command: process.execPath,
-    args: [path.join(newest.installPath, 'bin', 'model-gateway.js'), action],
-    cwd: newest.scope === 'user' ? undefined : newest.projectPath,
+    args: [path.join(selected.installPath, 'bin', 'model-gateway.js'), action],
+    cwd: selected.scope === 'user' ? undefined : selected.projectPath,
     label: `model-gateway ${action}`,
   };
 }
@@ -655,7 +662,11 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   }
 
   const gateways = modelGatewayInstances(instances);
-  const gateway = gateways.length > 0 ? (options.check ? gatewayCommand(instances, 'doctor') : gatewayUpdateCommand(home)) : null;
+  const gateway = gateways.length > 0
+    ? options.check || options.dryRun
+      ? gatewayCommand(instances, 'doctor', process.cwd(), report)
+      : gatewayUpdateCommand(home)
+    : null;
   let gatewaySetupOk = true;
   if (gateway && !options.check && !options.dryRun) {
     const launcher = installGatewayLauncher(instances, home);
