@@ -109,7 +109,7 @@ handing off implementation. Draw from three sources, in this order:
   When the plan wires Model Gateway or Sidequest routing, check the effective setting first:
 
   ```sh
-  node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
+  node -e "const { compactionWindowFinding } = require('${CLAUDE_PLUGIN_ROOT}/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
   ```
 
   Report the finding. Model Gateway owns backend windows and saved compact-at policy; use its
@@ -134,7 +134,7 @@ handing off implementation. Draw from three sources, in this order:
     derived from recurring correction themes, using
     [references/rule-templates.md](references/rule-templates.md) as reference material to derive
     from, never copy (byte-identical output means it was copied; rewrite or drop it). Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade.
-    Every workspace gets the self-improvement rule from [references/self-improvement.md](references/self-improvement.md), and, for every
+    Only when live-rules is approved, propose the self-improvement rule from [references/self-improvement.md](references/self-improvement.md), and, for every
     codebase, a proposed CRAP gate from [references/crap-gate.md](references/crap-gate.md). Adapt
     them to the project and include them in the approved write list. Skip the CRAP gate for a
     not-a-codebase.
@@ -178,10 +178,10 @@ Order matters: plugins install first, workspace artifacts that depend on them se
 nothing that needs a plugin loaded happens until after the activation boundary.
 
 - Install approved plugins with `claude plugin install <name>@<marketplace> --scope project`.
-- Write the approved artifacts: live rules under `.claude/live-rules/rules/*.md` via live-rules'
+- Write the approved artifacts: only when live-rules is approved, live rules under `.claude/live-rules/rules/*.md` via live-rules'
   documented atomic format (or its `add-rule` skill after reload), `.claude/quality-gate/crap.json`
-  and `.claude/live-rules/rules/crap-gate.md` when the CRAP gate is approved (plus the quality-gate plugin install), `permissions.allow`
-  entries in `.claude/settings.json`, a structure note for greenfield projects per
+  when the CRAP gate is approved (plus the quality-gate plugin install), and its live rule only when live-rules is also approved; `permissions.allow`
+  entries in `.claude/settings.local.json` (per-user and gitignored; confirm it is excluded from git), a structure note for greenfield projects per
   [references/structure-notes.md](references/structure-notes.md), and optionally a lightweight
   CLAUDE.md seeded through the built-in `/init`.
 - Then stop once: ask the user to activate the selected installs with `/reload-plugins`, or restart
@@ -192,8 +192,12 @@ nothing that needs a plugin loaded happens until after the activation boundary.
 
 After the reload or restart: `claude plugin list --json` confirms every selected plugin is installed and
 enabled at its requested scope. Then verify each piece is actually usable, not just present:
-build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
-is visibly injected in your context, bring up the sidequest board if selected, and check each
+build the codebase map via `map-codebase` when selected (skip for not-a-codebase), and, when live-rules is selected,
+resolve its current-project/user install row in `<claude config dir>/plugins/installed_plugins.json`
+(`CLAUDE_CONFIG_DIR` or `~/.claude`). Use that row's `installPath` as `<LIVE_RULES_ROOT>`, never Quartermaster's plugin root. Run
+`node "<LIVE_RULES_ROOT>/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"`
+to generate the manifest from the approved rule files, then confirm live-rules content is visibly injected in your context.
+Confirm learned permissions are in the gitignored `.claude/settings.local.json`, bring up the sidequest board if selected, and check each
 LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap`
 (it runs the installed quality-gate) from `${CLAUDE_PROJECT_DIR}` once and report the real result: pass, fail with its offender
 count, or exit 2 with the missing prerequisite. Do not say the gate is live before that command ran.
@@ -246,5 +250,5 @@ what would make the user's current work easier and whether this setup is earning
 - `references/stack-plugins.md` - stack to plugins/marketplaces/LSP catalog
 - `references/rule-templates.md` - workflow and stack rule reference material
 - `references/crap-gate.md` - CRAP threshold policy, LCOV recipes, config, and live-rule source
-- `references/self-improvement.md` - the self-improvement live rule every workspace gets
+- `references/self-improvement.md` - the self-improvement live rule offered when live-rules is approved
 - `references/structure-notes.md` - structure notes, mostly for greenfield

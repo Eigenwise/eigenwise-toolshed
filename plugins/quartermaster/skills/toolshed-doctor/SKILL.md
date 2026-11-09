@@ -17,7 +17,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js" --check
 Then run the same read-only session health audit used at startup:
 
 ```sh
-node -e "const { audit } = require(process.env.CLAUDE_PLUGIN_ROOT + '/hooks/session-start-freshness.js'); const result = audit({ currentProject: process.cwd() }); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings, staleProcesses: result.staleProcesses }, null, 2));"
+node -e "const { audit } = require('${CLAUDE_PLUGIN_ROOT}/hooks/session-start-freshness.js'); const result = audit({ currentProject: process.cwd() }); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings, staleProcesses: result.staleProcesses }, null, 2));"
 ```
 
 For Model Gateway, report the audit finding exactly. It distinguishes a missing checker, a spawn error, a three-second startup timeout, a nonzero doctor result, and empty output. A nonzero doctor result includes one bounded, secret-filtered diagnostic line and is never a missing-checker finding. The SessionStart warning uses the same cause in compact form. These checks only report observed health; do not call the gateway healthy because a later command happened to pass.
@@ -68,10 +68,10 @@ Do not install, rebuild the board, delete history, or run recording changes from
 
 ## Agent teams
 
-Check whether a project-level `env` block masks the global agent-teams setting. This is read-only and prints nothing when the project has no `env` block or already enables teams:
+Check whether a project-level `env` block masks the global agent-teams setting. This is read-only and warns only when user-level settings enable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. It prints nothing when that user setting is absent or disabled, the project has no `env` block, or the project already sets the flag:
 
 ```sh
-node -e "const { agentTeamsWarning } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); const warning = agentTeamsWarning(process.cwd()); if (warning) console.log(warning);"
+node -e "const { agentTeamsWarning } = require('${CLAUDE_PLUGIN_ROOT}/lib/project-settings.js'); const warning = agentTeamsWarning(process.cwd()); if (warning) console.log(warning);"
 ```
 
 If it prints a warning, report it with the one-line remedy verbatim. Do not fix it from the doctor.
@@ -82,7 +82,7 @@ Check the effective `autoCompactWindow` from user and project settings. This is 
 setting wins when both files set the key:
 
 ```sh
-node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
+node -e "const { compactionWindowFinding } = require('${CLAUDE_PLUGIN_ROOT}/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
 ```
 
 Report the finding verbatim. Explicit user or project values are reported and preserved. When neither
