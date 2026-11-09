@@ -37,8 +37,8 @@ async function mine(options = {}) {
     },
     ...signals,
     sidequest: sidequestFriction(options, window.cutoffMs),
-    installed: readInstalled(env).map((plugin) => plugin.id),
-    installedWithoutAttribution: unusedInstalled(signals.attribution.plugins, env),
+    installed: [...new Set(readInstalled(env, options.projectPath).filter((plugin) => plugin.appliesToProject).map((plugin) => plugin.id))],
+    installedWithoutAttribution: unusedInstalled(signals.attribution.plugins, env, options.projectPath),
     decisions,
   };
 }

@@ -24,7 +24,7 @@ const USAGE = `quartermaster - mine recent Claude Code sessions for what would m
 Usage:
   quartermaster mine [--project <path>] [--days <n>] [--sessions <n>] [--all-projects] [--no-subagents]
   quartermaster status [--project <path>]
-  quartermaster catalog [--query <terms>] [--installed]
+  quartermaster catalog [--query <terms>] [--installed] [--project <path>]
   quartermaster decisions list [--project <path>]
   quartermaster decisions add --title <t> --fingerprint <f> --status applied|rejected|deferred
                           [--kind <k>] [--signal denials|interrupts|corrections|toolErrors|any]
@@ -230,9 +230,9 @@ async function main(argv = process.argv.slice(2)) {
       printJson(statusFor(options.projectPath));
       return;
     case 'catalog':
-      if (options.installed) printJson(readInstalled());
-      else if (options.query) printJson(searchAvailable(options.query));
-      else printJson({ available: readAvailable().length, installed: readInstalled().length, hint: 'use --query <terms> to search, --installed to list installs' });
+      if (options.installed) printJson(readInstalled(process.env, options.projectPath));
+      else if (options.query) printJson(searchAvailable(options.query, process.env, options.projectPath));
+      else printJson({ available: readAvailable().length, installed: new Set(readInstalled(process.env, options.projectPath).filter((plugin) => plugin.appliesToProject).map((plugin) => plugin.id)).size, hint: 'use --query <terms> to search, --installed to list all install rows with scope, projectPath and appliesToProject' });
       return;
     case 'decisions-list':
       printJson(readDecisions(process.env, options.projectPathGiven ? options.projectPath : null));
