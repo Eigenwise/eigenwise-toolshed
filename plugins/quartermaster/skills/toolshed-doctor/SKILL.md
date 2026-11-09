@@ -101,7 +101,7 @@ not update, install, uninstall, reload, or edit anything. If freshness is proven
 Run the project-only policy check read-only:
 
 ```sh
-node -e "const { qualityPolicyFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/quality-policy.js'); console.log(qualityPolicyFinding(process.cwd()));"
+node -e "const { qualityPolicyFinding } = require('${CLAUDE_PLUGIN_ROOT}/lib/quality-policy.js'); console.log(qualityPolicyFinding(process.cwd()));"
 ```
 
 With Quality Gate installed and no project config, report "shipped defaults, no project file". Without the gate, report project executor references that have no policy owner. Invalid or unreadable

@@ -130,7 +130,7 @@ Propose it with these three sentences, filling the threshold from Quality Gate's
 Read the installed owner's defaults and preserve existing coverage settings with this read-only proposal:
 
 ```sh
-node -e "const { qualityPolicyProposal } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/quality-policy.js'); console.log(JSON.stringify(qualityPolicyProposal(process.cwd()), null, 2));"
+node -e "const { qualityPolicyProposal } = require('${CLAUDE_PLUGIN_ROOT}/lib/quality-policy.js'); console.log(JSON.stringify(qualityPolicyProposal(process.cwd()), null, 2));"
 ```
 
 Show the proposed config, gate command and execution cost in the approval list. After explicit project approval,
