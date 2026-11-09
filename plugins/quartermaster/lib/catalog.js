@@ -3,8 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { pluginsDir } = require('./paths.js');
-const { normalizeProjectPath } = require('../bin/install-workspace-plugins.js');
+const { normalizeProjectPath, pluginsDir } = require('./paths.js');
 
 const SEARCH_LIMIT = 15;
 
