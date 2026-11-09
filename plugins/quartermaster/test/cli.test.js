@@ -39,7 +39,7 @@ function permissionEnvironment(projectPath, commands) {
   const claudeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-claude-'));
   const root = path.join(claudeDirectory, 'projects', slugForProject(projectPath));
   fs.mkdirSync(root, { recursive: true });
-  commands.forEach((command, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), permissionTranscript(command), 'utf8'));
+  commands.forEach((command, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), `${JSON.stringify({ cwd: projectPath })}\n${permissionTranscript(command)}`, 'utf8'));
   return { CLAUDE_CONFIG_DIR: claudeDirectory, QUARTERMASTER_STATE_DIR: path.join(claudeDirectory, 'quartermaster-state') };
 }
 
