@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -118,7 +119,7 @@ test('stops before update mutations when the Claude executable is unavailable', 
   assert.deepEqual(calls.map((command) => command.args), [['--version']]);
   assert.equal(installedGatewayLauncher, false);
   assert.match(lines.join('\n'), /Claude Code executable "missing-claude" could not be run/);
-  assert.match(lines.join('\n'), /--claude <absolute claude\.exe path>/);
+  assert.match(lines.join('\n'), /--claude <absolute path>/);
   assert.equal(lines.filter((line) => line.includes('Claude Code executable')).length, 1);
 }));
 
@@ -228,7 +229,7 @@ test('update and check modes touch only Toolshed installs', () => withRegistry(r
     report: () => {},
   });
 
-  assert.equal(updateCalls[0].command, 'claude');
+  assert.equal(updateCalls[0].command, updateCalls[1].command);
   assert.deepEqual(updateCalls[0].args, ['--version']);
   assert.ok(updateCalls.some((command) => command.args.join(' ') === 'plugin marketplace update eigenwise-toolshed'));
   assert.equal(updateCalls.some((command) => command.args.join(' ').includes('another-marketplace') || command.args.join(' ').includes('other@')), false);
@@ -644,3 +645,57 @@ test('leaves a status line that is not the retired Toolshed shim alone', () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+function runBatchClaudeFixture(extension, explicit, script) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed npm & Claude '));
+  const command = path.join(directory, 'claude.' + extension);
+  const log = path.join(directory, 'calls.txt');
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  assert.deepEqual(fs.readdirSync(directory), []);
+  fs.writeFileSync(command, script || '@echo off\r\necho %*>>"' + log + '"\r\necho 2.0.0\r\n');
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }] } }));
+  const invocation = 'const updater = require(' + JSON.stringify(require.resolve('../bin/update-toolshed.js')) + ');' +
+    'const result = updater.runUpdate(' + JSON.stringify({ registryFile, home: directory, options: { claude: explicit ? command : 'claude', claudeExplicit: explicit } }) + '); process.exitCode = result.ok ? 0 : 1;';
+  try {
+    const result = childProcess.spawnSync(process.execPath, ['-e', invocation], {
+      env: { ...process.env, PATH: directory, APPDATA: directory, LOCALAPPDATA: directory },
+      encoding: 'utf8', timeout: 15000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const nativeCommand = path.join(directory, 'claude.exe');
+    fs.writeFileSync(nativeCommand, '');
+    const observed = [];
+    runUpdate({ registryFile, home: directory, options: { claude: 'claude' }, environment: { PATH: directory },
+      run: (invocation) => { observed.push(invocation.command); return { ok: true }; }, report: () => {} });
+    assert.equal(observed[0], nativeCommand);
+    const posixObserved = [];
+    runUpdate({ registryFile, home: directory, options: { claude: 'claude' }, platform: 'linux', environment: { PATH: directory },
+      run: (invocation) => { posixObserved.push(invocation.command); return { ok: true }; }, report: () => {} });
+    assert.equal(posixObserved[0], 'claude');
+    const calls = fs.readFileSync(log, 'utf8');
+    assert.match(calls, /"?--version"?/);
+    assert.match(calls, /"?plugin"? "?marketplace"? "?update"? "?eigenwise-toolshed"?/);
+    assert.match(calls, /"?plugin"? "?update"? "?sidequest@eigenwise-toolshed"? "?--scope"? "?user"?/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test('discovers an npm Claude cmd shim on an otherwise empty PATH and runs scoped updates', { skip: process.platform !== 'win32' }, () => {
+  runBatchClaudeFixture('cmd', false);
+});
+
+test('runs an explicit Claude bat path containing spaces and ampersands without shell interpolation', { skip: process.platform !== 'win32' }, () => {
+  runBatchClaudeFixture('bat', true);
+});
+
+test('discovers and runs a PowerShell Claude shim without changing execution policy', { skip: process.platform !== 'win32' }, () => {
+  runBatchClaudeFixture('ps1', false, '$args -join " " | Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt"); Write-Output "2.0.0"');
+});
+
+test('refuses batch expansion characters before starting the Claude shim', { skip: process.platform !== 'win32' }, () => withRegistry(registry, (registryFile) => {
+  const lines = [];
+  const result = runUpdate({ registryFile, options: { claude: 'C:/unsafe%PATH%/claude.cmd', claudeExplicit: true }, report: (line) => lines.push(line) });
+  assert.equal(result.ok, false);
+  assert.match(lines.join('\n'), /Cannot safely pass quotes/);
+}));
