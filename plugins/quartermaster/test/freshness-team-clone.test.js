@@ -45,7 +45,9 @@ function runHook(name, fixture, input) {
 test('a team clone uses CLAUDE_CONFIG_DIR and shows one update across all three hooks', (testContext) => {
   const fixture = teamClone(testContext);
   const input = { cwd: fixture.project, session_id: randomUUID(), prompt: 'continue' };
-  const start = JSON.parse(runHook('session-start-freshness.js', fixture, input));
+  const startup = runHook('session-start-freshness.js', fixture, input);
+  assert.notEqual(startup, '', 'the configured registry must produce an update notice');
+  const start = JSON.parse(startup);
   assert.match(start.systemMessage, /quartermaster 1\.0\.0 → 2\.0\.0/);
   assert.doesNotMatch(start.systemMessage, /auto-update is off/);
   assert.equal(runHook('user-prompt-freshness.js', fixture, input), '');
@@ -58,7 +60,9 @@ test('a fresh team clone advises installation without removing shared settings',
   const fixture = teamClone(testContext, '2.0.0');
   fs.mkdirSync(path.join(fixture.project, '.claude', '.codebase-info'));
   writeJson(path.join(fixture.project, '.claude', 'settings.json'), { enabledPlugins: { 'codebase-mapper@eigenwise-toolshed': true } });
-  const output = JSON.parse(runHook('session-start-freshness.js', fixture, { cwd: fixture.project, session_id: randomUUID() }));
+  const startup = runHook('session-start-freshness.js', fixture, { cwd: fixture.project, session_id: randomUUID() });
+  assert.notEqual(startup, '', 'shared enabledPlugins must produce install advice');
+  const output = JSON.parse(startup);
   assert.match(output.systemMessage, /install codebase-mapper at project scope/);
   assert.doesNotMatch(output.systemMessage, /remove/);
   const auditScript = `const {audit}=require(${JSON.stringify(path.join(__dirname, '..', 'hooks', 'session-start-freshness.js'))});console.log(JSON.stringify(audit({currentProject:${JSON.stringify(fixture.project)},versions:{node:'22.5.0',claude:'2.1.0'},boards:[],platform:'darwin'}).instances));`;
@@ -76,12 +80,16 @@ test('configured proxies skip the background manifest request without sending tr
   await assert.rejects(requestManifest(request, 100, { http_proxy: 'http://proxy.example:8080', NO_PROXY: '*' }), /proxy configured/);
 });
 
-test('a failed manifest fetch stays silent at the next prompt', (testContext) => {
+test('a failed manifest fetch stays silent at the next prompt', async (testContext) => {
   const fixture = teamClone(testContext);
-  writeJson(path.join(fixture.configuration, 'eigenwise-toolshed', 'marketplace-freshness.json'), {
-    checkedAt: new Date().toISOString(), unavailable: true,
-  });
-  assert.equal(runHook('user-prompt-freshness.js', fixture, { cwd: fixture.project, session_id: randomUUID(), prompt: 'continue' }), '');
+  const { refreshCache } = require('../hooks/marketplace-freshness-cache.js');
+  const { decide } = require('../hooks/user-prompt-freshness.js');
+  const cache = await refreshCache({ home: fixture.directory, requestManifest: async () => { throw new Error('offline'); } });
+  assert.equal(cache.unavailable, true);
+  assert.equal(decide({ cwd: fixture.project, session_id: randomUUID(), prompt: 'continue' }, {
+    registryFile: path.join(fixture.configuration, 'plugins', 'installed_plugins.json'), cache,
+    warningStateDirectory: path.join(fixture.directory, 'warnings'), warnedStates: new Set(),
+  }), '');
 });
 
 test('the updater reads the registry from CLAUDE_CONFIG_DIR', (testContext) => {
