@@ -103,9 +103,8 @@ Weigh them like this:
   `areasTop`, and the top commands say far more about purpose than the title does.
 
 Then state your read in one or two lines and ask them to correct it, rather than asking them to
-explain themselves from scratch: "the last three weeks look like they went into the ingest path and
-its tests, with an open goal about it not dropping rows. Is that still what matters?" Say the
-invitation out loud, in a sentence. A read delivered as settled fact is something they have to argue
+explain themselves from scratch. Correction detection covers English and Dutch prompts, including
+common direct openers and phrases. Say the invitation out loud, in a sentence. A read delivered as settled fact is something they have to argue
 with; the same read offered for correction costs them one line either way. Only fall back to a real
 question when the signals are genuinely thin or contradictory.
 

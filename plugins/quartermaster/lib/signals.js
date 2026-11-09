@@ -9,8 +9,8 @@ const GOAL_CHARS = 300;
 
 // Openers that mean the previous turn went the wrong way, matched at the start of the prompt where
 // a correction almost always lands, so an incidental "actually" mid-paragraph does not trip it.
-const CORRECTION_OPENERS = /^\s*(?:no\b|nope\b|stop\b|wrong\b|don'?t\b|do not\b|actually\b|not (?:like )?that\b|that'?s not\b|revert\b|undo\b|never\b|please (?:don'?t|stop)\b)/i;
-const CORRECTION_PHRASES = /\b(?:i (?:already )?(?:told|said|asked)|you keep|again,|why did you|i didn'?t ask|that'?s wrong|not what i)\b/i;
+const CORRECTION_OPENERS = /^\s*(?:no\b|nope\b|stop\b|wrong\b|don'?t\b|do not\b|actually\b|not (?:like )?that\b|that'?s not\b|revert\b|undo\b|never\b|please (?:don'?t|stop)\b|nee[n]?\b|niet zo\b|fout\b|verkeerd\b|dat bedoel ik niet\b|doe dat niet\b|stop daarmee\b|ga terug\b|maak ongedaan\b)/i;
+const CORRECTION_PHRASES = /\b(?:i (?:already )?(?:told|said|asked)|you keep|again,|why did you|i didn'?t ask|that'?s wrong|not what i|dat klopt niet|dat bedoel ik niet)\b/i;
 
 // A prompt that opens with a markup tag is the harness talking, not the user: a slash-command
 // wrapper, piped command output, a hook's injected line. Taking one of these as the opening ask

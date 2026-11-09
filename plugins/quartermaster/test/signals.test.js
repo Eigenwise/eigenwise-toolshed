@@ -16,6 +16,10 @@ function writeTranscript(records) {
   return file;
 }
 
+function readFixtureTranscript(records) {
+  return records.map((record) => JSON.stringify(record)).join('\n');
+}
+
 function userPrompt(text, extra = {}) {
   return { type: 'user', message: { role: 'user', content: text }, timestamp: '2026-08-01T10:00:00Z', ...extra };
 }
@@ -149,6 +153,21 @@ test('detects corrections and interrupts from user prompts', async () => {
   assert.equal(signals.friction.corrections.count, 1);
   assert.match(signals.friction.corrections.samples[0].quote, /existing form/);
   assert.equal(signals.friction.interrupts, 2);
+});
+
+test('detects Dutch corrections from a fixture transcript and groups their theme', async () => {
+  const transcript = readFixtureTranscript([
+    userPrompt('nee, gebruik de bestaande pagina'),
+    userPrompt('dat klopt niet, zo bedoel ik het niet'),
+    userPrompt('fout, maak ongedaan'),
+    userPrompt('niet zo, doe dat niet'),
+    userPrompt('verkeerd, stop daarmee'),
+    userPrompt('ga terug naar de vorige versie'),
+  ]);
+  const signals = await collect(transcript.split('\n').map((record) => JSON.parse(record)));
+
+  assert.equal(signals.friction.corrections.count, 6);
+  assert.deepEqual(signals.friction.corrections.byTheme, { general: 6 });
 });
 
 test('removes leading harness blocks before collecting correction evidence', async () => {
