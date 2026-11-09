@@ -31,6 +31,8 @@ Setup works in this order:
 5. It stops at the reload or restart boundary, then continues when you tell it to.
 6. It verifies each piece it installed and records your decisions.
 
+Setup counts user-scope plugins as installed everywhere. Project- and local-scope plugins count only in their matching project, so installing Codebase Mapper in one repository still leaves it available for setup in another. The local `catalog --installed --project "<project root>"` inventory includes every installation's `scope`, `projectPath`, and `appliesToProject`; only rows marked `true` apply here. Catalog searches and `mine.installed` use that same project-specific answer.
+
 Setup does not seed clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
 
 | Setup does itself | Setup asks you | Setup leaves to you |

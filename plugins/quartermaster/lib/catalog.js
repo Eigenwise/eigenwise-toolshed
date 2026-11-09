@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { pluginsDir } = require('./paths.js');
+const { normalizeProjectPath } = require('../bin/install-workspace-plugins.js');
 
 const SEARCH_LIMIT = 15;
 
@@ -16,21 +17,33 @@ function readJson(file, fallback) {
   }
 }
 
-/** Installed plugin ids ("name@marketplace") with where each install applies. */
-function readInstalled(env = process.env) {
+function installationAppliesToProject(installation, projectPath) {
+  if (installation.scope === 'user') return true;
+  if (!['project', 'local'].includes(installation.scope)) return false;
+  const installedProject = normalizeProjectPath(installation.projectPath);
+  return installedProject !== null && installedProject === normalizeProjectPath(projectPath);
+}
+
+/** Installed plugin rows ("name@marketplace") with where each install applies. */
+function readInstalled(env = process.env, projectPath = process.cwd()) {
   const file = path.join(pluginsDir(env), 'installed_plugins.json');
   const parsed = readJson(file, { plugins: {} });
   const installed = [];
   for (const [id, records] of Object.entries(parsed.plugins ?? {})) {
-    const atSign = id.lastIndexOf('@');
-    installed.push({
-      id,
-      name: atSign > 0 ? id.slice(0, atSign) : id,
-      marketplace: atSign > 0 ? id.slice(atSign + 1) : null,
-      scopes: Array.isArray(records) ? records.map((record) => record.scope ?? 'user') : [],
-    });
+    installed.push(...pluginInstallations(id, records, projectPath));
   }
   return installed;
+}
+
+function pluginInstallations(id, records, projectPath) {
+  if (!Array.isArray(records)) return [];
+  const atSign = id.lastIndexOf('@');
+  const name = atSign > 0 ? id.slice(0, atSign) : id;
+  const marketplace = atSign > 0 ? id.slice(atSign + 1) : null;
+  return records.map((record) => {
+    const installation = { scope: record.scope ?? 'user', projectPath: record.projectPath ?? null };
+    return { id, name, marketplace, ...installation, appliesToProject: installationAppliesToProject(installation, projectPath) };
+  });
 }
 
 /**
@@ -105,10 +118,10 @@ function scorePlugin(plugin, terms) {
   return score;
 }
 
-function searchAvailable(query, env = process.env) {
+function searchAvailable(query, env = process.env, projectPath = process.cwd()) {
   const terms = String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
-  const installedIds = new Set(readInstalled(env).map((plugin) => plugin.id));
+  const installedIds = new Set(readInstalled(env, projectPath).filter((plugin) => plugin.appliesToProject).map((plugin) => plugin.id));
   return readAvailable(env)
     .filter((plugin) => !installedIds.has(plugin.id))
     .map((plugin) => ({ ...plugin, score: scorePlugin(plugin, terms) }))
@@ -118,11 +131,12 @@ function searchAvailable(query, env = process.env) {
 }
 
 /** Installed plugins with zero attribution events in the scanned window. A hint, not proof. */
-function unusedInstalled(attributionPlugins, env = process.env) {
+function unusedInstalled(attributionPlugins, env = process.env, projectPath = process.cwd()) {
   const used = new Set(Object.keys(attributionPlugins ?? {}).map((name) => name.toLowerCase()));
-  return readInstalled(env)
+  return [...new Set(readInstalled(env, projectPath)
+    .filter((plugin) => plugin.appliesToProject)
     .filter((plugin) => !used.has(plugin.name.toLowerCase()))
-    .map((plugin) => plugin.id);
+    .map((plugin) => plugin.id))];
 }
 
 module.exports = { readAvailable, readInstalled, searchAvailable, unusedInstalled };

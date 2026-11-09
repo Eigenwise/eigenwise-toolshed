@@ -58,7 +58,9 @@ test('readInstalled splits id into name and marketplace', () => {
   const installed = readInstalled(environment);
   const liveRules = installed.find((plugin) => plugin.name === 'live-rules');
   assert.equal(liveRules.marketplace, 'eigenwise-toolshed');
-  assert.deepEqual(liveRules.scopes, ['user']);
+  assert.equal(liveRules.scope, 'user');
+  assert.equal(liveRules.projectPath, null);
+  assert.equal(liveRules.appliesToProject, true);
 });
 
 test('readAvailable merges catalog cache with marketplace manifests', () => {
@@ -83,6 +85,35 @@ test('searchAvailable matches terms, excludes installed, ranks name hits first',
 
   const grafanaResults = searchAvailable('grafana', environment);
   assert.equal(grafanaResults[0].name, 'grafana-helper');
+});
+
+test('catalog keeps other-project installs searchable and inventories every scope', () => {
+  const projectPath = 'C:/Workspaces/Repo-B';
+  fs.writeFileSync(path.join(environment.pluginsDir, 'installed_plugins.json'), JSON.stringify({ plugins: {
+    'playwright@claude-plugins-official': [{ scope: 'project', projectPath: 'C:/Workspaces/Repo-A' }],
+    'context7@claude-plugins-official': [{ scope: 'user' }],
+    'live-rules@eigenwise-toolshed': [
+      { scope: 'project', projectPath: 'c:\\workspaces\\repo-b\\' },
+      { scope: 'local', projectPath: 'C:/Workspaces/Repo-B/.' },
+      { scope: 'local', projectPath: 'C:/Workspaces/Repo-A' },
+      { scope: 'project' },
+      { scope: 'unknown', projectPath },
+    ],
+    'unqualified': [{}],
+    'malformed@registry': {},
+  } }));
+  const installed = readInstalled(environment, projectPath);
+  assert.deepEqual(installed.map((plugin) => plugin.appliesToProject), [false, true, true, true, false, false, false, true]);
+  assert.equal(installed[0].scope, 'project');
+  assert.equal(installed[0].projectPath, 'C:/Workspaces/Repo-A');
+  assert.equal(installed[1].projectPath, null);
+  assert.equal(installed[7].marketplace, null);
+  assert.equal(searchAvailable('browser', environment, projectPath)[0].name, 'playwright');
+  assert.deepEqual(searchAvailable('documentation', environment, projectPath), []);
+  assert.deepEqual(searchAvailable('browser', environment, 'c:/workspaces/repo-a/'), []);
+  assert.deepEqual(unusedInstalled({}, environment, projectPath), [
+    'context7@claude-plugins-official', 'live-rules@eigenwise-toolshed', 'unqualified',
+  ]);
 });
 
 test('unusedInstalled flags installs with no attribution events', () => {

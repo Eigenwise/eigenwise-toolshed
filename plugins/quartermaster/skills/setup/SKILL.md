@@ -49,8 +49,12 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mine --all-projects --days 45 
 
 This is the cross-project view: attribution shows which plugins and MCP servers the user
 actually uses; host-reported policy blocks need separate confirmation before any permission change;
-correction themes show which rules to seed. Also run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --installed`
-to see what user-scope plugins already apply here.
+correction themes show which rules to seed. Also run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --installed --project "<project root>"`.
+It lists every registry installation with `scope`, `projectPath`, and `appliesToProject`. Only rows
+with `appliesToProject: true` are already installed here: user-scope installs apply everywhere;
+project/local installs apply only to the matching project path. `mine.installed` uses the same
+per-project answer, even with `--all-projects`. Pass `--project "<project root>"` to mining and
+catalog queries when the target project differs from the current directory.
 
 The local mining script reads transcript files and emits a bounded JSON aggregate. The setup skill
 reads that aggregate, not the raw transcripts. The active model can therefore see clipped session
