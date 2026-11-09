@@ -15,7 +15,8 @@ const CORRECTION_PHRASES = /\b(?:i (?:already )?(?:told|said|asked)|you keep|aga
 // A prompt that opens with a markup tag is the harness talking, not the user: a slash-command
 // wrapper, piped command output, a hook's injected line. Taking one of these as the opening ask
 // reports "/clear" back as what the user wanted.
-const HARNESS_PROMPT = /^\s*<[a-z][a-z-]*>/i;
+const COMPACTION_PROMPT = /^\s*Below is a conversation log from a Claude Code coding session\./;
+const HARNESS_PROMPT = /^\s*(?:<[a-z][a-z-]*>|Below is a conversation log from a Claude Code coding session\.)/i;
 const HARNESS_BLOCK_START = /^\s*<(?:agent-message|command-message|command-name|local-command(?:-caveat|-stdout)?|system-reminder|task-(?:notification|progress|result))\b/i;
 const HARNESS_BLOCK_OPEN = /^\s*<(agent-message|command-message|command-name|local-command(?:-caveat|-stdout)?|system-reminder|task-(?:notification|progress|result))\b[^>]*>/i;
 
@@ -57,6 +58,11 @@ function textAfterLeadingHarnessBlocks(text) {
     remainder = remainder.slice(opening[0].length + closing.index + closing[0].length);
     removedBlock = true;
   }
+}
+
+function isCorrection(text) {
+  if (!text || COMPACTION_PROMPT.test(text)) return false;
+  return CORRECTION_OPENERS.test(text) || CORRECTION_PHRASES.test(text);
 }
 
 function basenameOf(token) {
@@ -263,7 +269,7 @@ function createSignalCollector() {
           // in wanting, before any of the work reshaped it.
           if (!tally.openingAsk && !HARNESS_PROMPT.test(text)) tally.openingAsk = clip(text, ASK_CHARS);
           const correctionText = textAfterLeadingHarnessBlocks(text);
-          if (!correctionText || (!CORRECTION_OPENERS.test(correctionText) && !CORRECTION_PHRASES.test(correctionText))) return;
+          if (!isCorrection(correctionText)) return;
           tally.corrections += 1;
           if (corrections.length < MAX_SAMPLES * 3) {
             corrections.push({

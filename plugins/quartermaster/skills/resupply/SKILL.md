@@ -57,7 +57,8 @@ A decline preserves the evidence window and backs off the next offer. Each conse
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mine --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-Default window is 30 days / 40 sessions. Add `--all-projects` only if the user asks for a global
+Default window is 30 days / 40 sessions across the project checkout and its currently registered
+Git worktrees. Sessions must record a cwd inside one of those checkouts. Add `--all-projects` only if the user asks for a global
 pass (much slower). Everything below reads from this one output.
 
 The `sidequest` field adds read-only lifecycle friction from the local Sidequest database

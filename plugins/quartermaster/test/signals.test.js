@@ -170,6 +170,29 @@ test('removes leading harness blocks before collecting correction evidence', asy
   assert.deepEqual(signals.friction.corrections.byTheme, { 'commit/git': 1, general: 1 });
 });
 
+test('auto-compaction prompt does not contribute correction quotes or themes', async () => {
+  const compactionPrompt = `Below is a conversation log from a Claude Code coding session. Create a summary to help
+ the next session quickly understand the context.
+
+## Prioritize including
+- Design decisions and technology choices made this session
+- Bugs and problems solved
+- Files changed or created, with a brief description...
+
+<conversation>
+user: I already told you not to commit generated files.
+</conversation>`;
+  const signals = await collect([
+    userPrompt(compactionPrompt),
+    userPrompt(`<system-reminder>compacting</system-reminder>\n${compactionPrompt}`),
+    userPrompt('no, do not commit the generated files'),
+  ]);
+  assert.equal(signals.friction.corrections.count, 1);
+  assert.deepEqual(signals.friction.corrections.samples.map((sample) => sample.quote), ['no, do not commit the generated files']);
+  assert.deepEqual(signals.friction.corrections.byTheme, { 'commit/git': 1 });
+  assert.equal(signals.sessions[0].openingAsk, 'no, do not commit the generated files');
+});
+
 test('meta and tool-result user records are not prompts', async () => {
   const signals = await collect([
     userPrompt('<command-name>/model</command-name>', { isMeta: true }),

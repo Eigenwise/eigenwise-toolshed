@@ -5,6 +5,8 @@ description: Set up workspaces, keep Toolshed plugins current, and find missing 
 
 Quartermaster helps with project setup, Toolshed maintenance, workspace health, and the next capability your work is missing. Its local scripts read transcript files and emit a bounded summary. The active model sees that summary when the setup or resupply skill reads it, not the raw transcripts.
 
+Project mining includes the checkout and its currently registered Git worktrees, with one shared day cutoff and session cap. A session's recorded cwd must belong to one of those checkouts. Removed worktrees are outside this window. Auto-compaction prompts are excluded from user-correction evidence. Decision verification still uses stored per-project SessionEnd tallies.
+
 ## Install
 
 Install Quartermaster in the project you want to set up. This example uses project scope:

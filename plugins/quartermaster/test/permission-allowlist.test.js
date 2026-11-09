@@ -48,7 +48,7 @@ function writeWindow(projectDir, transcripts) {
   const claudeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-claude-'));
   const root = path.join(claudeDirectory, 'projects', slugForProject(projectDir));
   fs.mkdirSync(root, { recursive: true });
-  transcripts.forEach((transcript, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), transcript, 'utf8'));
+  transcripts.forEach((transcript, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), `${JSON.stringify({ cwd: projectDir })}\n${transcript}`, 'utf8'));
   return { CLAUDE_CONFIG_DIR: claudeDirectory, QUARTERMASTER_STATE_DIR: path.join(claudeDirectory, 'quartermaster-state') };
 }
 
