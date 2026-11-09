@@ -569,14 +569,10 @@ test('add warns for a write-scope ticket with no declared files, and dispatch re
   assert.deepStrictEqual(policyConfig.autoApproveScope, ['generated/**']);
   const policyTicket = cliJsonAt(policyProject, ['add', '-t', 'scope can be rescued', '--category', 'coding.normal', '--description', 'The board policy can grant the executor first scope request even though this ticket declares no files.']);
   assert.doesNotMatch(policyTicket.warnings.join('\n'), /no file scope declared/);
-  const policyDispatch = cliResultAt(policyProject, ['dispatch', policyTicket.ticket.ref, '--unverified-transport']);
+  const policyDispatch = cliResultAt(policyProject, ['dispatch', policyTicket.ticket.ref, '--unverified-transport', '--session', 'policy-executor-session']);
   assert.strictEqual(policyDispatch.status, 0, policyDispatch.stderr + policyDispatch.stdout);
   const policyDispatchPayload = JSON.parse(policyDispatch.stdout);
   assert.doesNotMatch(policyDispatchPayload.warnings.join('\n'), /no file scope declared/);
-  // An isolated dispatch binds its claiming runtime by session id, and the CLI
-  // falls back to CLAUDE_CODE_SESSION_ID when --session is absent. A developer
-  // machine inside Claude Code exports one and CI does not, so leaving it
-  // implicit passes locally and refuses `unbound_dispatch` on CI.
   const policyTokenNameMatch = policyDispatchPayload.spawn.prompt.match(/--token-name (SQ-\d+-p\d+)\b/);
   assert.ok(policyTokenNameMatch, policyDispatchPayload.spawn.prompt);
   const policyTokenFile = path.join(SIDEQUEST_HOME, 'dispatch-tokens', policyDispatchPayload.project, `${policyTokenNameMatch[1]}.token`);
