@@ -985,10 +985,18 @@ function waitForPortRelease(port, { listening = portListening, attempts = 20, de
   })();
 }
 
-function spawnSupervisedProxy({ command = PROXY_BIN, port = PROXY_PORT, logs = LOGS, spawnProcess = spawn } = {}) {
+function supervisedProxyEnvironment(port, env = process.env) {
+  const proxyEnv = { ...env, PORT: String(port) };
+  if (proxyEnv.CCP_CODEX_REQUEST_COMPRESSION === undefined && proxyEnv.CODEX_GATEWAY_REQUEST_COMPRESSION !== undefined) {
+    proxyEnv.CCP_CODEX_REQUEST_COMPRESSION = proxyEnv.CODEX_GATEWAY_REQUEST_COMPRESSION;
+  }
+  return proxyEnv;
+}
+
+function spawnSupervisedProxy({ command = PROXY_BIN, port = PROXY_PORT, logs = LOGS, spawnProcess = spawn, env = process.env } = {}) {
   const output = fs.openSync(path.join(logs, 'proxy.log'), 'a');
   const child = spawnProcess(command, ['serve', '--no-monitor'], {
-    stdio: ['ignore', output, output], env: { ...process.env, PORT: String(port) }, windowsHide: true,
+    stdio: ['ignore', output, output], env: supervisedProxyEnvironment(port, env), windowsHide: true,
   });
   child.once('error', () => {});
   fs.closeSync(output);
