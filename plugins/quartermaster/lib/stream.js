@@ -43,6 +43,16 @@ function denialKindOf(record, block) {
   return HOOK_ERROR_PREFIX.test(textOf(block?.content)) ? 'hook_block' : kind;
 }
 
+// The mode arrives on `permission-mode` records and on prompts, before the tool
+// results it governs; subagent transcripts carry none.
+function permissionModeAfter(record, currentMode) {
+  return typeof record.permissionMode === 'string' ? record.permissionMode : currentMode;
+}
+
+function approvalSourceOf(record, permissionMode) {
+  return { permissionDecision: record.permissionDecision ?? null, permissionMode };
+}
+
 function mcpServerOf(toolName) {
   const match = /^mcp__(.+?)__[^_]/.exec(String(toolName ?? ''));
   if (!match) return null;
@@ -61,6 +71,7 @@ function mcpServerOf(toolName) {
 async function streamTranscript(source, collector) {
   const pendingTools = new Map();
   const stats = { records: 0, unparseable: 0, firstMs: null, lastMs: null };
+  let permissionMode = null;
 
   const input = fs.createReadStream(source.file, { encoding: 'utf8' });
   const lines = readline.createInterface({ input, crlfDelay: Infinity });
@@ -75,6 +86,7 @@ async function streamTranscript(source, collector) {
       continue;
     }
     stats.records += 1;
+    permissionMode = permissionModeAfter(record, permissionMode);
 
     const timestampMs = record.timestamp ? Date.parse(record.timestamp) : Number.NaN;
     if (Number.isFinite(timestampMs)) {
@@ -160,6 +172,7 @@ async function streamTranscript(source, collector) {
           input: call?.input ?? null,
           isError: resultIsError(block, record),
           denial: denialKindOf(record, block),
+          ...approvalSourceOf(record, permissionMode),
         });
       }
     }

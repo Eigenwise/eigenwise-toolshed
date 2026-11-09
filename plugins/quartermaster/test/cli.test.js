@@ -160,6 +160,20 @@ test('allowlist summarizes large blocked sets and caps requested details', () =>
   assert.equal(detailedReport.blocked.omitted, 5);
 });
 
+test('allowlist reports a fingerprint recorded as rejected as skipped, with its reason', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  const environment = permissionEnvironment(projectPath, Array.from({ length: 3 }, () => 'npm run lint'));
+  const rejected = run(['decisions', 'add', '--title', 'allow Bash(npm run:*)', '--fingerprint', 'permission:Bash:npm run', '--status', 'rejected', '--kind', 'permission'], projectPath, environment);
+  assert.equal(rejected.status, 0, rejected.stderr);
+
+  const result = run('allowlist', projectPath, environment);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /skipped permission:Bash:npm run: rejected in the decision ledger \(3 approvals\)/);
+  assert.doesNotMatch(result.stdout, /would add Bash\(npm run:\*\)/);
+  assert.deepEqual(jsonReport(result).skipped, [{ fingerprint: 'permission:Bash:npm run', approvals: 3, reason: 'rejected in the decision ledger' }]);
+});
+
 test('allowlist identifies rule vetoes and sighted destructive commands', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
   const environment = permissionEnvironment(projectPath, [

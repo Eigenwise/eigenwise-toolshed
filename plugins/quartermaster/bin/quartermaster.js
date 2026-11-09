@@ -43,6 +43,10 @@ Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
 Blocked allowlist candidates are summarized by default; --blocked includes up to 25 detailed entries.
 allowlist counts a fingerprint a PreToolUse hook blocked separately (hookBlocked) and keeps it off
 the candidate list, since a hook denial is not the same signal as a real approval or rejection.
+Only approvals the user gave at a prompt count; auto-mode classifier, bypass and config approvals do not.
+A fingerprint recorded as rejected (decisions add --status rejected) or from an uninstalled plugin is
+reported as skipped and never written. No rule is learned for a bare executable, a path-invoked or quoted
+executable, or a file, path, or generated-name argument; quoted arguments are data, not commands.
 crap scores nothing itself: it passes its arguments to quality-gate crap and exits with its code. Without
 quality-gate installed it prints the install command and exits 2. quality-gate reads .claude/quality-gate/crap.json
 and falls back to .claude/quartermaster/crap.json.
@@ -105,11 +109,22 @@ function printBlockedReport(entries, includeDetails) {
   return report;
 }
 
+function skippedReportEntry(entry) {
+  return { fingerprint: entry.fingerprint, approvals: entry.approvals, reason: entry.skipReason };
+}
+
+function printSkipped(entries) {
+  for (const entry of entries) {
+    process.stdout.write(`skipped ${entry.fingerprint}: ${entry.skipReason} (${entry.approvals} approvals)\n`);
+  }
+}
+
 function permissionReport(result, includeBlockedDetails) {
   return {
     projectDir: result.projectDir,
     additions: result.additions,
     blocked: blockedReport(result.blocked, includeBlockedDetails).report,
+    skipped: result.skipped.map(skippedReportEntry),
     hookBlocked: result.hookBlocked,
     applied: result.applied,
     scanned: result.scanned,
@@ -255,6 +270,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write(`added ${addition.fingerprint} after ${addition.approvals} approvals\n`);
       }
       printBlockedReport(result.blocked, options.includeBlocked);
+      printSkipped(result.skipped);
       if (!result.applied) {
         for (const entry of result.eligible.filter((candidate) => !candidate.destructive)) {
           process.stdout.write(`would add ${ruleFor(entry.fingerprint)} after ${entry.approvals} approvals\n`);
