@@ -34,12 +34,12 @@ const { slug } = store.ensureProject(PROJECT_DIR);
 const codingNormal = store.getCategory('coding.normal');
 store.setCategory(Object.assign({}, codingNormal, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 
-function createClaimedMixedChangeTicket(by: string) {
+function createClaimedMixedChangeTicket(by: string, extraFiles: string[] = []) {
   const ticket = store.createTicket(slug, {
     title: 'negative control thread fixture',
     description: 'Where: negative-control fixture. Contract: accept matching markers from the claim holder. Verify: inspect completion.',
     category: 'coding.normal',
-    files: ['lib/fixture.js', 'test/fixture.test.js'],
+    files: ['lib/fixture.js', 'test/fixture.test.js', ...extraFiles],
     source: 'test',
   });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: `${ticket.ref}-session` });
@@ -197,6 +197,99 @@ test('GH-547: a comment added inside an existing test body still charges that te
   assert.equal(refusal.reason, 'negative_control_test_required');
   assert.match(refusal.message, new RegExp(secondExistingTest));
   assert.doesNotMatch(refusal.message, new RegExp(firstExistingTest));
+});
+
+test('GH-681: a comment line that quotes a test call defines no test in a JS file', () => {
+  const by = 'gh-681-js-comment-call';
+  const ticket = claimAgainstTwoTestBaseline(by);
+  const quotedName = 'named only by a comment';
+  writeFixtureTestWith(6, [`  // it ('${quotedName}') is prose, not a test`]);
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = verifyComplete(ticket.ref, by);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(secondExistingTest));
+  assert.doesNotMatch(refusal.message, new RegExp(quotedName));
+});
+
+const rustBaseline = [
+  'use std::sync::Arc;',
+  '',
+  '#[tokio::test]',
+  'async fn existing_rust_test() {',
+  '    let value = 1;',
+  '    assert_eq!(value, 1);',
+  '}',
+  '',
+  '// says what came of it (`status-ack`).',
+  'fn helper() -> u32 {',
+  '    let base = 1;',
+  '    base',
+  '}',
+  '',
+];
+
+function claimAgainstRustBaseline(by: string) {
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), twoTestBaseline.join('\n'));
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture_tests.rs'), rustBaseline.join('\n'));
+  git(['add', 'test/fixture.test.js', 'test/fixture_tests.rs']);
+  git(['commit', '--allow-empty', '-m', `rust baseline for ${by}`]);
+  const ticket = createClaimedMixedChangeTicket(by, ['test/fixture_tests.rs']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = '${by}';\n`);
+  return ticket;
+}
+
+function writeRustFixture(edit: (lines: string[]) => string[]) {
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture_tests.rs'), edit([...rustBaseline]).join('\n'));
+}
+
+test('GH-681: a helper edit after a Rust test is not charged to a name quoted in a comment or to the test above', () => {
+  const by = 'gh-681-rust-helper-edit';
+  const ticket = claimAgainstRustBaseline(by);
+  writeRustFixture((lines) => lines.map((line) => (line === '    let base = 1;' ? '    let base = 2;' : line)));
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const accepted = verifyComplete(ticket.ref, by);
+  assert.equal(accepted.ok, true, accepted.message);
+});
+
+test('GH-681: a new Rust test function is a test the negative control must name', () => {
+  const by = 'gh-681-rust-new-test';
+  const ticket = claimAgainstRustBaseline(by);
+  writeRustFixture((lines) => [...lines, '#[tokio::test]', 'async fn added_rust_test() {', '    assert!(true);', '}', '']);
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = verifyComplete(ticket.ref, by);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, /added_rust_test/);
+  assert.doesNotMatch(refusal.message, /existing_rust_test|status-ack/);
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: '[sidequest:negative-control-test] failed added_rust_test', source: 'mcp' }).ok, true);
+  const accepted = verifyComplete(ticket.ref, by);
+  assert.equal(accepted.ok, true, accepted.message);
+});
+
+test('GH-681: an edit inside a Rust test body names that test', () => {
+  const by = 'gh-681-rust-body-edit';
+  const ticket = claimAgainstRustBaseline(by);
+  writeRustFixture((lines) => lines.map((line) => (line === '    let value = 1;' ? '    let value = 2;' : line)));
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = verifyComplete(ticket.ref, by);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, /existing_rust_test/);
+  assert.doesNotMatch(refusal.message, /status-ack/);
+});
+
+test('GH-681: an edit to a Rust test attribute line names the test it decorates', () => {
+  const by = 'gh-681-rust-attribute-edit';
+  const ticket = claimAgainstRustBaseline(by);
+  writeRustFixture((lines) => lines.map((line) => (line === '#[tokio::test]' ? '#[tokio::test(flavor = "multi_thread")]' : line)));
+
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: secondControl.split('\n')[0], source: 'mcp' }).ok, true);
+  const refusal = verifyComplete(ticket.ref, by);
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, /existing_rust_test/);
 });
 
 function appendedTestRefusal(by: string, changeExisting: boolean) {
