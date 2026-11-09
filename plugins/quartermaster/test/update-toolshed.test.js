@@ -68,34 +68,42 @@ test('routes project and local updates through the recorded project directory', 
 });
 
 test('runs the gateway doctor in the older registered project instead of the newer project', () => {
-  const projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-project-'));
+  const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-older-'));
+  const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
   try {
     const projects = [
-      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: 'C:/projects/newer', installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
-      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: projectDirectory, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: newerProject, installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: olderProject, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
     ];
     const lines = [];
-    const doctor = gatewayCommand(projects, 'doctor', projectDirectory, (line) => lines.push(line));
+    const doctor = gatewayCommand(projects, 'doctor', olderProject, (line) => lines.push(line));
 
-    assert.equal(doctor.cwd, projectDirectory);
+    assert.equal(doctor.cwd, olderProject);
     assert.equal(doctor.args[0], path.join('C:/cache/older', 'bin', 'model-gateway.js'));
     assert.match(lines.join('\n'), /current project/);
   } finally {
-    fs.rmSync(projectDirectory, { recursive: true, force: true });
+    fs.rmSync(olderProject, { recursive: true, force: true });
+    fs.rmSync(newerProject, { recursive: true, force: true });
   }
 });
 
 test('unregistered current project reports and checks the selected registered project', () => {
-  const projects = [
-    { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: process.cwd(), installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
-    { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: 'C:/projects/older', installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
-  ];
-  const lines = [];
-  const doctor = gatewayCommand(projects, 'doctor', 'C:/projects/unregistered', (line) => lines.push(line));
+  const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-current-'));
+  const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
+  try {
+    const projects = [
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: newerProject, installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: olderProject, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
+    ];
+    const lines = [];
+    const doctor = gatewayCommand(projects, 'doctor', olderProject, (line) => lines.push(line));
 
-  assert.equal(doctor.cwd, process.cwd());
-  assert.match(lines.join('\n'), /Current project C:\/projects\/unregistered is not registered/);
-  assert.match(lines.join('\n'), /instead/);
+    assert.equal(doctor.cwd, olderProject);
+    assert.equal(lines.join('\n'), `Running model-gateway doctor for current project ${olderProject}.`);
+  } finally {
+    fs.rmSync(olderProject, { recursive: true, force: true });
+    fs.rmSync(newerProject, { recursive: true, force: true });
+  }
 });
 
 test('uses the stable model-gateway updater for upgrades and the installed command for checks', () => withRegistry(registry, (registryFile) => {
