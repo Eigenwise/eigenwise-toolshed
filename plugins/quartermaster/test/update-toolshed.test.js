@@ -266,20 +266,23 @@ test('update and check modes touch only Toolshed installs', () => withRegistry(r
 
   const checkCalls = [];
   const lines = [];
+  const projectRegistry = structuredClone(registry);
+  projectRegistry.plugins['model-gateway@eigenwise-toolshed'] = [
+    { scope: 'project', projectPath: 'C:/projects/newer', installPath: 'C:/cache/newer', version: '1.0.0', lastUpdated: '2026-07-18T12:00:00Z' },
+    { scope: 'project', projectPath: process.cwd(), installPath: 'C:/cache/current', version: '1.0.0', lastUpdated: '2026-07-17T12:00:00Z' },
+  ];
+  fs.writeFileSync(registryFile, JSON.stringify(projectRegistry));
   runUpdate({
     registryFile,
     options: { claude: 'claude', dryRun: false, check: true },
-    run: (command) => {
-      checkCalls.push(command);
-      return { ok: true };
-    },
+    run: (command) => { checkCalls.push(command); return { ok: true }; },
     report: (line) => lines.push(line),
   });
 
   assert.equal(checkCalls.length, 1);
-  assert.equal(checkCalls[0].args.at(-1), 'doctor');
-  assert.equal(checkCalls[0].args.join(' ').includes('another-marketplace'), false);
-  assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
+  assert.equal(checkCalls[0].cwd, process.cwd());
+  assert.equal(checkCalls[0].args[0], path.join('C:/cache/current', 'bin', 'model-gateway.js'));
+  assert.match(lines.join('\n'), /current project/);
 }));
 
 test('legacy codex-gateway installs stop before stale updates, setup, or wiring', () => {
