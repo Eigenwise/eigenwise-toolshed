@@ -19,7 +19,7 @@ const { fetchUrl } = require('./process-supervision.js');
 const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
-const { createAnthropicCatalog, advertisedAnthropicRows } = require('./anthropic-catalog.js');
+const { createAnthropicCatalog, advertisedAnthropicRows, readAnthropicCatalog } = require('./anthropic-catalog.js');
 const { ToolSchemaCompatibilityError, adaptCodexToolSchemas } = require('./tool-schema-compat.js');
 const {
   clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
@@ -1359,7 +1359,7 @@ function runWorker() {
     if (logSentryPolicies) logAdvertisedSentryPolicies();
     if (source !== 'proxy') return;
     try {
-      syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
+      syncGatewayDiscoveryCache({ models: [...advertisedAnthropicRows(readAnthropicCatalog().data), ...modelCache.data], baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
       console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
     }

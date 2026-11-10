@@ -26,7 +26,7 @@ function validCatalogRows(rows) {
 function readAnthropicCatalog() {
   try {
     const saved = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
-    return { ...saved, data: validCatalogRows(saved.data) };
+    return { ...saved, data: validCatalogRows(saved.data), updatedAt: Number(saved.updatedAt) || 0 };
   } catch { return { data: [], updatedAt: 0 }; }
 }
 
@@ -74,6 +74,10 @@ function writeCatalog(saved) {
   writeFileAtomically(CACHE_PATH, JSON.stringify(saved, null, 2) + '\n', { mode: 0o600 });
 }
 
+function hasCatalogCredentials(headers) {
+  return Boolean(headers.authorization || headers['x-api-key']);
+}
+
 function createAnthropicCatalog({ lookup } = {}) {
   let inFlight = null;
   async function refresh(headers, cached) {
@@ -92,7 +96,7 @@ function createAnthropicCatalog({ lookup } = {}) {
     const cached = readAnthropicCatalog();
     if (Date.now() - cached.updatedAt < TTL_MS) return cached.data;
     const headers = catalogHeaders(incoming);
-    if (!headers.authorization && !headers['x-api-key']) return cached.data;
+    if (!hasCatalogCredentials(headers)) return cached.data;
     if (!inFlight) inFlight = refresh(headers, cached).finally(() => { inFlight = null; });
     if (cached.data.length) return cached.data;
     return (await inFlight).data;
@@ -107,7 +111,8 @@ function anthropicCatalogReport() {
   const catalog = readAnthropicCatalog();
   const age = catalog.updatedAt ? `${Math.max(0, Math.floor((Date.now() - catalog.updatedAt) / 1000))}s old` : 'not cached';
   const failure = catalog.error ? `; ${catalog.error}; serving ${catalog.data.length ? 'cached Anthropic rows' : 'Codex/Grok only'}` : '';
-  return `Anthropic catalog: ${age}; ${catalog.data.length} models${failure}`;
+  const missing = catalog.updatedAt ? '' : '; awaiting an authenticated discovery request; serving Codex/Grok only';
+  return `Anthropic catalog: ${age}; ${catalog.data.length} models${failure}${missing}`;
 }
 
 module.exports = { advertisedAnthropicRows, anthropicCatalogReport, catalogHeaders, createAnthropicCatalog, readAnthropicCatalog };

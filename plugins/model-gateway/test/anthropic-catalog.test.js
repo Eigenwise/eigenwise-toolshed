@@ -68,9 +68,17 @@ test('unreachable upstream keeps Codex rows and a stale cache still serves Anthr
 test('ensure advances cached catalog defaults, preserves overrides, and never adopts retired or older ids', (testRunner) => {
   const environment = gatewayTestEnvironment(testRunner);
   const state = path.join(environment.HOME, '.claude', 'model-gateway');
+  const project = path.join(environment.HOME, 'wired-project');
+  const settingsFile = path.join(project, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${environment.CODEX_GATEWAY_PORT}`, ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1m]', USER_SETTING: 'keep' } }));
   saveCatalog(environment.HOME, [fable('claude-fable-5-2'), fable('claude-fable-9-9', 'retired')]);
+  fs.writeFileSync(path.join(state, 'wired-projects.json'), JSON.stringify({ projects: [project] }));
   const first = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], { env: environment, encoding: 'utf8', timeout: 30000 });
   assert.equal(first.status, 0, first.stderr);
+  const wired = JSON.parse(fs.readFileSync(settingsFile));
+  assert.equal(wired.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-2[1m]', 'registered project advances with the default');
+  assert.equal(wired.env.USER_SETTING, 'keep');
   assert.match(first.stdout, /fable pin moved claude-fable-5-1\[1m\] -> claude-fable-5-2\[1m\]/);
   const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { env: environment, encoding: 'utf8', timeout: 10000 });
   assert.match(pins.stdout, /fable: claude-fable-5-2\[1m\] \(catalog default\)/);
@@ -84,4 +92,78 @@ test('ensure advances cached catalog defaults, preserves overrides, and never ad
   assert.equal(older.status, 0, older.stderr);
   const saved = JSON.parse(fs.readFileSync(path.join(state, 'detected-pins.json')));
   assert.equal(saved.catalogPins.fable, 'claude-fable-5-2[1m]', 'older and retired ids never replace a newer adopted pin');
+});
+
+for (const [credential, headers] of Object.entries({ oauth: { authorization: 'Bearer oauth-only' }, apiKey: { 'x-api-key': 'api-only' } })) {
+  test(`${credential} credentials fetch every upstream catalog page`, async (testRunner) => {
+    const seen = [];
+    const endpoint = await upstream(testRunner, (request, response) => {
+      seen.push({ url: request.url, headers: request.headers });
+      const next = request.url.includes('after_id=claude-fable-5-1');
+      response.end(JSON.stringify({ data: [fable(next ? 'claude-fable-5-2' : 'claude-fable-5-1')], has_more: !next, last_id: 'claude-fable-5-1' }));
+    });
+    const environment = gatewayTestEnvironment(testRunner, { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: endpoint });
+    const { port } = await startGateway(testRunner, 'serve-worker', environment);
+    const result = await models(port, headers);
+    assert.deepEqual(result.data.slice(0, 2).map((row) => row.id), ['claude-fable-5-1', 'claude-fable-5-2']);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].headers.authorization, headers.authorization);
+    assert.equal(seen[1].headers['x-api-key'], headers['x-api-key']);
+  });
+}
+
+test('unauthenticated discovery never calls upstream and rejected credentials keep the gateway usable', async (testRunner) => {
+  const seen = [];
+  const endpoint = await upstream(testRunner, (request, response) => {
+    seen.push(request.url);
+    response.writeHead(401);
+    response.end('{}');
+  });
+  const environment = gatewayTestEnvironment(testRunner, { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: endpoint });
+  const { port } = await startGateway(testRunner, 'serve-worker', environment);
+  const anonymous = await models(port);
+  assert.ok(anonymous.data.some((row) => row.id.startsWith('claude-gpt-')));
+  assert.equal(seen.length, 0);
+  const rejected = await models(port, { authorization: 'Bearer rejected' });
+  assert.deepEqual(rejected.data, anonymous.data);
+  assert.equal(seen.length, 1);
+  const saved = JSON.parse(fs.readFileSync(path.join(environment.HOME, '.claude', 'model-gateway', 'anthropic-models.json')));
+  assert.equal(saved.error, 'upstream HTTP 401');
+});
+
+test('OAuth picker discovery cache includes cached native models without live discovery', async (testRunner) => {
+  const proxy = await upstream(testRunner, (request, response) => response.end(JSON.stringify({ data: [{ id: 'gpt-6.1-sol' }] })));
+  const environment = gatewayTestEnvironment(testRunner, { CODEX_GATEWAY_PROXY_PORT: new URL(proxy).port });
+  saveCatalog(environment.HOME, [fable('claude-fable-5-2')]);
+  const settingsFile = path.join(environment.HOME, '.claude', 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${environment.CODEX_GATEWAY_PORT}` } }));
+  const cacheDirectory = path.join(environment.CLAUDE_CONFIG_DIR, 'cache');
+  fs.mkdirSync(cacheDirectory, { recursive: true });
+  const cacheFile = path.join(cacheDirectory, 'gateway-models.json');
+  const written = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('discovery cache was not written')), 10000);
+    const watcher = fs.watch(cacheDirectory, () => {
+      if (!fs.existsSync(cacheFile)) return;
+      clearTimeout(timeout);
+      watcher.close();
+      resolve();
+    });
+    testRunner.after(() => { clearTimeout(timeout); watcher.close(); });
+  });
+  await startGateway(testRunner, 'serve-worker', environment, { isolatedOverrides: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${environment.CODEX_GATEWAY_PORT}` } });
+  await written;
+  const discovery = JSON.parse(fs.readFileSync(cacheFile));
+  assert.deepEqual(discovery.models[0], { id: 'claude-fable-5-2', display_name: 'Fable fixture' });
+  assert.ok(discovery.models.some((row) => row.id.startsWith('claude-gpt-')));
+});
+
+test('invalid persisted catalog pins cannot override shipped defaults', (testRunner) => {
+  const environment = gatewayTestEnvironment(testRunner);
+  const state = path.join(environment.HOME, '.claude', 'model-gateway');
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, 'detected-pins.json'), JSON.stringify({ catalogPins: { opus: 123, sonnet: 'claude-sonnet-9;invalid', fable: 'claude-opus-99' } }));
+  const result = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { env: environment, encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /fable: claude-fable-5-1\[1m\]/);
+  assert.match(result.stdout, /sonnet: claude-sonnet-5-5\[1m\]/);
 });

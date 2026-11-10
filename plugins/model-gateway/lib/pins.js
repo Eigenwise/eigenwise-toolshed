@@ -78,7 +78,7 @@ function readDetectedPinCache() {
       alias,
       typeof saved.detectedFor?.[alias] === 'string' ? saved.detectedFor[alias] : cliVersion,
     ]));
-    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor, retired: readRetiredPins(saved), catalogPins: saved.catalogPins || {} };
+    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor, retired: readRetiredPins(saved), catalogPins: validatedCatalogPins(saved.catalogPins) };
   } catch { return null; }
 }
 
@@ -110,16 +110,33 @@ function detectedPinOutranksShipped(alias, pin) {
   return !RETIRED_SHIPPED_PINS[alias].includes(pin) && comparePinVersions(pin, KNOWN_GOOD_PINS[alias]) !== -1;
 }
 
+function validatedCatalogPins(saved = {}) {
+  return Object.fromEntries(Object.keys(PIN_ALIASES)
+    .map((alias) => [alias, normalizedDetectedPin(alias, saved?.[alias])])
+    .filter(([alias, pin]) => pin && detectedPinOutranksShipped(alias, pin)));
+}
+
+function catalogFamily(id) {
+  const version = pinVersion(id);
+  if (!version || !Object.hasOwn(PIN_ALIASES, version[0])) return null;
+  return version[0];
+}
+
+function usableCatalogPin(row, retired) {
+  if (['retired', 'deprecated'].includes(row.lifecycle)) return null;
+  const alias = catalogFamily(row.id);
+  if (!alias) return null;
+  const pin = normalizedDetectedPin(alias, row.id);
+  if (!detectedPinOutranksShipped(alias, pin)) return null;
+  if (retired[alias]?.includes(pin)) return null;
+  return [alias, pin];
+}
+
 function newestCatalogPins() {
   const newest = {};
-  for (const row of readAnthropicCatalog().data) {
-    if (['retired', 'deprecated'].includes(row.lifecycle)) continue;
-    const version = pinVersion(row.id);
-    if (!version || !Object.hasOwn(PIN_ALIASES, version[0])) continue;
-    const alias = version[0];
-    const pin = normalizedDetectedPin(alias, row.id);
-    if (!detectedPinOutranksShipped(alias, pin)) continue;
-    if ((readDetectedPinCache()?.retired?.[alias] || []).includes(pin)) continue;
+  const retired = readDetectedPinCache()?.retired || {};
+  const candidates = readAnthropicCatalog().data.map((row) => usableCatalogPin(row, retired)).filter(Boolean);
+  for (const [alias, pin] of candidates) {
     if (!newest[alias] || comparePinVersions(pin, newest[alias]) === 1) newest[alias] = pin;
   }
   return newest;
@@ -141,7 +158,7 @@ function refreshCatalogPins() {
     cached.retired[alias] = retirePin(cached.retired[alias], defaults[alias]);
     cached.catalogPins[alias] = pin;
   }
-  writeDetectedPinCache(cached);
+  if (Object.keys(cached.catalogPins).length) writeDetectedPinCache(cached);
 }
 
 function detectedPinDefaults() {
