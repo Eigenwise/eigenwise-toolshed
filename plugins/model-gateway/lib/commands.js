@@ -27,7 +27,7 @@
  * the env switch and extra listener follow automatically.
  */
 
-const { anthropicCatalogReport } = require('./anthropic-catalog.js');
+const { anthropicCatalogReport, withCachedAnthropicRows } = require('./anthropic-catalog.js');
 const { fork, spawn, spawnSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const crypto = require('node:crypto');
@@ -1770,7 +1770,7 @@ function writeGatewayDiscoveryCache(models, catalogSource) {
     log(`discovery cache: kept; the shim is serving its ${standIn}`);
     return { state: 'skipped', reason: 'stand-in-catalog', modelCount: 0 };
   }
-  const result = syncGatewayDiscoveryCache({ models, baseUrl: discoveryCacheBaseUrl() });
+  const result = syncGatewayDiscoveryCache({ models: withCachedAnthropicRows(models), baseUrl: discoveryCacheBaseUrl() });
   if (result.state === 'wrote') log(`discovery cache: wrote ${result.modelCount} models`);
   else if (result.state === 'unchanged') log('discovery cache: unchanged');
   return result;

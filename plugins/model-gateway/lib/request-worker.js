@@ -19,7 +19,7 @@ const { fetchUrl } = require('./process-supervision.js');
 const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
-const { createAnthropicCatalog, advertisedAnthropicRows, readAnthropicCatalog } = require('./anthropic-catalog.js');
+const { createAnthropicCatalog, advertisedAnthropicRows, withCachedAnthropicRows } = require('./anthropic-catalog.js');
 const { ToolSchemaCompatibilityError, adaptCodexToolSchemas } = require('./tool-schema-compat.js');
 const {
   clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
@@ -1107,7 +1107,7 @@ function runWorker() {
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
     source: 'fallback',
-    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
+    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)),
   };
   const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
   const dispatchRoutes = new DispatchSessionRouteCache({ cachePath: DISPATCH_ROUTE_CACHE_PATH });
@@ -1127,7 +1127,7 @@ function runWorker() {
   let draining = false;
   let activeRequests = 0;
   const anthropicBypass = createHostsBypassResolver();
-  const anthropicModels = createAnthropicCatalog({ lookup: anthropicBypass.lookup });
+  const anthropicModels = createAnthropicCatalog({ lookup: anthropicBypass.lookup, onRefresh: () => syncDiscoveryCache(true) });
 
   function beginDrain() {
     let remaining = servers.size;
@@ -1358,8 +1358,12 @@ function runWorker() {
     };
     if (logSentryPolicies) logAdvertisedSentryPolicies();
     if (source !== 'proxy') return;
+    syncDiscoveryCache();
+  }
+
+  function syncDiscoveryCache(force = false) {
     try {
-      syncGatewayDiscoveryCache({ models: [...advertisedAnthropicRows(readAnthropicCatalog().data), ...modelCache.data], baseUrl: effectiveBaseUrl().value || null });
+      syncGatewayDiscoveryCache({ models: withCachedAnthropicRows(modelCache.data), baseUrl: effectiveBaseUrl().value || null, force });
     } catch (error) {
       console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
     }
@@ -2407,6 +2411,7 @@ function runWorker() {
       }
       assertAnthropicPassthroughSentryIsDisabled(requestedModel);
       counters.anthropic++;
+      void anthropicModels(req.headers);
       requestRouteLog(req, 'anthropic', requestedModel, pathOnly);
       routeTelemetry.setRoute({
         selectedModel: requestedModel,

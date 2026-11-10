@@ -25,6 +25,28 @@ function fable(id, lifecycle = 'active') {
   return { id, display_name: 'Fable fixture', lifecycle };
 }
 
+function waitForDiscovery(testRunner, cacheFile) {
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('discovery cache was not written')), 10000);
+    const watcher = fs.watch(path.dirname(cacheFile), () => {
+      if (!fs.existsSync(cacheFile)) return;
+      clearTimeout(timeout);
+      watcher.close();
+      resolve();
+    });
+    testRunner.after(() => { clearTimeout(timeout); watcher.close(); });
+  });
+}
+
+function inference(port) {
+  return fetch(`http://127.0.0.1:${port}/v1/messages`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer inference-secret', 'x-api-key': 'inference-key', 'x-private': 'drop-me', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-fable-5-2', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 }),
+  }).then((response) => response.json());
+}
+
 function models(port, headers = {}) {
   return fetch(`http://127.0.0.1:${port}/v1/models`, { headers }).then((response) => response.json());
 }
@@ -125,7 +147,8 @@ test('unauthenticated discovery never calls upstream and rejected credentials ke
   assert.ok(anonymous.data.some((row) => row.id.startsWith('claude-gpt-')));
   assert.equal(seen.length, 0);
   const rejected = await models(port, { authorization: 'Bearer rejected' });
-  assert.deepEqual(rejected.data, anonymous.data);
+  assert.deepEqual(rejected.data.filter((row) => row.id.startsWith('claude-gpt-')), anonymous.data.filter((row) => row.id.startsWith('claude-gpt-')));
+  assert.equal(rejected.data.some((row) => row.id === 'claude-fable-5-2'), false);
   assert.equal(seen.length, 1);
   const saved = JSON.parse(fs.readFileSync(path.join(environment.HOME, '.claude', 'model-gateway', 'anthropic-models.json')));
   assert.equal(saved.error, 'upstream HTTP 401');
@@ -155,6 +178,67 @@ test('OAuth picker discovery cache includes cached native models without live di
   const discovery = JSON.parse(fs.readFileSync(cacheFile));
   assert.deepEqual(discovery.models[0], { id: 'claude-fable-5-2', display_name: 'Fable fixture' });
   assert.ok(discovery.models.some((row) => row.id.startsWith('claude-gpt-')));
+});
+
+test('inference credentials populate the picker once without persisting secrets', { timeout: 20000 }, async (testRunner) => {
+  const catalogs = [];
+  const catalogStarted = Promise.withResolvers();
+  const endpoint = await upstream(testRunner, (request, response) => {
+    if (request.url.startsWith('/v1/models')) {
+      catalogs.push({ request, response });
+      catalogStarted.resolve();
+      return;
+    }
+    response.end(JSON.stringify({ content: [] }));
+  });
+  const environment = gatewayTestEnvironment(testRunner, { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: endpoint });
+  const cacheFile = path.join(environment.CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
+  assert.equal(fs.existsSync(cacheFile), false, 'picker cache starts absent');
+  assert.equal(fs.existsSync(path.join(environment.HOME, '.claude', 'model-gateway')), false, 'state starts absent');
+  const baseUrl = `http://127.0.0.1:${environment.CODEX_GATEWAY_PORT}`;
+  const { port } = await startGateway(testRunner, 'serve-worker', environment, { isolatedOverrides: { ANTHROPIC_BASE_URL: baseUrl } });
+  await inference(port);
+  await catalogStarted.promise;
+  await inference(port);
+  assert.equal(catalogs.length, 1, 'in-flight refresh is shared');
+  assert.equal(catalogs[0].request.headers.authorization, 'Bearer inference-secret');
+  assert.equal(catalogs[0].request.headers['x-api-key'], 'inference-key');
+  assert.equal(catalogs[0].request.headers['x-private'], undefined);
+  const written = waitForDiscovery(testRunner, cacheFile);
+  catalogs[0].response.end(JSON.stringify({ data: [fable('claude-fable-5-2'), fable('claude-sonnet-5-5')], has_more: false }));
+  await written;
+  const discovery = JSON.parse(fs.readFileSync(cacheFile));
+  assert.deepEqual(discovery.models.slice(0, 2).map((row) => row.id), ['claude-fable-5-2', 'claude-sonnet-5-5']);
+  assert.equal(discovery.models[0].display_name, 'Fable fixture');
+  assert.ok(discovery.models.some((row) => row.id.startsWith('claude-gpt-')));
+  assert.ok(discovery.fetchedAt >= Date.now() - 10000);
+  await inference(port);
+  assert.equal(catalogs.length, 1, 'fresh catalog avoids another inference refresh');
+  const state = path.join(environment.HOME, '.claude', 'model-gateway');
+  for (const file of fs.readdirSync(state, { recursive: true })) {
+    const filename = path.join(state, file);
+    if (!fs.statSync(filename).isFile()) continue;
+    assert.doesNotMatch(fs.readFileSync(filename, 'utf8'), /inference-secret|inference-key/);
+  }
+  assert.doesNotMatch(fs.readFileSync(cacheFile, 'utf8'), /inference-secret|inference-key/);
+});
+
+test('inference catalog rejection retains old rows and reports the refresh reason', async (testRunner) => {
+  const endpoint = await upstream(testRunner, (request, response) => {
+    response.writeHead(request.url.startsWith('/v1/models') ? 401 : 200);
+    response.end('{}');
+  });
+  const environment = gatewayTestEnvironment(testRunner, { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: endpoint });
+  saveCatalog(environment.HOME, [fable('claude-fable-5-1')], 1);
+  const { port } = await startGateway(testRunner, 'serve-worker', environment);
+  const savedFile = path.join(environment.HOME, '.claude', 'model-gateway', 'anthropic-models.json');
+  const written = waitForDiscovery(testRunner, savedFile);
+  await inference(port);
+  await written;
+  const saved = JSON.parse(fs.readFileSync(savedFile));
+  assert.equal(saved.data[0].id, 'claude-fable-5-1');
+  assert.equal(saved.updatedAt, 1);
+  assert.equal(saved.error, 'upstream HTTP 401');
 });
 
 test('invalid persisted catalog pins cannot override shipped defaults', (testRunner) => {
