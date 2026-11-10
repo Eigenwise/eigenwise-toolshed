@@ -24,7 +24,9 @@ function transcript(root, checkout, name, cwd, modifiedMs) {
 }
 
 test('mine admits linked-checkout cwd sessions before applying the shared window cap', async (context) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-worktrees-'));
+  // Windows CI hands out an 8.3 short-name TEMP; git reports the long spelling, and a real
+  // project path is never the short one, so the fixture uses the long spelling throughout.
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-worktrees-')));
   context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const project = path.join(directory, 'project');
   const linked = path.join(directory, 'linked');
