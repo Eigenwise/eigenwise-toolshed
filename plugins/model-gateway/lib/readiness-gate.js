@@ -46,7 +46,7 @@ function readHookPayload() {
 async function readinessGate({ recover = () => require('./commands.js').recoverGateway() } = {}) {
   const payload = readHookPayload();
   const policy = recoveryPolicy();
-  if (policy === 'unwired') return;
+  if (policy === 'unwired') return require('./settings-wiring.js').repairProjectWiring();
   if (policy === 'disabled') return console.error(pluginDisabledNotice());
   try { await recoverUnlessHealthy(recover); }
   catch (error) {

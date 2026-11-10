@@ -128,7 +128,7 @@ Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagn
 
 ### Turn the gateway off for this project
 
-To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. Session start keeps the Claude model pins among those settings current, so the project still gets new Claude releases. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
+To get Remote Control without RC-compatibility, run `env --remove` for this project, then restart Claude Code. It removes the gateway base URL, discovery flag, static gateway values and gateway-owned alias pins. User-set pins with values the gateway does not own survive and are named in the output. Native Claude aliases then follow Claude Code's defaults. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
 
 That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A process-exported `ANTHROPIC_BASE_URL` still wins over the file edit. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
@@ -139,3 +139,5 @@ Model Gateway's plugin code is free and MIT-licensed. If it saves you time, opti
 ## License
 
 MIT
+
+`ensure` repairs leftover gateway discovery flags and owned alias pins in settings files without a base URL, and reports the removed aliases in one line. It also registers the current wired project if pin sync was missing it. `doctor` reports "leftover gateway settings: aliases pinned to <ids>, no gateway routing" or "wired-but-unregistered project" and names `ensure` as the fix, without changing those settings or the wiring registry. Settings that name another endpoint are left alone.

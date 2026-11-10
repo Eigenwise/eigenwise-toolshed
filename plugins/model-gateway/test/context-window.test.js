@@ -1344,136 +1344,31 @@ function runSyncUnwiredPins(cwd, env) {
   return result;
 }
 
-test('a project with the gateway turned off keeps its pins current across Claude releases', () => {
+test('unwired cleanup removes owned pins without probing Claude and preserves user settings', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unwired-home-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unwired-project-'));
   const claude = installFakeClaude(home);
   const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
-  const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  // What "turn the gateway off for this project" leaves behind: every gateway
-  // key except ANTHROPIC_BASE_URL. Fable holds a value the plugin never writes,
-  // and the Sonnet pin was deleted by hand.
-  fs.writeFileSync(settingsFile, JSON.stringify({
-    env: {
-      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
-      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-4-2[1m]',
-      USER_SETTING: 'keep-me',
-    },
-  }));
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    FAKE_CLAUDE_LOG: claude.logFile,
-    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
-    CODEX_GATEWAY_PIN_CACHE_TTL_MS: '1',
-  };
-  try {
-    const first = runSyncUnwiredPins(cwd, env);
-    let settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env;
-    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-9[1m]');
-    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined);
-    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-4-2[1m]');
-    assert.equal(settings.USER_SETTING, 'keep-me');
-    assert.equal(settings.ANTHROPIC_BASE_URL, undefined);
-    assert.match(first.stdout, /ANTHROPIC_DEFAULT_OPUS_MODEL claude-opus-5\[1m\] -> claude-opus-9\[1m\]/);
-
-    // The next release. claude-opus-9[1m] came from this plugin's own probe, so
-    // it is still recognised as ours after claude-opus-10 replaces it.
-    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_OPUS: 'claude-opus-10' });
-    settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env;
-    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-10[1m]');
-    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-4-2[1m]');
-    assert.deepEqual(JSON.parse(fs.readFileSync(cachePath, 'utf8')).retired.opus, ['claude-opus-9[1m]']);
-
-    const unchanged = fs.readFileSync(settingsFile, 'utf8');
-    const repeat = runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_OPUS: 'claude-opus-10' });
-    assert.equal(fs.readFileSync(settingsFile, 'utf8'), unchanged);
-    assert.doesNotMatch(repeat.stdout, /updated stale/);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
-function unwiredPinProject(prefix) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-home-`));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-project-`));
-  const claude = installFakeClaude(home);
-  const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
-  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify({
-    env: { CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]' },
-  }));
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    FAKE_CLAUDE_LOG: claude.logFile,
-    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
-    FAKE_CLAUDE_EDIT_SETTINGS: settingsFile,
-  };
-  const cleanup = () => {
-    fs.rmSync(home, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
-  };
-  return { cwd, env, settingsFile, cleanup };
-}
-
-// The alias probes run between deciding to sync and writing, so a write made
-// by anything else in that window has to survive the sync.
-test('unwired pin sync keeps a settings edit made while the alias probes run', () => {
-  const { cwd, env, settingsFile, cleanup } = unwiredPinProject('model-gateway-unwired-race');
-  try {
-    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_EDIT_JSON: JSON.stringify({ permissions: { allow: ['Bash(ls)'] } }) });
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] });
-    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-9[1m]');
-  } finally {
-    cleanup();
-  }
-});
-
-test('unwired pin sync leaves a file that was wired while the alias probes ran', () => {
-  const { cwd, env, settingsFile, cleanup } = unwiredPinProject('model-gateway-unwired-rewired');
-  try {
-    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_EDIT_JSON: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' } }) });
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
-    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]', 'a wired file is syncGatewayWiring\'s to update');
-  } finally {
-    cleanup();
-  }
-});
-
-test('pin sync leaves foreign and still-wired settings untouched', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-home-'));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-project-'));
-  const claude = installFakeClaude(home);
-  const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
-  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const original = JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]' } });
-  fs.writeFileSync(settingsFile, original);
-  // A file that names a base URL is wired (syncGatewayWiring's job) or routed
-  // somewhere else; either way this path must not rewrite it.
-  const userFile = path.join(home, '.claude', 'settings.json');
-  const wired = JSON.stringify({
-    env: {
-      ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764',
-      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
-    },
-  });
-  fs.mkdirSync(path.dirname(userFile), { recursive: true });
-  fs.writeFileSync(userFile, wired);
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: {
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-4-2[1m]',
+    USER_SETTING: 'keep-me',
+  } }));
   const env = { ...process.env, HOME: home, USERPROFILE: home, FAKE_CLAUDE_LOG: claude.logFile, CODEX_GATEWAY_CLAUDE_BIN: claude.command };
   try {
-    runSyncUnwiredPins(cwd, env);
-    assert.equal(fs.readFileSync(settingsFile, 'utf8'), original);
-    assert.equal(fs.readFileSync(userFile, 'utf8'), wired);
-    assert.equal(fs.existsSync(claude.logFile), false, 'no alias probe runs for a file this path does not own');
+    const result = runSyncUnwiredPins(cwd, env);
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env, {
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-4-2[1m]', USER_SETTING: 'keep-me',
+    });
+    assert.match(result.stdout, /repaired leftover gateway settings/);
+    assert.match(result.stdout, /preserved user pins: ANTHROPIC_DEFAULT_FABLE_MODEL/);
+    assert.equal(fs.existsSync(claude.logFile), false, 'cleanup never probes aliases');
+    const before = fs.readFileSync(settingsFile, 'utf8');
+    const repeat = runSyncUnwiredPins(cwd, env);
+    assert.equal(fs.readFileSync(settingsFile, 'utf8'), before);
+    assert.equal(repeat.stdout, '');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
