@@ -183,10 +183,12 @@ test('OAuth picker discovery cache includes cached native models without live di
 test('inference credentials populate the picker once without persisting secrets', { timeout: 20000 }, async (testRunner) => {
   const catalogs = [];
   const catalogStarted = Promise.withResolvers();
+  const refreshDeadline = setTimeout(() => catalogStarted.resolve(false), 10000);
+  testRunner.after(() => clearTimeout(refreshDeadline));
   const endpoint = await upstream(testRunner, (request, response) => {
     if (request.url.startsWith('/v1/models')) {
       catalogs.push({ request, response });
-      catalogStarted.resolve();
+      catalogStarted.resolve(true);
       return;
     }
     response.end(JSON.stringify({ content: [] }));
@@ -198,7 +200,8 @@ test('inference credentials populate the picker once without persisting secrets'
   const baseUrl = `http://127.0.0.1:${environment.CODEX_GATEWAY_PORT}`;
   const { port } = await startGateway(testRunner, 'serve-worker', environment, { isolatedOverrides: { ANTHROPIC_BASE_URL: baseUrl } });
   await inference(port);
-  await catalogStarted.promise;
+  assert.equal(await catalogStarted.promise, true, 'inference starts an upstream catalog refresh');
+  clearTimeout(refreshDeadline);
   await inference(port);
   assert.equal(catalogs.length, 1, 'in-flight refresh is shared');
   assert.equal(catalogs[0].request.headers.authorization, 'Bearer inference-secret');
