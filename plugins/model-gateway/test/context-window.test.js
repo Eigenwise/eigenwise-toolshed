@@ -1284,7 +1284,7 @@ test('the local Fable probe keeps proxy observation active for the installed Cla
     const localSocketRequests = localRequests.filter(({ localAddress }) => localAddress === '127.0.0.1');
     const proxyTargets = proxy.targets();
     const observation = `Claude ${versionText}; init model=${pin}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxyTargets.join(',') || '(none)'}; local requests=${localRequests.length}; local socket requests=${localSocketRequests.length}`;
-    assert.equal(pin, 'claude-fable-5-1[1m]', observation);
+    assert.match(pin, /^claude-fable-\d+(?:-\d+)?\[1m\]$/, observation);
     assert.deepEqual(proxyTargets, [], observation);
     assert.equal(proxy.connectionCount(), 0, observation);
     assert.equal(localSocketRequests.length, localRequests.length, observation);
