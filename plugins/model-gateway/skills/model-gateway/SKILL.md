@@ -112,6 +112,12 @@ never proves ownership. A failed `/v1/models` check gets one fresh-connection co
 (e.g. dispatching Codex subagents through the gateway): do not tell the user to restart Claude Code just to
 bring auth back, or you kill the session that was about to use it.
 
+## Anthropic discovery and catalog pins
+
+Authenticated `/v1/models` requests relay OAuth or API-key headers to Anthropic and return its rows before Codex/Grok rows. Upstream names are preserved and known model-window picker alias rules still apply. `~/.claude/model-gateway/anthropic-models.json` caches the catalog for one hour. Stale rows are served during refresh; upstream failure serves cached rows or Codex/Grok-only discovery. `doctor` and `status` report catalog age and fetch failure. No credentials are cached.
+
+SessionStart (`ensure --quiet`) and updates compare cached same-family versions with pin defaults and synchronize registered gateway-owned settings. Newer active versions advance defaults; older or retired versions do not. Explicit overrides always survive catalog updates. When an override trails the catalog, `ensure`, `doctor` and `status` name both versions and the `pin --<alias> default` recovery. The temporary Fable 5.2 workaround is an explicit override too: its owner must remove it with `pin --fable default` after upgrading to follow future catalog releases. Do not delete overrides automatically.
+
 ## Selecting models
 
 - `/model` picker: rows like "GPT-6.1-sol (Codex)" and "Grok 4.5".
@@ -133,7 +139,7 @@ bring auth back, or you kill the session that was about to use it.
   the last good pin, then a shipped safe default. A detected alias older than the shipped default, or
   one the plugin retired, loses to the shipped default. Set a persistent per-alias override with
   `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
-  to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
+  to return to detected/catalog defaults. Overrides always win. `pin` with no arguments and `doctor` show each
   effective pin, whether it is overridden, and which lagging CLI alias a shipped pin replaced. Overrides live in
   `~/.claude/model-gateway/pins.json`, outside
   the plugin cache. A pin change, and every SessionStart pin refresh, updates every registered wired

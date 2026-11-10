@@ -27,6 +27,7 @@
  * the env switch and extra listener follow automatically.
  */
 
+const { anthropicCatalogReport } = require('./anthropic-catalog.js');
 const { fork, spawn, spawnSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const crypto = require('node:crypto');
@@ -125,7 +126,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, refreshCatalogPins, comparePinVersions, stalePinUpdates,
   writePinOverrides,
 } = require('./pins.js');
 
@@ -149,7 +150,8 @@ const USAGE = `usage: model-gateway.js <command>
                    --refresh exits non-zero and says why on stderr when it could not write a
                    fresh one, and prints the retained catalog unchanged
   pin [--opus|--sonnet|--fable <model|default>]
-                   show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
+                   show pin sources and newest catalog ids, or persist an override (${PIN_OVERRIDE_PATH});
+                   default removes the override and follows detected/catalog defaults, never backwards
   context-window [--claude <tokens|full>] [--codex <tokens|full>] [--grok <tokens|full>]
                    show or persist the context window per backend (${CONTEXT_WINDOW_PATH}); the
                    orchestrator and every executor share it. Defaults: claude full, codex 272000,
@@ -169,7 +171,7 @@ const USAGE = `usage: model-gateway.js <command>
                    print the Claude Code env block, or merge/remove wiring
                    (--write-project writes .claude/settings.local.json; --write-user
                    is an opt-in shared fallback in ~/.claude/settings.json)
-  doctor           full health check
+  doctor           full health check, Anthropic catalog age/fallback, pin sources and newest ids
   remote-control <enable|disable|doctor> [--confirm]
                    manage the opt-in hosts-file compatibility mode; enable refuses an effective
                    HTTPS api.anthropic.com process URL before hosts changes
@@ -424,6 +426,7 @@ async function restartAfterSetup(proxyRecoveryHandoff) {
 
 async function setup({ preserveWiring = false } = {}) {
   mkdirs();
+  refreshCatalogPinsAndWiring();
   migrateReadinessGates();
   sweepOldProxyBinaries();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
@@ -947,6 +950,8 @@ async function statusReport({ readiness = null, probeShim = probeShimState } = {
   log(`Codex readiness: ${codex.state}`);
   if (!codex.ready) log(codex.message);
   reportContextWindows();
+  log(anthropicCatalogReport());
+  reportEffectivePins();
   return { ok: codex.ready, health, readiness: codex };
 }
 
@@ -1020,14 +1025,38 @@ function refreshRegisteredProjectPins(ownedPins) {
 // The sync writes nothing when every registered project already agrees.
 async function refreshDetectedPinsAndWiring(options = {}) {
   const ownedPins = ownedPinValues();
+  const previous = effectivePins();
   await refreshDetectedPins(options);
+  refreshCatalogPins();
+  reportPinChanges(previous);
   refreshRegisteredProjectPins(ownedPins);
   refreshRegisteredClaudeWindow();
 }
 
+function refreshCatalogPinsAndWiring() {
+  const ownedPins = ownedPinValues();
+  const previous = effectivePins();
+  refreshCatalogPins();
+  reportPinChanges(previous);
+  refreshRegisteredProjectPins(ownedPins);
+}
+
+function reportPinChanges(previous) {
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    if (pin.value !== previous[alias].value) log(`model-gateway: ${alias} pin moved ${previous[alias].value} -> ${pin.value}`);
+    reportOutdatedOverride(alias, pin);
+  }
+}
+
+function reportOutdatedOverride(alias, pin) {
+  if (pin.source !== 'override' || comparePinVersions(pin.newest || '', pin.value) !== 1) return;
+  log(`${alias} pinned by override to ${pin.value}; catalog has ${pin.newest}; pin --${alias} default follows the catalog`);
+}
+
 function reportEffectivePins(label = '', suffix = '') {
   for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
+    log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)}); newest catalog: ${pin.newest || 'unavailable'}`);
+    reportOutdatedOverride(alias, pin);
   }
 }
 
@@ -2707,6 +2736,7 @@ const commands = {
     cleanLegacyGatewayModelCache();
     sweepOldProxyBinaries();
     const wired = isWired();
+    refreshCatalogPinsAndWiring();
     const initialReadiness = await getCodexReadiness();
     if (!initialReadiness.checks.proxyBinary) {
       if (wired) {

@@ -19,6 +19,7 @@ const { fetchUrl } = require('./process-supervision.js');
 const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
+const { createAnthropicCatalog, advertisedAnthropicRows, readAnthropicCatalog } = require('./anthropic-catalog.js');
 const { ToolSchemaCompatibilityError, adaptCodexToolSchemas } = require('./tool-schema-compat.js');
 const {
   clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
@@ -1126,6 +1127,7 @@ function runWorker() {
   let draining = false;
   let activeRequests = 0;
   const anthropicBypass = createHostsBypassResolver();
+  const anthropicModels = createAnthropicCatalog({ lookup: anthropicBypass.lookup });
 
   function beginDrain() {
     let remaining = servers.size;
@@ -1357,7 +1359,7 @@ function runWorker() {
     if (logSentryPolicies) logAdvertisedSentryPolicies();
     if (source !== 'proxy') return;
     try {
-      syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
+      syncGatewayDiscoveryCache({ models: [...advertisedAnthropicRows(readAnthropicCatalog().data), ...modelCache.data], baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
       console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
     }
@@ -2118,7 +2120,7 @@ function runWorker() {
     request.end(body);
   }
 
-  function handleRequest(req, res) {
+  async function handleRequest(req, res) {
     const pathOnly = req.url.split('?')[0];
 
     if (req.method === 'POST' && pathOnly === '/drain') {
@@ -2168,8 +2170,9 @@ function runWorker() {
 
     if (req.method === 'GET' && pathOnly === '/v1/models') {
       counters.models++;
+      const anthropicRows = await anthropicModels(req.headers);
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ data: modelCache.data, has_more: false }));
+      return res.end(JSON.stringify({ data: [...advertisedAnthropicRows(anthropicRows), ...modelCache.data], has_more: false }));
     }
 
     if (req.method === 'HEAD') { res.writeHead(200); return res.end(); }

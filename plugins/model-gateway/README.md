@@ -96,9 +96,11 @@ Running this plugin's test suite uses its own gateway home and never touches the
 
 ## Claude model pins
 
-Pins follow the installed Claude CLI's resolved alias. Pin detection runs an isolated local probe that disables Claude Code's nonessential network traffic while preserving proxy observation and bypassing the local endpoint. If one alias probe misses, that alias uses its shipped known-good pin and is marked stale so the next refresh probes it again automatically. A detected alias only wins when it's at least as new as the shipped known-good pin and isn't a value the plugin retired; otherwise the shipped pin wins. A saved `pin --<alias>` override beats both.
+Pins follow the newest usable same-family version from the cached Anthropic catalog, the installed Claude CLI's resolved alias, or the shipped default, without moving a catalog-adopted pin backwards. Pin detection runs an isolated local probe that disables Claude Code's nonessential network traffic while preserving proxy observation and bypassing the local endpoint. If one alias probe misses, that alias uses its shipped known-good pin and is marked stale so the next refresh probes it again automatically. A detected alias only wins when it's at least as new as the shipped known-good pin and isn't a value the plugin retired; otherwise the shipped pin wins. A saved `pin --<alias>` override always wins. `pin --fable default` removes that override and follows the catalog again. `doctor` and `status` show catalog age, each pin source and the newest available family id, including a warning when an override trails the catalog.
 
-Already-wired projects need `model-gateway env --write-project` (or update-toolshed), then a new Claude Code session, to pick up a changed pin.
+SessionStart (`ensure --quiet`) and updates advance catalog defaults and synchronize gateway-owned pins in registered projects. Restart open Claude Code sessions to pick up changed pins.
+
+The shim lists Anthropic models before Codex and Grok models. Authenticated `/v1/models` requests relay OAuth or API-key headers to Anthropic. The catalog lives in `~/.claude/model-gateway/anthropic-models.json` with a one-hour TTL. Stale rows return immediately while one refresh runs; an empty cache waits for the first bounded fetch. Upstream failures retain cached rows, or return the existing Codex/Grok list when no Anthropic rows are cached. Auth credentials are never written to this catalog.
 
 ## If something stops working
 
