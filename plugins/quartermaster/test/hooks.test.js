@@ -16,7 +16,7 @@ test('keeps startup-only and startup-or-resume hooks separate with a one-second 
           {
             type: 'command',
             command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-auto-allowlist.js"',
-            timeout: 10,
+            timeout: 1,
           },
           {
             type: 'command',

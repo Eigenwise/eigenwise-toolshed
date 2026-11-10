@@ -120,7 +120,7 @@ export async function crapReport(options = {}) {
   const changedPaths = files.concat(selectedDeletedFiles(root, baseline.base, settings));
   const removedMetrics = [];
   const analyzer = changedPaths.some((file) => JAVASCRIPT_SOURCE.test(file) || file.endsWith('.vue')) ? await createAnalyzer(root) : null;
-  const report = { root, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: complexityOnly(root, options, settings), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
+  const report = { root, policy: settings.policy, base: baseline.base, files: sourceHashes(root, files), pythonPolicy: settings.pythonPolicy, pythonOracles: settings.pythonOracles, ccOnly: complexityOnly(root, options, settings), max: THRESHOLD, warnings: [...warnings, ...baseline.warnings] };
   if (settings.usedDeprecatedRatchet) report.warnings.push('--ratchet and config ratchet are deprecated. Use --base or config base instead.');
   try {
     report.metrics = await sourceMetrics(root, files, analyzer, complexityCsv, settings.pythonPolicy, settings.pythonOracles);
@@ -163,7 +163,7 @@ export function writeReceipt(report, receiptsDirectory = process.env.QUALITY_GAT
   if (!head) return null;
   const rowCounts = Object.fromEntries(['new', 'modified-raised', LEGACY_UNCHANGED].map((classification) => [classification, report.changedMetrics.filter((metric) => metric.classification === classification).length]));
   rowCounts.unverified = report.unverified.length;
-  const receipt = { gateVersion: GATE_VERSION, pythonPolicy: report.pythonPolicy, pythonOracles: report.pythonOracles, project: report.root, base: report.base, head, files: report.files, rowCounts, verdict: report.verdict, timestamp: new Date().toISOString(), ccOnly: report.ccOnly, sourceMapTranslations: report.sourceMapTranslations, sourceMapRefusals: report.sourceMapRefusals, reasons: report.unverified.map((metric) => `${metric.relativePath}:${metric.line} ${metric.name}: ${metric.unverified}`) };
+  const receipt = { gateVersion: GATE_VERSION, policy: report.policy, pythonPolicy: report.pythonPolicy, pythonOracles: report.pythonOracles, project: report.root, base: report.base, head, files: report.files, rowCounts, verdict: report.verdict, timestamp: new Date().toISOString(), ccOnly: report.ccOnly, sourceMapTranslations: report.sourceMapTranslations, sourceMapRefusals: report.sourceMapRefusals, reasons: report.unverified.map((metric) => `${metric.relativePath}:${metric.line} ${metric.name}: ${metric.unverified}`) };
   const directory = receiptsDirectory ? path.resolve(receiptsDirectory) : path.join(report.root, '.claude/quality-gate/receipts');
   fs.mkdirSync(directory, { recursive: true });
   const target = path.join(directory, head + '.json');

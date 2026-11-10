@@ -114,3 +114,39 @@ In the inspected Claude Code 2.1.295, a direct worktree-isolated Bash startup as
 Ordinary CommonJS bodies use exact captured text and AST/runtime ranges. Static methods lacking an exact twin, patched wrappers and unsupported maps stay UNVERIFIED. Compiled TypeScript needs an embedded single-source map with matching source content. Exactly one AST runtime twin must match the exact closing-token end plus one of three start anchors: the body opening, the runtime declaration start after the export prefix, or an exact compiler segment joining the generated and original whole AST declaration starts. Native TypeScript CommonJS can map the generated function start to the original AST start before the erased export prefix. That whole-declaration anchor requires a segment at exactly the generated start, with no nearest-segment interpolation. This also supports erased typed return annotations; body-start support remains for public/private/override modifiers with unmapped declaration starts. Missing or ambiguous anchors and later unmapped coverage boundaries stay UNVERIFIED. Re-indented logical-operator starts and finally keywords can also bind through their own AST syntax inside the unique owned runtime twin. A logical operator needs the same token kind and exact compiler-mapped first and last bytes of its right operand; finally needs its actual TryStatement keyword and exact mapped block braces. Both directions require a unique correspondence. Missing, shifted, duplicate or wrong-owner syntax stays UNVERIFIED; this never joins nearest tokens or changes owned-text denominators. Names, nearest tokens and sibling order never establish ownership. A coverage block that ends on re-indented whitespace before a closing brace binds through that brace's own mapping; a boundary without an exact byte match stays UNVERIFIED. Exact zero-hit bodies measure zero; absent bodies stay UNVERIFIED. Complexity 2 with zero coverage scores 6 and fails. `measure` prints JSON and exits 1 on score failure, unverified rows or a refused declaration.
 
 Exit 0 means passed, empty scope or informational-only rows; exit 1 means a score failure; exit 2 means an enforced function whose verdict depends on unverified coverage, or a missing prerequisite. Coverage-independent cc 1 passes print the bound and missing-coverage reason. `measure` exits 1 for failures or unresolved measurements and 0 otherwise. `--json` includes the verdict. Git runs write hash-bound receipts under `.claude/quality-gate/receipts/<head-sha>.json`, including unverified runs. Consumers must check root, HEAD, source hashes and `ccOnly` before accepting a full pass. This command doesn't install hooks or configure your project.
+
+## Project delivery policy
+
+Installing Quality Gate enables its shipped delivery defaults. Sidequest reads the installed Quality Gate
+policy owner for both executor briefings and integration. Without `.claude/quality-gate/crap.json`, receipts
+record `policy.source: "default"` and briefings say "shipped defaults, no project file". An explicit project
+file takes precedence and records `policy.source: "project"`. Without an installed gate, verification runs
+without quality measurement. No user-home rule is needed.
+
+The shipped policy defaults are:
+
+| Field under `policy` | Default | Meaning |
+| --- | --- | --- |
+| `threshold` | `6` | New and complexity-raised bodies must score strictly below it. Six fails even without coverage. This release supports the fixed threshold only. |
+| `legacyRatchet` | `not-worse` | Touched bodies whose complexity stayed equal or fell are informational LEGACY rows. Untouched legacy is out of scope. |
+| `unverifiedHandling` | `debt` | Missing measurement remains UNVERIFIED in the delivery evidence, and does not hold otherwise green work below the complexity floor. `block` explicitly holds it. |
+| `debtTicketMode` | `standing-per-boundary` | Reuse one open measurement-debt ticket per unsupported capture boundary. |
+| `installMode` | `local` | Keep tools, caches and reports local. Never change tracked dependencies, lockfiles or CI just to install measurement. |
+
+Existing project configs inherit these defaults; setup writes an explicit `policy` object while preserving
+coverage settings. Quality Gate validates all fields and refuses unsupported values. The gate still reports
+missing coverage honestly, including exit 2 where measurement prerequisites are missing; the delivery policy
+controls whether that evidence holds integration. It never converts UNVERIFIED into a measured pass.
+
+### Measurement-debt tickets
+
+Before filing, search the project's existing tickets for the same unsupported runner/adapter and capture seam.
+For example, deliveries blocked from capture by the same Vitest-worker boundary share one standing ticket.
+Append the delivery ref and unmeasured bodies there; don't file another ticket for each changed file, commit or
+execution. Re-measure when that boundary gains support. Configuring `per-delivery` creates one debt ticket for
+each delivery instead; `none` keeps debt only in delivery evidence. These are instructions for the board owner,
+not permission for the scorer to create tickets itself.
+
+Quartermaster proposes and writes configuration only after project approval. `/quartermaster:toolshed-doctor`
+reports shipped defaults when the gate is installed without a project file. Personal preferences can remain
+in your own rules, but shared quality policy belongs in the project.

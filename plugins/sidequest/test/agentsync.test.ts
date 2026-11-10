@@ -34,36 +34,38 @@ const STABLE_EXECUTORS = [
   ]),
 ].sort();
 
-test('briefing discovers the project gate and reports none without inventing a requirement', () => {
+test('briefing reads the shipped project policy without inventing a home-rule requirement', (context: import('node:test').TestContext) => {
   const project = tmpDir();
+  const previousHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  context.after(() => {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = previousHome;
+  });
+  process.env.SIDEQUEST_CLAUDE_HOME = path.join(project, 'claude');
   const ticket = { ref: 'SQ-GATE', title: 'Gate discovery', category: {} };
   const render = () => agentsync.renderTicketBriefing(ticket, 'gate-token', undefined, project);
-  assert.match(render(), /Configured quality gate: none\./);
-  const configDirectory = path.join(project, '.claude', 'quartermaster');
-  fs.mkdirSync(configDirectory, { recursive: true });
-  const qualityGateDirectory = path.join(project, '.claude', 'quality-gate');
-  fs.mkdirSync(qualityGateDirectory, { recursive: true });
-  const gate = { command: 'node scripts/check-quality.js', threshold: 9, base: 'quality-baseline' };
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify(gate));
-  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(gate)));
-  assert.ok(render().includes('Legacy bodies whose complexity did not rise are informational and never fail.'));
+  assert.match(render(), /No quality policy configured\./);
+  fs.mkdirSync(path.join(project, 'claude/plugins'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: {
+    'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: path.resolve(__dirname, '../../quality-gate') }],
+  } }));
+  assert.match(render(), /shipped defaults, no project file/);
+  fs.mkdirSync(path.join(project, '.claude/quality-gate'), { recursive: true });
+  const configuration = path.join(project, '.claude/quality-gate/crap.json');
+  fs.writeFileSync(configuration, '{}');
+  assert.match(render(), /Configured quality policy:.*"threshold":6/);
+  assert.match(render(), /Legacy bodies whose complexity did not rise are informational/);
+  assert.match(render(), /Reuse one standing measurement-debt ticket per unsupported capture boundary/);
+  assert.match(render(), /not a delivery hold/);
   const store = require('../lib/store.js');
-  const slug = store.ensureProject(project, 'quality gate discovery').slug;
-  assert.ok(agentsync.renderTicketBriefing(ticket, 'gate-token', slug).includes('Configured quality gate: ' + JSON.stringify(gate)));
-  const preferredGate = { command: 'quality-gate config', threshold: 4, base: 'quality-gate-baseline' };
-  fs.writeFileSync(path.join(qualityGateDirectory, 'crap.json'), JSON.stringify(preferredGate));
-  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(preferredGate)));
-  fs.rmSync(path.join(qualityGateDirectory, 'crap.json'));
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ coverageCommand: 'npm test' }));
-  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify({
-    command: 'node "<quality-gate plugin root>/bin/quality-gate.js" crap',
-    threshold: 'gate-owned', base: 'gate-selected default',
-  })));
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ max: 8, base: 'main' }));
-  assert.match(render(), /"threshold":8,"base":"main"/);
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), '{broken');
+  const slug = store.ensureProject(project, 'quality policy discovery').slug;
+  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token', slug), /Configured quality policy:/);
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { debtTicketMode: 'per-delivery', unverifiedHandling: 'block' } }));
+  assert.match(render(), /one measurement-debt ticket for this delivery/);
+  assert.match(render(), /UNVERIFIED measurement blocks delivery/);
+  fs.writeFileSync(configuration, '{broken');
   assert.throws(render, SyntaxError);
-  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token'), /Configured quality gate: none\./);
+  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token'), /No quality policy configured\./);
 });
 
 test('marked intake review briefing carries the bounded evidence-first review contract', () => {

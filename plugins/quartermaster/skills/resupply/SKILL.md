@@ -43,7 +43,11 @@ question rather than the question itself.
 
 ## Process
 
-If the user declines a SessionStart nudge or Stop-time offer before the round starts, record that whole-round decline, then stop. Run:
+If the user declines a SessionStart nudge or Stop-time offer before the round starts, record that whole-round decline, then stop. When the user replies `no resupply` to a Stop-time offer, run this command using the hook-provided project and plugin paths, then stop:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"
+```
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"
@@ -57,7 +61,8 @@ A decline preserves the evidence window and backs off the next offer. Each conse
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mine --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-Default window is 30 days / 40 sessions. Add `--all-projects` only if the user asks for a global
+Default window is 30 days / 40 sessions across the project checkout and its currently registered
+Git worktrees. Sessions must record a cwd inside one of those checkouts. Add `--all-projects` only if the user asks for a global
 pass (much slower). Everything below reads from this one output.
 
 The `sidequest` field adds read-only lifecycle friction from the local Sidequest database
@@ -98,9 +103,8 @@ Weigh them like this:
   `areasTop`, and the top commands say far more about purpose than the title does.
 
 Then state your read in one or two lines and ask them to correct it, rather than asking them to
-explain themselves from scratch: "the last three weeks look like they went into the ingest path and
-its tests, with an open goal about it not dropping rows. Is that still what matters?" Say the
-invitation out loud, in a sentence. A read delivered as settled fact is something they have to argue
+explain themselves from scratch. Correction detection covers English and Dutch prompts, including
+common direct openers and phrases. Say the invitation out loud, in a sentence. A read delivered as settled fact is something they have to argue
 with; the same read offered for correction costs them one line either way. Only fall back to a real
 question when the signals are genuinely thin or contradictory.
 
@@ -122,7 +126,12 @@ the workspace could not deliver it. Start there.
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" verify --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-Open with one line per earlier decision that has a verdict. Ask two things of each: is it being
+The output has `decisions` and a `window` with `sessions` and `worktreeSessions`. Human-driven
+linked-worktree sessions (at least two real prompts) count toward the main project for verification,
+the nudge, and the resupply offer. Existing worktree tally files are merged on read without rewriting
+them; session ids are deduplicated. Only currently registered worktrees can be resolved.
+
+Open with one line per earlier decision in `decisions` that has a verdict. Ask two things of each: is it being
 used (`attribution`), and did what it targeted actually get cheaper. Name the three verdicts out
 loud: **keep** when it is used and helping, **improve** when it is used but underperforming, and
 **roll back** when it is unused or making no difference. Being honest about a recommendation that
@@ -265,13 +274,13 @@ Before ordinary friction findings, check whether the project opted into automati
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" allowlist --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-Until the project opts in, that command only reports what it would add: it considers a fingerprint with at least three user approvals and no user rejection, and never considers a destructive Bash command. Bare `PowerShell` is excluded as an unsafe shell rule, even with the marker. Quartermaster does not generate scoped PowerShell rules; existing bare `PowerShell` entries remain and need user review. A manually chosen scoped rule stays the user's decision. Blocked fingerprints are summarized by tool with the most-approved candidates; use `--blocked` for up to 25 detailed entries, which identify an over-broad wildcard rule or the sighted destructive command. Report the safe candidates and offer the opt-in; approving it is what turns on the writing, and every later addition goes to the decision ledger:
+Until the project opts in, that command only reports what it would add: it considers a fingerprint with at least three user approvals and no user rejection, and never considers a destructive Bash command. Only an approval the user gave at a prompt counts; auto-mode classifier, bypass-mode, and config approvals never do. A fingerprint recorded as `rejected` in the decision ledger, or a tool whose plugin is no longer installed, is reported as `skipped` and never written, so record a declined permission with `decisions add --status rejected` and it stays out for good. No rule is learned for a bare executable (`curl`, `sed`), a path-invoked or quoted executable, or a file, path, or generated-name argument; words inside a quoted argument are data, never a command. Bare `PowerShell` is excluded as an unsafe shell rule, even with the marker. Quartermaster does not generate scoped PowerShell rules; existing bare `PowerShell` entries remain and need user review. A manually chosen scoped rule stays the user's decision. Blocked fingerprints are summarized by tool with the most-approved candidates; use `--blocked` for up to 25 detailed entries, which identify an over-broad wildcard rule or the sighted destructive command. Report the safe candidates and offer the opt-in; approving it is what turns on the writing, and every later addition goes to the decision ledger:
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-The marker and every learned rule stay in the project's `.claude/settings.local.json`, never a user, global, or shared setting. With no marker, the SessionStart hook exits immediately.
+The marker and every learned rule stay in the project's `.claude/settings.local.json`, never a user, global, or shared setting. With no marker, the SessionStart hook exits immediately. After opt-in, permission learning runs in the background; learned rules land at the next session start after that pass.
 
 Now the friction: repeated denials on the same safe pattern, corrections clustering on one theme,
 tool errors concentrated in one tool, hook errors. Each is real and each has a cheap fix; they just

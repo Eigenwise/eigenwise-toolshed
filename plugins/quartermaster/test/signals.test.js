@@ -16,6 +16,10 @@ function writeTranscript(records) {
   return file;
 }
 
+function readFixtureTranscript(records) {
+  return records.map((record) => JSON.stringify(record)).join('\n');
+}
+
 function userPrompt(text, extra = {}) {
   return { type: 'user', message: { role: 'user', content: text }, timestamp: '2026-08-01T10:00:00Z', ...extra };
 }
@@ -151,6 +155,21 @@ test('detects corrections and interrupts from user prompts', async () => {
   assert.equal(signals.friction.interrupts, 2);
 });
 
+test('detects Dutch corrections from a fixture transcript and groups their theme', async () => {
+  const transcript = readFixtureTranscript([
+    userPrompt('nee, gebruik de bestaande pagina'),
+    userPrompt('dat klopt niet, zo bedoel ik het niet'),
+    userPrompt('fout, maak ongedaan'),
+    userPrompt('niet zo, doe dat niet'),
+    userPrompt('verkeerd, stop daarmee'),
+    userPrompt('ga terug naar de vorige versie'),
+  ]);
+  const signals = await collect(transcript.split('\n').map((record) => JSON.parse(record)));
+
+  assert.equal(signals.friction.corrections.count, 6);
+  assert.deepEqual(signals.friction.corrections.byTheme, { general: 6 });
+});
+
 test('removes leading harness blocks before collecting correction evidence', async () => {
   const signals = await collect([
     userPrompt('<task-notification>you keep committing generated files</task-notification>'),
@@ -168,6 +187,29 @@ test('removes leading harness blocks before collecting correction evidence', asy
     'no, the retry path is correct',
   ]);
   assert.deepEqual(signals.friction.corrections.byTheme, { 'commit/git': 1, general: 1 });
+});
+
+test('auto-compaction prompt does not contribute correction quotes or themes', async () => {
+  const compactionPrompt = `Below is a conversation log from a Claude Code coding session. Create a summary to help
+ the next session quickly understand the context.
+
+## Prioritize including
+- Design decisions and technology choices made this session
+- Bugs and problems solved
+- Files changed or created, with a brief description...
+
+<conversation>
+user: I already told you not to commit generated files.
+</conversation>`;
+  const signals = await collect([
+    userPrompt(compactionPrompt),
+    userPrompt(`<system-reminder>compacting</system-reminder>\n${compactionPrompt}`),
+    userPrompt('no, do not commit the generated files'),
+  ]);
+  assert.equal(signals.friction.corrections.count, 1);
+  assert.deepEqual(signals.friction.corrections.samples.map((sample) => sample.quote), ['no, do not commit the generated files']);
+  assert.deepEqual(signals.friction.corrections.byTheme, { 'commit/git': 1 });
+  assert.equal(signals.sessions[0].openingAsk, 'no, do not commit the generated files');
 });
 
 test('meta and tool-result user records are not prompts', async () => {

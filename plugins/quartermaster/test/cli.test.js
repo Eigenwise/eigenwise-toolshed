@@ -39,7 +39,7 @@ function permissionEnvironment(projectPath, commands) {
   const claudeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-claude-'));
   const root = path.join(claudeDirectory, 'projects', slugForProject(projectPath));
   fs.mkdirSync(root, { recursive: true });
-  commands.forEach((command, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), permissionTranscript(command), 'utf8'));
+  commands.forEach((command, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), `${JSON.stringify({ cwd: projectPath })}\n${permissionTranscript(command)}`, 'utf8'));
   return { CLAUDE_CONFIG_DIR: claudeDirectory, QUARTERMASTER_STATE_DIR: path.join(claudeDirectory, 'quartermaster-state') };
 }
 
@@ -52,6 +52,42 @@ function jsonReport(result) {
 function blockedEntryLines(output) {
   return output.split('\n').filter((line) => line.startsWith('blocked permission:'));
 }
+
+test('catalog and mine honor the target project while inventory retains other-project rows', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-project-'));
+  const configDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-catalog-'));
+  const pluginsDirectory = path.join(configDirectory, 'plugins');
+  fs.mkdirSync(pluginsDirectory);
+  const environment = { CLAUDE_CONFIG_DIR: configDirectory, QUARTERMASTER_STATE_DIR: path.join(configDirectory, 'state') };
+  fs.writeFileSync(path.join(pluginsDirectory, 'installed_plugins.json'), JSON.stringify({ plugins: {
+    'codebase-mapper@eigenwise-toolshed': [{ scope: 'project', projectPath: `${projectPath}-other` }],
+    'live-rules@eigenwise-toolshed': [{ scope: 'user' }],
+    'sidequest@eigenwise-toolshed': [{ scope: 'local', projectPath }, { scope: 'project', projectPath }],
+  } }));
+  fs.writeFileSync(path.join(pluginsDirectory, 'plugin-catalog-cache.json'), JSON.stringify({ catalog: { plugins: {
+    'codebase-mapper@eigenwise-toolshed': { plugin: 'codebase-mapper', marketplace_entry: { description: 'workspace tools' } },
+    'live-rules@eigenwise-toolshed': { plugin: 'live-rules', marketplace_entry: { description: 'workspace tools' } },
+    'sidequest@eigenwise-toolshed': { plugin: 'sidequest', marketplace_entry: { description: 'workspace tools' } },
+  } } }));
+  const inventory = run(['catalog', '--installed'], projectPath, environment);
+  assert.equal(inventory.status, 0, inventory.stderr);
+  const rows = JSON.parse(inventory.stdout);
+  assert.equal(rows[0].projectPath, `${projectPath}-other`);
+  assert.equal(rows[0].scope, 'project');
+  assert.equal(rows[0].appliesToProject, false);
+  assert.equal(rows[1].projectPath, null);
+  assert.equal(rows[1].appliesToProject, true);
+  const search = run(['catalog', '--query', 'workspace'], projectPath, environment);
+  assert.equal(search.status, 0, search.stderr);
+  assert.deepEqual(JSON.parse(search.stdout).map((plugin) => plugin.name), ['codebase-mapper']);
+  const summary = run('catalog', projectPath, environment);
+  assert.equal(summary.status, 0, summary.stderr);
+  assert.equal(JSON.parse(summary.stdout).installed, 2);
+  const mined = run(['mine', '--all-projects'], projectPath, environment);
+  assert.equal(mined.status, 0, mined.stderr);
+  assert.deepEqual(JSON.parse(mined.stdout).installed, ['live-rules@eigenwise-toolshed', 'sidequest@eigenwise-toolshed']);
+  assert.deepEqual(JSON.parse(mined.stdout).installedWithoutAttribution, ['live-rules@eigenwise-toolshed', 'sidequest@eigenwise-toolshed']);
+});
 
 test('the retired mark-retro command stays unavailable', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
@@ -158,6 +194,20 @@ test('allowlist summarizes large blocked sets and caps requested details', () =>
   const detailedReport = jsonReport(detailed);
   assert.equal(detailedReport.blocked.details.length, 25);
   assert.equal(detailedReport.blocked.omitted, 5);
+});
+
+test('allowlist reports a fingerprint recorded as rejected as skipped, with its reason', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+  const environment = permissionEnvironment(projectPath, Array.from({ length: 3 }, () => 'npm run lint'));
+  const rejected = run(['decisions', 'add', '--title', 'allow Bash(npm run:*)', '--fingerprint', 'permission:Bash:npm run', '--status', 'rejected', '--kind', 'permission'], projectPath, environment);
+  assert.equal(rejected.status, 0, rejected.stderr);
+
+  const result = run('allowlist', projectPath, environment);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /skipped permission:Bash:npm run: rejected in the decision ledger \(3 approvals\)/);
+  assert.doesNotMatch(result.stdout, /would add Bash\(npm run:\*\)/);
+  assert.deepEqual(jsonReport(result).skipped, [{ fingerprint: 'permission:Bash:npm run', approvals: 3, reason: 'rejected in the decision ledger' }]);
 });
 
 test('allowlist identifies rule vetoes and sighted destructive commands', () => {

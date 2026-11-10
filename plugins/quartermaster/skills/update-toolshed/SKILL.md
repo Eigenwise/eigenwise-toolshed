@@ -16,9 +16,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 It reads Claude Code's installed-plugin registry, refreshes the Eigenwise Toolshed marketplace, and
 updates every active Toolshed install recorded there at its recorded scope and project directory. That
 includes user, project, and local installs across projects, not only the project where this skill is
-invoked. It does not inspect, refresh, or update third-party marketplaces or plugins. When Model Gateway
-is installed, it runs its stable updater, `node ~/.claude/model-gateway/update.js`, and surfaces that
-command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to
+invoked. It does not inspect, refresh, or update third-party marketplaces or plugins. During `--check` and
+`--dry-run`, it runs the Model Gateway doctor for the current project when registered; otherwise it reports
+and checks a registered project instead. During updates, it runs the stable updater, `node ~/.claude/model-gateway/update.js`, and surfaces that command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to
 close sessions, restarts it when it can, and reports the resulting state. Claude Code's registry has
 versions but not release notes or commit history, so the updater says that plainly instead of guessing at
 a changelog. Gateway wiring stays as recorded: the stable updater runs `setup --preserve-wiring`, which
@@ -29,10 +29,10 @@ Codex/Grok rows disappear from `/model`; Claude Code can persist an explicit id 
 `/model claude-gpt-5.6-terra`, but that does not prove a later request reaches Model Gateway. Normal
 gateway mode is the verified inference path.
 Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. Before any
-mutation, the updater runs a discovered Claude Code command once. It tries `claude` from `PATH`, then
+mutation, the updater runs a discovered Claude Code command once. It tries `claude` from `PATH` (on Windows, native `claude.exe` first, then npm `claude.cmd` or `claude.ps1` automatically), then
 known desktop-app locations, including the Windows MSIX package cache and `~/.local/bin/claude` on macOS.
 If none work, the updater stops before refreshing marketplaces, updating plugins, or invoking the gateway
-updater. Use `--claude <absolute claude.exe path>` to override discovery; an explicit path that fails stops
+updater. Batch paths and arguments containing quotes, `%`, `!`, or control characters are refused; use a native `claude.exe` for those paths. Use `--claude <absolute path>` to override discovery; an explicit path that fails stops
 the run rather than guessing past it. Check and dry-run stay non-mutating. It continues after individual
 update failures and prints the failing commands with one failure detail in the summary.
 

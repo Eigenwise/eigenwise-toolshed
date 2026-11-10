@@ -6,9 +6,10 @@ import { resolveCompiler } from './compiler.mjs';
 import { spawnSync } from 'node:child_process';
 import { createAnalyzer, changedMetricsAgainstBase, readCoverage, functionCoverage, functionBranches, normalizedPath, LEGACY_UNCHANGED } from './core.mjs';
 import { changedLineRanges } from './branches.mjs';
+import policyOwner from './policy.cjs';
 
 const NO_COVERAGE_RECORD = 'no suite loaded this file, so it has no coverage record (a child process needs QUALITY_GATE_V8_CAPTURE and the shared core preload in NODE_OPTIONS; see scripts/quality/README.md)';
-export const THRESHOLD = 6;
+export const THRESHOLD = policyOwner.DEFAULT_POLICY.threshold;
 
 export function enforcedMetrics(changedMetrics) {
   return changedMetrics.filter((metric) => metric.classification !== LEGACY_UNCHANGED);

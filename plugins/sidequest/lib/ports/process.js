@@ -264,7 +264,7 @@ function shellCannotParsePosixSyntax(logPath, exitCode, shell) {
   return /^'!' is not recognized as an internal or external command,$/m.test(fs.readFileSync(logPath, "utf8"));
 }
 function verifierEnvironment(environment) {
-  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^(?:CLAUDE_PLUGIN_|CLAUDE_CODE_SESSION_ID$|CLAUDE_SESSION_ID$|SIDEQUEST_SESSION$)/i.test(name)));
 }
 function shellExitReason(shell, shellExitCode, spawnError) {
   const reason = `The ${shell.label} exited ${shellExitCode ?? "without a code"} before reporting the suite exit code.`;

@@ -263,21 +263,19 @@ test('reports every remotely outdated plugin in one compact warning', () => {
   assert.equal((message.match(/Toolshed updates available/g) || []).length, 1);
 });
 
-test('treats an unavailable remote manifest as unknown without claiming an update', () => {
+test('stays silent when the remote manifest is unavailable', () => {
   const directory = tempDirectory();
   const registryFile = path.join(directory, 'installed_plugins.json');
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
     'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
   } }));
-  const output = JSON.parse(decide({ prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'remote-unavailable' }, {
+  const output = decide({ prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'remote-unavailable' }, {
     registryFile,
     cache: { checkedAt: new Date().toISOString(), unavailable: true },
     warningStateDirectory: path.join(directory, 'warnings'),
     warnedStates: new Set(),
-  }));
-  assert.match(output.hookSpecificOutput.additionalContext, /freshness could not be determined/);
-  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /4\.35\.0/);
-  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /decision/);
+  });
+  assert.equal(output, '');
 });
 
 test('selects user and overlapping project installs, excluding unrelated marketplaces', () => {
@@ -305,7 +303,7 @@ test('compares SemVer 2 including prereleases', () => {
   assert.equal(compareSemver('broken', '1.0.0'), null);
 });
 
-test('reports a new remote version after earlier unknown freshness and version warnings', () => {
+test('reports only the first available update after unknown freshness', () => {
   const directory = tempDirectory();
   const registryFile = path.join(directory, 'installed_plugins.json');
   const input = { prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'remote-version-change' };
@@ -318,8 +316,7 @@ test('reports a new remote version after earlier unknown freshness and version w
     'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
   } }));
 
-  const unknown = JSON.parse(decide(input, { ...options, cache: { checkedAt: new Date().toISOString(), unavailable: true } }));
-  assert.match(unknown.hookSpecificOutput.additionalContext, /freshness could not be determined/);
+  assert.equal(decide(input, { ...options, cache: { checkedAt: new Date().toISOString(), unavailable: true } }), '');
 
   const first = JSON.parse(decide(input, { ...options, cache: {
     checkedAt: new Date().toISOString(),
@@ -327,9 +324,9 @@ test('reports a new remote version after earlier unknown freshness and version w
   } }));
   assert.match(first.hookSpecificOutput.additionalContext, /sidequest 4\.34\.0 → 4\.35\.0/);
 
-  const newer = JSON.parse(decide(input, { ...options, cache: {
+  const newer = decide(input, { ...options, cache: {
     checkedAt: new Date().toISOString(),
     manifest: { plugins: [{ name: 'sidequest', version: '4.36.0' }] },
-  } }));
-  assert.match(newer.hookSpecificOutput.additionalContext, /sidequest 4\.34\.0 → 4\.36\.0/);
+  } });
+  assert.equal(newer, '');
 });

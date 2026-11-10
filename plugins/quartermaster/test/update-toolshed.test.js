@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -67,14 +68,53 @@ test('routes project and local updates through the recorded project directory', 
   assert.equal(user.cwd, undefined);
 });
 
-test('uses the stable model-gateway updater for upgrades and the installed command for checks', () => {
+test('runs the gateway doctor in the older registered project instead of the newer project', () => {
+  const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-older-'));
+  const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
+  try {
+    const projects = [
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: newerProject, installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: olderProject, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
+    ];
+    const lines = [];
+    const doctor = gatewayCommand(projects, 'doctor', olderProject, (line) => lines.push(line));
+
+    assert.equal(doctor.cwd, olderProject);
+    assert.equal(doctor.args[0], path.join('C:/cache/older', 'bin', 'model-gateway.js'));
+    assert.match(lines.join('\n'), /current project/);
+  } finally {
+    fs.rmSync(olderProject, { recursive: true, force: true });
+    fs.rmSync(newerProject, { recursive: true, force: true });
+  }
+});
+
+test('registered older current project is reported as doctor target', () => {
+  const olderProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-current-'));
+  const newerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-newer-'));
+  try {
+    const projects = [
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: newerProject, installPath: 'C:/cache/newer', lastUpdated: '2026-07-18T12:00:00Z' },
+      { id: 'model-gateway@eigenwise-toolshed', scope: 'project', projectPath: olderProject, installPath: 'C:/cache/older', lastUpdated: '2026-07-17T12:00:00Z' },
+    ];
+    const lines = [];
+    const doctor = gatewayCommand(projects, 'doctor', olderProject, (line) => lines.push(line));
+
+    assert.equal(doctor.cwd, olderProject);
+    assert.equal(lines.join('\n'), `Running model-gateway doctor for current project ${olderProject}.`);
+  } finally {
+    fs.rmSync(olderProject, { recursive: true, force: true });
+    fs.rmSync(newerProject, { recursive: true, force: true });
+  }
+});
+
+test('uses the stable model-gateway updater for upgrades and the installed command for checks', () => withRegistry(registry, (registryFile) => {
   const installs = installedPlugins(registry);
   const update = gatewayUpdateCommand('C:/Users/example');
   const doctor = gatewayCommand(installs, 'doctor');
 
   assert.deepEqual(update.args, [path.join('C:/Users/example', '.claude', 'model-gateway', 'update.js')]);
   assert.equal(doctor.args.at(-1), 'doctor');
-});
+}));
 
 test('preflights Claude Code once before update mutations and preserves an explicit path', () => withRegistry(registry, (registryFile) => {
   const calls = [];
@@ -118,7 +158,7 @@ test('stops before update mutations when the Claude executable is unavailable', 
   assert.deepEqual(calls.map((command) => command.args), [['--version']]);
   assert.equal(installedGatewayLauncher, false);
   assert.match(lines.join('\n'), /Claude Code executable "missing-claude" could not be run/);
-  assert.match(lines.join('\n'), /--claude <absolute claude\.exe path>/);
+  assert.match(lines.join('\n'), /--claude <absolute path>/);
   assert.equal(lines.filter((line) => line.includes('Claude Code executable')).length, 1);
 }));
 
@@ -228,27 +268,30 @@ test('update and check modes touch only Toolshed installs', () => withRegistry(r
     report: () => {},
   });
 
-  assert.equal(updateCalls[0].command, 'claude');
+  assert.equal(updateCalls[0].command, updateCalls[1].command);
   assert.deepEqual(updateCalls[0].args, ['--version']);
   assert.ok(updateCalls.some((command) => command.args.join(' ') === 'plugin marketplace update eigenwise-toolshed'));
   assert.equal(updateCalls.some((command) => command.args.join(' ').includes('another-marketplace') || command.args.join(' ').includes('other@')), false);
 
   const checkCalls = [];
   const lines = [];
+  const projectRegistry = structuredClone(registry);
+  projectRegistry.plugins['model-gateway@eigenwise-toolshed'] = [
+    { scope: 'project', projectPath: 'C:/projects/newer', installPath: 'C:/cache/newer', version: '1.0.0', lastUpdated: '2026-07-18T12:00:00Z' },
+    { scope: 'project', projectPath: process.cwd(), installPath: 'C:/cache/current', version: '1.0.0', lastUpdated: '2026-07-17T12:00:00Z' },
+  ];
+  fs.writeFileSync(registryFile, JSON.stringify(projectRegistry));
   runUpdate({
     registryFile,
     options: { claude: 'claude', dryRun: false, check: true },
-    run: (command) => {
-      checkCalls.push(command);
-      return { ok: true };
-    },
+    run: (command) => { checkCalls.push(command); return { ok: true }; },
     report: (line) => lines.push(line),
   });
 
   assert.equal(checkCalls.length, 1);
-  assert.equal(checkCalls[0].args.at(-1), 'doctor');
-  assert.equal(checkCalls[0].args.join(' ').includes('another-marketplace'), false);
-  assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
+  assert.equal(checkCalls[0].cwd, process.cwd());
+  assert.equal(checkCalls[0].args[0], path.join('C:/cache/current', 'bin', 'model-gateway.js'));
+  assert.match(lines.join('\n'), /current project/);
 }));
 
 test('legacy codex-gateway installs stop before stale updates, setup, or wiring', () => {
@@ -644,3 +687,57 @@ test('leaves a status line that is not the retired Toolshed shim alone', () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+function runBatchClaudeFixture(extension, explicit, script) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed npm & Claude '));
+  const command = path.join(directory, 'claude.' + extension);
+  const log = path.join(directory, 'calls.txt');
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  assert.deepEqual(fs.readdirSync(directory), []);
+  fs.writeFileSync(command, script || '@echo off\r\necho %*>>"' + log + '"\r\necho 2.0.0\r\n');
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }] } }));
+  const invocation = 'const updater = require(' + JSON.stringify(require.resolve('../bin/update-toolshed.js')) + ');' +
+    'const result = updater.runUpdate(' + JSON.stringify({ registryFile, home: directory, options: { claude: explicit ? command : 'claude', claudeExplicit: explicit } }) + '); process.exitCode = result.ok ? 0 : 1;';
+  try {
+    const result = childProcess.spawnSync(process.execPath, ['-e', invocation], {
+      env: { ...process.env, PATH: directory, APPDATA: directory, LOCALAPPDATA: directory },
+      encoding: 'utf8', timeout: 15000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const nativeCommand = path.join(directory, 'claude.exe');
+    fs.writeFileSync(nativeCommand, '');
+    const observed = [];
+    runUpdate({ registryFile, home: directory, options: { claude: 'claude' }, environment: { PATH: directory },
+      run: (invocation) => { observed.push(invocation.command); return { ok: true }; }, report: () => {} });
+    assert.equal(observed[0], nativeCommand);
+    const posixObserved = [];
+    runUpdate({ registryFile, home: directory, options: { claude: 'claude' }, platform: 'linux', environment: { PATH: directory },
+      run: (invocation) => { posixObserved.push(invocation.command); return { ok: true }; }, report: () => {} });
+    assert.equal(posixObserved[0], 'claude');
+    const calls = fs.readFileSync(log, 'utf8');
+    assert.match(calls, /"?--version"?/);
+    assert.match(calls, /"?plugin"? "?marketplace"? "?update"? "?eigenwise-toolshed"?/);
+    assert.match(calls, /"?plugin"? "?update"? "?sidequest@eigenwise-toolshed"? "?--scope"? "?user"?/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test('discovers an npm Claude cmd shim on an otherwise empty PATH and runs scoped updates', { skip: process.platform !== 'win32' }, () => {
+  runBatchClaudeFixture('cmd', false);
+});
+
+test('runs an explicit Claude bat path containing spaces and ampersands without shell interpolation', { skip: process.platform !== 'win32' }, () => {
+  runBatchClaudeFixture('bat', true);
+});
+
+test('discovers and runs a PowerShell Claude shim without changing execution policy', { skip: process.platform !== 'win32' }, () => {
+  runBatchClaudeFixture('ps1', false, '$args -join " " | Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt"); Write-Output "2.0.0"');
+});
+
+test('refuses batch expansion characters before starting the Claude shim', { skip: process.platform !== 'win32' }, () => withRegistry(registry, (registryFile) => {
+  const lines = [];
+  const result = runUpdate({ registryFile, options: { claude: 'C:/unsafe%PATH%/claude.cmd', claudeExplicit: true }, report: (line) => lines.push(line) });
+  assert.equal(result.ok, false);
+  assert.match(lines.join('\n'), /Cannot safely pass quotes/);
+}));

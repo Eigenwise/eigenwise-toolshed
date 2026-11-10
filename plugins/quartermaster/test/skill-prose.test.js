@@ -26,7 +26,7 @@ test('documents namespaced Quartermaster commands and Live Rules deduplication',
 test('delegates quality guidance to quality-gate', () => {
   const setup = readSkill('setup');
 
-  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup only offers the coverage upgrade/);
+  assert.match(setup, /Quality guidance comes from the quality-gate plugin; setup proposes its project policy and coverage support on approval/);
   assert.doesNotMatch(setup, /clean-code-principles/);
 });
 
@@ -153,4 +153,49 @@ test('resupply offers an optional gate and ties requirements to a named user rul
   assert.match(requirements[0], /user-injected rule requires the gate, name that rule in one line/);
   assert.doesNotMatch(proposal, /apply 6|starts at 6|violation of|your own rule requires it/);
   assert.match(readSkill('setup'), /gate is opt-in/);
+});
+
+
+test('setup keeps learned permissions local and Live Rules independently selected', () => {
+  const setup = readSkill('setup');
+  assert.match(setup, /permissions.allow.*\n\s+entries in \x60\.claude\/settings\.local\.json\x60/);
+  assert.match(setup, /per-user and gitignored/);
+  assert.doesNotMatch(setup, /permissions.allow.*\n\s+entries in \x60\.claude\/settings\.json\x60/);
+  assert.match(setup, /Only when live-rules is approved, propose the self-improvement rule/);
+  const stack = fs.readFileSync(path.join(__dirname, '..', 'skills/setup/references/stack-plugins.md'), 'utf8');
+  assert.doesNotMatch(stack, /## Core|Select these for every codebase|bootstrap helper|settingsMerge|bootstrap plan/);
+  assert.match(stack, /When Sidequest parallel executors were selected/);
+  assert.doesNotMatch(stack, /npm install -D typescript/);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'bin/install-workspace-plugins.js')), false);
+});
+
+test('setup delegates manifest generation to the installed Live Rules script', () => {
+  const references = path.join(__dirname, '..', 'skills/setup/references');
+  const templates = fs.readFileSync(path.join(references, 'rule-templates.md'), 'utf8');
+  const selfImprovement = fs.readFileSync(path.join(references, 'self-improvement.md'), 'utf8');
+  assert.match(templates, /sync-atomic-rules\.js.*--project/);
+  assert.match(templates, /installPath/);
+  assert.doesNotMatch(templates, /Then write.*manifest|sha256|SHA-256|"hash"|validate every hash/);
+  assert.doesNotMatch(selfImprovement, /Include its path, SHA-256 hash/);
+  assert.match(selfImprovement, /Only when live-rules is approved/);
+  assert.match(readSkill('setup'), /LIVE_RULES_ROOT.*sync-atomic-rules\.js/);
+});
+
+test('skill snippets use host-substituted plugin paths instead of missing shell environment', () => {
+  const skillsDirectory = path.join(__dirname, '..', 'skills');
+  const offenders = collectFiles(skillsDirectory)
+    .filter((filePath) => /process\.env\.CLAUDE_(?:PLUGIN_ROOT|PROJECT_DIR)/.test(fs.readFileSync(filePath, 'utf8')))
+    .map((filePath) => path.relative(skillsDirectory, filePath));
+  assert.deepEqual(offenders, []);
+});
+
+test('setup and doctor use the shipped project quality policy owner', () => {
+  const setup = readSkill('setup');
+  const doctor = readSkill('toolshed-doctor');
+  const reference = fs.readFileSync(path.join(__dirname, '../skills/setup/references/crap-gate.md'), 'utf8');
+  assert.match(setup, /three-sentence project-policy explanation/);
+  assert.match(reference, /qualityPolicyProposal/);
+  assert.match(reference, /writeApprovedQualityPolicy/);
+  assert.match(reference, /one standing ticket per unsupported capture boundary/);
+  assert.match(doctor, /qualityPolicyFinding/);
 });

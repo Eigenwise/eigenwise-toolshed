@@ -3,8 +3,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { readInstalled } = require('./catalog.js');
 const { resolveWindow } = require('./scan.js');
-const { appendDecision } = require('./state.js');
+const { appendDecision, rejectedFingerprints } = require('./state.js');
 const { streamTranscript } = require('./stream.js');
 const { readProjectSettings, writeProjectSettings } = require('./project-settings.js');
 
@@ -64,6 +65,22 @@ const SESSION_SCRATCHPAD_PATH = /claude[-\\/][^\\/]+[\\/][\s\S]*[\\/]scratchpad(
 // literally rather than as a glob, so the rule can never match the command that
 // earned it. The rule is dead on arrival, so the fingerprint earns none.
 const GLOB_ARGUMENT = /[*?[\]]/;
+// A shell word: unquoted characters, backslash escapes, and whole quoted
+// spans. Quotes are \x22 and \x27 for the lizard reason given above.
+const SHELL_WORD = /(?:[^\s\x22\x27\\]|\\[\s\S]|\x22(?:[^\x22\\]|\\[\s\S])*\x22|\x27[^\x27]*\x27)+/g;
+// An escape is matched before a quote can open, so `\"` never starts a span.
+const QUOTED_SPAN_OR_ESCAPE = /\\[\s\S]|\x22(?:[^\x22\\]|\\[\s\S])*\x22|\x27[^\x27]*\x27/g;
+const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// The kept second word must read as a subcommand (`npm run`, `git status`),
+// never a file, a path, a quoted string, or a generated name: those pin the
+// rule to one session's worktree, scratchpad, or file (GH-457).
+const STABLE_SUBCOMMAND = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const GENERATED_IDENTIFIER = /(?=[0-9a-f]*\d)[0-9a-f]{8,}/i;
+const PATH_OR_QUOTED_EXECUTABLE = /^[\x22\x27]|[\\/]/;
+// The host stamps `permissionDecision.source` on each tool result; before it
+// did, only the session's permission mode tells an auto approval apart.
+const AUTO_APPROVING_MODE = /^(?:auto|bypassPermissions|dontAsk)$/;
+const PLUGIN_TOOL_FINGERPRINT = /^permission:mcp__plugin_/;
 
 function settingsFile(projectDir) {
   return path.join(projectDir, '.claude', 'settings.local.json');
@@ -83,28 +100,41 @@ function permissionAutomationEnabled(projectDir) {
   return readSettings(projectDir).quartermaster?.[ENABLED_SETTING] === true;
 }
 
+// Unbalanced quotes yield no words at all: what the shell would run is
+// unknowable, so nothing is learned from it.
+function shellWords(command) {
+  const text = String(command ?? '').trim();
+  if (text.replace(SHELL_WORD, '').trim()) return [];
+  const words = text.match(SHELL_WORD) ?? [];
+  const start = words.findIndex((word) => !ENVIRONMENT_ASSIGNMENT.test(word));
+  return start < 0 ? [] : words.slice(start);
+}
+
+function withoutQuotedData(command) {
+  return String(command ?? '').replace(QUOTED_SPAN_OR_ESCAPE, (span) => (span.startsWith('\\') ? span : '""'));
+}
+
+// Words keep their quotes and their path: Claude Code matches a rule against
+// the command as typed, so `Bash(Blender":*)` or a basename-only rule for a
+// path-invoked script never matches again (GH-521). The veto below refuses
+// both instead. Case is kept for the same literal-match reason; the veto
+// regexes compare with an `i` flag rather than lowercasing here.
 function normalizedCommandPrefix(command) {
-  const words = String(command ?? '').trim().replace(/\s+/g, ' ').replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+/, '').split(' ');
-  if (!words[0]) return null;
-  // Case is kept: the rule this fingerprint becomes is matched literally by a
-  // case-sensitive host, so a lowercased fingerprint can silently fail to
-  // match the very command it was written for. Anything that needs a
-  // case-insensitive comparison (the veto regexes below) matches on this
-  // original-case string with an `i` flag instead of lowercasing it here.
-  const executable = words[0].replace(/^.*[\\/]/, '').replace(/\.exe$/i, '');
-  const subcommand = words[1] && !words[1].startsWith('-') ? words[1] : null;
-  return subcommand ? `${executable} ${subcommand}` : executable;
+  const [first, second] = shellWords(command);
+  if (!first) return null;
+  const executable = first.replace(/\.exe$/i, '');
+  return second && !second.startsWith('-') ? `${executable} ${second}` : executable;
 }
 
 function fingerprintFor(name, input) {
   if (!name) return null;
   if (name === 'Bash') {
     const command = input?.command;
-    // Checked on the raw command, before normalizedCommandPrefix collapses
-    // whitespace and truncates it to a word or two: a separator, newline, or
-    // trailing backslash anywhere in the command means the rest of it is
-    // unaccounted for, so it earns no fingerprint at all.
-    if (RAW_COMPOUND_SEPARATOR.test(command)) return null;
+    // Checked on the whole command, before normalizedCommandPrefix truncates
+    // it to a word or two: a separator, newline, or trailing backslash
+    // anywhere outside a quoted string means the rest of it is unaccounted
+    // for, so it earns no fingerprint at all.
+    if (RAW_COMPOUND_SEPARATOR.test(withoutQuotedData(command))) return null;
     const prefix = normalizedCommandPrefix(command);
     return prefix ? `permission:Bash:${prefix}` : null;
   }
@@ -116,8 +146,11 @@ function ruleFor(fingerprint) {
   return match ? `Bash(${match[1]}:*)` : fingerprint.slice('permission:'.length);
 }
 
+// A quoted argument is data (`grep -F "drop"`), so only unquoted words are
+// tested as commands (GH-397). DESTRUCTIVE_PHRASE still reads the whole
+// command: `psql db -c "drop table t"` hands that quoted SQL to a client.
 function commandWords(command) {
-  return String(command ?? '')
+  return withoutQuotedData(command)
     .split(/[\s;&|(){}<>]+/)
     .filter(Boolean)
     .map((word) => word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, ''));
@@ -194,6 +227,23 @@ const TOO_BROAD_RULES = [
     reason: 'wildcard would cover destructive siblings',
     test: ({ prefix }) => DESTRUCTIVE_FAMILY.test(prefix),
   },
+  // A rule matches the command as typed, so a path or quoted executable earns
+  // a rule that only fits that one spelling, and a basename rule fits none.
+  {
+    reason: 'path-invoked or quoted executable',
+    test: ({ executable }) => PATH_OR_QUOTED_EXECUTABLE.test(executable),
+  },
+  // A bare executable grants every argument: `Bash(curl:*)` also allows
+  // `curl -T ~/.ssh/id_rsa`, `Bash(sed:*)` allows `sed -i`. Growing the veto
+  // list one executable at a time never closes that, so none is learned.
+  {
+    reason: 'bare executable without a subcommand',
+    test: ({ firstArg }) => !firstArg,
+  },
+  {
+    reason: 'argument is a file, path, or generated name, not a subcommand',
+    test: ({ firstArg }) => !STABLE_SUBCOMMAND.test(firstArg) || GENERATED_IDENTIFIER.test(firstArg),
+  },
 ];
 
 function ruleTooBroadReason(fingerprint) {
@@ -225,10 +275,21 @@ function bumpHookBlocks(entry) {
 // would misreport why the candidate was excluded) or as an approval (the call did not go through).
 // It gets its own counter, left absent until the first sighting, so a hook-blocked fingerprint is
 // kept off the allowlist without inventing a false denial reason for it.
+// An approval the host granted from config, the auto-mode classifier, or a
+// bypassing mode was never put to the user, so it says nothing about what the
+// user would allow (GH-481).
+function approvedByUser(event) {
+  const source = event.permissionDecision?.source;
+  if (source) return String(source).startsWith('user');
+  return !AUTO_APPROVING_MODE.test(event.permissionMode ?? '');
+}
+
 function recordOutcome(entry, event) {
   if (event.denial === 'user-rejected') entry.denials += 1;
   else if (event.denial === 'hook_block') bumpHookBlocks(entry);
-  else if (!event.isError) entry.approvals += 1;
+  else if (event.isError) return;
+  else if (approvedByUser(event)) entry.approvals += 1;
+  else entry.automaticApprovals += 1;
 }
 
 function createPermissionCollector() {
@@ -243,6 +304,7 @@ function createPermissionCollector() {
         fingerprint,
         input,
         approvals: 0,
+        automaticApprovals: 0,
         denials: 0,
         destructive: Boolean(vetoReason),
         vetoReason,
@@ -322,18 +384,50 @@ function enablePermissionAutomation(projectDir) {
   return true;
 }
 
-async function applyPermissionAllowlist(options = {}) {
+function installedPluginToolPrefixes(env) {
+  return readInstalled(env).map((plugin) => `permission:mcp__plugin_${plugin.name.replace(/[^A-Za-z0-9_-]/g, '_')}_`);
+}
+
+function skipReasonFor(entry, ledger) {
+  if (ledger.rejected.has(entry.fingerprint)) return 'rejected in the decision ledger';
+  const fromMissingPlugin = PLUGIN_TOOL_FINGERPRINT.test(entry.fingerprint)
+    && !ledger.installedToolPrefixes.some((prefix) => entry.fingerprint.startsWith(prefix));
+  return fromMissingPlugin ? 'its plugin is no longer installed' : null;
+}
+
+// A rejection recorded in the ledger silences the rule for good, the same
+// promise resupply makes, and a removed plugin's tools stay in the 30-day
+// transcript window after the tools themselves are gone (GH-469).
+function setAsideSkipped(candidates, options, projectDir) {
+  const ledger = {
+    rejected: new Set(rejectedFingerprints(options.env, projectDir).rejected),
+    installedToolPrefixes: installedPluginToolPrefixes(options.env),
+  };
+  for (const entry of candidates) entry.skipReason = skipReasonFor(entry, ledger);
+  return candidates.filter((entry) => entry.skipReason);
+}
+
+async function learnPermissionAllowlist(options = {}) {
   const projectDir = path.resolve(options.projectPath ?? process.cwd());
   const collected = await collectPermissionDecisions({ ...options, projectPath: projectDir });
   const candidates = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0 && !entry.hookBlocks);
   const hookBlocked = collected.decisions.filter((entry) => entry.hookBlocks).length;
-  const blocked = candidates.filter(ruleIsBlocked);
-  const eligible = candidates.filter((entry) => !ruleIsBlocked(entry));
+  for (const entry of candidates) ruleIsBlocked(entry);
+  return { candidates, hookBlocked, window: collected.window };
+}
+
+function applyLearnedPermissionAllowlist(learning, options = {}) {
+  const projectDir = path.resolve(options.projectPath ?? process.cwd());
+  const { candidates, hookBlocked } = learning;
+  const skipped = setAsideSkipped(candidates, options, projectDir);
+  const proposable = candidates.filter((entry) => !entry.skipReason);
+  const blocked = proposable.filter(ruleIsBlocked);
+  const eligible = proposable.filter((entry) => !ruleIsBlocked(entry));
   // Writing permission rules is the opt-in itself, so a caller that has not
   // enabled the marker only ever gets the report. Without this, `quartermaster
   // allowlist` silently granted permissions in any project it was run in.
   if (!permissionAutomationEnabled(projectDir)) {
-    return { projectDir, additions: [], blocked, eligible, hookBlocked, applied: false, scanned: collected.window.files.length };
+    return { projectDir, additions: [], blocked, eligible, skipped, hookBlocked, applied: false, scanned: learning.window.files.length };
   }
   const writable = eligible.filter((entry) => !ruleIsBlocked(entry));
   const added = appendRulesToSettings(projectDir, writable.map((entry) => ruleFor(entry.fingerprint)));
@@ -351,10 +445,17 @@ async function applyPermissionAllowlist(options = {}) {
       approvals: entry.approvals,
     }, options.env);
   }
-  return { projectDir, additions, blocked, eligible, hookBlocked, applied: true, scanned: collected.window.files.length };
+  return { projectDir, additions, blocked, eligible, skipped, hookBlocked, applied: true, scanned: learning.window.files.length };
+}
+
+async function applyPermissionAllowlist(options = {}) {
+  const learning = await learnPermissionAllowlist(options);
+  return applyLearnedPermissionAllowlist(learning, options);
 }
 
 module.exports = {
+  applyLearnedPermissionAllowlist,
+  learnPermissionAllowlist,
   ENABLED_SETTING,
   MIN_APPROVALS,
   appendRulesToSettings,

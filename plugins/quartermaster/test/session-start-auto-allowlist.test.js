@@ -31,14 +31,17 @@ function runHook(projectDir, commands) {
   const claudeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-hook-claude-'));
   const root = path.join(claudeDirectory, 'projects', slugForProject(projectDir));
   fs.mkdirSync(root, { recursive: true });
-  commands.forEach((command, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), permissionTranscript(command), 'utf8'));
+  commands.forEach((command, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), `${JSON.stringify({ cwd: projectDir })}\n${permissionTranscript(command)}`, 'utf8'));
   const environment = { CLAUDE_CONFIG_DIR: claudeDirectory, QUARTERMASTER_STATE_DIR: path.join(claudeDirectory, 'quartermaster-state') };
   enablePermissionAutomation(projectDir);
-  const result = spawnSync(process.execPath, [HOOK], {
+  const options = {
     env: { ...process.env, ...environment, CLAUDE_PROJECT_DIR: projectDir },
     input: JSON.stringify({ source: 'startup', cwd: projectDir }),
     encoding: 'utf8',
-  });
+  };
+  const background = spawnSync(process.execPath, [HOOK], options);
+  assert.equal(background.status, 0, background.stderr);
+  const result = spawnSync(process.execPath, [HOOK], options);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 }
