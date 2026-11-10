@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.1.0 (2026-11-10)
+
+Released in v3.619.0, up from 1.0.3.
+
+### Features
+
+- Ship the project quality policy through Quality Gate (SQ-4057)
+  Quality Gate owns project policy defaults and validation. Quartermaster proposes and writes them after approval, and its doctor detects project executor references without configuration. Sidequest uses the same installed owner for executor briefings and integration evidence, including standing-per-boundary measurement debt.
+
+### Fixes
+
+- Permission learning respects rejections, ignores auto-mode approvals, and reads quoted arguments as data (SQ-3441)
+  The auto-allowlist no longer re-adds a rule recorded as rejected in the decision ledger, or a rule for a tool whose plugin was uninstalled; both are reported as `skipped` (GH-469). Only approvals the user gave at a prompt count, read from each tool result's `permissionDecision.source` or, on older transcripts, the session's permission mode; auto-mode classifier, bypass and config approvals no longer do (GH-481). No rule is learned for a bare executable such as `Bash(curl:*)`, or for a file, path, quoted string or generated name in the subcommand slot, so one session's worktree or scratchpad argument repeated three times earns nothing (GH-457). Words inside a quoted argument are data, so `grep -F "drop ..."` no longer vetoes a fingerprint, while escaped quotes and unbalanced quotes still fail closed (GH-397). A quoted or path-invoked executable is refused with a reason instead of rendering `Bash(Blender":*)` (GH-521).
+- Run update checks in the current project (SQ-3442)
+  `update-toolshed --check` and `--dry-run` now run the Model Gateway doctor in the current registered project, or report the registered project checked when the current project is unknown.
+- Include linked-worktree sessions in Quartermaster mining (SQ-3512)
+  Quartermaster mining now includes sessions from currently registered Git worktrees and validates their recorded cwd. Auto-compaction prompts no longer count as user corrections. Decision verification's stored per-project tallies are unchanged.
+- Keep SessionStart health probes off the synchronous path (SQ-4069)
+  SessionStart reuses cached health observations and refreshes expensive probes asynchronously. Loaded-versus-installed plugin checks still run locally on every start.
+- Learn permission rules in the background and apply them at the next start (SQ-4080)
+  Fix GH-720: SessionStart applies cached permission learning before handing transcript scanning to the background, avoiding the synchronous startup scan. Learned rules land at the next session start, with current opt-in, rejection and installed-plugin checks.
+- Quiet team-clone freshness checks and deduplicate update notices (SQ-4083)
+  Shared plugin settings get install-only advice. Optional auto-update no longer triggers a startup action warning. Update notices share per-session state across startup, prompts, and Stop. Failed background fetches stay silent, proxy-configured environments skip them, and freshness checks and the updater honor CLAUDE_CONFIG_DIR. Document the hourly public manifest request and its privacy boundary.
+- Keep workspace setup personal permissions and optional rules consistent (SQ-4084)
+  Learned permissions stay in per-user settings.local.json. Setup seeds self-improvement rules only with Live Rules, syncs manifests through its installed script, and keeps the SessionStart charter active without a matching install. Remove the unused workspace installer and stale setup guidance. Doctor snippets use substituted plugin paths and warn about agent teams only when enabled in user settings.
+- Clarify Stop-time resupply replies (SQ-4085)
+- Keep plugins installed in other projects available during setup (SQ-4086)
+  Catalog searches and mining now count project/local installs only for the matching project. The installed inventory includes scope, projectPath, and appliesToProject for each installation.
+- Find and run npm-installed Claude Code on Windows (SQ-4087)
+  The updater discovers Windows npm shims automatically and runs batch installs through an explicitly quoted cmd.exe invocation. Native Claude executables stay preferred.
+- Detect Dutch user corrections (SQ-4089)
+  Quartermaster now recognizes common Dutch correction phrases and reports English and Dutch correction detection in its resupply guidance.
+- Count linked-worktree session tallies toward the main project (SQ-4093)
+  Human-driven linked-worktree sessions now contribute to the main project's verification, nudges, and resupply offers. Existing worktree tally files are read without rewriting them, and verify reports their contribution in its window. Fixes GH-502.
+
 ## 1.0.3 (2026-10-31)
 
 Released in v3.618.0, up from 1.0.2.
