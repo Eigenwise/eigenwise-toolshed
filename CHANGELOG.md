@@ -8,6 +8,90 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.619.0 (2026-11-10)
+
+### Repository
+
+- Add the newcomer lifecycle, routing explainer and guidance notes to the Sidequest getting-started page (SQ-4043)
+
+### model-gateway 0.55.3 → 0.55.4
+
+#### Fixes
+
+- Model Gateway setup authenticates the GitHub release lookup with GH_TOKEN, GITHUB_TOKEN or gh auth token, names the anonymous rate limit on 403/429, and drops Authorization on cross-origin redirects (GH-718) [`0059765`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0059765f3af32eca3bbbf0e441bc57b04c1717d9)
+- Forward CODEX_GATEWAY_REQUEST_COMPRESSION to the supervised Codex proxy (GH-782)
+  When `CODEX_GATEWAY_REQUEST_COMPRESSION` is set in the supervisor environment, `spawnSupervisedProxy` forwards it as `CCP_CODEX_REQUEST_COMPRESSION` unless `CCP_CODEX_REQUEST_COMPRESSION` is already explicitly set.
+
+### quality-gate 1.4.0 → 1.5.0
+
+#### Features
+
+- Ship the project quality policy through Quality Gate (SQ-4057)
+  Quality Gate owns project policy defaults and validation. Quartermaster proposes and writes them after approval, and its doctor detects project executor references without configuration. Sidequest uses the same installed owner for executor briefings and integration evidence, including standing-per-boundary measurement debt.
+
+### quartermaster 1.0.3 → 1.1.0
+
+#### Features
+
+- Ship the project quality policy through Quality Gate (SQ-4057)
+  Quality Gate owns project policy defaults and validation. Quartermaster proposes and writes them after approval, and its doctor detects project executor references without configuration. Sidequest uses the same installed owner for executor briefings and integration evidence, including standing-per-boundary measurement debt.
+
+#### Fixes
+
+- Permission learning respects rejections, ignores auto-mode approvals, and reads quoted arguments as data (SQ-3441)
+  The auto-allowlist no longer re-adds a rule recorded as rejected in the decision ledger, or a rule for a tool whose plugin was uninstalled; both are reported as `skipped` (GH-469). Only approvals the user gave at a prompt count, read from each tool result's `permissionDecision.source` or, on older transcripts, the session's permission mode; auto-mode classifier, bypass and config approvals no longer do (GH-481). No rule is learned for a bare executable such as `Bash(curl:*)`, or for a file, path, quoted string or generated name in the subcommand slot, so one session's worktree or scratchpad argument repeated three times earns nothing (GH-457). Words inside a quoted argument are data, so `grep -F "drop ..."` no longer vetoes a fingerprint, while escaped quotes and unbalanced quotes still fail closed (GH-397). A quoted or path-invoked executable is refused with a reason instead of rendering `Bash(Blender":*)` (GH-521).
+- Run update checks in the current project (SQ-3442)
+  `update-toolshed --check` and `--dry-run` now run the Model Gateway doctor in the current registered project, or report the registered project checked when the current project is unknown.
+- Include linked-worktree sessions in Quartermaster mining (SQ-3512)
+  Quartermaster mining now includes sessions from currently registered Git worktrees and validates their recorded cwd. Auto-compaction prompts no longer count as user corrections. Decision verification's stored per-project tallies are unchanged.
+- Keep SessionStart health probes off the synchronous path (SQ-4069)
+  SessionStart reuses cached health observations and refreshes expensive probes asynchronously. Loaded-versus-installed plugin checks still run locally on every start.
+- Learn permission rules in the background and apply them at the next start (SQ-4080)
+  Fix GH-720: SessionStart applies cached permission learning before handing transcript scanning to the background, avoiding the synchronous startup scan. Learned rules land at the next session start, with current opt-in, rejection and installed-plugin checks.
+- Quiet team-clone freshness checks and deduplicate update notices (SQ-4083)
+  Shared plugin settings get install-only advice. Optional auto-update no longer triggers a startup action warning. Update notices share per-session state across startup, prompts, and Stop. Failed background fetches stay silent, proxy-configured environments skip them, and freshness checks and the updater honor CLAUDE_CONFIG_DIR. Document the hourly public manifest request and its privacy boundary.
+- Keep workspace setup personal permissions and optional rules consistent (SQ-4084)
+  Learned permissions stay in per-user settings.local.json. Setup seeds self-improvement rules only with Live Rules, syncs manifests through its installed script, and keeps the SessionStart charter active without a matching install. Remove the unused workspace installer and stale setup guidance. Doctor snippets use substituted plugin paths and warn about agent teams only when enabled in user settings.
+- Clarify Stop-time resupply replies (SQ-4085)
+- Keep plugins installed in other projects available during setup (SQ-4086)
+  Catalog searches and mining now count project/local installs only for the matching project. The installed inventory includes scope, projectPath, and appliesToProject for each installation.
+- Find and run npm-installed Claude Code on Windows (SQ-4087)
+  The updater discovers Windows npm shims automatically and runs batch installs through an explicitly quoted cmd.exe invocation. Native Claude executables stay preferred.
+- Detect Dutch user corrections (SQ-4089)
+  Quartermaster now recognizes common Dutch correction phrases and reports English and Dutch correction detection in its resupply guidance.
+- Count linked-worktree session tallies toward the main project (SQ-4093)
+  Human-driven linked-worktree sessions now contribute to the main project's verification, nudges, and resupply offers. Existing worktree tally files are read without rewriting them, and verify reports their contribution in its window. Fixes GH-502.
+
+### sidequest 6.8.1 → 6.9.0
+
+#### Features
+
+- Record story intake and configure review cycles (SQ-4046)
+  Add the story intake record, `story_intake` MCP tool and `story intake` CLI actions. Boards can configure intake mode and one to three review cycles; existing boards default to off. Add the shared dispatch policy function for the follow-on gate wiring.
+- Add a reusable independent intake review brief (SQ-4049)
+  Review-audit tickets labeled `intake-review` now get an evidence-first briefing with five review parts, up to four revised human questions and a five-line verdict. The intake reference includes a ticket description template; ordinary reviews stay unchanged.
+- Ship the project quality policy through Quality Gate (SQ-4057)
+  Quality Gate owns project policy defaults and validation. Quartermaster proposes and writes them after approval, and its doctor detects project executor references without configuration. Sidequest uses the same installed owner for executor briefings and integration evidence, including standing-per-boundary measurement debt.
+
+#### Fixes
+
+- Negative-control test names recognize Rust tests and ignore comment lines (GH-681)
+  The negative-control gate no longer treats a comment that quotes `it ('x')` as a test, recognizes Rust `#[test]` and `#[tokio::test]` functions as test definitions, and stops charging an edit to a Rust helper after a test to the test above it (GH-681).
+- Retire never-claimed preparations with a reason (SQ-3830)
+  The preparing session can retire its never-claimed dispatch with a reason of at least 20 characters. Use MCP dispatch with retireOnly and reason, or release --retire-prepared --reason. Foreign-session deadlines and claimed-attempt guards stay unchanged.
+- Keep executor attempt duration separate from integration time (SQ-3993)
+  Integration updates the submitted executor attempt instead of appending another copy. Submit remains the executor end time, and integratedAt records delivery separately. Pulse collapses historical duplicate attempts without rewriting stored history.
+- Reclaim delivered executor worktrees without duplicate attempts (SQ-4024)
+  Delivery cleanup recognizes the integration stamp on the submitted attempt. MCP and CLI integration reclaim terminal isolated worktrees immediately while preserving one attempt and its original submit time.
+- Keep dispatch retirement descriptors within the MCP budget (SQ-4025)
+  Keep preparer retirement visible in served MCP descriptors, refresh the descriptor golden, and retain the existing tools/list byte budget.
+- Share recorded-delivery gates on an unchanged clean head (SQ-4032)
+  Recorded deliveries at the same clean head share the import-walk gate and identical verifier commands. Different commands and working directories still run separately. A new commit or dirty checkout invalidates sharing.
+- Keep orchestrator sessions out of verifier children (SQ-4078)
+  Integration, recorded-delivery, wave and capture verifiers clear ambient session identity before launching children. Planning-depth fixtures use an explicit dispatch session.
+- SQ-4057 follow-up: integration quality uses shipped defaults without a project policy file (SQ-4092)
+  Installed Quality Gate uses its shipped defaults when no project policy file exists. Integration receipts record the policy source, and executor briefings and doctor report the same effective policy.
+
 ## v3.618.0 (2026-10-31)
 
 ### quartermaster 1.0.2 → 1.0.3
