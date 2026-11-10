@@ -187,9 +187,38 @@ function pluginTestFiles(project: string, plugin: string): string[] {
   return pluginRelative(root, directoryFiles(path.join(root, 'test')).filter((file) => importingTest(file) && !pluginRunnerTest(file, moduleRoots)));
 }
 
+const NODE_FLAGS_WITH_VALUES = new Set(['--require', '-r', '--import', '--loader', '--experimental-loader', '--test-timeout', '--test-concurrency', '--test-reporter', '--test-reporter-destination', '--test-name-pattern', '--test-skip-pattern', '--conditions', '-C']);
+
+function nodeTestRunner(script: string): string {
+  const tokens: string[] = script.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+  if (tokens.shift() !== 'node' || !tokens.includes('--test')) return 'node --test';
+  const flags = nodeTestFlags(tokens);
+  return 'node ' + flags.join(' ').replace(/(?:^|\s)--test-concurrency(?:=\S+|\s+\S+)/g, '').trim();
+}
+
+function nodeTestFlags(tokens: string[]): string[] {
+  const globIndex = tokens.findIndex((token) => /[*?]/.test(token));
+  if (globIndex !== -1) return tokens.slice(0, globIndex);
+  const flags: string[] = [];
+  while (/^--?[^-]/.test(String(tokens[0]))) appendNodeTestFlag(tokens, flags);
+  return flags;
+}
+
+function appendNodeTestFlag(tokens: string[], flags: string[]): void {
+  const flag = tokens.shift()!;
+  const value = NODE_FLAGS_WITH_VALUES.has(flag) ? tokens.shift() : undefined;
+  flags.push(flag);
+  if (value !== undefined) flags.push(value);
+}
+
+function selectedTestRunner(scripts: Record<string, string>): string {
+  if (scripts['test:files']) return 'npm run test:files --';
+  return nodeTestRunner(scripts.test ?? '');
+}
+
 function testBatchCommand(scripts: Record<string, string>, files: string[], normalSuite: boolean): string {
   if (normalSuite) return scripts['test:full'] ? 'npm run test:full' : 'npm test';
-  const runner = scripts['test:files'] ? 'npm run test:files --' : 'node --test';
+  const runner = selectedTestRunner(scripts);
   return runner + ' --test-concurrency=1 ' + files.map((file) => quoteArgument(file.replaceAll('[', '[[]'))).join(' ');
 }
 
@@ -303,14 +332,14 @@ function importWalkExclusionCommand(sharedGate: boolean, command: string | null 
   return command || '';
 }
 
-export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40, execute: IntegrationExecution = runProcessVerification, sharedGate = false): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; pluginRunnerResults: PluginRunnerResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string; pluginRunnerSplit: string } } {
+export function runImportingIntegrationTests(project: string, changedPaths: string[], pinned: VerificationResult, timeoutMilliseconds: number, environment: NodeJS.ProcessEnv, fileThreshold = 40, execute: IntegrationExecution = runProcessVerification, sharedGate = false): VerificationResult & { integrationTests: IntegrationTestSelection[]; importingTestResults: VerificationResult[]; pluginRunnerResults: PluginRunnerResult[]; importingTestSummary: { selectedFiles: number; durationMilliseconds: number; timeoutMilliseconds: number; exclusionReason: string; pluginRunnerSplit: string; runners: { plugin: string; command: string }[] } } {
   const started = Date.now();
   const selections = selectIntegrationTests(project, changedPaths).map((selection) => selectionWithExclusions(project, selection));
   const batches = integrationTestBatches(project, selections, importWalkExclusionCommand(sharedGate, pinned.command), timeoutMilliseconds, fileThreshold);
   const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== 'plugin-runner'), pinned, environment, execute);
   const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === 'plugin-runner'), pinned, environment, execute);
   const importingTestResults = [...failures, ...pluginRunnerResults.filter(pluginRunnerFailed)];
-  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: 'Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.', pluginRunnerSplit: PLUGIN_RUNNER_SPLIT };
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: 'Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.', pluginRunnerSplit: PLUGIN_RUNNER_SPLIT, runners: batches.map(({ plugin, command }) => ({ plugin, command })) };
   if (pinned.logPath) fs.appendFileSync(pinned.logPath, '\nImport-walk gate: ' + JSON.stringify({ ...importingTestSummary, selections, batches, pluginRunnerResults }) + '\n');
   return { ...(importingTestResults[0] ?? pinned), integrationTests: selections, importingTestResults, pluginRunnerResults, importingTestSummary };
 }
