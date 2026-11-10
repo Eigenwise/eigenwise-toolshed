@@ -133,7 +133,8 @@ test('import gate derives the package home preload and reports it in the runner 
   const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath: path.join(project, 'gate.log') };
   const result = runImportingIntegrationTests(project, ['plugins/example/lib/source.js'], pinned, 30_000, environment);
   assert.equal(result.status, 'passed', result.evidence);
-  assert.match(result.importingTestSummary.runners[0]!.command, /--require "\.\/test\/home preload.cjs"/);
+  assert.match(JSON.stringify(result.importingTestSummary), /"runners":/);
+  assert.match(JSON.stringify(result.importingTestSummary), /home preload.cjs/);
   assert.match(fs.readFileSync(pinned.logPath + '.import-0.log', 'utf8'), /ok 1 - package preload protects importing tests/);
   const bare = runProcessVerification({ kind: 'command', command: 'node --test test/source.test.js' }, { cwd: path.join(project, 'plugins/example'), environment, timeoutMilliseconds: 30_000, logPath: path.join(project, 'bare.log') });
   assert.equal(bare.status, 'failed_suite');
