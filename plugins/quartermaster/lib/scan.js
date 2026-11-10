@@ -90,7 +90,9 @@ function projectSessions(options, root, projectPath, cutoffMs) {
   if (options.slug) return { slugs: [options.slug], sessions: sessionsInSlug(root, options.slug) };
   const directories = checkoutPaths(projectPath);
   const checkouts = directories.map(canonicalDirectory);
-  const slugs = [...new Set(directories.map((checkout) => resolveSlug(checkout, root)))];
+  // Git may print a checkout in a different spelling than the session's cwd (an 8.3 short
+  // TEMP on Windows CI, for one), and the transcript slug follows the cwd spelling.
+  const slugs = [...new Set([...directories, ...checkouts].map((checkout) => resolveSlug(checkout, root)))];
   const sessions = slugs.flatMap((slug) => sessionsInSlug(root, slug))
     .filter((session) => session.modifiedMs >= cutoffMs)
     .filter((session) => sessionInCheckouts(session, checkouts));
