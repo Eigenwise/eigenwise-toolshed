@@ -46,6 +46,31 @@ test('ordinary captures register while running and remove records after success 
   }
 });
 
+test('integration verifier children drop session identity without changing the parent environment', (context) => {
+  const { runProcessVerification, verifierEnvironment } = require('../src/lib/ports/process.js');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-gate-session-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const environment = {
+    ...process.env,
+    CLAUDE_CODE_SESSION_ID: 'live-orchestrator-session',
+    CLAUDE_SESSION_ID: 'legacy-orchestrator-session',
+    SIDEQUEST_SESSION: 'sidequest-orchestrator-session',
+    claude_code_session_id: 'case-insensitive-session',
+    SIDEQUEST_VERIFY_SENTINEL: 'preserved',
+  };
+  const script = path.join(directory, 'probe.cjs');
+  fs.writeFileSync(script, "console.log(JSON.stringify({ CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID, CLAUDE_SESSION_ID: process.env.CLAUDE_SESSION_ID, SIDEQUEST_SESSION: process.env.SIDEQUEST_SESSION, SIDEQUEST_VERIFY_SENTINEL: process.env.SIDEQUEST_VERIFY_SENTINEL }));");
+  const result = runProcessVerification({ kind: 'command', command: '"' + process.execPath + '" "' + script + '"' }, {
+    cwd: directory, environment, timeoutMilliseconds: 30_000, logPath: path.join(directory, 'gate.log'),
+  });
+  assert.equal(result.status, 'passed', result.evidence);
+  const observed = JSON.parse(fs.readFileSync(result.logPath, 'utf8').trim().split(String.fromCharCode(10))[0]!);
+  assert.deepEqual(Object.keys(observed).filter((name) => /^(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|SIDEQUEST_SESSION)$/i.test(name)), []);
+  assert.equal(observed.SIDEQUEST_VERIFY_SENTINEL, 'preserved');
+  assert.equal(environment.CLAUDE_CODE_SESSION_ID, 'live-orchestrator-session');
+  assert.equal(verifierEnvironment(environment).claude_code_session_id, undefined);
+});
+
 test('integration timeout identifies phase budget exhaustion separately from failing assertions', () => {
   const result: VerificationResult = { kind: 'command', status: 'failed_suite', command: 'npm run test:full', evidence: 'exit 1', failureIdentities: ['exit:1'], outputTail: 'Sidequest functional tests exceeded their 1200000ms phase budget at concurrency 8' };
   assert.deepEqual(phaseBudgetResult(result).failureIdentities, ['exit:1', 'phase_budget_exceeded']);

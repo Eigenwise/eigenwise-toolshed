@@ -1,5 +1,7 @@
 'use strict';
 
+import { stampExecutorIntegration } from './completion';
+
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('../prepared-dispatch.js');
 const { classifyVerificationKind, verificationRequirement } = require('../kernel/verification.js');
 const { resolveSuite } = require('../suite-resolver.js');
@@ -440,7 +442,7 @@ function crossBoardDispatchRefusal(ticket: any, projectPath: any, runtimeCwd: an
 function unspawnedPreparedRemedy(competing: readonly SessionBoardDispatch[]) {
   const prepared = competing.filter((entry) => entry.state?.outcome === 'prepared');
   if (!prepared.length) return '';
-  const calls = prepared.map((entry) => `dispatch({ ref: "${entry.ref}", project: ${JSON.stringify(entry.path)}, recoveryEvidence: "<why it will not be spawned>", retireOnly: true })`).join(', ');
+  const calls = prepared.map((entry) => `dispatch({ ref: "${entry.ref}", project: ${JSON.stringify(entry.path)}, reason: "<why it will not be spawned, at least 20 characters>", retireOnly: true })`).join(', ');
   const ttlHours = Math.round(preparedDispatchTtlMs() / 3600000);
   return ` A prepared dispatch nobody will spawn keeps counting until the ${ttlHours} hour prepared-dispatch TTL expires it; retire it now from this session with ${calls}.`;
 }
@@ -900,7 +902,7 @@ function terminalUnclaimedAttempt(ticket?: any, state?: any) {
 function preparingSessionClause(state?: any) {
   const preparingSession = String(state?.preparedBy?.sessionId || '').trim();
   return preparingSession
-    ? `The session that prepared it (${preparingSession}) can retire it now with that evidence: it spawned the runtime, so the host's failure report or the Agent call returning without a claim is proof the board never gets.`
+    ? `The session that prepared it (${preparingSession}) can retire it now with a reason of at least 20 characters using MCP dispatch { retireOnly: true, reason } or sidequest release --retire-prepared --reason. recoveryEvidence remains accepted.`
     : 'No preparing session was recorded, so evidence waits for the deadline.';
 }
 
@@ -909,7 +911,7 @@ function preparingSessionClause(state?: any) {
 function unclaimedAttemptRecoveryGuidance(ticket?: any, state?: any) {
   if (!unclaimedEvidenceAttempt(ticket, state)) return '';
   const ref = ticket.ref;
-  return ` Nobody claimed this attempt, so there is no claim to release. The one recovery is recovery evidence: close it with \`groomClose ${ref} --recoveryEvidence "<the host's failure report>"\` (add \`--deliveryCommit <sha> --deliveryMethod manual\` for work landed by hand, reachable from the recorded integration branch), which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). ${preparingSessionClause(state)} From any other session both refuse with the countdown to the retirement deadline.`;
+  return ` Nobody claimed this attempt, so there is no claim to release. The preparing session can use \`sidequest release ${ref} --retire-prepared --reason "<why, at least 20 characters>"\` (MCP \`dispatch { retireOnly: true, reason }\`). Recovery evidence remains available: close it with \`groomClose ${ref} --recoveryEvidence "<the host's failure report>"\` (add \`--deliveryCommit <sha> --deliveryMethod manual\` for work landed by hand, reachable from the recorded integration branch), which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). ${preparingSessionClause(state)} From any other session both refuse with the countdown to the retirement deadline.`;
 }
 
 function minuteCount(minutes: number) {
@@ -1035,9 +1037,31 @@ function preparedCompatibilityWarning(state: PreparedCompatibilityState, current
   return preparedCompatibilityDecision(state, currentInstall)?.warning || null;
 }
 
+function preparerRetirementReason(ticket: StoredRecord, state: StoredRecord, opts: { reason?: unknown; sessionId?: unknown }): string {
+  if (!unclaimedEvidenceAttempt(ticket, state)) return '';
+  if (!preparingSessionAttests(state, opts.sessionId)) return '';
+  const reason = String(opts.reason || '').trim();
+  if (!/^(?:[\s\S]{20,})?$/.test(reason)) throw new Error('Retiring a prepared dispatch requires a reason of at least 20 characters.');
+  return reason;
+}
+
+function unclaimedRetirementShape(state: StoredRecord, reason: string): string {
+  if (reason) return 'retired_by_preparer';
+  return unboundEvidenceAttempt(state) ? 'unclaimed_launch_superseded' : 'stranded_bound_launch_superseded';
+}
+
+function recordRetirementReason(state: StoredRecord, reason: string, evidence: string): void {
+  const attempt = state.attempts?.at(-1);
+  if (!attempt) return;
+  if (reason) {
+    state.retirementReason = reason;
+    attempt.reason = reason;
+  }
+  if (evidence) attempt.recoveryEvidence = evidence;
+}
+
 function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   const evidence = String(opts?.evidence || '').trim();
-  if (!evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'Superseding an unbound dispatch attempt requires observed failure evidence.' };
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
@@ -1045,6 +1069,8 @@ function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
     const state = dispatchState(ticket);
     const now = Date.now();
     if (terminalUnclaimedAttempt(ticket, state)) return { ok: true, ticket, alreadyTerminal: true };
+    const reason = preparerRetirementReason(ticket, state, opts);
+    if (!reason && !evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'The preparing session may retire an unclaimed dispatch with a reason of at least 20 characters. Other sessions require observed failure recoveryEvidence and the existing retirement deadline.' };
     if (!evidenceRetirableAttempt(ticket, state, now, opts?.sessionId)) {
       return {
         ok: false,
@@ -1053,15 +1079,11 @@ function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. Evidence retires an unclaimed attempt at once from the session that prepared it, and from any other session once it has no readable runtime signal or its latest runtime signal is past its retirement deadline. A claimed attempt waits for its own terminal record.`,
       };
     }
-    // What the runtime reached, not what the gate allowed: an attempt that bound or reserved a checkout
-    // is stranded, and one that never left the token is a launch that never arrived.
-    const strandedBound = !unboundEvidenceAttempt(state);
     setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', {
       slug,
-      failureShape: strandedBound ? 'stranded_bound_launch_superseded' : 'unclaimed_launch_superseded',
+      failureShape: unclaimedRetirementShape(state, reason),
     });
-    const attempt = state.attempts?.at(-1);
-    if (attempt) attempt.recoveryEvidence = evidence;
+    recordRetirementReason(state, reason, evidence);
     ticket.dispatchNonce = null;
     ticket.dispatchExecutor = null;
     const previousStatus = ticket.status;
@@ -1150,7 +1172,7 @@ function soleIdleCandidate(candidates: any[]) {
 }
 
 function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any, commit?: any, release?: any) {
-  const route = state && state.route && typeof state.route === 'object' ? state.route : {};
+  const route = state.route && typeof state.route === 'object' ? state.route : {};
   const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
   const terminalSource = source || 'store';
   attempts.push({
@@ -1173,6 +1195,7 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
     failureShape,
     source: terminalSource,
     terminalAt: at,
+    ...(outcome === 'submitted' ? { submittedAt: at } : {}),
     terminalSource,
     ...(commit ? { commit } : {}),
     ...(release?.kind ? { release } : {}),
@@ -1301,17 +1324,30 @@ function reviewCandidateTreeRefusal(slug?: any, ticket?: any) {
   };
 }
 
-function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
-  const state = dispatchState(ticket);
-  if (!state) return;
-  const at = new Date().toISOString();
-  captureTerminalWorktreeRevision(opts?.slug, ticket, state, at);
-  const release = opts?.releaseKind ? {
+function recordAttemptIntegration(state: StoredRecord, outcome: string, at: string): boolean {
+  if (state.outcome !== 'submitted' || outcome !== 'done') return false;
+  if (!stampExecutorIntegration(state, state.integratedAt || at)) return false;
+  state.outcome = outcome;
+  return true;
+}
+
+function dispatchTerminalRelease(opts: { releaseKind?: string; releaseReason?: string; releaseEvidence?: unknown }) {
+  return opts.releaseKind ? {
     kind: opts.releaseKind,
     reason: opts.releaseReason || null,
     evidence: opts.releaseEvidence || null,
   } : null;
-  const failureShape = opts?.failureShape || release?.kind || classifyDispatchFailure(opts?.error);
+}
+
+function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
+  const state = dispatchState(ticket);
+  if (!state) return;
+  opts ??= {};
+  const at = new Date().toISOString();
+  if (recordAttemptIntegration(state, outcome, at)) return;
+  captureTerminalWorktreeRevision(opts.slug, ticket, state, at);
+  const release = dispatchTerminalRelease(opts);
+  const failureShape = opts.failureShape || release?.kind || classifyDispatchFailure(opts.error);
   state.outcome = outcome;
   state.failureShape = failureShape;
   state.terminalAt = at;
@@ -2036,6 +2072,7 @@ function dispatchSource(opts: DispatchOptions, fallback: string): string {
 function retireUnboundDispatchOnly(slug: string, idOrRef: string, opts: DispatchOptions) {
   const superseded = supersedeUnboundAttempt(slug, idOrRef, {
     evidence: opts.recoveryEvidence,
+    reason: opts.reason,
     source: dispatchSource(opts, 'dispatch'),
     sessionId: opts.sessionId,
   });
@@ -2110,9 +2147,10 @@ function preparedInstallCompatibility(found: StoredRecord, projectPath: string) 
 }
 
 function supersedeEvidencedAttempt(slug: string, found: StoredRecord, opts: DispatchOptions): void {
-  if (!opts.recoveryEvidence) return;
+  if (!opts.recoveryEvidence && !opts.reason) return;
   const superseded = supersedeUnboundAttempt(slug, found.id, {
     evidence: opts.recoveryEvidence,
+    reason: opts.reason,
     source: dispatchSource(opts, 'dispatch'),
     sessionId: opts.sessionId,
   });

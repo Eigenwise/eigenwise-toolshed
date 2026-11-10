@@ -42,14 +42,38 @@ __export(completion_exports, {
   completionView: () => completionView,
   createCompletion: () => createCompletion,
   createSummaryCloseout: () => createSummaryCloseout,
+  executorAttemptHistory: () => executorAttemptHistory,
   readDemonstrations: () => readDemonstrations,
   sanitizeCompletionText: () => sanitizeCompletionText,
+  stampExecutorIntegration: () => stampExecutorIntegration,
   storyCompletionView: () => storyCompletionView
 });
 module.exports = __toCommonJS(completion_exports);
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 var import_integration_tests = require("../integration-tests.js");
+function stampExecutorIntegration(dispatch, at) {
+  if (!dispatch || !at) return false;
+  const attempt = dispatch.attempts?.find((entry) => entry.preparedAt === dispatch.preparedAt && entry.tokenPrefix === dispatch.tokenPrefix);
+  if (!attempt) return false;
+  Object.assign(attempt, { submittedAt: attempt.terminalAt, integratedAt: at });
+  dispatch.integratedAt = at;
+  dispatch.submittedAt = dispatch.terminalAt;
+  return true;
+}
+function executorAttemptHistory(attempts) {
+  const history = /* @__PURE__ */ new Map();
+  for (const attempt of attempts) {
+    const identity = attempt.preparedAt ? JSON.stringify([attempt.preparedAt, attempt.tokenPrefix]) : attempt;
+    const existing = history.get(identity);
+    history.set(identity, existing ? mergeExecutorAttempt(existing, attempt) : { ...attempt });
+  }
+  return [...history.values()];
+}
+function mergeExecutorAttempt(existing, later) {
+  if (existing.outcome !== "submitted" || later.outcome !== "done") return existing;
+  return { ...existing, submittedAt: existing.terminalAt, integratedAt: later.terminalAt };
+}
 const NOT_REQUIRED_CONTROL_KINDS = /* @__PURE__ */ new Set(["behavior-preserving-refactor", "inherited-read-only", "docs", "type-annotation-only", "fixture-only"]);
 const DELIVERED_OUTCOMES = /* @__PURE__ */ new Set(["delivered", "verified"]);
 const VERIFY_STATUS = {
@@ -878,7 +902,9 @@ function saveSummaryAfterCloseout(dependencies, slug, ref, by, summary, result) 
   completionView,
   createCompletion,
   createSummaryCloseout,
+  executorAttemptHistory,
   readDemonstrations,
   sanitizeCompletionText,
+  stampExecutorIntegration,
   storyCompletionView
 });

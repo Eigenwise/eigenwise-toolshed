@@ -27,6 +27,7 @@ const store = require('./store');
 const { compactSchema, conciseDescription, resolveProject, runtimeSessionId, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
 const { sidequestMutationFreshness } = require('./plugin-freshness');
 const { tools: readTools } = require('./mcp-read');
+const { tools: intakeTools } = require('./mcp-intake');
 const { tools: ticketTools } = require('./mcp-tickets');
 const { tools: lifecycleTools } = require('./mcp-lifecycle');
 const { tools: collaborationTools } = require('./mcp-collaboration');
@@ -106,6 +107,7 @@ function serverVersion() {
 
 const TOOLS: ToolDefinition[] = [
   ...readTools,
+  ...intakeTools,
   ...ticketTools,
   ...lifecycleTools,
   ...collaborationTools,
@@ -126,14 +128,14 @@ const MUTATING_TOOLS = new Set([
   'done', 'groomClose', 'release', 'commit', 'submit', 'supersede_submission', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch',
   'category_add', 'category_edit', 'category_detach', 'category_relink', 'category_rm',
   'profile_create', 'profile_edit', 'profile_retire', 'profile_use', 'profile_repoint', 'profile_promote',
-  'archive_board', 'unarchive_board',
+  'archive_board', 'unarchive_board', 'story_intake',
 ]);
 const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'category_rm', 'global_fallback', 'profile_create', 'profile_edit', 'profile_retire', 'profile_repoint', 'profile_promote']);
 const mutationTails = new Map<string, Promise<void>>();
 
 const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
   verdict: ['correct', 'finalize'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
-  board_config: ['githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode', 'integrationQuality',
+  board_config: ['intake', 'githubSync', 'jiraBaseUrl', 'name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode', 'integrationQuality',
     'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
     'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
 };
@@ -382,7 +384,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears.' },
-  board_config: { integrationQuality: 'enforce (default): measured failures refuse. report: record only. off: skip quality, verify normally.', verifyEnvironment: 'shared: verify at integration only. Frozen per dispatch; default isolated.' },
+  board_config: { integrationQuality: 'enforce(default): measured failures refuse; report: record; off: verify only.', verifyEnvironment: 'shared: integration-only verify; default isolated. Dispatch-frozen.' },
   dispatch: {
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
     recoveryEvidence: 'Unverified; preparer retires now, else latest signal grace; bound name only.',

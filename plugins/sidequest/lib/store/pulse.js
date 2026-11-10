@@ -3,6 +3,7 @@ const { githubRepository, referenceKeys } = require("../external-refs");
 const { execFileSync } = require("../git-process.js");
 const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js");
 const { stopOutlivesClaim } = require("./claims.js");
+const { executorAttemptHistory } = require("./completion.js");
 function createGitHubCiRunsProvider(projectPath, execute = execFileSync) {
   const command = (program, arguments_) => execute(program, arguments_, {
     cwd: projectPath,
@@ -281,7 +282,7 @@ function createPulse(dependencies) {
         executor: dispatch.executor || null,
         route: normalizeRoute(dispatch.route),
         recovery: dispatch.recovery || null,
-        attempts: Array.isArray(dispatch.attempts) ? dispatch.attempts : [],
+        attempts: executorAttemptHistory(Array.isArray(dispatch.attempts) ? dispatch.attempts : []),
         agentId: dispatch.agentId || null,
         agentName: dispatch.agentName || null,
         preparedAt: dispatch.preparedAt || null,

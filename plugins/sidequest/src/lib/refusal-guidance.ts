@@ -92,6 +92,7 @@ function notOwnerRecovery(ref: string, context: ClaimContext): string {
   if (context.submission?.by && !context.claim?.by) {
     return `${ref} has a parked submission from "${context.submission.by}". Its producer is terminal: do not ask it to release or resume. The control plane must publish it, request changes on an unbound candidate with MCP rework from the main thread (omit by), or follow the bound review's oracle and repair flow; an executor reports the need to the orchestrator.`;
   }
+  if (!context.claim?.by && !context.by) return `Nobody owns a claim on ${ref}. The preparing session can retire its never-claimed dispatch with \`sidequest release ${ref} --retire-prepared --reason "<why, at least 20 characters>"\` or MCP \`dispatch { ref: "${ref}", retireOnly: true, reason: "<why, at least 20 characters>" }\`. Foreign sessions still require recoveryEvidence and the retirement deadline.`;
   return `This is a live claim. Ask the claim holder to release it with \`sidequest release ${ref}\`.`;
 }
 
@@ -207,7 +208,7 @@ export function routingDisabledMessage(ref: string): string {
 }
 
 export function manualCandidateDeliveryGuidance(): string {
-  return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, run every pinned verifier plus the full composed gate, then groomClose each with its immutable deliveryCommit and deliveryMethod:"manual"; omit integration:true.';
+  return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, then record them together with integrate using comma-separated refs, the same immutable deliveryCommit and deliveryMethod:"manual", or groomClose each at that unchanged clean head; omit integration:true. Recorded deliveries share one import-walk and full composed gate per exact commit and clean tree. Every pinned verifier still runs unless its exact command and cwd already passed in that shared gate, and any commit or dirty change invalidates sharing.';
 }
 
 export function candidateReviewRequiredGuidance(): string {

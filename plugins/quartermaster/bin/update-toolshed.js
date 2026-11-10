@@ -5,6 +5,8 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeDir } = require('../lib/paths.js');
+const { claudeCommandsOnPath } = require('../hooks/freshness-helpers.js');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
 const LEGACY_GATEWAY_PLUGIN = `codex-gateway@${GATEWAY_MARKETPLACE}`;
@@ -48,11 +50,12 @@ their recorded project directory so Claude Code updates the right scope.
   --confirm-sessions-closed
                 Required with --migrate-model-gateway because migration moves shared gateway state
   --claude      Claude Code command to run. By default, the updater tries claude on PATH,
-                then known desktop-app install locations. Use an absolute path to override discovery.`;
+                including Windows claude.exe, claude.cmd and claude.ps1, then desktop-app locations.
+                Use an absolute path to override discovery.`;
 }
 
 function registryPath(home = os.homedir()) {
-  return path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+  return path.join(claudeDir(process.env, home), 'plugins', 'installed_plugins.json');
 }
 
 function readRegistry(file) {
@@ -162,7 +165,7 @@ function healStatuslineFile(filePath, dryRun) {
 function healStaleStatuslines(instances, options = {}) {
   const home = options.home || os.homedir();
   const projects = [...new Set(instances.map((instance) => instance.projectPath).filter(Boolean))];
-  const files = [path.join(home, '.claude', 'settings.json')];
+  const files = [path.join(claudeDir(process.env, home), 'settings.json')];
   for (const projectPath of projects) files.push(path.join(projectPath, '.claude', 'settings.json'), path.join(projectPath, '.claude', 'settings.local.json'));
   return files.map((file) => healStatuslineFile(file, options.dryRun)).filter((result) => result.healed);
 }
@@ -216,8 +219,8 @@ function gatewayMigrationInstruction() {
 }
 
 function moveLegacyGatewayState(home, options) {
-  const legacyState = path.join(home, '.claude', 'codex-gateway');
-  const modelState = path.join(home, '.claude', 'model-gateway');
+  const legacyState = path.join(claudeDir(process.env, home), 'codex-gateway');
+  const modelState = path.join(claudeDir(process.env, home), 'model-gateway');
   if (!fs.existsSync(legacyState)) return { moved: false, legacyState, modelState };
   if (fs.existsSync(modelState)) {
     throw new Error(`Refusing to merge legacy gateway state into existing ${modelState}. Move it aside after checking it, then retry the migration.`);
@@ -315,7 +318,7 @@ function marketplaceCommand(marketplace, claude) {
 function gatewayUpdateCommand(home = os.homedir()) {
   return {
     command: process.execPath,
-    args: [path.join(home, '.claude', 'model-gateway', 'update.js')],
+    args: [path.join(claudeDir(process.env, home), 'model-gateway', 'update.js')],
     label: 'model-gateway update',
   };
 }
@@ -331,22 +334,29 @@ function installGatewayUpdateLauncher(instances, home = os.homedir()) {
   return writeUpdateLauncher({ home });
 }
 
-function gatewayCommand(instances, action) {
+function gatewayCommand(instances, action, currentProject = process.cwd(), report = () => {}) {
   const gateways = activeProjectInstances(instances).filter((instance) => instance.id === MODEL_GATEWAY_PLUGIN && instance.installPath);
   if (gateways.length === 0) return null;
 
   const newest = gateways.sort((left, right) => String(right.lastUpdated ?? '').localeCompare(String(left.lastUpdated ?? '')))[0];
+  const currentProjectGateway = gateways.find((instance) => instance.projectPath === currentProject);
+  const selected = currentProjectGateway ?? newest;
+  if (!currentProjectGateway) {
+    report(`Current project ${currentProject} is not registered with model-gateway; checking registered project ${selected.projectPath ?? 'user scope'} instead.`);
+  } else {
+    report(`Running model-gateway ${action} for current project ${currentProject}.`);
+  }
   return {
     command: process.execPath,
-    args: [path.join(newest.installPath, 'bin', 'model-gateway.js'), action],
-    cwd: newest.scope === 'user' ? undefined : newest.projectPath,
+    args: [path.join(selected.installPath, 'bin', 'model-gateway.js'), action],
+    cwd: selected.scope === 'user' ? undefined : selected.projectPath,
     label: `model-gateway ${action}`,
   };
 }
 
 function gatewayWiringMode(home = os.homedir()) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'wiring.json'), 'utf8')).mode === 'global'
+    return JSON.parse(fs.readFileSync(path.join(claudeDir(process.env, home), 'model-gateway', 'wiring.json'), 'utf8')).mode === 'global'
       ? 'global'
       : 'local';
   } catch { return 'local'; }
@@ -395,9 +405,38 @@ function commandText(command) {
   return [command.command, ...command.args].map((part) => JSON.stringify(part)).join(' ');
 }
 
+function quoteBatchArgument(value) {
+  if (/["%!\x00-\x1f]/.test(value)) throw new Error('Cannot safely pass quotes, %, !, or control characters to a Claude batch command. Use a native claude.exe path with --claude.');
+  return '"' + value + '"';
+}
+
+function windowsScriptCommand(command) {
+  if (/\.(cmd|bat)$/i.test(command.command)) {
+    return {
+      command: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'),
+      args: ['/d', '/v:off', '/s', '/c', '"' + [command.command, ...command.args].map(quoteBatchArgument).join(' ') + '"'],
+      windowsVerbatimArguments: true,
+    };
+  }
+  if (/\.ps1$/i.test(command.command)) {
+    return {
+      command: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      args: ['-NoProfile', '-NonInteractive', '-File', command.command, ...command.args],
+    };
+  }
+  return command;
+}
+
 function defaultRun(command) {
-  const result = childProcess.spawnSync(command.command, command.args, {
+  let launch;
+  try {
+    launch = process.platform === 'win32' ? windowsScriptCommand(command) : command;
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  const result = childProcess.spawnSync(launch.command, launch.args, {
     cwd: command.cwd,
+    windowsVerbatimArguments: launch.windowsVerbatimArguments,
     encoding: 'utf8',
     shell: false,
     windowsHide: true,
@@ -464,7 +503,7 @@ function preflightClaude(options, run, report, platform = process.platform, envi
   const explicit = hasExplicitClaudeCommand(options);
   const candidates = explicit
     ? [options.claude]
-    : ['claude', ...desktopClaudeCandidates(platform, environment)];
+    : [...claudeCommandsOnPath(platform, environment), ...desktopClaudeCandidates(platform, environment)];
   let failedCandidate;
 
   for (const candidate of candidates) {
@@ -485,7 +524,7 @@ function preflightClaude(options, run, report, platform = process.platform, envi
   } else {
     report(`Toolshed update stopped: no runnable Claude Code executable was found (${detail}).`);
   }
-  report('Retry with --claude <absolute claude.exe path> if Claude Code is installed elsewhere.');
+  report('Looked for claude.exe and claude.cmd (also claude.ps1) on Windows PATH. Retry with --claude <absolute path> if Claude Code is installed elsewhere.');
   return false;
 }
 
@@ -534,7 +573,7 @@ function runModelGatewayMigration({ registryFile = registryPath(), home = os.hom
     return { ok: false, failures };
   }
   if (options.dryRun) {
-    report(`Would move gateway-owned state from ${path.join(home, '.claude', 'codex-gateway')} to ${path.join(home, '.claude', 'model-gateway')}, then run model-gateway setup, ensure, doctor, and retire codex-gateway.`);
+    report(`Would move gateway-owned state from ${path.join(claudeDir(process.env, home), 'codex-gateway')} to ${path.join(claudeDir(process.env, home), 'model-gateway')}, then run model-gateway setup, ensure, doctor, and retire codex-gateway.`);
     return { ok: true, failures: [] };
   }
 
@@ -655,7 +694,11 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   }
 
   const gateways = modelGatewayInstances(instances);
-  const gateway = gateways.length > 0 ? (options.check ? gatewayCommand(instances, 'doctor') : gatewayUpdateCommand(home)) : null;
+  const gateway = gateways.length > 0
+    ? options.check || options.dryRun
+      ? gatewayCommand(instances, 'doctor', process.cwd(), report)
+      : gatewayUpdateCommand(home)
+    : null;
   let gatewaySetupOk = true;
   if (gateway && !options.check && !options.dryRun) {
     const launcher = installGatewayLauncher(instances, home);

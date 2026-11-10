@@ -2,6 +2,8 @@ const { emitExternalRefUpdates } = require('./external-ref-updates.js');
 const { currentBoardPath } = require('./move.js');
 'use strict';
 
+import { stampExecutorIntegration, type ExecutorDispatchRecord } from './completion';
+
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic, verifyCwdForRequirement } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
 const { readLockHolder } = require('./locks.js');
@@ -20,6 +22,7 @@ const { stillSpawnsInsideItsWrite } = require('../db');
 import type { VerificationRequirement as PinnedVerificationRequirement, VerificationResult } from '../kernel/verification.js';
 type VerificationRequirement = PinnedVerificationRequirement & Readonly<{ verifyCwd?: string }>;
 import type { CandidateInvalidation } from '../kernel/wave.js';
+import type { IntegrationExecution } from '../integration-tests.js';
 import { integrationCaptureEnvironment, phaseBudgetResult, beginIntegrationProgress, finishIntegrationProgress, integrationProgressPath, reportIntegrationProgress, runImportingIntegrationTests } from '../integration-tests.js';
 import { runIntegrationQuality, type IntegrationQuality, type QualityInput } from '../integration-quality.js';
 import type { CompositionTicket } from './composition-admission.js';
@@ -969,26 +972,51 @@ function noteQualityDebt(quality: IntegrationQuality, reason: string): void {
   }
 }
 
+function qualityDebtTitle(ticket: QualityTicket, quality: IntegrationQuality): string {
+  if (quality.policy?.debtTicketMode === 'per-delivery') return `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
+  const reasons = [...new Set(quality.unverified.map((row) => row.unverified))].sort();
+  const boundary = crypto.createHash('sha256').update(JSON.stringify(reasons)).digest('hex');
+  return 'Quality measurement debt for capture boundary ' + boundary;
+}
+
+interface MeasurementDebtTicket {
+  id: string;
+  title: string;
+  description?: string;
+  status?: string;
+  comments?: { body: string }[];
+}
+
+function appendQualityDebtDelivery(slug: string, existing: MeasurementDebtTicket, ticket: QualityTicket, quality: IntegrationQuality): void {
+  const delivery = `Affected delivery: ${ticket.ref} at ${ticket.submission.commit}`;
+  if (existing.description?.startsWith(delivery + '\n')) return;
+  if (existing.comments?.some((comment) => comment.body.startsWith(delivery + '\n'))) return;
+  addComment(slug, existing.id, { by: 'integration-quality', source: 'integration-quality', body: delivery + '\nReceipt: ' + quality.receipt + '\n' + JSON.stringify(quality.unverified) });
+}
+
+function fileQualityDebt(slug: string, ticket: QualityTicket, quality: IntegrationQuality, files: string[]): void {
+  const title = qualityDebtTitle(ticket, quality);
+  const existing = listTickets(slug).find((candidate: MeasurementDebtTicket) => candidate.title === title && candidate.status !== 'done');
+  if (existing) return appendQualityDebtDelivery(slug, existing, ticket, quality);
+  dependencies.createTicket(slug, {
+    title,
+    description: `Affected delivery: ${ticket.ref} at ${ticket.submission.commit}\nReceipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
+    category: 'coding.normal',
+    complexity: 2,
+    complexityWhy: 'Capture missing native quality evidence for an existing candidate',
+    files,
+    executorVerifyKind: 'manual',
+    executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
+    source: 'integration-quality',
+  });
+}
+
 function recordQualityDebt(slug: string, ticket: QualityTicket, quality: IntegrationQuality) {
-  if (!quality.unverified.length || quality.captureGap) return;
+  if (!quality.unverified.length || quality.policy?.debtTicketMode === 'none') return;
   const files = qualityDebtFiles(ticket, quality);
   if (!files.length) return noteQualityDebt(quality, 'no candidate source/test paths have unverified rows');
-  const title = `Quality measurement debt for ${ticket.ref} at ${ticket.submission.commit}`;
   try {
-    transaction(() => {
-      if (listTickets(slug).some((existing: { title: string }) => existing.title === title)) return;
-      dependencies.createTicket(slug, {
-        title,
-        description: `Re-measure the immutable candidate ${ticket.submission.commit}. Receipt: ${quality.receipt}\n${JSON.stringify(quality.unverified)}`,
-        category: 'coding.normal',
-        complexity: 2,
-        complexityWhy: 'Capture missing native quality evidence for an existing candidate',
-        files,
-        executorVerifyKind: 'manual',
-        executorVerify: 'Native quality-gate receipt resolves every recorded UNVERIFIED row',
-        source: 'integration-quality',
-      });
-    });
+    transaction(() => fileQualityDebt(slug, ticket, quality, files));
   } catch (error) {
     noteQualityDebt(quality, integrationGitError(error));
   }
@@ -1062,6 +1090,87 @@ function preflightDeliveryVerification(slug: string, ticket: QualityTicket, requ
   return deliveryBuildFailure(slug, ticket, opts) || unexecutedDeliveryVerification(ticket, requirement, opts);
 }
 
+type RecordedGate = {
+  identity: string;
+  paths: string[];
+  commands: Record<string, VerificationResult>;
+  imports?: ReturnType<typeof runImportingIntegrationTests>;
+};
+
+type RecordedGateContext = {
+  file: string;
+  gate: RecordedGate;
+  project: string;
+  deliveryCommit: string;
+};
+
+function recordedGateIdentity(project: string, deliveryCommit: string, threshold: number): string {
+  if (integrationGit(project, ['status', '--porcelain', '--untracked-files=all'])) return '';
+  return JSON.stringify([project, deliveryCommit, integrationGit(project, ['rev-parse', 'HEAD', 'HEAD^{tree}']), threshold]);
+}
+
+function readRecordedGate(file: string): RecordedGate | undefined {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; }
+}
+
+function recordedGatePaths(slug: string, ticket: QualityTicket): string[] {
+  const participants: QualityTicket[] = listTickets(slug).filter(pendingSubmission);
+  return Array.from(new Set([...candidateBuildPaths(participants), ...candidateBuildPaths([ticket])])).sort();
+}
+
+function prepareRecordedGate(slug: string, ticket: QualityTicket, project: string, deliveryCommit: string): RecordedGateContext | undefined {
+  const file = path.join(projectDir(slug), 'integrations', 'recorded-gate.json');
+  const identity = recordedGateIdentity(project, deliveryCommit, boardConfig(slug).integrationTestFileThreshold);
+  const previous = readRecordedGate(file);
+  fs.rmSync(file, { force: true });
+  if (!identity) return undefined;
+  const gate = previous?.identity === identity ? previous : { identity, paths: [], commands: {} };
+  const paths = recordedGatePaths(slug, ticket);
+  if (!paths.every((file) => gate.paths.includes(file))) gate.imports = undefined;
+  gate.paths = Array.from(new Set([...gate.paths, ...paths]));
+  return { file, gate, project, deliveryCommit };
+}
+
+function recordedDeliveryContext(slug: string, ticket: QualityTicket, project: string, options?: { deliveryCommit?: string }): RecordedGateContext | undefined {
+  if (!options?.deliveryCommit) return undefined;
+  return prepareRecordedGate(slug, ticket, project, options.deliveryCommit);
+}
+
+function importingDeliveryPaths(context: RecordedGateContext | undefined, participants: QualityTicket[]): string[] {
+  return context?.gate.paths || candidateBuildPaths(participants);
+}
+
+function recordedGateExecution(context: RecordedGateContext | undefined): IntegrationExecution {
+  return (requirement, options) => {
+    if (!context) return runProcessVerification(requirement, options);
+    const key = JSON.stringify([path.resolve(options?.cwd || process.cwd()), requirement.command]);
+    const previous = context.gate.commands[key];
+    if (previous) return { ...previous, kind: requirement.kind };
+    const result = runProcessVerification(requirement, options);
+    if (result.status === 'passed') context.gate.commands[key] = result;
+    return result;
+  };
+}
+
+function recordedGateImports(context: RecordedGateContext | undefined, pinned: VerificationResult, run: () => ReturnType<typeof runImportingIntegrationTests>): ReturnType<typeof runImportingIntegrationTests> {
+  if (!context) return run();
+  if (context.gate.imports) return { ...context.gate.imports, ...pinned };
+  const result = run();
+  if (result.status === 'passed') context.gate.imports = result;
+  return result;
+}
+
+function finishRecordedGate(context: RecordedGateContext | undefined, result: VerificationResult, threshold: number): VerificationResult & { recordedDeliveryGate?: { identity: string; deliveryCommit: string } } {
+  if (!context) return result;
+  if (recordedGateIdentity(context.project, context.deliveryCommit, threshold) !== context.gate.identity) {
+    return { ...result, status: 'could_not_run', evidence: 'The recorded-delivery checkout changed during verification; rerun on the settled tree.' };
+  }
+  if (result.status !== 'passed') return result;
+  ensureDir(path.dirname(context.file));
+  fs.writeFileSync(context.file, JSON.stringify(context.gate));
+  return { ...result, recordedDeliveryGate: { identity: context.gate.identity, deliveryCommit: context.deliveryCommit } };
+}
+
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const requirement = opts?.requirement || deliveryVerificationRequirement(ticket);
   const unexecuted = preflightDeliveryVerification(slug, ticket, requirement, opts);
@@ -1082,9 +1191,11 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   // that worktree never held.
   const project = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
   const verifyCwd = verifyCwdForRequirement(requirement, ticket.executorVerifyCwd);
+  const sharedGate = recordedDeliveryContext(slug, ticket, project, opts);
+  const execute = recordedGateExecution(sharedGate);
   const verify = (environment: NodeJS.ProcessEnv) => {
     reportIntegrationProgress('pinned verifier', requirement.command);
-    return runProcessVerification(requirement, {
+    return execute(requirement, {
       cwd: verifyCwd ? path.resolve(project, verifyCwd) : project,
       timeoutMilliseconds,
       logPath: opts?.verifyLogPath || integrationVerifyLogPath(slug, ticket),
@@ -1093,14 +1204,18 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
     });
   };
   const participants = opts?.qualityTickets || [ticket];
-  const changedPaths = participants.flatMap((participant: QualityTicket) => participant.submission.changedPaths || []);
-  const runWithImportingTests = (environment: NodeJS.ProcessEnv) => runImportingIntegrationTests(project, changedPaths, verify(environment), timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold);
+  const changedPaths = importingDeliveryPaths(sharedGate, participants);
+  const runWithImportingTests = (environment: NodeJS.ProcessEnv) => {
+    const pinned = verify(environment);
+    return recordedGateImports(sharedGate, pinned, () => runImportingIntegrationTests(project, changedPaths, pinned, timeoutMilliseconds, environment, boardConfig(slug).integrationTestFileThreshold, execute, Boolean(sharedGate)));
+  };
   const runWithQuality = (environment: NodeJS.ProcessEnv) => {
     const captureEnvironment = integrationCaptureEnvironment(projectDir(slug), environment);
     const result = verifyCandidateQuality(slug, participants, project, timeoutMilliseconds, runWithImportingTests, captureEnvironment);
     return { ...phaseBudgetResult(result), liveVerifyCaptureCount: Number(captureEnvironment.SIDEQUEST_LIVE_VERIFY_CAPTURE_COUNT) };
   };
-  return verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
+  const result = verifyWithFullSuiteCapture(requirement.command, project, runWithQuality);
+  return finishRecordedGate(sharedGate, result, boardConfig(slug).integrationTestFileThreshold);
 }
 
 function verificationFailureComment(verify: any) {
@@ -1383,7 +1498,7 @@ type DeliveryTicket = {
   id: string;
   ref: string;
   externalRefs?: import('../external-refs').ExternalReference[];
-  dispatch?: { integrationTarget?: { branch: string } };
+  dispatch?: ExecutorDispatchRecord & { integrationTarget?: { branch: string } };
   submission: {
     integration: {
       deliveredAt?: string;
@@ -1408,7 +1523,9 @@ function assertRecordedIntegrationBranch(slug: string, ticket: DeliveryTicket, r
 
 function persistSubmissionIntegration(slug: string, ticket: DeliveryTicket, resolvedRecordingBranch?: string) {
   assertRecordedIntegrationBranch(slug, ticket, resolvedRecordingBranch);
-  const newlyDelivered = ticket.submission.integration.deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+  const deliveredAt = ticket.submission.integration.deliveredAt;
+  const newlyDelivered = deliveredAt && !getTicket(slug, ticket.id)?.submission?.integration?.deliveredAt;
+  stampExecutorIntegration(ticket.dispatch, deliveredAt);
   putTicket(slug, ticket);
   if (newlyDelivered) afterCommit(() => emitDeliveryExternalRefs(slug, ticket));
   queueEventNotification(slug, ticket, 'status', 'integration');
@@ -2497,7 +2614,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} delivery refused: verificationSupersession requires a runnable command or suite verifier.`,
       };
     }
-    const verify = verifyDeliveredSubmission(slug, ticket, { ...(replacementRequirement ? { requirement: replacementRequirement } : {}), cwd: repo });
+    const verify = verifyDeliveredSubmission(slug, ticket, { ...(replacementRequirement ? { requirement: replacementRequirement } : {}), cwd: repo, deliveryCommit });
     if (!verificationAccepted(verify)) {
       const failureReason = `${verificationOutcome(verify)}_recorded_delivery`;
       const failureMessage = `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;

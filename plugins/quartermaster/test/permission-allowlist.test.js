@@ -10,14 +10,16 @@ const { test } = require('node:test');
 const {
   appendRulesToSettings,
   applyPermissionAllowlist,
+  collectPermissionDecisions,
   enablePermissionAutomation,
   fingerprintFor,
+  isDestructive,
   normalizedCommandPrefix,
   permissionAutomationEnabled,
   ruleFor,
   ruleTooBroadReason,
 } = require('../lib/permission-allowlist.js');
-const { readDecisions } = require('../lib/state.js');
+const { appendDecision, readDecisions } = require('../lib/state.js');
 const { slugForProject } = require('../lib/paths.js');
 
 function temporaryProject() {
@@ -48,7 +50,7 @@ function writeWindow(projectDir, transcripts) {
   const claudeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-claude-'));
   const root = path.join(claudeDirectory, 'projects', slugForProject(projectDir));
   fs.mkdirSync(root, { recursive: true });
-  transcripts.forEach((transcript, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), transcript, 'utf8'));
+  transcripts.forEach((transcript, index) => fs.writeFileSync(path.join(root, `session-${index}.jsonl`), `${JSON.stringify({ cwd: projectDir })}\n${transcript}`, 'utf8'));
   return { CLAUDE_CONFIG_DIR: claudeDirectory, QUARTERMASTER_STATE_DIR: path.join(claudeDirectory, 'quartermaster-state') };
 }
 
@@ -232,6 +234,172 @@ test('a glob argument is vetoed, not written as a dead literal-* rule', async ()
   assert.doesNotMatch(after, /Bash\(ls/);
 });
 
+function decidedTranscript(command, { toolName = 'Bash', mode = null, decision = null } = {}) {
+  const identifier = `tool-${Math.random()}`;
+  const records = mode ? [{ type: 'permission-mode', permissionMode: mode }] : [];
+  records.push(
+    { type: 'assistant', timestamp: '2026-08-12T12:00:00.000Z', message: { content: [{ type: 'tool_use', id: identifier, name: toolName, input: { command } }] } },
+    {
+      type: 'user',
+      timestamp: '2026-08-12T12:01:00.000Z',
+      message: { content: [{ type: 'tool_result', tool_use_id: identifier, content: 'done', is_error: false }] },
+      ...(decision ? { permissionDecision: decision } : {}),
+    },
+  );
+  return records.map((record) => `${JSON.stringify(record)}\n`).join('');
+}
+
+const USER_APPROVED = { decision: 'accept', source: 'user_temporary', grantScope: 'once' };
+const CLASSIFIER_APPROVED = { decision: 'accept', source: 'config', reasonType: 'classifier' };
+const MODE_APPROVED = { decision: 'accept', source: 'config', reasonType: 'mode' };
+
+function settingsWithRules(projectDir) {
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, '{\n  "quartermaster": { "autoApprovePermissions": true },\n  "permissions": {\n    "allow": ["Read"],\n    "deny": ["Bash(rm:*)"]\n  }\n}\n', 'utf8');
+  return settingsFile;
+}
+
+test('a fingerprint recorded as rejected is never proposed again and the settings stay byte-identical (GH-469)', async () => {
+  const projectDir = temporaryProject();
+  const settingsFile = settingsWithRules(projectDir);
+  const before = fs.readFileSync(settingsFile);
+  const environment = writeWindow(projectDir, Array.from({ length: 5 }, () => decidedTranscript('npm run lint', { decision: USER_APPROVED })));
+  appendDecision({ projectDir, kind: 'permission', title: 'allow Bash(npm run:*)', fingerprint: 'permission:Bash:npm run', status: 'rejected' }, environment);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.additions.length, 0);
+  assert.equal(result.eligible.length, 0);
+  assert.deepEqual(result.skipped.map((entry) => [entry.fingerprint, entry.skipReason]), [['permission:Bash:npm run', 'rejected in the decision ledger']]);
+  assert.ok(fs.readFileSync(settingsFile).equals(before), 'a no-op run leaves the existing allow and deny rules byte-identical');
+});
+
+test('a tool from a plugin that is no longer installed is skipped, an installed plugin tool is still learned (GH-469)', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, [
+    ...Array.from({ length: 3 }, () => decidedTranscript(undefined, { toolName: 'mcp__plugin_removed_board__claim', decision: USER_APPROVED })),
+    ...Array.from({ length: 3 }, () => decidedTranscript(undefined, { toolName: 'mcp__plugin_kept-tools_board__claim', decision: USER_APPROVED })),
+  ]);
+  const registry = path.join(environment.CLAUDE_CONFIG_DIR, 'plugins', 'installed_plugins.json');
+  fs.mkdirSync(path.dirname(registry), { recursive: true });
+  fs.writeFileSync(registry, JSON.stringify({ plugins: { 'kept-tools@market': [{ scope: 'user' }] } }), 'utf8');
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.deepEqual(result.additions.map((entry) => entry.fingerprint), ['permission:mcp__plugin_kept-tools_board__claim']);
+  assert.deepEqual(result.skipped.map((entry) => [entry.fingerprint, entry.skipReason]), [['permission:mcp__plugin_removed_board__claim', 'its plugin is no longer installed']]);
+});
+
+test('approvals the auto-mode classifier or a bypassing mode granted never count as user decisions (GH-481)', async () => {
+  const projectDir = temporaryProject();
+  const settingsFile = settingsWithRules(projectDir);
+  const before = fs.readFileSync(settingsFile);
+  const environment = writeWindow(projectDir, [
+    ...Array.from({ length: 5 }, () => decidedTranscript('npm run lint', { mode: 'auto', decision: CLASSIFIER_APPROVED })),
+    ...Array.from({ length: 5 }, () => decidedTranscript('cargo build', { mode: 'bypassPermissions', decision: MODE_APPROVED })),
+    // A host that predates permissionDecision leaves only the session mode.
+    ...Array.from({ length: 5 }, () => decidedTranscript('make format', { mode: 'bypassPermissions' })),
+    ...Array.from({ length: 5 }, () => decidedTranscript('go vet', { mode: 'auto' })),
+  ]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+  const collected = await collectPermissionDecisions({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.additions.length, 0);
+  assert.equal(result.eligible.length, 0);
+  for (const entry of collected.decisions) {
+    assert.equal(entry.approvals, 0, `${entry.fingerprint} counted an automatic approval as a user decision`);
+    assert.equal(entry.automaticApprovals, 5);
+  }
+  assert.ok(fs.readFileSync(settingsFile).equals(before));
+});
+
+test('a user approval counts even inside an auto-mode session, and so does a legacy approval with no recorded source', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, [
+    ...Array.from({ length: 3 }, () => decidedTranscript('npm run lint', { mode: 'auto', decision: USER_APPROVED })),
+    ...Array.from({ length: 3 }, () => decidedTranscript('npm run build', { mode: 'default' })),
+  ]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.deepEqual(result.additions.map((entry) => entry.fingerprint).sort(), ['permission:Bash:npm run']);
+  assert.equal(result.additions[0].approvals, 6);
+});
+
+test('a session-scoped argument repeated three times in one session earns no rule (GH-457)', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const oneSession = [
+    "cp 'C:/Users/me/.claude/worktrees/agent-a8f3d5aec089f3c1c/out.json' dist/",
+    'cd agent-a8f3d5aec089f3c1c',
+    'cat 4f1c2b9e-7d3a-4e8f-9a6b-1c2d3e4f5a6b.log',
+  ].flatMap((command) => Array.from({ length: 3 }, () => decidedTranscript(command, { decision: USER_APPROVED }))).join('');
+  const environment = writeWindow(projectDir, [oneSession]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+  const after = fs.readFileSync(path.join(projectDir, '.claude', 'settings.local.json'), 'utf8');
+
+  assert.equal(result.additions.length, 0);
+  assert.equal(result.blocked.length, 3);
+  for (const entry of result.blocked) {
+    assert.equal(entry.vetoReason, 'argument is a file, path, or generated name, not a subcommand', entry.fingerprint);
+  }
+  assert.doesNotMatch(after, /"allow"/);
+});
+
+test('a destructive word inside a quoted search argument is data, not a command (GH-397)', async () => {
+  const quotedSearches = [
+    'grep -R -n -F "grades the drop magnitude" src/',
+    "grep -i 'format string' lib/",
+    'rg "kill switch"',
+    'git log --grep "truncate"',
+    'git commit -m "rm the old fixtures"',
+  ];
+  for (const command of quotedSearches) {
+    assert.equal(isDestructive({ command }), false, command);
+  }
+  const realDestructive = [
+    'drop',
+    'rm -rf x',
+    'git push --force',
+    'git log --oneline rm -f /tmp/log',
+    'echo \\"x rm -rf y\\"',
+    'grep -F "unterminated rm -rf x',
+    'psql app -c "drop table users"',
+  ];
+  for (const command of realDestructive) {
+    assert.equal(isDestructive({ command }), true, command);
+  }
+
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, Array.from({ length: 3 }, () => decidedTranscript('git log --grep "truncate the drop magnitude"', { decision: USER_APPROVED })));
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.deepEqual(result.additions.map((entry) => ruleFor(entry.fingerprint)), ['Bash(git log:*)']);
+});
+
+test('a quoted separator is data, an escaped quote cannot hide a real one, and unbalanced quotes earn nothing', () => {
+  assert.equal(fingerprintFor('Bash', { command: 'git commit -m "first; second | third"' }), 'permission:Bash:git commit');
+  assert.equal(fingerprintFor('Bash', { command: 'echo hi \\"; rm -rf ~; \\"' }), null);
+  assert.equal(fingerprintFor('Bash', { command: 'git commit -m "unterminated' }), null);
+  assert.equal(normalizedCommandPrefix('FOO="a b" npm test -- --unit'), 'npm test');
+  assert.equal(normalizedCommandPrefix('A=1 B=2'), null);
+});
+
+test('a quoted executable path keeps its quotes in the fingerprint and is refused, never rendered as Blender" (GH-521)', () => {
+  const fingerprint = fingerprintFor('Bash', { command: '"/Applications/Blender.app/Contents/MacOS/Blender" --background' });
+
+  assert.equal(fingerprint, 'permission:Bash:"/Applications/Blender.app/Contents/MacOS/Blender"');
+  assert.equal(ruleTooBroadReason(fingerprint), 'path-invoked or quoted executable');
+  assert.equal(ruleTooBroadReason(fingerprintFor('Bash', { command: '"/Applications/My App/chain.sh" build' })), 'path-invoked or quoted executable');
+});
+
 test('enabling automation writes only the project-local opt-in marker', () => {
   const projectDir = temporaryProject();
 
@@ -290,15 +458,36 @@ const BLOCKED_FINGERPRINTS = [
   ['permission:Bash:watch node', 'arbitrary execution'],
   ['permission:Bash:source ./script.sh', 'arbitrary execution'],
   ['permission:Bash:. ./script.sh', 'arbitrary execution'],
+  // Class 6 (GH-521): a rule matches the command as typed, so a path or a
+  // quoted executable earns a rule that never matches again.
+  ['permission:Bash:"/Applications/Blender.app/Contents/MacOS/Blender"', 'path-invoked or quoted executable'],
+  ['permission:Bash:"/Applications/My App/run" build', 'path-invoked or quoted executable'],
+  ['permission:Bash:./gradlew build', 'path-invoked or quoted executable'],
+  ['permission:Bash:C:\\tools\\fd search', 'path-invoked or quoted executable'],
+  // Class 7: a bare executable grants every flag (`curl -T`, `sed -i`,
+  // `awk 'BEGIN{system(...)}'`), so no executable is learned without a subcommand.
+  ['permission:Bash:ls', 'bare executable without a subcommand'],
+  ['permission:Bash:curl', 'bare executable without a subcommand'],
+  ['permission:Bash:sed', 'bare executable without a subcommand'],
+  ['permission:Bash:awk', 'bare executable without a subcommand'],
+  ['permission:Bash:grep', 'bare executable without a subcommand'],
+  // Class 8 (GH-457): a file, path, quoted string, or generated name in the
+  // subcommand slot pins the rule to one file or one session.
+  ['permission:Bash:cat README.md', 'argument is a file, path, or generated name, not a subcommand'],
+  ['permission:Bash:cp "src/app/main.js"', 'argument is a file, path, or generated name, not a subcommand'],
+  ['permission:Bash:cp \'/tmp/agent-worktree/out.json\'', 'argument is a file, path, or generated name, not a subcommand'],
+  ['permission:Bash:cd agent-a8f3d5aec089f3c1c', 'argument is a file, path, or generated name, not a subcommand'],
+  ['permission:Bash:cd ..', 'argument is a file, path, or generated name, not a subcommand'],
 ];
 
 const ALLOWED_FINGERPRINTS = [
   'permission:Bash:npm test',
   'permission:Bash:npm run',
   'permission:Bash:git status',
-  'permission:Bash:cat README.md',
+  'permission:Bash:git log',
   'permission:Bash:cd src',
-  'permission:Bash:ls',
+  'permission:Bash:make build-all',
+  'permission:Read',
 ];
 
 test('the veto blocks every class of loop keyword, shell fragment, variable target, and pinned path', () => {

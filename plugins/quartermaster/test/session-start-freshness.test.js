@@ -302,7 +302,7 @@ function seedSidequestBoards(home, boards) {
   database.close();
 }
 
-function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, input = {}, boards = [] }) {
+function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, input = {}, boards = [], autoUpdate = true }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-freshness-'));
   const cache = path.join(home, 'marketplace');
   const pluginRoot = path.join(home, 'quartermaster');
@@ -314,7 +314,7 @@ function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, inpu
     fs.writeFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), registry);
     fs.writeFileSync(path.join(home, '.claude', 'plugins', 'known_marketplaces.json'), JSON.stringify({
       'eigenwise-toolshed': {
-        autoUpdate: true,
+        autoUpdate,
         lastUpdated: new Date().toISOString(),
         installLocation: cache,
       },
@@ -466,7 +466,9 @@ test('writes a project-scoped health warning to SessionStart context', () => {
     input: { cwd: 'C:/work/current/subdirectory' },
   });
 
-  assert.equal(output.hookSpecificOutput.additionalContext, 'Toolshed project health: sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0.');
+  // The process inventory probe only runs on Windows, so its age is absent on other platforms.
+  const processInventoryAge = process.platform === 'win32' ? '; process inventory unknown age' : '';
+  assert.equal(output.hookSpecificOutput.additionalContext, `Toolshed project health: sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0.\nCached probe ages: Claude Code unknown age; marketplace comparison unknown age${processInventoryAge}.`);
   assert.equal(output.systemMessage, 'Toolshed update available (cached): sidequest 1.0.0 → 1.1.0 — /update-toolshed, then /reload-plugins.');
 });
 
@@ -508,6 +510,7 @@ test('hooks.json registers the freshness hooks and nothing observability owns', 
   const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
   const commandsFor = (event) => (hooks[event] || []).flatMap((group) => group.hooks.map((h) => h.command)).join(' ');
   assert.ok(commandsFor('SessionStart').includes('session-start-freshness.js'));
+  assert.ok(commandsFor('SessionStart').includes('session-start-probes.js'));
   assert.ok(commandsFor('SessionStart').includes('billing-path-check.js'));
   assert.ok(commandsFor('SessionStart').includes('marketplace-freshness-cache.js'));
   assert.ok(commandsFor('UserPromptSubmit').includes('user-prompt-freshness.js'));
@@ -753,7 +756,8 @@ test('SQ-2237: project settings without a codebase-mapper install report a dead 
 
   assert.match(output().systemMessage, /codebase-mapper enabled in .claude\/settings.json but no matching project install/);
   assert.match(output().hookSpecificOutput.additionalContext, /hooks are not running/);
-  assert.match(output().hookSpecificOutput.additionalContext, /install codebase-mapper at project scope or remove the dead enabledPlugins entry/);
+  assert.match(output().hookSpecificOutput.additionalContext, /install codebase-mapper at project scope/);
+  assert.doesNotMatch(output().systemMessage, /remove/);
   assert.equal(output([{ scope: 'project', projectPath: project, version: '2.15.5' }]), null);
 
   enablePlugins(project, 'settings.local.json', { 'codebase-mapper@eigenwise-toolshed': false });
@@ -761,7 +765,7 @@ test('SQ-2237: project settings without a codebase-mapper install report a dead 
   assert.doesNotMatch(output().systemMessage, /hooks are not running/);
 });
 
-test('SQ-2237: user settings without a user codebase-mapper install report a dead flag', (t) => {
+test('SQ-2237 user settings without a user codebase-mapper install report a dead flag', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-home-'));
   const project = mappedProject(t);
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -772,7 +776,7 @@ test('SQ-2237: user settings without a user codebase-mapper install report a dea
     registry: { plugins: { 'codebase-mapper@eigenwise-toolshed': mapperInstances } },
   }));
 
-  assert.match(findingText(result([]).projectProblems).join('\n'), /enabled in ~\/\.claude\/settings.json but no matching user install/);
+  assert.match(findingText(result([]).projectProblems).join('\n'), /settings.json but no matching user install/);
   assert.match(findingText(result([]).projectProblems).join('\n'), /hooks are not running/);
   assert.doesNotMatch(findingText(result([{ scope: 'user', version: '2.15.5' }]).projectProblems).join('\n'), /hooks are not running/);
   assert.match(findingText(result([{ scope: 'user', version: '2.15.5' }]).projectProblems).join('\n'), /no project\/local codebase-mapper install/);
@@ -784,12 +788,13 @@ test('SQ-2211: a Toolshed marketplace declaration with auto-update on is not rep
     ...hookFixture({
       'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
     }, { quartermaster: '0.49.0' }),
-    marketplaces: { 'eigenwise-toolshed': { lastUpdated: new Date().toISOString() } },
+    autoUpdate: false,
     loadedVersion: '0.49.0',
     input: { cwd: project },
   });
 
-  assert.match(output().systemMessage, /eigenwise-toolshed auto-update is off/);
+  assert.equal(output().systemMessage, undefined);
+  assert.match(output().hookSpecificOutput.additionalContext, /eigenwise-toolshed auto-update is off/);
 
   fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(project, '.claude', 'settings.json'), JSON.stringify({
@@ -799,10 +804,10 @@ test('SQ-2211: a Toolshed marketplace declaration with auto-update on is not rep
   fs.writeFileSync(path.join(project, '.claude', 'settings.local.json'), JSON.stringify({
     extraKnownMarketplaces: { 'eigenwise-toolshed': { source: { source: 'github', repo: 'eigenwise/eigenwise-toolshed' } } },
   }));
-  assert.doesNotMatch(output().systemMessage, /eigenwise-toolshed auto-update is off/);
+  assert.equal(output(), null);
 });
 
-test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t) => {
+test('SQ-2237 settings-only Sidequest enablement reports a board dead flag', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-board-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -823,7 +828,7 @@ test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t
   enablePlugins(home, 'settings.json', { 'sidequest@eigenwise-toolshed': true });
   const otherBoard = { name: 'other', path: path.join(home, 'board-without-settings') };
   const userEnabledWithoutInstall = boardMappings([otherBoard], [], home);
-  assert.match(findingText(userEnabledWithoutInstall.problems).join('\n'), /enabled in ~\/\.claude\/settings.json but no matching user install/);
+  assert.match(findingText(userEnabledWithoutInstall.problems).join('\n'), /settings.json but no matching user install/);
   assert.match(findingText(userEnabledWithoutInstall.problems).join('\n'), /hooks are not running/);
 
   const userEnabledAndInstalled = boardMappings([otherBoard], [{ id: 'sidequest@eigenwise-toolshed', scope: 'user' }], home);

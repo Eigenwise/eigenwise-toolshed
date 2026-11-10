@@ -554,3 +554,8 @@ Capture logs are written directly under the board project
 Executor submit/done accepts `summary: { result, checked, uncertain, action }`, each plain-text field up to 600 characters. It lives in `ticket.completionSummary`, bound to the submitted candidate (null for done without a submission). Candidate changes mark it stale in `completion`; lifecycle records still decide stage, blockers and facts. Read `completion <ref|US-n> --text` for the closeout report. `body` remains required. A failed summary write returns `summaryError` and records a comment without undoing delivery.
 
 Integration quality uses `crap` when the project Quality Gate config supplies `coverageCommand`, or a single changed plugin supplies `coverage:lcov`. Plugin LCOV paths resolve from that plugin directory. Otherwise integration keeps the V8 `measure` path. Integration receipts record `measurementPath`, `sourceMapTranslations`, and `sourceMapRefusals`. A report with no changed bodies is cross-checked with the AST complexity inventory; a nonzero inventory refuses delivery with the missing-body count.
+
+
+### Executor attempt timing
+
+`dispatch.attempts` keeps one terminal snapshot per executor generation (identified by `preparedAt` and `tokenPrefix`). Submit records `outcome: submitted`, `terminalAt` and `submittedAt`. Integration updates that snapshot with `integratedAt` and preserves its submit outcome and end time for executor duration and candidate provenance. The live dispatch can move to `done` without extending executor time. Pulse collapses historical duplicate generations in its returned attempt list, retaining the submit end time and recording the later integration time separately; stored history is unchanged. Records missing a generation timestamp stay separate.

@@ -14,6 +14,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { countRecentTranscripts } = require('../lib/scan.js');
+const { pluginsDir } = require('../lib/paths.js');
+const { activeInstances, readJson } = require('./freshness-helpers.js');
 const { markNudged, readProjectState, statusFor } = require('../lib/state.js');
 
 const FIRST_RUN_MIN_TRANSCRIPTS = 5;
@@ -38,8 +40,11 @@ function emit(context) {
   }));
 }
 
-function seededSelfImprovementRuleExists(projectDir) {
-  return fs.existsSync(path.join(projectDir, '.claude', 'live-rules', 'rules', 'self-improvement.md'));
+function activeSelfImprovementRuleExists(projectDir) {
+  if (!fs.existsSync(path.join(projectDir, '.claude', 'live-rules', 'rules', 'self-improvement.md'))) return false;
+  const registry = readJson(fs, path.join(pluginsDir(), 'installed_plugins.json'));
+  return activeInstances(registry, projectDir, 'eigenwise-toolshed')
+    .some((installation) => installation.name === 'live-rules');
 }
 
 function resupplyNudge(projectDir) {
@@ -65,7 +70,7 @@ function main() {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || data.cwd || process.cwd();
 
   const parts = [];
-  if (!seededSelfImprovementRuleExists(projectDir)) parts.push(CAPABILITY_CHARTER);
+  if (!activeSelfImprovementRuleExists(projectDir)) parts.push(CAPABILITY_CHARTER);
   const nudge = resupplyNudge(projectDir);
   if (nudge) parts.push(nudge);
   if (parts.length) emit(parts.join('\n\n'));

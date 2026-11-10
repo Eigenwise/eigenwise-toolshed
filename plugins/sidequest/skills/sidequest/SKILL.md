@@ -232,3 +232,5 @@ producer generations, incompatible captures, worker self-grants and late declara
 The declaration is factual provenance only: execution, quality and admission remain UNVERIFIED.
 It cannot rebind an old receipt or exempt held authored code. While its sources match, the
 dispatch submits normally with the frozen record; integration runs the pinned verifier.
+
+For your own never-claimed dispatch, use `dispatch { ref, retireOnly: true, reason }` (reason 20+ characters), or CLI `release <ref> --retire-prepared --reason "..."`. This records `retired_by_preparer` without failure evidence. Foreign sessions retain evidence and deadline guards; claimed attempts retain claim-owner recovery. See the recovery section in `references/orchestration.md`.

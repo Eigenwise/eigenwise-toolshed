@@ -13,32 +13,11 @@ Write each selected rule to its own `.claude/live-rules/rules/<stable-name>.md` 
 
 A new workspace uses `.claude/live-rules/`, never a new `.claude/live-rules.md`. Give every rule a
 stable kebab-case file name derived from its heading, such as `atomic-commits.md` or
-`svelte-5-components.md`. Then write `.claude/live-rules/manifest.json` from the UTF-8 contents of the
-selected rule files with `\r` bytes removed. Do not hand-type hashes: SHA-256 each complete normalized
-rule file, including its final newline, and copy scope metadata from its frontmatter. Every manifest entry
-has this shape:
-
-```json
-{
-  "version": 1,
-  "rules": [
-    {
-      "path": "rules/atomic-commits.md",
-      "hash": "<sha256 of the LF-normalized rules/atomic-commits.md contents>",
-      "description": "Atomic commits & two hats",
-      "globs": [],
-      "dirs": [],
-      "prompt": [],
-      "priority": 95,
-      "enabled": true,
-      "include": []
-    }
-  ]
-}
-```
-
-Write the complete directory through a temporary sibling, validate every hash against the files, then
-rename it into `.claude/live-rules/`. The manifest's `path` values are relative to that directory.
+`svelte-5-components.md`. Write only the approved rule files when live-rules is selected.
+After reload, resolve live-rules' current-project/user `installPath` from the installed-plugin registry,
+then run `node "<LIVE_RULES_ROOT>/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"`.
+The script owns manifest generation and hashes. Do not hand-edit `.claude/live-rules/manifest.json`.
+Alternatively, hand rule creation to `/live-rules:add-rule` after reload.
 
 ---
 

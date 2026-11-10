@@ -148,10 +148,19 @@ async function cmdVerdict(opts: any, positional: any) {
   else fail(`verdict: ${res.message || `could not record a verdict for ${idOrRef}`}`);
 }
 
+function closeReleasedDispatch(ticket: unknown, result: { ok: boolean }): void {
+  if (result.ok) closeDispatchExecutor(ticket);
+}
+
 async function cmdRelease(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
   const { slug, meta } = await resolveProject(opts);
+  if (opts['retire-prepared']) {
+    const result = store.prepareDispatch(slug, idOrRef, { retireOnly: true, reason: opts.reason, sessionId: sessionId(opts), source: 'cli' });
+    process.stdout.write(JSON.stringify({ project: slug, ...result }, null, 2) + '\n');
+    return;
+  }
   const by = workerId(opts);
   // The reason mandate is the MCP executor surface's contract (3.23.0); the CLI
   // stays the human/admin fallback where forced ceremony on dead-claim cleanup
@@ -180,7 +189,7 @@ async function cmdRelease(opts: any, positional: any) {
     source: opts.source || 'cli',
     sessionId: sessionId(opts),
   });
-  if (res.ok) closeDispatchExecutor(ticket);
+  closeReleasedDispatch(ticket, res);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -715,8 +724,45 @@ function printIntegrationAttempts(attempts: { outcome?: string; reason?: string;
   }
 }
 
+async function recordDeliveredCandidate(slug: string, projectPath: string, idOrRef: string, opts: any, target: any, by: string, verificationWaiver: any) {
+    const recorded = store.recordDeliveredSubmission(slug, idOrRef, {
+      target,
+      deliveryCommit: opts['delivery-commit'],
+      deliveryInteractionCommit: opts['delivery-interaction-commit'],
+      deliveryMethod: opts['delivery-method'],
+      deliveryRevision: opts['delivery-revision'],
+      resolvedPaths: opts['resolved-path'],
+      by,
+      reason: opts.reason,
+      skipVerify: !!opts['skip-verify'],
+      verificationWaiver,
+    });
+    if (!recorded.ok) fail(`integrate: ${recorded.message}.`);
+    const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
+      by,
+      reason: opts.reason,
+      purpose: 'integration',
+    });
+    if (!closed.ok) fail(`integrate: ${closed.message}.`);
+    if (!closed.idempotent) Object.assign(closed, await advanceAndSweepAfterIntegration(slug, projectPath, closed.ticket));
+  return Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed);
+}
+
+async function recordDeliveredCandidates(slug: string, projectPath: string, refs: string[], opts: any, target: any, by: string, verificationWaiver: any) {
+  const deliveries = [];
+  for (const idOrRef of refs) {
+    deliveries.push(await recordDeliveredCandidate(slug, projectPath, idOrRef, opts, target, by, verificationWaiver));
+  }
+  if (opts.json) {
+    const result = deliveries.length === 1 ? deliveries[0] : { ok: true, project: slug, deliveries };
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return;
+  }
+  for (const delivery of deliveries) console.log(`Recorded ${delivery.ticket.ref} delivered commit ${delivery.delivery.deliveryCommit} onto ${delivery.delivery.targetBranch}.`);
+}
+
 async function cmdIntegrate(opts: any, positional: any) {
-  const refs = positional.map((value: any) => String(value || '').trim()).filter(Boolean);
+  const refs = positional.flatMap((value: string) => String(value).split(',')).map((value: string) => value.trim()).filter(Boolean);
   const idOrRef = refs[0];
   if (!idOrRef) fail('integrate: pass one or more ticket ids or refs, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.');
   const { slug, meta } = await resolveProject(opts);
@@ -749,33 +795,7 @@ async function cmdIntegrate(opts: any, positional: any) {
     }
   }
   if (opts['delivery-commit'] != null) {
-    if (refs.length > 1) fail('integrate: recorded delivery accepts one candidate; deliver an assembled wave through its exact participant set.');
-    const recorded = store.recordDeliveredSubmission(slug, idOrRef, {
-      target,
-      deliveryCommit: opts['delivery-commit'],
-      deliveryInteractionCommit: opts['delivery-interaction-commit'],
-      deliveryMethod: opts['delivery-method'],
-      deliveryRevision: opts['delivery-revision'],
-      resolvedPaths: opts['resolved-path'],
-      by,
-      reason: opts.reason,
-      skipVerify: !!opts['skip-verify'],
-      verificationWaiver,
-    });
-    if (!recorded.ok) fail(`integrate: ${recorded.message || recorded.reason}.`);
-    const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
-      by,
-      reason: opts.reason,
-      purpose: 'integration',
-    });
-    if (closed.ok && !closed.idempotent) Object.assign(closed, await advanceAndSweepAfterIntegration(slug, meta.path, closed.ticket));
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed), null, 2) + '\n');
-      if (!closed.ok) process.exitCode = 1;
-      return;
-    }
-    if (!closed.ok) fail(`integrate: recorded delivery for ${idOrRef}, but could not close it: ${closed.message || closed.reason}.`);
-    console.log(`✓ ${closed.ticket.ref} recorded delivered commit ${recorded.integration.deliveryCommit} onto ${recorded.integration.targetBranch} — ${meta.name}`);
+    await recordDeliveredCandidates(slug, meta.path, refs, opts, target, by, verificationWaiver);
     return;
   }
   const mode = opts.mode == null ? store.boardConfig(slug).delivery : opts.mode;

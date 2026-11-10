@@ -5,6 +5,8 @@ description: Set up workspaces, keep Toolshed plugins current, and find missing 
 
 Quartermaster helps with project setup, Toolshed maintenance, workspace health, and the next capability your work is missing. Its local scripts read transcript files and emit a bounded summary. The active model sees that summary when the setup or resupply skill reads it, not the raw transcripts.
 
+Project mining includes the checkout and its currently registered Git worktrees, with one shared day cutoff and session cap. A session's recorded cwd must belong to one of those checkouts. Removed worktrees are outside this window. Auto-compaction prompts are excluded from user-correction evidence. Decision verification still uses stored per-project SessionEnd tallies.
+
 ## Install
 
 Install Quartermaster in the project you want to set up. This example uses project scope:
@@ -22,7 +24,31 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Setup reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. It no longer seeds clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
+Setup works in this order:
+
+1. It assesses the project: stack, existing `CLAUDE.md` and `.claude/`, and recent session history across your projects.
+2. It asks a few short questions, with a one-line reason for each.
+3. It proposes the plan one item at a time, covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item.
+4. It installs the approved plugins and writes the approved files.
+5. It stops at the reload or restart boundary, then continues when you tell it to.
+6. It verifies each piece it installed and records your decisions.
+
+Setup counts user-scope plugins as installed everywhere. Project- and local-scope plugins count only in their matching project, so installing Codebase Mapper in one repository still leaves it available for setup in another. The local `catalog --installed --project "<project root>"` inventory includes every installation's `scope`, `projectPath`, and `appliesToProject`; only rows marked `true` apply here. Catalog searches and `mine.installed` use that same project-specific answer.
+
+The self-improvement rule is offered only with Live Rules. Without that plugin, Quartermaster keeps its SessionStart capability charter active, even if a leftover rule file exists.
+
+Setup does not seed clean-code guidance: [Quality Gate](../quality-gate/) carries that itself once installed.
+
+| Setup does itself | Setup asks you | Setup leaves to you |
+| --- | --- | --- |
+| Reads the project and the bounded history summary. Installs approved plugins at project scope. Writes approved rules only for selected Live Rules, learned permission entries in per-user, gitignored `.claude/settings.local.json`, and approved config. Checks that each installed plugin is enabled and usable. Records applied and rejected decisions. | Every plugin, rule, permission entry, and file write. The questions about what the project is for and who works in it. Whether to record local usage. Whether to change a context-window policy. The reload or restart. | The marketplace bootstrap in [Getting started](../), which is the only command you run before setup. `/reload-plugins`. Wiring Model Gateway through its own skill. Committing `.claude/`. Any later update or health check. |
+
+Each Toolshed component is an independent opt-in, and none requires another. Saying yes to one does not sign you up for the rest, so setup does not guarantee the full bundle. Here is what each yes gets you:
+
+- **Sidequest routing:** tickets are classified, routed to a model and effort level, dispatched to executors in isolated git worktrees, gated on a verify command, and integrated back. Routing works across Claude models on its own.
+- **Model Gateway:** your ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker, which also enables Sidequest's non-Claude routes.
+- **Codebase Mapper:** a maintained map under `.claude/.codebase-info/` that starts each session oriented.
+- **Quality Gate:** per-function complexity and coverage scoring for the code Claude writes. See [Keep complex code tested](#keep-complex-code-tested).
 
 Before it names a plugin in that plan, setup can check current sources for whether the plugin is still maintained, whether the description in the local catalog has gone stale, and whether something fits better, including something from a marketplace you have not added yet. Those lookups are bounded to the few candidates that would lead to an install, and searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. With `WebSearch` and `WebFetch` turned off, Claude skips the check and labels the proposals unresearched rather than implying they were verified. What it reads informs the proposal; your approval is still what authorizes the install.
 
@@ -48,7 +74,7 @@ prompts into Pi configuration directories. That makes it a local-fit example, no
 marketplace package. Quartermaster can recommend researching it for a proven delegation gap without
 claiming Quartermaster runs on Pi.
 
-Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
+Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. After that boundary setup runs `claude plugin list --json` to confirm every selected plugin is installed and enabled at its requested scope. It then checks that each piece is usable: it builds the codebase map, syncs approved live-rule files with Live Rules' own script and confirms injection only when Live Rules was selected, brings up the Sidequest board, and checks that each language server responds. For an approved quality gate it runs the gate once and reports the real result. Setup does not wire Model Gateway itself. If Model Gateway is installed but unwired, it points you to the gateway skill instead.
 
 ### Keep complex code tested
 
@@ -65,9 +91,13 @@ only sets it up. When you approve it, setup installs quality-gate if it is missi
 node "<quality-gate plugin root>/bin/quality-gate.js" crap
 ```
 
-It also shows the coverage command for your stack. A function with complexity 6 or more fails at any
-coverage, so the failure line says to split it rather than add tests. Exit 2 means a prerequisite or
-measurement input is missing. Follow the printed hint, then run the gate again.
+It also shows the coverage command for your stack. A new or complexity-raised function must score strictly
+below 6, and complexity 6 or more fails at any coverage, so the failure line says to split it rather than add
+tests. Without coverage the gate checks complexity only and reports coverage as unverified. Exit 2 means a
+prerequisite or measurement input is missing. Follow the printed hint, then run the gate again.
+
+The commands in this section are for ongoing use after setup. The only gate command setup itself runs is the
+one verification pass after the reload.
 
 `quartermaster crap` is retired. It passes its arguments to the installed quality-gate and exits with
 its code; without quality-gate it scores nothing, prints the install command
@@ -78,13 +108,13 @@ turn until a receipt exists, and if resupply finds one in your settings it recom
 names the file. The gate scores what the session changed since the merge base, so files that came in
 through a merge, rebase, or pull are never demanded.
 
-Quartermaster reports existing `autoCompactWindow` settings, including which file wins, and preserves them. When neither user nor project settings sets a value, an installed Model Gateway owns compaction: doctor reads its saved context-window policy through the gateway's own reader and report formatter, including defaults and saved compact-at limits. Without Model Gateway, compaction follows the model default. Use Model Gateway's `context-window` command to set a backend policy; Quartermaster doesn't recommend a fixed global window.
+The context window is your decision. Quartermaster reports existing `autoCompactWindow` settings, including which file wins, and preserves them. When neither user nor project settings sets a value, an installed Model Gateway owns compaction: doctor reads its saved context-window policy through the gateway's own reader and report formatter, including defaults and saved compact-at limits. Without Model Gateway, compaction follows the model default. Use Model Gateway's `context-window` command to set a backend policy; Quartermaster doesn't recommend a fixed global window.
 
-If you choose local usage recording, Claude hands setup to Observability. Each project stays off until you run `/observability:track on`. `/observability:track status` checks recording; `/observability:track off` stops it and keeps history. `/observability:board` opens the local usage board. You can also decline and continue without recording.
+Local usage recording is also your decision. If you choose it, Claude hands setup to Observability. Each project stays off until you run `/observability:track on`. `/observability:track status` checks recording; `/observability:track off` stops it and keeps history. `/observability:board` opens the local usage board. You can also decline and continue without recording.
 
 ## Keep a workspace current
 
-Tell Claude what you want to do:
+Updating and health checks are maintenance you run after setup, not part of first-time setup. Tell Claude what you want to do:
 
 > Update my Eigenwise Toolshed plugins.
 
@@ -96,9 +126,13 @@ Or run the maintenance skills directly:
 
 > /quartermaster:toolshed-doctor
 
-The requested updater reads Claude Code's installed-plugin registry and updates every active Eigenwise Toolshed install at its recorded user, project, or local scope and project path. It can update installs in other recorded projects, not only the project where you invoked it. Third-party plugins and marketplaces are left alone. Before it changes anything, it runs the configured Claude Code command once. The default uses `claude` from `PATH`; if Claude Code is installed elsewhere, retry with `--claude <absolute claude.exe path>`. An unavailable command stops the run before marketplace, plugin, or Model Gateway updates.
+The requested updater reads Claude Code's installed-plugin registry and updates every active Eigenwise Toolshed install at its recorded user, project, or local scope and project path. It can update installs in other recorded projects, not only the project where you invoked it. Third-party plugins and marketplaces are left alone. Before it changes anything, it runs the configured Claude Code command once. The default uses `claude` from `PATH`. On Windows it prefers native `claude.exe` and finds npm `claude.cmd` or `claude.ps1` installs automatically. If Claude Code is installed elsewhere, retry with `--claude <absolute path>`. An unavailable command stops the run before marketplace, plugin, or Model Gateway updates.
 
 Updating never wires a project. The Model Gateway step refreshes Claude alias pins only in projects already recorded as wired, and only when a pin value changed, so an update that changes nothing touches no settings file. The directory you start the updater from stays unwired unless you wire it yourself with Model Gateway's `env --write-project`.
+
+SessionStart reads local cached health observations instead of waiting for subprocess probes. Gateway checks refresh after 10 minutes; Windows process inventory and Claude Code version checks refresh after 60 minutes. Marketplace comparisons default to six hours, configurable with `QUARTERMASTER_FRESHNESS_CACHE_HOURS` (positive hours). An asynchronous SessionStart hook refreshes stale observations under the Quartermaster state directory. Health context includes observation ages; an absent or unhealthy gateway observation says `gateway: checking` with its last known state and age. Loaded-versus-installed plugin mismatch checks still read local state on every start.
+
+The advisory freshness hooks fetch only the public marketplace version manifest from raw.githubusercontent.com at most hourly, send no project data, and skip this background check when HTTPS_PROXY or HTTP_PROXY (including lowercase forms) is configured; fetch failures stay silent.
 
 Freshness hooks are advisory. They report cached availability and loaded-version mismatches, and they point to `/quartermaster:update-toolshed`; they do not install, restart, or replace the requested updater. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace in Claude Code. An open session still needs `/reload-plugins` after plugin code changes. Restart Claude Code when process-level gateway wiring or model discovery changed.
 
@@ -126,7 +160,7 @@ The miner reads local transcript files and emits a bounded aggregate. The active
   is present in the transcript: that case is classified `hook_block`, counted separately, and left
   out of the denial total so one hook-heavy session cannot drown out real denials;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
-- short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence.
+- short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence. Correction detection recognizes English and Dutch openers and phrases.
 
 Resupply also reads retained Sidequest lifecycle records from `SIDEQUEST_HOME/sidequest.db`
 (default `~/.claude/sidequest/sidequest.db`) when present. Its `sidequest` aggregate counts verifier
@@ -140,7 +174,7 @@ board. These counts are proposal evidence under the same per-item approval rules
 
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply.
 
-Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial and no hook block, and it never covers a destructive command such as `rm` or `git push --force`. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. It vetoes several other classes of rule that would be too broad however often approved: a shell control keyword or subshell opener (`for`, `if`, `{`); a compound command whose separator or redirection (`;`, `&`, `|`, `<`, `>`) proves the rest of the command was cut off the fingerprint; a `cd` target, other argument, or command substitution (`$VAR`, `$(...)`, a backtick) that only resolves at runtime; a wrapper (`nohup`, `timeout`, `nice`, `setsid`, `stdbuf`, `command`, `builtin`, `watch`, `script`, `chroot`), an interpreter, or `source`/`.` that runs caller-supplied code; and a version-pinned plugin cache path or per-session scratchpad path that goes stale on its own. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting. Learned rules are merged into `permissions.allow`, preserving deny rules, the permission mode, and unrelated settings. A write reformats the JSON with two-space indentation.
+Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial and no hook block, and it never covers a destructive command such as `rm` or `git push --force`. Only approvals you gave at a prompt count: a tool the auto-mode classifier, bypass mode, or an existing rule let through was never your decision. A fingerprint recorded as rejected in the decision ledger stays out for good, and a tool whose plugin you uninstalled is skipped instead of coming back from older transcripts. Both show up as `skipped` in the `allowlist` report. Words inside a quoted argument are data, so `grep -F "drop"` does not count as a destructive command. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. It vetoes several other classes of rule that would be too broad however often approved: a shell control keyword or subshell opener (`for`, `if`, `{`); a compound command whose separator or redirection (`;`, `&`, `|`, `<`, `>`) proves the rest of the command was cut off the fingerprint; a `cd` target, other argument, or command substitution (`$VAR`, `$(...)`, a backtick) that only resolves at runtime; a wrapper (`nohup`, `timeout`, `nice`, `setsid`, `stdbuf`, `command`, `builtin`, `watch`, `script`, `chroot`), an interpreter, or `source`/`.` that runs caller-supplied code; a version-pinned plugin cache path or per-session scratchpad path that goes stale on its own; a bare executable with no subcommand (`curl`, `sed`, `ls`), since its wildcard grants every flag; a path-invoked or quoted executable, whose rule would only ever match that one spelling; and a file, path, quoted string, or generated name such as an agent worktree id in the subcommand slot, which pins the rule to one file or one session. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting. Permission learning runs in the background after opt-in; learned rules land at the next session start after that pass. Learned rules are merged into `permissions.allow`, preserving deny rules, the permission mode, and unrelated settings. A write reformats the JSON with two-space indentation.
 
 The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation records the user's own no to a proposal actually shown to them, and it does not return in that project; an accepted one is checked in a later pass. A finding the skill itself decides to skip, rather than one the user turned down, is left unrecorded or marked deferred instead of rejected.
 
@@ -173,10 +207,18 @@ It grants no automatic idle work, permission changes, or paid/publishing/deletio
 
 ## How the loop closes
 
-A SessionEnd hook tallies each session locally in one streamed pass. The due check also counts current-project transcript file metadata, without opening content, so active or uncleanly ended sessions refill the window. Once enough unreviewed session activity or friction accumulates, the SessionStart nudge records that an offer is due and a Stop hook shows the user a non-blocking offer of a focused optimization round after the reply. It never forces an extra turn, offers once per session, ignores Stop-hook continuations, and uses a separate 24-hour cross-session offer cooldown. After an accepted resupply, the same 24-hour cooldown can reopen on twice the usual evidence after a four-hour floor. Declining preserves the evidence window, while each consecutive decline doubles the offer backoff until an accepted resupply resets it. Applied recommendations record their targets, and later checks compare the signal before and after. Recommendations still need separate approval unless standing permission covers their exact class.
+A SessionEnd hook tallies human-driven sessions (at least two real prompts) locally in one streamed pass. Linked-worktree tallies count toward the main project for verification, the nudge, and the resupply offer. Existing tally files from currently registered worktrees are merged on read without rewriting them, with session ids deduplicated. The `verify` output has `decisions` and a `window` reporting total `sessions` and contributing `worktreeSessions`. Single-prompt executor sessions are excluded. The due check also counts current-project transcript file metadata, without opening content, so active or uncleanly ended sessions refill the window. Once enough unreviewed session activity or friction accumulates, the SessionStart nudge records that an offer is due and a Stop hook shows the user a non-blocking offer of a focused optimization round after the reply. It never forces an extra turn, offers once per session, ignores Stop-hook continuations, and uses a separate 24-hour cross-session offer cooldown. After an accepted resupply, the same 24-hour cooldown can reopen on twice the usual evidence after a four-hour floor. Declining a SessionStart nudge or Stop-time offer with `no resupply` records the decline, preserves the evidence window, and doubles the offer backoff each time until an accepted resupply resets it. Applied recommendations record their targets, and later checks compare the signal before and after. Recommendations still need separate approval unless standing permission covers their exact class.
 
 ## What it stores
 
 Tallies and decisions live under `~/.claude/quartermaster-state/`: per-session counters and a decision ledger with fingerprints. The bounded aggregate is the model-facing summary for setup and resupply. Raw transcripts are not loaded into model context, and the resupply skill must not open them. Transcript-derived text in the aggregate is clipped, and scratch directories are dropped from path areas.
 
 The [generated Quartermaster reference](../../reference/quartermaster/) contains the agent-facing skill and command details. See [contributing](../../contributing/) for maintainer workflows and the separate [support page](https://eigenwise.github.io/eigenwise-toolshed/support/) for ways to help.
+
+## Quality policy proposal
+
+For each codebase, setup proposes Quality Gate's [project delivery policy](../quality-gate/#project-delivery-policy):
+CRAP strictly below the owned threshold for new and raised bodies, informational not-worse legacy rows,
+and UNVERIFIED-as-debt with one standing ticket per unsupported capture boundary. It shows the project config,
+local measurement setup and execution cost, then writes only after approval. An installed gate uses shipped defaults until a project file overrides them; doctor reports that source. The policy is per project;
+installing Quartermaster or Quality Gate alone never opts every project in.

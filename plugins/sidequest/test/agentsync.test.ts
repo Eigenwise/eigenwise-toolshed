@@ -34,36 +34,90 @@ const STABLE_EXECUTORS = [
   ]),
 ].sort();
 
-test('briefing discovers the project gate and reports none without inventing a requirement', () => {
+test('briefing reads the shipped project policy without inventing a home-rule requirement', (context: import('node:test').TestContext) => {
   const project = tmpDir();
+  const previousHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  context.after(() => {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = previousHome;
+  });
+  process.env.SIDEQUEST_CLAUDE_HOME = path.join(project, 'claude');
   const ticket = { ref: 'SQ-GATE', title: 'Gate discovery', category: {} };
   const render = () => agentsync.renderTicketBriefing(ticket, 'gate-token', undefined, project);
-  assert.match(render(), /Configured quality gate: none\./);
-  const configDirectory = path.join(project, '.claude', 'quartermaster');
-  fs.mkdirSync(configDirectory, { recursive: true });
-  const qualityGateDirectory = path.join(project, '.claude', 'quality-gate');
-  fs.mkdirSync(qualityGateDirectory, { recursive: true });
-  const gate = { command: 'node scripts/check-quality.js', threshold: 9, base: 'quality-baseline' };
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify(gate));
-  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(gate)));
-  assert.ok(render().includes('Legacy bodies whose complexity did not rise are informational and never fail.'));
+  assert.match(render(), /No quality policy configured\./);
+  fs.mkdirSync(path.join(project, 'claude/plugins'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: {
+    'quality-gate@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: path.resolve(__dirname, '../../quality-gate') }],
+  } }));
+  assert.match(render(), /shipped defaults, no project file/);
+  fs.mkdirSync(path.join(project, '.claude/quality-gate'), { recursive: true });
+  const configuration = path.join(project, '.claude/quality-gate/crap.json');
+  fs.writeFileSync(configuration, '{}');
+  assert.match(render(), /Configured quality policy:.*"threshold":6/);
+  assert.match(render(), /Legacy bodies whose complexity did not rise are informational/);
+  assert.match(render(), /Reuse one standing measurement-debt ticket per unsupported capture boundary/);
+  assert.match(render(), /not a delivery hold/);
   const store = require('../lib/store.js');
-  const slug = store.ensureProject(project, 'quality gate discovery').slug;
-  assert.ok(agentsync.renderTicketBriefing(ticket, 'gate-token', slug).includes('Configured quality gate: ' + JSON.stringify(gate)));
-  const preferredGate = { command: 'quality-gate config', threshold: 4, base: 'quality-gate-baseline' };
-  fs.writeFileSync(path.join(qualityGateDirectory, 'crap.json'), JSON.stringify(preferredGate));
-  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify(preferredGate)));
-  fs.rmSync(path.join(qualityGateDirectory, 'crap.json'));
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ coverageCommand: 'npm test' }));
-  assert.ok(render().includes('Configured quality gate: ' + JSON.stringify({
-    command: 'node "<quality-gate plugin root>/bin/quality-gate.js" crap',
-    threshold: 'gate-owned', base: 'gate-selected default',
-  })));
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), JSON.stringify({ max: 8, base: 'main' }));
-  assert.match(render(), /"threshold":8,"base":"main"/);
-  fs.writeFileSync(path.join(configDirectory, 'crap.json'), '{broken');
+  const slug = store.ensureProject(project, 'quality policy discovery').slug;
+  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token', slug), /Configured quality policy:/);
+  fs.writeFileSync(configuration, JSON.stringify({ policy: { debtTicketMode: 'per-delivery', unverifiedHandling: 'block' } }));
+  assert.match(render(), /one measurement-debt ticket for this delivery/);
+  assert.match(render(), /UNVERIFIED measurement blocks delivery/);
+  fs.writeFileSync(configuration, '{broken');
   assert.throws(render, SyntaxError);
-  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token'), /Configured quality gate: none\./);
+  assert.match(agentsync.renderTicketBriefing(ticket, 'gate-token'), /No quality policy configured\./);
+});
+
+test('marked intake review briefing carries the bounded evidence-first review contract', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-INTAKE', category: { id: 'review-audit' }, labels: ['intake-review'],
+  }, 'intake-token');
+  assert.match(briefing, /## Independent intake review\n/);
+  const section = briefing.split('## Independent intake review\n')[1].split('\n\n## ')[0];
+  assert.ok(Buffer.byteLength(section, 'utf8') < 4000, 'fixed review section stays below 4KB');
+  assert.match(section, /Read the linked recon tickets' comments, then the story decision log and current contract/);
+  assert.match(section, /Judge the draft on evidence, not its framing/);
+  assert.match(section, /1\. Decided vs ask/);
+  assert.match(section, /2\. Missing gaps/);
+  assert.match(section, /3\. Contested recommendations/);
+  assert.match(section, /4\. Further research: only decision-changing work/);
+  assert.match(section, /5\. Revised human question set: at most four questions/);
+  assert.match(section, /one recommended option and its evidence-based reason, plus Other/);
+  assert.match(section, /Return zero questions when none remain/);
+  assert.match(section, /End with exactly five verdict lines/);
+  assert.match(section, /Ready for human round:/);
+  assert.match(section, /Blocking findings:/);
+  assert.match(section, /Settled decisions to preserve:/);
+  assert.match(section, /Research before asking:/);
+  assert.match(section, /Human choices remaining:/);
+  assert.match(section, /under about 3,000 tokens/);
+  assert.match(section, /Propose no design and write nothing to the repository/);
+  assert.match(section, /this review grants no implementation approval/);
+  assert.ok(briefing.indexOf('## Dispatch, claim') < briefing.indexOf('## Independent intake review'));
+  assert.ok(briefing.indexOf('## Independent intake review') < briefing.indexOf('## This ticket'));
+});
+
+test('intake review requires both the review category and the explicit label', () => {
+  assert.doesNotMatch(agentsync.renderTicketBriefing({
+    ref: 'SQ-REVIEW', categoryId: 'review-audit',
+  }, 'intake-token'), /## Independent intake review/);
+  assert.doesNotMatch(agentsync.renderTicketBriefing({
+    ref: 'SQ-CODING', categoryId: 'coding.normal', labels: ['intake-review'],
+  }, 'intake-token'), /## Independent intake review/);
+  assert.doesNotMatch(agentsync.renderTicketBriefing({
+    ref: 'SQ-ORDINARY', category: {}, labels: [],
+  }, 'intake-token'), /## Independent intake review/);
+  assert.match(agentsync.renderTicketBriefing({
+    ref: 'SQ-REVIEW', categoryId: 'review-audit', labels: ['intake-review'],
+  }, 'intake-token'), /## Independent intake review/);
+});
+
+test('intake review reference documents the existing label and description inputs', () => {
+  const reference = fs.readFileSync(path.join(__dirname, '../skills/sidequest/references/intake.md'), 'utf8');
+  assert.match(reference, /`review-audit` category with `labels: \["intake-review"\]`/);
+  assert.match(reference, /Recon tickets and relevant comments:/);
+  assert.match(reference, /Draft playback:/);
+  assert.match(reference, /Draft questions and recommendations:/);
 });
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }

@@ -933,7 +933,11 @@ function dispatchHasTerminalLifecycleAuthority(dispatch: any): boolean {
   const attempts = Array.isArray(dispatch?.attempts) ? dispatch.attempts : [];
   return attempts.some((attempt: any) => attempt?.terminalAt === terminalAt
     && attempt?.terminalSource === terminalSource
-    && attempt?.outcome === outcome);
+    && terminalAttemptOutcomes(attempt).includes(outcome));
+}
+
+function terminalAttemptOutcomes(attempt: { outcome?: string; integratedAt?: string }): (string | undefined)[] {
+  return [attempt.outcome, ...(attempt.integratedAt ? ['done'] : [])];
 }
 
 function dispatchHasCompletedWorktreeCreation(dispatch: any): boolean {

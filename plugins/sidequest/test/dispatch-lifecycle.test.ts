@@ -5512,3 +5512,51 @@ test("evidence done closes without a commit and SubagentStop adds no second repo
   assert.doesNotMatch(JSON.stringify(stop), /Saved evidence: inventory.json/);
   assert.equal(store.getTicket(slug, fixture.ticket.ref).comments.filter((comment: { body: string }) => comment.body === body).length, 1);
 });
+
+
+test('SQ-3993: integrating preserves the submitted executor end time and one attempt', () => {
+  const ticket = createFixture('executor integration timing fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'attempt-timing-' + ticket.id });
+  const owner = 'attempt-timing-owner-' + ticket.id;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  commitFixtureChange();
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', 'refs/sidequest/' + ticket.ref, commit], { cwd: PROJECT });
+  const range = require('../lib/commit-scope.js').submissionRange(PROJECT, {
+    commit, gitRef: 'refs/sidequest/' + ticket.ref, base: prepared.ticket.dispatch.baseCommit, integrationBranch: 'main', upstream: 'main',
+  });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  const submitted = store.submitTicket(slug, ticket.ref, owner, {
+    commit, range, verify: 'manual: attempt timing fixture', source: 'test',
+  });
+  assert.equal(submitted.ok, true, JSON.stringify(submitted));
+  const before = store.getTicket(slug, ticket.ref).dispatch;
+  const integrated = store.integrateSubmission(slug, ticket.ref, {
+    deliveryMethod: 'manual', deliveryCommit: commit, reason: 'Candidate is already committed on the fixture integration branch.',
+  });
+  assert.equal(integrated.ok, true, JSON.stringify(integrated));
+  const closed = store.completeTicketAsControlPlane(slug, ticket.ref, { purpose: 'delivery', by: 'integrator', deliveryCommit: commit, deliveryMethod: 'manual', reason: 'The fixture candidate is delivered on main.' });
+  assert.equal(closed.ok, true, JSON.stringify(closed));
+  const after = store.getTicket(slug, ticket.ref).dispatch;
+  assert.equal(after.attempts.length, before.attempts.length, 'integration updates the submitted attempt in place');
+  assert.equal(after.terminalAt, before.terminalAt, 'executor time ends at submit');
+  assert.equal(after.attempts.at(-1).terminalAt, before.terminalAt);
+  assert.equal(after.attempts.at(-1).submittedAt, before.terminalAt);
+  assert.equal(after.attempts.at(-1).outcome, 'submitted', 'source provenance keeps its submitted terminal snapshot');
+  assert.ok(after.attempts.at(-1).integratedAt, 'integration has its own timestamp');
+  assert.equal(after.integratedAt, after.attempts.at(-1).integratedAt);
+});
+
+test('SQ-3993: pulse collapses historical submit and integration copies without changing stored history', () => {
+  const ticket = createFixture('historical executor timing fixture');
+  const submitted = { preparedAt: '2026-10-01T00:00:00Z', tokenPrefix: 'old-token', outcome: 'submitted', terminalAt: '2026-10-01T01:00:00Z' };
+  ticket.dispatch = { attempts: [submitted, { ...submitted, outcome: 'done', terminalAt: '2026-10-01T03:00:00Z' }] };
+  independentTicketWrite(slug, ticket.id, ticket);
+  const attempts = store.pulsePayload(slug, ticket.ref, { full: true }).dispatch.attempts;
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].terminalAt, submitted.terminalAt);
+  assert.equal(attempts[0].integratedAt, '2026-10-01T03:00:00Z');
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.attempts.length, 2);
+});

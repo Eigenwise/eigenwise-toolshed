@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeDir } = require('../lib/paths.js');
 const {
   activeInstances,
   compareSemver,
@@ -125,7 +126,7 @@ function installedVersionsKey(updates) {
 
 function remoteWarning(instances, cache, now) {
   if (!instances.length) return '';
-  if (!cacheIsCurrent(cache, now) || !cache?.manifest) return 'Toolshed release freshness could not be determined. This prompt is proceeding. Run /update-toolshed to refresh the marketplace.';
+  if (!cacheIsCurrent(cache, now) || !cache?.manifest) return '';
   const updates = remoteUpdates(instances, cache.manifest);
   if (!updates.length) return '';
   return `Toolshed updates available: ${updates.map((update) => `${update.name} ${update.installed} → ${update.available}`).join(', ')}. Run /update-toolshed to install them; /reload-plugins cannot fetch new versions.`;
@@ -142,12 +143,11 @@ function decide(input, options = {}) {
   });
   if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt)) return '';
   const home = options.home || os.homedir();
-  const registryFile = options.registryFile || path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+  const registryFile = options.registryFile || path.join(claudeDir(process.env, home), 'plugins', 'installed_plugins.json');
   const instances = activeInstances(readJson(fileSystem, registryFile) || {}, input?.cwd, MARKETPLACE, options.platform);
   const cache = options.cache === undefined ? readCache(fileSystem, home) : options.cache;
   const remoteMessage = remoteWarning(instances, cache, options.now ?? Date.now());
-  const updates = remoteUpdates(instances, cache?.manifest);
-  if (remoteMessage && warnOnce(input, 'remote', options, availableVersionsKey(updates))) return warningOutput(remoteMessage);
+  if (remoteMessage && warnOnce(input, 'remote', options)) return warningOutput(remoteMessage);
   const installedVersion = newerInstalledVersion(instances, loadedVersion);
   if (installedVersion) return warnOnce(input, 'reload', options, `quartermaster@${installedVersion}`) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
   const reportedUpdates = reportedReloads(instances, input, options);

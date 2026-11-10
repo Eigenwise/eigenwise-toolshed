@@ -200,9 +200,17 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
   escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
+- **Retire your own never-claimed preparation.** The preparing session can retire a prepared, launched,
+  bound, or briefed attempt that nobody claimed with MCP `dispatch { ref, retireOnly: true, reason }`
+  or `sidequest release <ref> --retire-prepared --reason "<why, at least 20 characters>"`.
+  The reason must have at least 20 characters. This records `retired_by_preparer` and the reason,
+  preserving the attempt history without asserting a runtime failure. Omit `retireOnly` on dispatch
+  to prepare a replacement in the same call. `recoveryEvidence` remains accepted for compatibility.
+  Foreign sessions still need evidence and the existing retirement deadline. A claimed attempt cannot
+  be retired through this path.
 - **Retire an attempt no runtime will finish.** An attempt that died before its first claim (an API error at
   launch, a refused claim, a failed or cancelled WorktreeCreate, the Agent call returning with no claim) has no
-  claim to release and no TaskStop to make: the one recovery is `recoveryEvidence`. **The session that prepared
+  claim to release and no TaskStop to make. The preparer can use the reason path above; observed failures can still use `recoveryEvidence`. **The session that prepared
   the dispatch is the authority:** it spawned the runtime, so the host's failure text or the returned Agent call is
   proof the board never receives, and its evidence retires the unclaimed attempt at once, grace or unclaimed-attempt idle backstop
   notwithstanding (SQ-3110). Any other session uses it only when `pulse` reports the unclaimed attempt as

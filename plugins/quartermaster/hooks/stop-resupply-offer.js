@@ -15,7 +15,7 @@ function readStdin() {
 }
 
 function offerMessage(status) {
-  return `quartermaster: ${status.unanalyzedSessions} sessions and ${status.frictionEvents} friction events since the last resupply. Want a focused resupply round for your development system, setup, tooling, or workflow? Run /quartermaster:resupply when ready. To decline, run node "${'${CLAUDE_PLUGIN_ROOT}'}/bin/quartermaster.js" decline-resupply --project "${'${CLAUDE_PROJECT_DIR}'}" to back off this offer without clearing the evidence window.`;
+  return `quartermaster: ${status.unanalyzedSessions} sessions and ${status.frictionEvents} friction events since the last resupply. Want a focused resupply round for your development system, setup, tooling, or workflow? Reply \`resupply\` to start a round, or \`no resupply\` to back off for a while.`;
 }
 
 function main() {

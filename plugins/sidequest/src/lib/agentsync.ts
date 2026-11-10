@@ -4,6 +4,7 @@ const { DEMONSTRATIONS_FILE } = require('./store/completion.js');
 'use strict';
 
 import { committedBuildCommands } from './commit-scope.js';
+import { configuredProjectQualityPolicy } from './integration-quality.js';
 import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
 /**
  * sidequest - runtime exec agent sync (SQ-158)
@@ -991,13 +992,12 @@ function briefingCommentBody(comments?: any) {
 
 function configuredQualityGateBody(projectPath?: string, slug?: string) {
   const project = projectPath || store.readMeta(slug)?.path;
-  if (!project) return 'Configured quality gate: none.';
-  const qualityGateConfig = path.join(project, '.claude', 'quality-gate', 'crap.json');
-  const quartermasterConfig = path.join(project, '.claude', 'quartermaster', 'crap.json');
-  const configPath = fs.existsSync(qualityGateConfig) ? qualityGateConfig : quartermasterConfig;
-  if (!fs.existsSync(configPath)) return 'Configured quality gate: none.';
-  const { command = 'node "<quality-gate plugin root>/bin/quality-gate.js" crap', max = 'gate-owned', threshold = max, base = 'gate-selected default' } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  return `Configured quality gate: ${JSON.stringify({ command, threshold, base })}. Legacy bodies whose complexity did not rise are informational and never fail.`;
+  if (!project) return 'No quality policy configured.';
+  const configured = configuredProjectQualityPolicy(project);
+  if (!configured) return 'No quality policy configured.';
+  const origins = { default: 'shipped defaults, no project file', project: 'project file' };
+  const handling = configured.policy.unverifiedHandling === 'debt' ? 'UNVERIFIED coverage is measurement debt, not a delivery hold; keep the delivery marked UNVERIFIED.' : 'UNVERIFIED measurement blocks delivery.';
+  return `Configured quality policy: ${JSON.stringify(configured.policy)} (${origins[configured.policy.source]}). New and complexity-raised bodies must score strictly below ${configured.policy.threshold}; complexity at the threshold fails even without coverage. Legacy bodies whose complexity did not rise are informational and never fail. Untouched legacy bodies are out of scope. ${handling} ${configured.debtInstruction} Keep measurement tooling local; never change tracked dependencies or CI to install it.`;
 }
 
 function legacyVerificationText(value?: string | null): string {
@@ -1346,6 +1346,34 @@ function renderExecutorProjection(packet?: any) {
   ].join('\n\n');
 }
 
+function intakeReviewProjection(ticket: { categoryId?: string; category?: { id?: string }; labels?: string[] }) {
+  const categoryId = ticket.categoryId || ticket.category?.id;
+  if (categoryId !== 'review-audit' || !ticket.labels?.includes('intake-review')) return [];
+  return [{
+    id: 'intake-review', kind: 'task', priority: 550, order: 1.5,
+    body: `## Independent intake review
+
+Activation and ticket description template: skills/sidequest/references/intake.md.
+Read the linked recon tickets' comments, then the story decision log and current contract, before judging the draft playback, questions and recommendations. The description supplies those refs and the draft. Recover missing or omitted evidence through board tools; report unavailable inputs as visibility blocks. Judge the draft on evidence, not its framing. Distinguish the requester's words, recorded decisions and orchestrator inferences. Do not reopen settled decisions without contradictory evidence.
+
+Return these five parts, citing ticket refs, comment ids or contract passages for each finding:
+1. Decided vs ask: what the evidence already settles, what needs the requester or a named delegate, and why. Agent defaults and unanswered questions never count as human approval.
+2. Missing gaps: rank by impact on the decision, mark blocking findings, and explain the consequence of leaving each unresolved.
+3. Contested recommendations: name recommendations the evidence does not support, the conflicting or missing evidence, and the decision at risk.
+4. Further research: only decision-changing work, as one-line ticket proposals with a bounded question, evidence needed and the decision it could change. Do not file or dispatch them yourself.
+5. Revised human question set: at most four questions, each with options, one recommended option and its evidence-based reason, plus Other. Ask only unresolved human choices. Return zero questions when none remain; flag missing evidence instead of asking the human to do research.
+
+End with exactly five verdict lines:
+Ready for human round: yes/no, with reason.
+Blocking findings: ranked identifiers or none.
+Settled decisions to preserve: concise list.
+Research before asking: proposed ticket identifiers or none.
+Human choices remaining: question identifiers or none.
+
+Keep the whole response under about 3,000 tokens. Propose no design and write nothing to the repository. Return the review through the board's normal read-only completion path. The orchestrator refines the draft and records the cycle; this review grants no implementation approval. Each cycle costs one read-only executor (about 5–10 machine minutes, zero human round trips) and prevents spending the human round on settled or unsupported choices.`,
+  }];
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
   if (slug && ticket?.ref && rejectedSubmissionRows(ticket).some((entry: any) => entry.preservationState === 'pending')) {
     const reconciled = store.reconcileSubmissionRejections(slug, ticket.ref);
@@ -1376,6 +1404,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     items: [
       { id: 'resume', kind: 'evidence', priority: 650, order: 0, body: continuation },
       { id: 'safety', kind: 'safety', priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, ticket?.dispatch?.tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety },
+      ...intakeReviewProjection(ticket),
       { id: 'execution-contract', kind: 'contract', priority: 500, order: 2, body: storyContractProjectionBody(snapshot) },
       ...(storyLog ? [{ id: 'story-decision-log', kind: 'evidence', priority: 475, order: 3, body: storyDecisionLogProjectionBody(storyLog) }] : []),
       ...(rejectionHistory ? [{ id: 'rejection-history', kind: 'evidence', priority: 450, order: 4, body: rejectionHistory }] : []),

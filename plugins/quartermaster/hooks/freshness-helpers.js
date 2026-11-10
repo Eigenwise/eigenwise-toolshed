@@ -125,7 +125,23 @@ function reportedLoadedPluginVersion(input, pluginId, options = {}) {
   return typeof state?.version === 'string' && typeof state?.pluginRoot === 'string' && fileSystem.existsSync(state.pluginRoot) ? state.version : null;
 }
 
+function claudeCommandsOnPath(platform = process.platform, environment = process.env) {
+  if (platform !== 'win32') return ['claude'];
+  const directories = (environment.PATH || environment.Path || '').split(';').filter(Boolean);
+  const candidates = ['claude.exe', 'claude.cmd', 'claude.ps1'].flatMap((name) =>
+    directories.map((directory) => path.join(directory.replace(/^"|"$/g, ''), name)));
+  const commands = candidates.filter((command) => {
+    try {
+      return fs.statSync(command).isFile();
+    } catch {
+      return false;
+    }
+  });
+  return commands.length ? commands : ['claude'];
+}
+
 module.exports = {
+  claudeCommandsOnPath,
   activeInstances,
   canonicalPath,
   compareSemver,

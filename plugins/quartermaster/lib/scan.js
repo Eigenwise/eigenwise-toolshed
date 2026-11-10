@@ -2,8 +2,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { StringDecoder } = require('node:string_decoder');
 
-const { projectsRoot, slugForProject } = require('./paths.js');
+const { checkoutPaths, projectsRoot, slugForProject } = require('./paths.js');
 
 const DEFAULT_DAYS = 30;
 const DEFAULT_SESSIONS = 40;
@@ -31,6 +32,78 @@ function resolveSlug(projectPath, root) {
   const wanted = slug.toLowerCase();
   const match = safeReaddir(root).find((name) => name.toLowerCase() === wanted);
   return match ?? slug;
+}
+
+function* transcriptLines(file) {
+  const descriptor = fs.openSync(file, 'r');
+  const buffer = Buffer.alloc(65536);
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  try {
+    let bytes;
+    while ((bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null)) > 0) {
+      const lines = (pending + decoder.write(buffer.subarray(0, bytes))).split('\n');
+      pending = lines.pop();
+      yield* lines;
+    }
+    yield pending + decoder.end();
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function recordedDirectory(line) {
+  try {
+    const record = JSON.parse(line);
+    return typeof record?.cwd === 'string' ? record.cwd : null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalDirectory(directory) {
+  try {
+    return fs.realpathSync.native(directory);
+  } catch {
+    return path.resolve(directory);
+  }
+}
+
+function directoryInCheckout(directory, checkout) {
+  const relative = path.relative(checkout, canonicalDirectory(directory));
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+function sessionInCheckouts(session, checkouts) {
+  try {
+    for (const line of transcriptLines(session.file)) {
+      const directory = recordedDirectory(line);
+      if (directory) return checkouts.some((checkout) => directoryInCheckout(directory, checkout));
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function projectSessions(options, root, projectPath, cutoffMs) {
+  if (options.slug) return { slugs: [options.slug], sessions: sessionsInSlug(root, options.slug) };
+  const directories = checkoutPaths(projectPath);
+  const checkouts = directories.map(canonicalDirectory);
+  // Git may print a checkout in a different spelling than the session's cwd (an 8.3 short
+  // TEMP on Windows CI, for one), and the transcript slug follows the cwd spelling.
+  const slugs = [...new Set([...directories, ...checkouts].map((checkout) => resolveSlug(checkout, root)))];
+  const sessions = slugs.flatMap((slug) => sessionsInSlug(root, slug))
+    .filter((session) => session.modifiedMs >= cutoffMs)
+    .filter((session) => sessionInCheckouts(session, checkouts));
+  return { slugs, sessions };
+}
+
+function sessionSources(options, root, projectPath, cutoffMs) {
+  if (!options.allProjects) return projectSessions(options, root, projectPath, cutoffMs);
+  const slugs = safeReaddir(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  return { slugs, sessions: slugs.flatMap((slug) => sessionsInSlug(root, slug)) };
 }
 
 function subagentsFor(slugDirectory, sessionId) {
@@ -84,11 +157,7 @@ function resolveWindow(options = {}) {
 
   const root = options.root ?? projectsRoot(env);
   const cutoffMs = now - days * 86400000;
-  const slugs = allProjects
-    ? safeReaddir(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
-    : [options.slug ?? resolveSlug(projectPath, root)];
-
-  const all = slugs.flatMap((slug) => sessionsInSlug(root, slug));
+  const { slugs, sessions: all } = sessionSources(options, root, projectPath, cutoffMs);
   const withinDays = all.filter((session) => session.modifiedMs >= cutoffMs);
   withinDays.sort((a, b) => b.modifiedMs - a.modifiedMs);
 

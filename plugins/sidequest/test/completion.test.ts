@@ -244,3 +244,20 @@ test('the CLI completion command prints the text by default and the view with --
   assert.equal(swallowed.status, 1);
   assert.match(swallowed.stderr, /--text takes no value/);
 });
+
+
+test('SQ-3993: executor history keeps separate generations and unidentified records', () => {
+  const fixture = board('attempt-generations');
+  const ticket = store.createTicket(fixture.slug, { title: 'Attempt generations' });
+  const first = { preparedAt: 'first', tokenPrefix: 'token', outcome: 'failed', terminalAt: 'one' };
+  const second = { ...first, preparedAt: 'second', outcome: 'submitted', terminalAt: 'two' };
+  const unknown = { outcome: 'done', terminalAt: 'three' };
+  const input = [first, { ...first }, second, unknown, { ...unknown }];
+  ticket.dispatch = { attempts: input };
+  persist(fixture.slug, ticket);
+  assert.deepEqual(store.pulsePayload(fixture.slug, ticket.ref).dispatch.attempts, [first, second, unknown, unknown]);
+  assert.equal(store.getTicket(fixture.slug, ticket.ref).dispatch.attempts.length, 5);
+  ticket.dispatch.attempts = [];
+  persist(fixture.slug, ticket);
+  assert.deepEqual(store.pulsePayload(fixture.slug, ticket.ref).dispatch.attempts, []);
+});

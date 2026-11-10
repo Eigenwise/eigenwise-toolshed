@@ -134,9 +134,11 @@ function compactionWindowFinding(projectDir, { globalSettingsPath = userSettings
   return gatewayCompactionFinding(home) || `No "autoCompactWindow" is configured in ${globalSettingsPath} or ${projectPath}. Compaction follows the model default. Use node ~/.claude/model-gateway/model-gateway.js context-window to inspect or set a Model Gateway policy when installed.`;
 }
 
-function agentTeamsWarning(projectDir) {
+function agentTeamsWarning(projectDir, { globalSettingsPath = userSettingsPath() } = {}) {
   const settings = readProjectSettings(projectDir);
   if (!settings.env || Object.hasOwn(settings.env, AGENT_TEAMS_ENV)) return null;
+  const globalSettings = readSettings(globalSettingsPath);
+  if (globalSettings.env?.[AGENT_TEAMS_ENV] !== '1') return null;
   return `Project env masks the global agent-teams setting. Add "${AGENT_TEAMS_ENV}": "1" to ${projectSettingsPath(projectDir)}.`;
 }
 

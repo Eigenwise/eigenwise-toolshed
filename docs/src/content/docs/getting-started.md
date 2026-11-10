@@ -3,7 +3,7 @@ title: Getting started
 description: Install Quartermaster, prepare a project, and choose the Toolshed plugin that fits the job.
 ---
 
-Eigenwise Toolshed is six independent Claude Code plugins. Start with Quartermaster when you want a guided project setup. Install a different plugin directly when you already know what you need.
+Eigenwise Toolshed is seven independent Claude Code plugins. Start with Quartermaster when you want a guided project setup. Install a different plugin directly when you already know what you need.
 
 ## Install Quartermaster
 
@@ -26,9 +26,9 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Quartermaster reads the project, mines a bounded history summary, asks a few setup questions, and proposes Toolshed plugins, stack plugins, starter rules, and permission entries. It shows the change list and waits for approval before installing or writing anything.
+Setup does the work and you make the calls. It reads the project, mines a bounded history summary, asks a few questions, and proposes Toolshed plugins, stack plugins, starter rules, and permission entries one at a time. Nothing installs or gets written until you approve it. It then installs and writes what you approved and stops at the reload boundary. Run `/reload-plugins` to activate the new plugin code, or restart Claude Code when setup changed the process environment or wiring that a reload cannot replace. Tell Claude `continue` and setup verifies each piece it installed.
 
-After setup installs the approved plugins and writes the approved files, it pauses. Run `/reload-plugins` to activate the new plugin code. Restart Claude Code instead when setup changed the process environment or wiring that a reload cannot replace. Tell Claude `continue`, then let setup verify each selected workflow after the boundary.
+Every Toolshed component is an opt-in. Setup does not install the full bundle, and it says so when a plugin is probably not needed. The only commands you type yourself are the marketplace bootstrap above and the reload. The [Quartermaster guide](./quartermaster/) has a table of what setup does itself, where it asks you, and what it leaves to you.
 
 Try one real request after verification:
 
@@ -38,7 +38,7 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 
 ## Choose your next workflow
 
-Toolshed includes these seven plugins:
+Toolshed includes these seven plugins, and each one is its own opt-in:
 
 - [Set up and maintain a workspace](./quartermaster/)
 - [Track and deliver owned work](./sidequest/)

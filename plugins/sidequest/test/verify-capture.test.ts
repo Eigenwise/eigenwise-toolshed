@@ -498,6 +498,28 @@ test('verify capture runs generated POSIX scripts through the host shell', () =>
   assert.deepStrictEqual(shell.arguments, ['verify-script.sh']);
 });
 
+test('verify capture child cannot inherit a live dispatch session from another board', async (context: import('node:test').TestContext) => {
+  const fixture = setupIsolatedDispatch('session-isolation');
+  context.after(() => fixture.cleanup());
+  const environment = {
+    ...process.env,
+    CLAUDE_CODE_SESSION_ID: 'session-session-isolation',
+    CLAUDE_SESSION_ID: 'session-session-isolation',
+    SIDEQUEST_SESSION: 'session-session-isolation',
+    SIDEQUEST_VERIFY_SENTINEL: 'preserved',
+  };
+  const script = path.join(fixture.project, 'session-probe.cjs');
+  fs.writeFileSync(script, "console.log(JSON.stringify({ CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID, CLAUDE_SESSION_ID: process.env.CLAUDE_SESSION_ID, SIDEQUEST_SESSION: process.env.SIDEQUEST_SESSION, SIDEQUEST_VERIFY_SENTINEL: process.env.SIDEQUEST_VERIFY_SENTINEL }));");
+  const capture = await runVerifyCapture('"' + process.execPath + '" "' + script + '"', fixture.project, 30_000, environment);
+  context.after(() => deleteLog(capture));
+  assert.equal(capture.status, 'passed', capture.evidence);
+  const observed = JSON.parse(fs.readFileSync(capture.logPath, 'utf8').trim().split(String.fromCharCode(10))[0]!);
+  assert.deepStrictEqual(Object.keys(observed).filter((name) => /^(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|SIDEQUEST_SESSION)$/i.test(name)), []);
+  assert.equal(observed.SIDEQUEST_VERIFY_SENTINEL, 'preserved');
+  assert.equal(environment.CLAUDE_CODE_SESSION_ID, 'session-session-isolation');
+  assert.equal(store.getTicket(fixture.slug, fixture.ticket.ref).dispatch.sessionId, 'session-session-isolation');
+});
+
 test('verify capture executes through the shared process port and preserves result classes', async () => {
   const passed = await runVerifyCapture('cd . && echo verify-capture-ran');
   try {
