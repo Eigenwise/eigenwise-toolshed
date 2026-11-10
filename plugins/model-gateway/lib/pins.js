@@ -4,6 +4,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const { writeFileAtomically } = require('./atomic-file.js');
+const { readAnthropicCatalog } = require('./anthropic-catalog.js');
 const {
   CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_FAMILY_RE, COMPAT_BASE_URL, DEFAULT_BASE_URL,
   DISPATCH_MODEL_ID, GROK_PREFIX, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX, PIN_ALIASES,
@@ -77,7 +78,7 @@ function readDetectedPinCache() {
       alias,
       typeof saved.detectedFor?.[alias] === 'string' ? saved.detectedFor[alias] : cliVersion,
     ]));
-    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor, retired: readRetiredPins(saved) };
+    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor, retired: readRetiredPins(saved), catalogPins: saved.catalogPins || {} };
   } catch { return null; }
 }
 
@@ -107,6 +108,40 @@ function recordDetectedPin(cache, alias, pin, version) {
 // after Sonnet 5.5 shipped). Letting that detection win would rewrite every wired project backwards.
 function detectedPinOutranksShipped(alias, pin) {
   return !RETIRED_SHIPPED_PINS[alias].includes(pin) && comparePinVersions(pin, KNOWN_GOOD_PINS[alias]) !== -1;
+}
+
+function newestCatalogPins() {
+  const newest = {};
+  for (const row of readAnthropicCatalog().data) {
+    if (['retired', 'deprecated'].includes(row.lifecycle)) continue;
+    const version = pinVersion(row.id);
+    if (!version || !Object.hasOwn(PIN_ALIASES, version[0])) continue;
+    const alias = version[0];
+    const pin = normalizedDetectedPin(alias, row.id);
+    if (!detectedPinOutranksShipped(alias, pin)) continue;
+    if ((readDetectedPinCache()?.retired?.[alias] || []).includes(pin)) continue;
+    if (!newest[alias] || comparePinVersions(pin, newest[alias]) === 1) newest[alias] = pin;
+  }
+  return newest;
+}
+
+function catalogPinDefaults(defaults) {
+  const saved = readDetectedPinCache()?.catalogPins || {};
+  return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [alias,
+    comparePinVersions(saved[alias] || '', defaults[alias]) === 1 ? saved[alias] : defaults[alias],
+  ]));
+}
+
+function refreshCatalogPins() {
+  const cached = readDetectedPinCache() || { pins: {}, detectedFor: {}, retired: {}, catalogPins: {} };
+  const defaults = catalogPinDefaults(detectedPinDefaults());
+  const newest = newestCatalogPins();
+  for (const [alias, pin] of Object.entries(newest)) {
+    if (comparePinVersions(pin, defaults[alias]) !== 1) continue;
+    cached.retired[alias] = retirePin(cached.retired[alias], defaults[alias]);
+    cached.catalogPins[alias] = pin;
+  }
+  writeDetectedPinCache(cached);
 }
 
 function detectedPinDefaults() {
@@ -273,7 +308,7 @@ async function refreshDetectedPins({ force = false } = {}) {
       recordDetectedPin({ pins, detectedFor, retired }, alias, detected[index], recordedVersion);
     }
     if (detected.some(Boolean)) {
-      writeDetectedPinCache({ cliVersion: recordedVersion, updatedAt: Date.now(), pins, detectedFor, retired });
+      writeDetectedPinCache({ cliVersion: recordedVersion, updatedAt: Date.now(), pins, detectedFor, retired, catalogPins: cached?.catalogPins || {} });
     }
     return pins;
   } catch { return cached?.pins || {}; } finally {
@@ -304,19 +339,23 @@ function writePinOverrides(overrides) {
 function effectivePins() {
   const overrides = readPinOverrides();
   const detected = currentDetectedPins(readDetectedPinCache());
-  const defaults = detectedPinDefaults();
+  const defaults = catalogPinDefaults(detectedPinDefaults());
+  const newest = newestCatalogPins();
+  const catalog = readDetectedPinCache()?.catalogPins || {};
   return Object.fromEntries(Object.entries(PIN_ALIASES).map(([alias]) => [alias, {
     default: defaults[alias],
     shipped: KNOWN_GOOD_PINS[alias],
     detected: detected[alias],
     override: overrides[alias] || null,
+    newest: newest[alias] || null,
     value: overrides[alias] || defaults[alias],
-    source: overrides[alias] ? 'override' : defaults[alias] === detected[alias] ? 'detected' : 'shipped',
+    source: overrides[alias] ? 'override' : defaults[alias] === catalog[alias] ? 'catalog' : defaults[alias] === detected[alias] ? 'detected' : 'shipped',
   }]));
 }
 
 function pinProvenance(pin) {
   if (pin.source === 'override') return `overridden; without it ${pin.default}`;
+  if (pin.source === 'catalog') return 'catalog default';
   if (pin.source === 'detected') return 'detected for this CLI';
   if (pin.detected) return `shipped default; this CLI resolves ${pin.detected}, which it replaces`;
   return `shipped fallback, not detected for this CLI`;
@@ -344,7 +383,7 @@ function ownedPinValues() {
   return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [
     PIN_ALIASES[alias],
     new Set([
-      KNOWN_GOOD_PINS[alias], ...RETIRED_SHIPPED_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias],
+      KNOWN_GOOD_PINS[alias], ...RETIRED_SHIPPED_PINS[alias], cached[alias], cache?.catalogPins?.[alias], overrides[alias], detectedPinDefaults()[alias],
       ...(cache?.retired?.[alias] || []),
     ].filter(Boolean)),
   ]));
@@ -368,5 +407,5 @@ function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 module.exports = {
   codexBaseFromId, comparePinVersions, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
   isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides, realClaudeRefusedUnderTest,
-  refreshDetectedPins, stalePinUpdates, writePinOverrides,
+  refreshDetectedPins, refreshCatalogPins, newestCatalogPins, stalePinUpdates, writePinOverrides,
 };
