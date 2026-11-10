@@ -144,6 +144,12 @@ Claude's supported separate number remains `--claude <tokens|full>`, synced thro
 
 Configuration is read at gateway startup. After deliberately changing it, stop the gateway and run `ensure`; restart open Claude Code sessions for native-window or picker changes. Updating or installing the plugin alone never adopts the 242000 example.
 
+## New Anthropic models
+
+The shim lists the upstream Anthropic catalog before Codex and Grok models. Authenticated discovery forwards your OAuth or API-key headers to Anthropic without saving them. The catalog cache in `~/.claude/model-gateway/anthropic-models.json` lasts one hour; stale rows stay available during refresh. If Anthropic cannot be reached or rejects authentication, discovery keeps the cached rows, or just the existing Codex/Grok rows when the cache is empty.
+
+SessionStart and updates advance Opus, Sonnet and Fable pins from the cached same-family catalog, without adopting older or retired versions. Registered projects get gateway-owned pin updates; restart their open Claude Code sessions afterward. An explicit override always wins. Ask Claude to remove a Fable override with `pin --fable default` when you want catalog updates again. `status` and `doctor` show catalog age, shipped/detected/catalog/override pin sources and the newest family ids. A lagging override is called out rather than changed.
+
 ## Daily use
 
 There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and confirms a failed probe through a fresh connection before recovering an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
