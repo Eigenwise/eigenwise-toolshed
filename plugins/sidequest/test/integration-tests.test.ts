@@ -92,6 +92,54 @@ test('integration test batches honour the board deadline and exclude pinned file
   assert.equal(integrationTestBatches(project, selections, 'node --version', 10_000)[0]!.timeoutMilliseconds, 10_000);
 });
 
+test('selected importing tests retain package Node flags and replace its file selection and concurrency', (context) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-flags-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  writeFixture(project, {
+    'plugins/example/package.json': JSON.stringify({ scripts: { test: 'node --require "./test/home preload.cjs" --import=./test/setup.mjs --experimental-strip-types --test --test-timeout=300000 --test-concurrency 2 "test/*.test.js"' } }),
+  });
+  const [batch] = integrationTestBatches(project, [{ plugin: 'plugins/example', files: ['test/selected.test.js'] }], 'node --version', 30_000);
+  assert.ok(batch);
+  assert.match(batch.command, /^node --require "\.\/test\/home preload.cjs" --import=\.\/test\/setup.mjs --experimental-strip-types --test --test-timeout=300000 --test-concurrency=1 /);
+  assert.ok(batch.command.includes('test/selected.test.js'));
+  assert.ok(!batch.command.includes('test/*.test.js'));
+  for (const script of [
+    'node --require ./test/setup.cjs --test --test-timeout 300000 --test-concurrency=2 test/original.test.js',
+    'node --require ./test/setup.cjs --experimental-default-type commonjs --test --test-timeout 300000 --test-concurrency=2 "test/*.test.js"',
+  ]) {
+    writeFixture(project, { 'plugins/example/package.json': JSON.stringify({ scripts: { test: script } }) });
+    const [selected] = integrationTestBatches(project, [{ plugin: 'plugins/example', files: ['test/selected.test.js'] }], 'node --version', 30_000);
+    assert.match(selected!.command, /--require \.\/test\/setup.cjs/);
+    assert.match(selected!.command, /--test-timeout 300000/);
+    assert.ok(!selected!.command.includes('test/original.test.js'));
+    assert.ok(!selected!.command.includes('--test-concurrency=2'));
+  }
+});
+
+test('import gate derives the package home preload and reports it in the runner summary', (context) => {
+  const { runProcessVerification } = require('../src/lib/ports/process.js');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-import-preload-'));
+  context.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  writeFixture(project, {
+    'plugins/example/package.json': JSON.stringify({ scripts: { test: 'node --require "./test/home preload.cjs" --test --test-concurrency=2 "test/*.test.js"' } }),
+    'plugins/example/test/home preload.cjs': "process.env.SIDEQUEST_FIXTURE_PRELOADED = 'isolated';",
+    'plugins/example/lib/source.js': 'module.exports = true;',
+    'plugins/example/test/source.test.js': "require('../lib/source.js'); require('node:test')('package preload protects importing tests', () => { require('node:assert/strict').equal(process.env.SIDEQUEST_FIXTURE_PRELOADED, 'isolated'); });",
+    'plugins/example/test/unselected.test.js': "throw new Error('unselected tests must not run');",
+  });
+  const environment = { ...process.env };
+  delete environment.NODE_TEST_CONTEXT;
+  delete environment.SIDEQUEST_FIXTURE_PRELOADED;
+  const pinned = { kind: 'command', status: 'passed' as const, command: 'node --version', evidence: 'baseline', logPath: path.join(project, 'gate.log') };
+  const result = runImportingIntegrationTests(project, ['plugins/example/lib/source.js'], pinned, 30_000, environment);
+  assert.equal(result.status, 'passed', result.evidence);
+  assert.match(result.importingTestSummary.runners[0]!.command, /--require "\.\/test\/home preload.cjs"/);
+  assert.match(fs.readFileSync(pinned.logPath + '.import-0.log', 'utf8'), /ok 1 - package preload protects importing tests/);
+  const bare = runProcessVerification({ kind: 'command', command: 'node --test test/source.test.js' }, { cwd: path.join(project, 'plugins/example'), environment, timeoutMilliseconds: 30_000, logPath: path.join(project, 'bare.log') });
+  assert.equal(bare.status, 'failed_suite');
+  assert.match(fs.readFileSync(bare.logPath, 'utf8'), /not ok 1 - package preload protects importing tests/);
+});
+
 function writeFixture(root: string, files: Record<string, string>): void {
   for (const [relative, content] of Object.entries(files)) {
     const file = path.join(root, relative);

@@ -182,9 +182,33 @@ function pluginTestFiles(project, plugin) {
   const moduleRoots = hooksModuleRoots(root);
   return pluginRelative(root, directoryFiles(import_node_path.default.join(root, "test")).filter((file) => importingTest(file) && !pluginRunnerTest(file, moduleRoots)));
 }
+const NODE_FLAGS_WITH_VALUES = /* @__PURE__ */ new Set(["--require", "-r", "--import", "--loader", "--experimental-loader", "--test-timeout", "--test-concurrency", "--test-reporter", "--test-reporter-destination", "--test-name-pattern", "--test-skip-pattern", "--conditions", "-C"]);
+function nodeTestRunner(script) {
+  const tokens = script.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+  if (tokens.shift() !== "node" || !tokens.includes("--test")) return "node --test";
+  const flags = nodeTestFlags(tokens);
+  return "node " + flags.join(" ").replace(/(?:^|\s)--test-concurrency(?:=\S+|\s+\S+)/g, "").trim();
+}
+function nodeTestFlags(tokens) {
+  const globIndex = tokens.findIndex((token) => /[*?]/.test(token));
+  if (globIndex !== -1) return tokens.slice(0, globIndex);
+  const flags = [];
+  while (/^--?[^-]/.test(String(tokens[0]))) appendNodeTestFlag(tokens, flags);
+  return flags;
+}
+function appendNodeTestFlag(tokens, flags) {
+  const flag = tokens.shift();
+  const value = NODE_FLAGS_WITH_VALUES.has(flag) ? tokens.shift() : void 0;
+  flags.push(flag);
+  if (value !== void 0) flags.push(value);
+}
+function selectedTestRunner(scripts) {
+  if (scripts["test:files"]) return "npm run test:files --";
+  return nodeTestRunner(scripts.test ?? "");
+}
 function testBatchCommand(scripts, files, normalSuite) {
   if (normalSuite) return scripts["test:full"] ? "npm run test:full" : "npm test";
-  const runner = scripts["test:files"] ? "npm run test:files --" : "node --test";
+  const runner = selectedTestRunner(scripts);
   return runner + " --test-concurrency=1 " + files.map((file) => quoteArgument(file.replaceAll("[", "[[]"))).join(" ");
 }
 function pluginRunnerBatch(project, selection, timeoutMilliseconds) {
@@ -286,7 +310,7 @@ function runImportingIntegrationTests(project, changedPaths, pinned, timeoutMill
   const failures = executeImportBatches(project, batches.filter((batch) => batch.shape !== "plugin-runner"), pinned, environment, execute);
   const pluginRunnerResults = failures.length ? [] : executePluginRunners(project, batches.filter((batch) => batch.shape === "plugin-runner"), pinned, environment, execute);
   const importingTestResults = [...failures, ...pluginRunnerResults.filter(pluginRunnerFailed)];
-  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: "Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.", pluginRunnerSplit: PLUGIN_RUNNER_SPLIT };
+  const importingTestSummary = { selectedFiles: selections.reduce((total, selection) => total + selection.files.length + (selection.pluginRunnerFiles?.length ?? 0), 0), durationMilliseconds: Date.now() - started, timeoutMilliseconds, exclusionReason: "Wall-clock performance and benchmark files are excluded from selected-file batches; full gates own their exclusions.", pluginRunnerSplit: PLUGIN_RUNNER_SPLIT, runners: batches.map(({ plugin, command }) => ({ plugin, command })) };
   if (pinned.logPath) import_node_fs.default.appendFileSync(pinned.logPath, "\nImport-walk gate: " + JSON.stringify({ ...importingTestSummary, selections, batches, pluginRunnerResults }) + "\n");
   return { ...importingTestResults[0] ?? pinned, integrationTests: selections, importingTestResults, pluginRunnerResults, importingTestSummary };
 }
