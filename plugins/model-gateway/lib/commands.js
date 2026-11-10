@@ -169,6 +169,7 @@ const USAGE = `usage: model-gateway.js <command>
                    CODEX_GATEWAY_CONTEXT_WINDOW is superseded and only applies when no codex value is saved.
   env [--write-project | --write-user | --remove] [--reconcile]
                    print the Claude Code env block, or merge/remove wiring
+                   --remove clears owned routing, discovery, static env and alias pins; preserves and names user pins
                    (--write-project writes .claude/settings.local.json; --write-user
                    is an opt-in shared fallback in ~/.claude/settings.json)
   doctor           full health check, Anthropic catalog age/fallback, pin sources and newest ids
@@ -241,7 +242,7 @@ const {
 const { describeShimState, fetchShimHealth, parseSemver, probeShimState, semverLt, servingCurrentVersion, servingShimVersion, shimNeedsRestart } = require('./shim-state.js');
 
 const {
-  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
+  removeGatewayOwnedSettings, projectWiringIssues, repairProjectWiring, cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
   processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings,
   selectedWiringScope, retireWiringModeConfig, settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
@@ -1101,48 +1102,8 @@ async function syncGatewayWiring() {
   }
 }
 
-// Turning the gateway off for Remote Control removes only ANTHROPIC_BASE_URL and
-// keeps the other gateway keys, pins included. syncGatewayWiring never runs for
-// that project again, so without this each alias stayed on the model it meant
-// the day the gateway was turned off, and /model never offered a newer one.
-// Only a file with no ANTHROPIC_BASE_URL that still carries the gateway's
-// discovery flag is touched, and only pins holding a value this plugin wrote.
-// A file naming any base URL belongs to syncGatewayWiring or to someone else.
 async function syncUnwiredPins() {
-  for (const scope of ['project', 'user']) await syncUnwiredPinsIn(settingsPath(scope));
-}
-
-function readSettingsIfPresent(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
-}
-
-function isUnwiredGatewayEnv(env) {
-  return Boolean(env)
-    && env.ANTHROPIC_BASE_URL === undefined
-    && env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === STATIC_ENV_BLOCK.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
-    && Object.values(PIN_ALIASES).some((key) => typeof env[key] === 'string');
-}
-
-function readUnwiredGatewaySettings(file) {
-  const settings = readSettingsIfPresent(file);
-  return isUnwiredGatewayEnv(settings?.env) ? settings : null;
-}
-
-function writePinUpdates(file, settings, updates) {
-  if (!updates.length) return;
-  for (const { key, to } of updates) settings.env[key] = to;
-  writeSettings(file, settings);
-  const changes = updates.map(({ key, from, to }) => `${key} ${from} -> ${to}`).join(', ');
-  log(`model-gateway: updated stale Claude alias pins in ${file} (${changes}). Start a new Claude Code session to use them.`);
-}
-
-async function syncUnwiredPinsIn(file) {
-  if (!readUnwiredGatewaySettings(file)) return;
-  await refreshDetectedPinsAndWiring();
-  // The alias probes take seconds and anything may write this file meanwhile,
-  // so decide and write from what is on disk after them, not the first read.
-  const settings = readUnwiredGatewaySettings(file);
-  if (settings) writePinUpdates(file, settings, stalePinUpdates(settings.env));
+  repairProjectWiring(log);
 }
 
 async function envCommand() {
@@ -1204,13 +1165,8 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   settings.env = settings.env || {};
   delete settings.env.ANTHROPIC_UNIX_SOCKET;
   if (remove) {
-    const ownedPins = ownedPinValues();
-    if (ourBaseUrls().includes(settings.env.ANTHROPIC_BASE_URL)) delete settings.env.ANTHROPIC_BASE_URL;
-    for (const [k, v] of Object.entries({ ...gatewayEnvBlock(), ...LEGACY_ENV_BLOCK })) {
-      const ours = ownedPins[k] ? ownedPins[k].has(String(settings.env[k])) : String(settings.env[k]) === String(v);
-      if (ours) delete settings.env[k];
-    }
-    if (!Object.keys(settings.env).length) delete settings.env;
+    const preserved = removeGatewayOwnedSettings(settings);
+    if (preserved.length) log(`model-gateway: preserved user pins in ${file}: ${preserved.join(', ')}`);
   } else {
     Object.assign(settings.env, envBlockFor(effectiveMode));
     for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
@@ -1224,7 +1180,7 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   }
   writeSettings(file, settings);
   const verified = readSettingsForWrite(file);
-  const expected = remove ? undefined : envBlockFor(effectiveMode).ANTHROPIC_BASE_URL;
+  const expected = remove ? settings.env?.ANTHROPIC_BASE_URL : envBlockFor(effectiveMode).ANTHROPIC_BASE_URL;
   if (verified.env?.ANTHROPIC_BASE_URL !== expected) throw new Error(`Could not verify gateway settings in ${file}`);
   const verifiedMode = verified.env?.ANTHROPIC_BASE_URL === COMPAT_BASE_URL ? 'compat' : 'default';
   if (scope === 'project') recordProjectWiring();
@@ -1402,8 +1358,13 @@ function reportRegisteredProjectPinDisagreements() {
   return result.disagreements.length > 0;
 }
 
+function reportProjectWiringIssues() {
+  for (const issue of projectWiringIssues()) log(`model-gateway: ${issue.message} in ${issue.file}; run ensure to repair.`);
+}
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   reportReadinessGate();
+  reportProjectWiringIssues();
   recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
@@ -2735,6 +2696,7 @@ const commands = {
     cleanLegacyEnvSettings();
     cleanLegacyGatewayModelCache();
     sweepOldProxyBinaries();
+    repairProjectWiring(noticeForUser);
     const wired = isWired();
     refreshCatalogPinsAndWiring();
     const initialReadiness = await getCodexReadiness();

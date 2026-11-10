@@ -62,7 +62,11 @@ if (gate) {
     return module.exports;
   })();
   const policy = recoveryPolicy();
-  if (policy === 'unwired') process.exit(0);
+  if (policy === 'unwired') {
+    const script = currentModelGatewayCli();
+    if (script) require(path.join(path.dirname(script), '..', 'lib', 'settings-wiring.js')).repairProjectWiring();
+    process.exit(0);
+  }
   if (policy === 'disabled') {
     console.error(pluginDisabledNotice());
     process.exit(0);
