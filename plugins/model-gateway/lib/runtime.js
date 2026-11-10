@@ -387,13 +387,17 @@ function sameGatewayDiscoveryModels(left, right) {
   ));
 }
 
-function syncGatewayDiscoveryCache({ models, baseUrl = DEFAULT_BASE_URL, cachePath = GATEWAY_MODELS_CACHE, now = Date.now } = {}) {
+function discoveryCacheIsCurrent(existing, models, force) {
+  return !force && existing && sameGatewayDiscoveryModels(existing.models, models);
+}
+
+function syncGatewayDiscoveryCache({ models, baseUrl = DEFAULT_BASE_URL, cachePath = GATEWAY_MODELS_CACHE, now = Date.now, force = false } = {}) {
   if (baseUrl === COMPAT_BASE_URL) return { state: 'skipped', reason: 'rc-compatibility', cachePath, modelCount: 0 };
   if (baseUrl !== DEFAULT_BASE_URL) return { state: 'skipped', reason: 'gateway-not-wired', cachePath, modelCount: 0 };
 
   const gatewayModels = gatewayDiscoveryModels(models);
   const existing = readGatewayDiscoveryCache(cachePath);
-  if (existing && sameGatewayDiscoveryModels(existing.models, gatewayModels)) {
+  if (discoveryCacheIsCurrent(existing, gatewayModels, force)) {
     return { state: 'unchanged', cachePath, modelCount: gatewayModels.length };
   }
 

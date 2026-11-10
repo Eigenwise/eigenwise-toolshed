@@ -100,7 +100,7 @@ Pins follow the newest usable same-family version from the cached Anthropic cata
 
 SessionStart (`ensure --quiet`) and updates advance catalog defaults and synchronize gateway-owned pins in registered projects. Restart open Claude Code sessions to pick up changed pins.
 
-The shim lists Anthropic models before Codex and Grok models. Authenticated `/v1/models` requests relay OAuth or API-key headers to Anthropic. The catalog lives in `~/.claude/model-gateway/anthropic-models.json` with a one-hour TTL. Stale rows return immediately while one refresh runs; an empty cache waits for the first bounded fetch. Upstream failures retain cached rows, or return the existing Codex/Grok list when no Anthropic rows are cached. Auth credentials are never written to this catalog.
+The shim lists Anthropic models before Codex and Grok models. A normal Anthropic inference request starts one background catalog fetch when the one-hour cache is absent or stale; authenticated `/v1/models` requests also refresh it. Allowlisted OAuth or API-key headers stay in memory for that fetch. Successful refreshes update `~/.claude/cache/gateway-models.json` immediately with Anthropic rows first, upstream names, and policy-defined picker aliases. `ensure` also merges cached Anthropic rows and advances forward-only default pins. Failures retain old rows and `doctor` shows the last refresh error. After one normal Claude turn on a wired project, the picker cache should list `claude-fable-5-2` if Anthropic advertises it. Fully restart Claude Code to load the updated picker rows. No credentials are saved.
 
 ## If something stops working
 
