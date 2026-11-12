@@ -28,6 +28,8 @@
  */
 
 const { anthropicCatalogReport, withCachedAnthropicRows } = require('./anthropic-catalog.js');
+const { withPreviousServerRows } = require('./previous-picker-rows.js');
+const { pickerGuardFailureLines, pickerGuardForCli, pickerGuardReport, runPickerGuard } = require('./picker-guard.js');
 const { fork, spawn, spawnSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const crypto = require('node:crypto');
@@ -126,7 +128,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, refreshCatalogPins, comparePinVersions, stalePinUpdates,
+  claudeVersion, isValidPin, ourBaseUrls, ownedPinValues, realClaudeRefusedUnderTest, pinProvenance, readPinOverrides, refreshDetectedPins, refreshCatalogPins, comparePinVersions, stalePinUpdates,
   writePinOverrides,
 } = require('./pins.js');
 
@@ -1091,6 +1093,20 @@ function pinCommand() {
   log('Applied the pin change to registered wired projects. Restart open Claude Code sessions to pick it up.');
 }
 
+function wiredGatewayEnv() {
+  return envBlockFor(wiredMode()?.mode || 'default');
+}
+
+// Runs the /model comparison at most once per Claude Code version, inside the SessionStart budget,
+// and repeats a recorded failure each session until a release or a fix clears it.
+async function reportStalePickerRowsOncePerCli() {
+  if (realClaudeRefusedUnderTest()) return;
+  const run = () => runPickerGuard({ gatewayEnv: wiredGatewayEnv(), timeoutMs: PICKER_HOOK_PROBE_TIMEOUT_MS });
+  const result = await pickerGuardForCli(await claudeVersion(), { run });
+  const lines = result && !result.unverified ? pickerGuardFailureLines(result) : [];
+  if (lines.length) noticeForUser(`${lines.join('; ')}. Run \`node "${resolveStableCommandPath()}" doctor\` for both row lists.`);
+}
+
 async function syncGatewayWiring() {
   await refreshDetectedPinsAndWiring();
   const current = wiredMode();
@@ -1362,6 +1378,8 @@ function reportProjectWiringIssues() {
   for (const issue of projectWiringIssues()) log(`model-gateway: ${issue.message} in ${issue.file}; run ensure to repair.`);
 }
 
+const PICKER_HOOK_PROBE_TIMEOUT_MS = 8000;
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   reportReadinessGate();
   reportProjectWiringIssues();
@@ -1382,6 +1400,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   const status = await statusReport({ readiness });
   const servingVersion = readiness.checks.servingVersion;
   log(`serving shim version: ${servingVersion || 'unavailable'}`);
+  for (const line of pickerGuardReport(await runPickerGuard({ gatewayEnv: wiredGatewayEnv() }))) log(line);
   log(`lifecycle evidence: ${lifecycleLogPath()}`);
   const observedExit = latestObservedLifecycleExit();
   if (observedExit) {
@@ -1731,7 +1750,7 @@ function writeGatewayDiscoveryCache(models, catalogSource) {
     log(`discovery cache: kept; the shim is serving its ${standIn}`);
     return { state: 'skipped', reason: 'stand-in-catalog', modelCount: 0 };
   }
-  const result = syncGatewayDiscoveryCache({ models: withCachedAnthropicRows(models), baseUrl: discoveryCacheBaseUrl() });
+  const result = syncGatewayDiscoveryCache({ models: withPreviousServerRows(withCachedAnthropicRows(models)), baseUrl: discoveryCacheBaseUrl() });
   if (result.state === 'wrote') log(`discovery cache: wrote ${result.modelCount} models`);
   else if (result.state === 'unchanged') log('discovery cache: unchanged');
   return result;
@@ -2745,6 +2764,7 @@ const commands = {
       }
       await syncCompatMode();
       await syncGatewayWiring();
+      await reportStalePickerRowsOncePerCli();
     }
     if (!quiet) await statusReport({ readiness });
     flushHookOutput();

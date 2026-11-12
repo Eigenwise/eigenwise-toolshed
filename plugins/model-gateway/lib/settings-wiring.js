@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { COMPAT_BASE_URL, COMPAT_HOST, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, gatewayClientModelId, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
-const { effectivePins, isGatewayModelId, ourBaseUrls, ownedPinValues } = require('./pins.js');
+const { FABLE_OPTION_KEYS, isGatewayModelId, ourBaseUrls, ownedPinValues, pinEnvBlock } = require('./pins.js');
 
 // Project-local wiring is the default so each repository opts into the
 // machine-local gateway endpoint independently. Claude Code still lets a local
@@ -111,12 +111,14 @@ function writeSettings(file, settings) {
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
 }
 
+// ANTHROPIC_CUSTOM_MODEL_OPTION is a general Claude Code setting a user may set for their own model,
+// so only a value the gateway wrote counts as ours.
 function ownedGatewayEnvEntries(env) {
-  const pins = ownedPinValues();
+  const ownedValuesByKey = ownedPinValues();
   const staticValues = { ...STATIC_ENV_BLOCK, ...LEGACY_ENV_BLOCK };
   return Object.entries(env || {}).filter(([key, value]) => (
     (key === 'ANTHROPIC_BASE_URL' && ourBaseUrls().includes(value))
-    || pins[key]?.has(String(value))
+    || ownedValuesByKey[key]?.has(String(value))
     || (Object.hasOwn(staticValues, key) && String(value) === String(staticValues[key]))
   ));
 }
@@ -260,14 +262,16 @@ function pinValuesNotOwned(env, valuesByKey) {
   )) || null;
 }
 
-function effectivePinValues() {
-  return Object.fromEntries(Object.entries(effectivePins()).map(([alias, pin]) => [PIN_ALIASES[alias], pin.value]));
-}
-
 // Only a pin the project already holds is rewritten: adding missing pins is wiring, and a
 // refresh runs at every SessionStart, where it must not rewire a project nobody asked about.
+// The Fable picker row is the exception: a project wired with the full block before the row
+// existed (it holds the Fable pin) must get it after an update without anyone rewiring it.
 function stalePinsIn(env, expected) {
-  return Object.entries(expected).filter(([key, value]) => env[key] !== undefined && env[key] !== value);
+  const addsFableOption = env[PIN_ALIASES.fable] !== undefined;
+  const fableOptionKeys = Object.values(FABLE_OPTION_KEYS);
+  return Object.entries(expected).filter(([key, value]) => (
+    (env[key] !== undefined || (addsFableOption && fableOptionKeys.includes(key))) && env[key] !== value
+  ));
 }
 
 function syncProjectPins(wiring, expected, ownedPins) {
@@ -289,7 +293,7 @@ function syncProjectPins(wiring, expected, ownedPins) {
 
 function syncRegisteredProjectPins({ ownedPins = ownedPinValues() } = {}) {
   const { wirings, pruned } = registeredProjectWiringReport();
-  const expected = effectivePinValues();
+  const expected = pinEnvBlock();
   const results = wirings.map((wiring) => syncProjectPins(wiring, expected, ownedPins));
   return {
     changed: results.flatMap((result) => result.changed ? [result.changed] : []),
@@ -300,7 +304,7 @@ function syncRegisteredProjectPins({ ownedPins = ownedPinValues() } = {}) {
 
 function registeredProjectPinDisagreements() {
   const { wirings, pruned } = registeredProjectWiringReport({ readOnly: true });
-  const expected = effectivePinValues();
+  const expected = pinEnvBlock();
   const disagreements = wirings.flatMap((wiring) => {
     const env = readSettingsForWrite(wiring.file).env || {};
     return Object.entries(expected)
