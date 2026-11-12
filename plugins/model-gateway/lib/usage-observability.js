@@ -6,6 +6,7 @@ const http = require('node:http');
 const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
+const antigravity = require('./antigravity-contract.js');
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:4318/v1/logs';
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -1044,7 +1045,113 @@ function createGatewayUsageEmitter(options = {}) {
   };
 }
 
+// Model identifiers, unlike session/correlation identifiers, have one narrowly
+// allowed slash namespace. Do not widen SAFE_IDENTIFIER or SAFE_SESSION_ID.
+function safeModelId(value) {
+  return antigravity.resolveModel(value) ? value : safeIdentifier(value);
+}
+
+const AGGREGATE_FIELDS = Object.freeze({ input_tokens: 'input_tokens', output_tokens: 'output_tokens',
+  cache_read_input_tokens: 'cache_read_tokens', cache_creation_input_tokens: 'cache_creation_tokens',
+  reasoning_tokens: 'thinking_tokens', thinking_tokens: 'thinking_tokens' });
+
+function aggregateUsage(usage) {
+  const entries = Object.entries(AGGREGATE_FIELDS).filter(([key]) => Number.isSafeInteger(usage?.[key]) && usage[key] >= 0);
+  return Object.fromEntries(entries.map(([key, name]) => [name, usage[key]]));
+}
+
+function aggregateRequestEvidence(state) {
+  const upstream = providerRequestId(state.headers);
+  if (upstream) return { request_id: upstream.value, request_id_source: upstream.source };
+  return { request_id: state.responseId || `gateway-request-${crypto.randomUUID()}`, request_id_source: state.responseId ? 'message_id' : 'generated' };
+}
+
+function aggregateIdentity(options, state) {
+  const headers = options.requestHeaders || {};
+  const route = options.route || {};
+  return { ...aggregateRequestEvidence(state),
+    client_request_id: safeIdentifier(headerValue(headers, 'x-claude-code-request-id')),
+    session_id: safeIdentifier(headerValue(headers, 'x-claude-code-session-id')),
+    agent_id: safeIdentifier(headerValue(headers, 'x-claude-code-agent-id')),
+    parent_agent_id: safeIdentifier(headerValue(headers, 'x-claude-code-parent-agent-id')),
+    model: safeModelId(route.effectiveModel), requested_model: safeModelId(route.requestedModel),
+    backend: 'antigravity', via: 'direct', request_sequence: options.sequence ?? null };
+}
+
+function successfulAggregateEvent(state) {
+  return state.complete && Object.keys(state.usage).length ? 'gateway.token.usage' : null;
+}
+
+function aggregateEvent(state) {
+  const success = state.status >= 200 && state.status < 300;
+  if (success) return successfulAggregateEvent(state);
+  return Object.keys(parseLimitHeaders(state.headers)).length ? 'gateway.limit.signal' : null;
+}
+
+function aggregateProject(options, identity) {
+  try { return safeIdentifier(options.resolveProjectId?.(identity.session_id)); }
+  catch { return null; }
+}
+
+function aggregateRecord(options, state, eventName) {
+  const measurements = eventName === 'gateway.token.usage' ? state.usage : parseLimitHeaders(state.headers);
+  const identity = aggregateIdentity(options, state);
+  const projectId = aggregateProject(options, identity);
+  return { eventName, observedAt: new Date(), projectId, ...parseTraceparent(options.requestHeaders),
+    attributes: { source: 'codex_gateway', source_event_id: `gateway-usage-${crypto.randomUUID()}`, source_schema: 'gateway-usage-v1',
+      'event.name': eventName, event_name: eventName, ...identity, project_name: projectId,
+      status: statusClass(state.status), status_code: state.status, response_mode: state.mode,
+      duration_ms: Number(process.hrtime.bigint() - state.started) / 1000000,
+      request_body_bytes: options.requestBodyBytes, response_body_bytes: state.bytes, ...measurements } };
+}
+
+function finishAggregate(options, state) {
+  if (state.finished) return null;
+  state.finished = true;
+  const event = aggregateEvent(state);
+  if (!event) return null;
+  const record = aggregateRecord(options, state, event);
+  try { options.emit?.(record); } catch {}
+  return record;
+}
+
+function observeAggregate(state, event) {
+  if (event.type === 'message_start') {
+    state.responseId = safeIdentifier(event.message?.id);
+    state.usage = { ...state.usage, ...aggregateUsage(event.message?.usage) };
+  }
+  if (event.type === 'message_delta') state.usage = { ...state.usage, ...aggregateUsage(event.usage) };
+}
+
+function createAggregateUsageCapture(options) {
+  const state = { usage: {}, bytes: 0, responseId: null, status: null, headers: {}, complete: true,
+    finished: false, started: process.hrtime.bigint(), mode: null };
+  return {
+    setResponse(status, headers) { state.status = status; state.headers = headers; state.mode = String(headers['content-type']).includes('text/event-stream') ? 'sse' : 'json'; },
+    noteResponseBytes(bytes) { state.bytes += bytes; },
+    observeEvent(event) { observeAggregate(state, event); },
+    setResponseComplete(complete) { state.complete = complete; },
+    finish() { return finishAggregate(options, state); },
+  };
+}
+
+function createAggregateUsageEmitter({ environment = process.env } = {}) {
+  const endpoint = resolveUsageEndpoint(environment);
+  const projectResolver = new SessionProjectResolver();
+  let sequence = 0;
+  return {
+    enabled: Boolean(endpoint),
+    start(options) {
+      sequence++;
+      return createAggregateUsageCapture({ ...options, sequence,
+        resolveProjectId: (sessionId) => projectResolver.resolve(sessionId),
+        emit(record) { if (endpoint) postOtlpLog(endpoint, buildOtlpLogPayload(record)); } });
+    },
+  };
+}
+
 module.exports = {
+  createAggregateUsageCapture, createAggregateUsageEmitter, safeModelId,
   DEFAULT_MAX_RESPONSE_BYTES,
   allocateLargestRemainder,
   buildOtlpLogPayload,
