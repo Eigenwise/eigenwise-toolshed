@@ -102,6 +102,8 @@ SessionStart (`ensure --quiet`) and updates advance catalog defaults and synchro
 
 The shim lists Anthropic models before Codex and Grok models. A normal Anthropic inference request starts one background catalog fetch when the one-hour cache is absent or stale; authenticated `/v1/models` requests also refresh it. Allowlisted OAuth or API-key headers stay in memory for that fetch. Successful refreshes update `~/.claude/cache/gateway-models.json` immediately with Anthropic rows first, upstream names, and policy-defined picker aliases. `ensure` also merges cached Anthropic rows and advances forward-only default pins. Failures retain old rows and `doctor` shows the last refresh error. After one normal Claude turn on a wired project, the picker cache should list `claude-fable-5-2` if Anthropic advertises it. Fully restart Claude Code to load the updated picker rows. No credentials are saved.
 
+Behind a custom base URL, Claude Code shows the picker rows Anthropic's bootstrap sends (cached in `~/.claude.json`) in place of its own Fable row, and that server row can still be an older Fable labelled "Fable". The gateway can't change that row, so wiring adds an `ANTHROPIC_CUSTOM_MODEL_OPTION` "Fable" row set to the current Fable pin, and the shim relabels any older cached server row as "Fable 5.1 (previous)" and so on. Codex and Grok rows stay. `doctor` compares the Fable, Opus and Sonnet rows with Claude Code's own, and `ensure` runs that check once per Claude Code version.
+
 ## If something stops working
 
 Tell Claude what happened, for example:
@@ -128,7 +130,7 @@ Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagn
 
 ### Turn the gateway off for this project
 
-To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. Session start keeps the Claude model pins among those settings current, so the project still gets new Claude releases. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
+To get Remote Control without RC-compatibility, run `env --remove` for this project, then restart Claude Code. It removes the gateway base URL, discovery flag, static gateway values and gateway-owned alias pins. User-set pins with values the gateway does not own survive and are named in the output. Native Claude aliases then follow Claude Code's defaults. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
 
 That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A process-exported `ANTHROPIC_BASE_URL` still wins over the file edit. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
@@ -139,3 +141,5 @@ Model Gateway's plugin code is free and MIT-licensed. If it saves you time, opti
 ## License
 
 MIT
+
+`ensure` repairs leftover gateway discovery flags and owned alias pins in settings files without a base URL, and reports the removed aliases in one line. It also registers the current wired project if pin sync was missing it. `doctor` reports "leftover gateway settings: aliases pinned to <ids>, no gateway routing" or "wired-but-unregistered project" and names `ensure` as the fix, without changing those settings or the wiring registry. Settings that name another endpoint are left alone.
