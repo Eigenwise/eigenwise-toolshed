@@ -20,6 +20,7 @@ const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
 const { createAnthropicCatalog, advertisedAnthropicRows, withCachedAnthropicRows } = require('./anthropic-catalog.js');
+const { withPreviousServerRows } = require('./previous-picker-rows.js');
 const { ToolSchemaCompatibilityError, adaptCodexToolSchemas } = require('./tool-schema-compat.js');
 const {
   clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
@@ -1363,7 +1364,7 @@ function runWorker() {
 
   function syncDiscoveryCache(force = false) {
     try {
-      syncGatewayDiscoveryCache({ models: withCachedAnthropicRows(modelCache.data), baseUrl: effectiveBaseUrl().value || null, force });
+      syncGatewayDiscoveryCache({ models: withPreviousServerRows(withCachedAnthropicRows(modelCache.data)), baseUrl: effectiveBaseUrl().value || null, force });
     } catch (error) {
       console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
     }
@@ -2176,7 +2177,7 @@ function runWorker() {
       counters.models++;
       const anthropicRows = await anthropicModels(req.headers);
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ data: [...advertisedAnthropicRows(anthropicRows), ...modelCache.data], has_more: false }));
+      return res.end(JSON.stringify({ data: withPreviousServerRows([...advertisedAnthropicRows(anthropicRows), ...modelCache.data]), has_more: false }));
     }
 
     if (req.method === 'HEAD') { res.writeHead(200); return res.end(); }
