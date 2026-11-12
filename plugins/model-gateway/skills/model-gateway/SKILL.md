@@ -87,7 +87,7 @@ Windows or macOS, and settings, parent, or User-scope edits cannot be promised t
 user fallback, then lists recorded projects whose local URL differs without changing their files.
 The confirmed command removes only Model Gateway-owned keys from those other projects'
 `.claude/settings.local.json` files: its base URL, the three Claude alias pins, and static gateway
-flags whose values equal plugin defaults. It leaves unrelated settings alone, skips projects already
+flags whose values equal plugin defaults. Alias pins are removed only when their values are gateway-owned; other pins survive and are named. It leaves unrelated settings alone, skips projects already
 agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+; `models` shows exactly what the shim advertises. Claude Code
 only refetches gateway discovery when it has an API-key credential. OAuth subscriptions do not give it
@@ -122,6 +122,8 @@ SessionStart (`ensure --quiet`) and updates compare cached same-family versions 
 
 - `/model` picker: rows like "GPT-6.1-sol (Codex)" and "Grok 4.5".
 - Typed: `/model claude-gpt-6.1-sol[1m]` or `/model claude-grok-4.5[1m]`. The picker and Sidequest catalog emit those exact ids. The suffix is stripped before routing to Codex or Grok.
+- **Fable row behind the gateway**: with a custom base URL, Claude Code (inspected 2.1.322) lists the rows Anthropic's bootstrap sends, cached in `~/.claude.json` `additionalModelOptionsCache`, instead of its own Fable row, and that row can still be an older Fable (`claude-fable-5-1[1m]` labelled "Fable"). The bootstrap goes to api.anthropic.com directly, so the gateway cannot change it. Two supported levers fix the picker with no user action after update and restart: the wiring writes `ANTHROPIC_CUSTOM_MODEL_OPTION` (+`_NAME` "Fable", `_DESCRIPTION`) set to the effective Fable pin (newest catalog Fable, else the CLI's detected Fable), and the shim advertises any cached server row older than its family's pin under the same id as "<name> (previous)", which replaces the server row. Result: one "Fable" row on the current model, an honestly labelled previous row, and all Codex/Grok rows. Registered projects holding the Fable pin get the option at the next `ensure`; a user's own `ANTHROPIC_CUSTOM_MODEL_OPTION` value is never rewritten or removed. `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` would restore Claude Code's own rows but switches gateway discovery off, so it is not used.
+- **/model check**: `doctor` compares the first row named Fable, Opus and Sonnet behind the gateway with Claude Code's own rows (stream-json initialize, hooks disabled, no model request) and fails when one runs an older model or no Codex/Grok row is listed. `ensure` runs the same check once per `claude --version`, records it in `~/.claude/model-gateway/picker-guard.json`, and repeats a recorded failure as a SessionStart notice. A "(previous)" row is reported as an upstream note, not a failure.
 - `lib/runtime.js`'s exported `MODEL_WINDOW_POLICY` is the sole authority for gateway backend windows, picker aliases, advertised windows, and sentry mode. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets. GPT ids absent from the table are deliberately advertised through its explicitly unmeasured 920k default, rather than silently inheriting a window. Grok 4.5 is a measured 500k row with a `[1m]` picker alias and the shared synthetic-413 sentry.
 - Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). Every `synthetic-413` policy row keeps its backend-window-minus-40000 ceiling. With no saved `compactAt`, the lowest legacy environment trigger or cap-minus-85000 wins. With `compactAt.codex` or `compactAt.grok` saved, the explicit maximum replaces those legacy candidates, is clamped to the cap, and ignores `CODEX_GATEWAY_COMPACT_TRIGGER` without mutating it. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; it does not promise a 1M backend input limit. A lower explicit `autoCompactWindow` still wins. Use `/context` to inspect the selected model and effective cap.
 - **Context window and cost**: `context-window` saves backend windows in `~/.claude/model-gateway/context-window.json` (`--claude <tokens|full> --codex <tokens|full> --grok <tokens|full>`). Defaults stay Claude `full`, Codex `272000`, Grok `full`; existing installs are never auto-migrated. `/v1/models` advertises the cap and keeps `[1m]` ids. With no explicit maximum, the gateway's legacy cap policy subtracts 85000, so Codex still compacts past 187000.
@@ -135,7 +137,7 @@ SessionStart (`ensure --quiet`) and updates compare cached same-family versions 
   window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
   SessionStart refreshes its cache after the CLI changes or the cache ages out, and rewrites stale pins
-  it wrote, including in a project where the gateway was turned off for Remote Control. A failed probe keeps
+  it wrote in wired projects. Unwired projects have owned pins removed so native aliases follow Claude Code. A failed probe keeps
   the last good pin, then a shipped safe default. A detected alias older than the shipped default, or
   one the plugin retired, loses to the shipped default. Set a persistent per-alias override with
   `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
@@ -244,6 +246,10 @@ or User-scope edits cannot be promised to win. Disabling stays available.
   didn't), and which mode each settings scope (user/project) is wired to.
 - Test/advanced overrides: `CODEX_GATEWAY_HOSTS_FILE` (custom hosts path), `CODEX_GATEWAY_COMPAT_PORT`
   (port other than 80). Neither is needed for normal use.
+
+Unwire with `env --remove` (or `env --remove --write-user` for the user fallback), then restart Claude Code. It removes owned routing, discovery, static env values and alias pins together. User-set pin values outside gateway ownership survive and are named.
+
+`ensure` repairs settings files that have owned pins or discovery enabled without a base URL and prints one repair line. It also registers the current wired project if it is missing from pin sync. `doctor` reports "leftover gateway settings: aliases pinned to <ids>, no gateway routing" and "wired-but-unregistered project" with `ensure` as the fix. These diagnostics leave settings and the registry unchanged. Files with another base URL are left alone.
 
 ## Day-2 operations
 

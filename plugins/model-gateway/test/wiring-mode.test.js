@@ -1008,3 +1008,89 @@ test('the updater finishes without wiring the directory it runs from or touching
   assert.equal(fs.readFileSync(projectRegistry(home), 'utf8'), registryBefore);
   assert.equal(fs.existsSync(path.join(home, '.claude', 'settings.json')), false, 'user settings were written');
 });
+
+
+test('ensure repairs orphan aliases before the missing-binary early return and doctor only reports', (t) => {
+  const { home, project } = fixture(t);
+  const file = path.join(project, '.claude', 'settings.local.json');
+  writeJson(file, { env: {
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1m]',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'user-chosen-model',
+  }, permissions: { allow: ['Bash(ls)'] } });
+  const before = fs.readFileSync(file, 'utf8');
+  const diagnostic = run(home, project, ['doctor']);
+  assert.match(diagnostic.output, /leftover gateway settings: aliases pinned to .*claude-fable-5-1\[1m\].*no gateway routing/);
+  assert.match(diagnostic.output, /run ensure to repair/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'doctor leaves orphan settings byte-identical');
+  const repaired = run(home, project, ['ensure', '--quiet']);
+  assert.equal(repaired.code, 0, repaired.output);
+  assert.match(repaired.output, /repaired leftover gateway settings/);
+  assert.match(repaired.output, /preserved user pins: ANTHROPIC_DEFAULT_SONNET_MODEL/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'user-chosen-model' }, permissions: { allow: ['Bash(ls)'] },
+  });
+});
+
+test('ensure registers a wired project missing from the registry and doctor only reports the gap', (t) => {
+  const { home, project } = fixture(t);
+  const file = path.join(project, '.claude', 'settings.local.json');
+  writeJson(file, gatewaySettings({ ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]' }));
+  const before = fs.readFileSync(file, 'utf8');
+  const diagnostic = run(home, project, ['doctor']);
+  assert.match(diagnostic.output, /wired-but-unregistered project/);
+  assert.equal(fs.existsSync(projectRegistry(home)), false, 'doctor never adds a registry');
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  run(home, project, ['ensure', '--quiet']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
+});
+
+test('env removal clears every owned env key and names preserved user pins', (t) => {
+  const { home, project } = fixture(t);
+  const file = path.join(project, '.claude', 'settings.local.json');
+  writeJson(file, gatewaySettings({
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1m]',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'user-chosen-model',
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
+    USER_SETTING: 'keep',
+  }));
+  const result = run(home, project, ['env', '--remove']);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /preserved user pins in .*ANTHROPIC_DEFAULT_SONNET_MODEL/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).env, {
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'user-chosen-model', USER_SETTING: 'keep',
+  });
+});
+
+test('reconciliation preserves and names non-owned alias pins', (t) => {
+  const { home, project } = fixture(t);
+  const file = path.join(project, '.claude', 'settings.local.json');
+  writeJson(file, gatewaySettings({ ANTHROPIC_BASE_URL: COMPAT_BASE_URL,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'user-opus', ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1m]' }));
+  const result = run(home, project, ['env', '--write-user', '--reconcile']);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /preserved user pins.*ANTHROPIC_DEFAULT_OPUS_MODEL/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).env, { ANTHROPIC_DEFAULT_OPUS_MODEL: 'user-opus' });
+});
+
+test('installed unwired readiness gate cleans owned leftovers without starting recovery', (t) => {
+  const { home, project } = fixture(t);
+  const file = path.join(project, '.claude', 'settings.local.json');
+  writeJson(file, { env: { ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1m]' } });
+  const install = path.resolve(__dirname, '..');
+  writeJson(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), {
+    plugins: { 'model-gateway@test': [{ version: '99.0.0', installPath: install }] },
+  });
+  const launcher = require('../hooks/registry-writer.js').writeCommandLauncher({ home }).file;
+  const result = spawnGatewayProcessSync(process.execPath, [launcher, 'readiness-gate'], {
+    cwd: project, encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: project }),
+    env: { ...process.env, HOME: home, USERPROFILE: home, ANTHROPIC_BASE_URL: 'https://api.anthropic.com' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /repaired leftover gateway settings/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {});
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'guardian.pid')), false);
+});

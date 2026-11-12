@@ -8,6 +8,39 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.622.0 (2026-11-12)
+
+### model-gateway 0.56.1 → 0.56.2
+
+#### Fixes
+
+- Remove owned alias pins when unwiring and repair orphan gateway settings (SQ-4105)
+  Unwiring clears owned discovery flags and alias pins together while preserving user pins. Ensure repairs orphan settings and registers wired projects missing from pin sync; doctor reports both without changing them.
+- Show the current Fable in /model behind the gateway (SQ-4106)
+  Behind the gateway, Claude Code's /model "Fable" row ran Fable 5.1, because Claude Code lists Anthropic's cached bootstrap rows there instead of its own Fable row. Wired projects now get a "Fable" row on the current Fable through `ANTHROPIC_CUSTOM_MODEL_OPTION`, the older server row is relabelled "Fable 5.1 (previous)", and the Codex/Grok rows stay. `doctor` and `ensure` (once per Claude Code version) check the Fable, Opus and Sonnet rows against Claude Code's own.
+
+## v3.621.0 (2026-11-10)
+
+### model-gateway 0.56.0 → 0.56.1
+
+#### Fixes
+
+- Populate Anthropic picker models from normal inference requests (SQ-4102)
+  Refresh the Anthropic catalog in the background on normal authenticated inference requests and write successful refreshes into Claude Code's picker cache. Keep previous rows on upstream failure and report the refresh error in doctor.
+
+### quartermaster 1.1.0 → 1.1.1
+
+#### Fixes
+
+- Correction detection no longer hard-codes Dutch phrases; it matches the English openers and phrases it had before 1.1.0 (SQ-4104)
+
+### sidequest 6.9.0 → 6.9.1
+
+#### Fixes
+
+- Keep package test preloads in importing-test batches (SQ-4099)
+  Importing-test batches now preserve Node flags from a plugin's test script, including home-isolation preloads, while keeping the gate's selected files and concurrency. The integration summary records the runner commands.
+
 ## v3.620.0 (2026-11-10)
 
 ### model-gateway 0.55.4 → 0.56.0
