@@ -78,13 +78,14 @@ function hasCatalogCredentials(headers) {
   return Boolean(headers.authorization || headers['x-api-key']);
 }
 
-function createAnthropicCatalog({ lookup } = {}) {
+function createAnthropicCatalog({ lookup, onRefresh = () => {} } = {}) {
   let inFlight = null;
   async function refresh(headers, cached) {
     try {
       const data = await fetchAnthropicCatalog(headers, lookup);
       const saved = { data, updatedAt: Date.now(), error: null };
       writeCatalog(saved);
+      onRefresh();
       return saved;
     } catch (error) {
       const saved = { ...cached, error: error.message, attemptedAt: Date.now() };
@@ -107,12 +108,18 @@ function advertisedAnthropicRows(rows) {
   return rows.map((row) => ({ ...row, id: gatewayClientModelId(row.id) }));
 }
 
+function withCachedAnthropicRows(models) {
+  const rows = advertisedAnthropicRows(readAnthropicCatalog().data);
+  const ids = new Set(rows.map((row) => row.id));
+  return [...rows, ...models.filter((row) => !ids.has(row.id))];
+}
+
 function anthropicCatalogReport() {
   const catalog = readAnthropicCatalog();
   const age = catalog.updatedAt ? `${Math.max(0, Math.floor((Date.now() - catalog.updatedAt) / 1000))}s old` : 'not cached';
   const failure = catalog.error ? `; ${catalog.error}; serving ${catalog.data.length ? 'cached Anthropic rows' : 'Codex/Grok only'}` : '';
-  const missing = catalog.updatedAt ? '' : '; awaiting an authenticated discovery request; serving Codex/Grok only';
+  const missing = catalog.updatedAt ? '' : '; populates on the next Anthropic request through the gateway; serving Codex/Grok only';
   return `Anthropic catalog: ${age}; ${catalog.data.length} models${failure}${missing}`;
 }
 
-module.exports = { advertisedAnthropicRows, anthropicCatalogReport, catalogHeaders, createAnthropicCatalog, readAnthropicCatalog };
+module.exports = { advertisedAnthropicRows, anthropicCatalogReport, catalogHeaders, createAnthropicCatalog, readAnthropicCatalog, withCachedAnthropicRows };

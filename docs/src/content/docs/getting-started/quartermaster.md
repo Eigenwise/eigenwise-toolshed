@@ -160,7 +160,7 @@ The miner reads local transcript files and emits a bounded aggregate. The active
   is present in the transcript: that case is classified `hook_block`, counted separately, and left
   out of the denial total so one hook-heavy session cannot drown out real denials;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
-- short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence. Correction detection recognizes English and Dutch openers and phrases.
+- short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence.
 
 Resupply also reads retained Sidequest lifecycle records from `SIDEQUEST_HOME/sidequest.db`
 (default `~/.claude/sidequest/sidequest.db`) when present. Its `sidequest` aggregate counts verifier

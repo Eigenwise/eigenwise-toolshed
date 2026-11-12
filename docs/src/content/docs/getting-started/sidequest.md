@@ -767,7 +767,11 @@ Capture and integration command deadlines both default to 25 minutes. Set board_
 for both paths and importing-test batches. The board setting `integrationTestFileThreshold`
 (default 40 extra files, positive integer) switches large import selections to the plugin's
 `test:full` script, or `npm test` when unavailable. That gate controls its own concurrency.
-Smaller batches exclude performance and benchmark files. Guidance Markdown selects guidance,
+Smaller batches exclude performance and benchmark files. They use `test:files` when available;
+otherwise a Node `scripts.test` supplies its preload and runner flags, with the gate selecting
+files and setting concurrency to one. Plugins without that script use bare `node --test`.
+`importingTestSummary.runners` records each plugin's command, including derived preloads.
+Guidance Markdown selects guidance,
 skill and compatibility tests. Batch receipts record the command shape, deadline and elapsed time.
 Timeout results name the key and effective limit. Every gate, on any board, runs under the owned
 process tree, which ends before the result is reported; on Windows the result names the job members
