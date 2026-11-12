@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 (2026-11-10)
+
+Released in v3.621.0, up from 1.1.0.
+
+### Fixes
+
+- Correction detection no longer hard-codes Dutch phrases; it matches the English openers and phrases it had before 1.1.0 (SQ-4104)
+
 ## 1.1.0 (2026-11-10)
 
 Released in v3.619.0, up from 1.0.3.
