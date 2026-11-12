@@ -1874,6 +1874,9 @@ function runWorker() {
               routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted');
               clientRes.destroy();
             });
+            upRes.on('close', () => {
+              if (!upRes.complete && !clientRes.writableEnded && !clientRes.destroyed) clientRes.destroy();
+            });
             return;
           }
           let settled = false;
@@ -1992,6 +1995,11 @@ function runWorker() {
       } else if (usageCapture) {
         upRes.on('data', (chunk) => usageCapture.noteResponseBytes(chunk.length));
       }
+      upRes.on('error', () => clientRes.destroy());
+      upRes.on('aborted', () => clientRes.destroy());
+      upRes.on('close', () => {
+        if (!upRes.complete && !clientRes.writableEnded && !clientRes.destroyed) clientRes.destroy();
+      });
       upRes.pipe(clientRes); // never buffer successful SSE: Claude Code needs the stream live
     });
     upReq.setTimeout(3600000, () => upReq.destroy(new Error('upstream timeout')));
@@ -2043,6 +2051,7 @@ function runWorker() {
       const streamed = String(upstream.headers['content-type'] || '').toLowerCase().includes('text/event-stream');
       usageCapture?.setResponse(upstream.statusCode, upstream.headers);
       upstream.once('end', () => routeTelemetry?.finish(upstream.statusCode));
+      upstream.once('aborted', () => routeTelemetry?.finish(upstream.statusCode, 'upstream_aborted'));
       upstream.once('error', () => routeTelemetry?.finish(upstream.statusCode, 'upstream_error'));
       if (upstream.statusCode === 426) {
         const chunks = [];
@@ -2096,6 +2105,10 @@ function runWorker() {
           clientRes.end();
         });
         upstream.on('error', () => clientRes.destroy());
+        upstream.on('aborted', () => clientRes.destroy());
+        upstream.on('close', () => {
+          if (!upstream.complete && !clientRes.writableEnded && !clientRes.destroyed) clientRes.destroy();
+        });
         return;
       }
       const chunks = [];
@@ -2113,6 +2126,10 @@ function runWorker() {
         clientRes.end(translatedBody);
       });
       upstream.on('error', () => clientRes.destroy());
+      upstream.on('aborted', () => clientRes.destroy());
+      upstream.on('close', () => {
+        if (!upstream.complete && !clientRes.writableEnded && !clientRes.destroyed) clientRes.destroy();
+      });
     });
     request.setTimeout(3600000, () => request.destroy(new Error('Grok upstream timeout')));
     request.on('error', (error) => {
