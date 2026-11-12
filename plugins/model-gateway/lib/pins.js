@@ -378,8 +378,41 @@ function pinProvenance(pin) {
   return `shipped fallback, not detected for this CLI`;
 }
 
+// Behind a custom base URL Claude Code shows the server-sent bootstrap rows instead of its own
+// Fable row, and Anthropic still sends an older Fable there (SQ-4106). ANTHROPIC_CUSTOM_MODEL_OPTION
+// is the only project-scoped setting that adds a row resolving to the current Fable.
+const FABLE_OPTION_KEYS = {
+  model: 'ANTHROPIC_CUSTOM_MODEL_OPTION',
+  name: 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME',
+  description: 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION',
+};
+
+function modelDisplayName(id) {
+  const version = pinVersion(id);
+  if (!version) return id;
+  const [family, major, minor] = version;
+  const hasMinor = id.replace(/\[1m\]$/, '').split('-').length === 4;
+  return `${family[0].toUpperCase()}${family.slice(1)} ${hasMinor ? `${major}.${minor}` : major}`;
+}
+
+function fableOptionDescription(fablePin) {
+  return `${modelDisplayName(fablePin)} · current Fable, through the gateway`;
+}
+
+function fableOptionBlock(fablePin) {
+  return {
+    [FABLE_OPTION_KEYS.model]: fablePin,
+    [FABLE_OPTION_KEYS.name]: 'Fable',
+    [FABLE_OPTION_KEYS.description]: fableOptionDescription(fablePin),
+  };
+}
+
 function pinEnvBlock() {
-  return Object.fromEntries(Object.entries(effectivePins()).map(([alias, pin]) => [PIN_ALIASES[alias], pin.value]));
+  const pins = effectivePins();
+  return {
+    ...Object.fromEntries(Object.entries(pins).map(([alias, pin]) => [PIN_ALIASES[alias], pin.value])),
+    ...fableOptionBlock(pins.fable.value),
+  };
 }
 
 function gatewayEnvBlock() {
@@ -394,6 +427,17 @@ function gatewayEnvBlock() {
 // survives `env --remove`. Detected pins a later probe replaced stay in the set,
 // so a settings file written before the last model release is still ours.
 function ownedPinValues() {
+  const pins = ownedAliasPinValues();
+  const fablePins = pins[PIN_ALIASES.fable];
+  return {
+    ...pins,
+    [FABLE_OPTION_KEYS.model]: new Set(fablePins),
+    [FABLE_OPTION_KEYS.name]: new Set(['Fable']),
+    [FABLE_OPTION_KEYS.description]: new Set([...fablePins].map(fableOptionDescription)),
+  };
+}
+
+function ownedAliasPinValues() {
   const overrides = readPinOverrides();
   const cache = readDetectedPinCache();
   const cached = cache?.pins || {};
@@ -422,7 +466,7 @@ function envBlockFor(mode) {
 function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
-  codexBaseFromId, comparePinVersions, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
+  claudeVersion, codexBaseFromId, comparePinVersions, detectedPinDefaults, FABLE_OPTION_KEYS, modelDisplayName, pinVersion, terminateProbe, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
   isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides, realClaudeRefusedUnderTest,
   refreshDetectedPins, refreshCatalogPins, newestCatalogPins, stalePinUpdates, writePinOverrides,
 };
