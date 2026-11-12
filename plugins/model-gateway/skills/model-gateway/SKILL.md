@@ -87,7 +87,7 @@ Windows or macOS, and settings, parent, or User-scope edits cannot be promised t
 user fallback, then lists recorded projects whose local URL differs without changing their files.
 The confirmed command removes only Model Gateway-owned keys from those other projects'
 `.claude/settings.local.json` files: its base URL, the three Claude alias pins, and static gateway
-flags whose values equal plugin defaults. It leaves unrelated settings alone, skips projects already
+flags whose values equal plugin defaults. Alias pins are removed only when their values are gateway-owned; other pins survive and are named. It leaves unrelated settings alone, skips projects already
 agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+; `models` shows exactly what the shim advertises. Claude Code
 only refetches gateway discovery when it has an API-key credential. OAuth subscriptions do not give it
@@ -135,7 +135,7 @@ SessionStart (`ensure --quiet`) and updates compare cached same-family versions 
   window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
   SessionStart refreshes its cache after the CLI changes or the cache ages out, and rewrites stale pins
-  it wrote, including in a project where the gateway was turned off for Remote Control. A failed probe keeps
+  it wrote in wired projects. Unwired projects have owned pins removed so native aliases follow Claude Code. A failed probe keeps
   the last good pin, then a shipped safe default. A detected alias older than the shipped default, or
   one the plugin retired, loses to the shipped default. Set a persistent per-alias override with
   `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
@@ -244,6 +244,10 @@ or User-scope edits cannot be promised to win. Disabling stays available.
   didn't), and which mode each settings scope (user/project) is wired to.
 - Test/advanced overrides: `CODEX_GATEWAY_HOSTS_FILE` (custom hosts path), `CODEX_GATEWAY_COMPAT_PORT`
   (port other than 80). Neither is needed for normal use.
+
+Unwire with `env --remove` (or `env --remove --write-user` for the user fallback), then restart Claude Code. It removes owned routing, discovery, static env values and alias pins together. User-set pin values outside gateway ownership survive and are named.
+
+`ensure` repairs settings files that have owned pins or discovery enabled without a base URL and prints one repair line. It also registers the current wired project if it is missing from pin sync. `doctor` reports "leftover gateway settings: aliases pinned to <ids>, no gateway routing" and "wired-but-unregistered project" with `ensure` as the fix. These diagnostics leave settings and the registry unchanged. Files with another base URL are left alone.
 
 ## Day-2 operations
 

@@ -112,11 +112,61 @@ function writeSettings(file, settings) {
 }
 
 function ownedGatewayEnvEntries(env) {
+  const pins = ownedPinValues();
+  const staticValues = { ...STATIC_ENV_BLOCK, ...LEGACY_ENV_BLOCK };
   return Object.entries(env || {}).filter(([key, value]) => (
     (key === 'ANTHROPIC_BASE_URL' && ourBaseUrls().includes(value))
-    || Object.values(PIN_ALIASES).includes(key)
-    || (Object.hasOwn(STATIC_ENV_BLOCK, key) && String(value) === String(STATIC_ENV_BLOCK[key]))
+    || pins[key]?.has(String(value))
+    || (Object.hasOwn(staticValues, key) && String(value) === String(staticValues[key]))
   ));
+}
+
+function removeGatewayOwnedSettings(settings) {
+  const preserved = Object.keys(ownedPinValues()).filter((key) => settings.env?.[key] !== undefined);
+  for (const [key] of ownedGatewayEnvEntries(settings.env)) delete settings.env[key];
+  if (settings.env && !Object.keys(settings.env).length) delete settings.env;
+  return preserved.filter((key) => settings.env?.[key] !== undefined);
+}
+
+function projectWiringIssues() {
+  const files = ['project', 'project-shared', 'user'].map(settingsPath);
+  return files.flatMap((file) => wiringIssuesIn(file));
+}
+
+function wiringIssuesIn(file) {
+  if (!fs.existsSync(file)) return [];
+  const settings = readSettingsForWrite(file);
+  const env = settings.env || {};
+  if (env.ANTHROPIC_BASE_URL !== undefined) return unregisteredProjectIssue(file, env);
+  return orphanWiringIssue(file, ownedGatewayEnvEntries(env));
+}
+
+function orphanWiringIssue(file, entries) {
+  if (!entries.some(([key]) => key === 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY' || Object.values(PIN_ALIASES).includes(key))) return [];
+  const aliases = entries.filter(([key]) => Object.values(PIN_ALIASES).includes(key)).map(([, value]) => value);
+  return [{ file, kind: 'orphan', message: `leftover gateway settings: aliases pinned to ${aliases.join(', ') || 'none'}, no gateway routing` }];
+}
+
+function unregisteredProjectIssue(file, env) {
+  if (file !== settingsPath('project') || !ourBaseUrls().includes(env.ANTHROPIC_BASE_URL)) return [];
+  const registered = recordedWiringProjects().projects.some((project) => isAbsoluteProjectPath(project) && registryKey(project) === registryKey(process.cwd()));
+  return registered ? [] : [{ file, kind: 'unregistered', message: 'wired-but-unregistered project' }];
+}
+
+function repairProjectWiring(report = console.error) {
+  for (const issue of projectWiringIssues()) repairWiringIssue(issue, report);
+}
+
+function repairWiringIssue(issue, report) {
+  if (issue.kind === 'unregistered') {
+    recordProjectWiring();
+    report(`model-gateway: registered wired project ${process.cwd()} for pin sync`);
+    return;
+  }
+  const settings = readSettingsForWrite(issue.file);
+  const preserved = removeGatewayOwnedSettings(settings);
+  writeSettings(issue.file, settings);
+  report(`model-gateway: repaired ${issue.message} in ${issue.file}; preserved user pins: ${preserved.join(', ') || 'none'}`);
 }
 
 function projectSettingsFile(projectDirectory) {
@@ -189,14 +239,14 @@ function registeredProjectWiring(entry, seen) {
   } catch { return null; }
 }
 
-function registeredProjectWiringReport() {
+function registeredProjectWiringReport({ readOnly = false } = {}) {
   const recorded = recordedWiringProjects();
   const seen = new Set();
   const results = recorded.projects.map((entry) => registeredProjectWiring(entry, seen));
   const wirings = results.flatMap((result) => result?.wiring ? [result.wiring] : []);
   const pruned = results.flatMap((result) => result?.pruned ? [result.pruned] : []);
   const projects = wirings.map(({ project }) => project);
-  if (recorded.exists && (recorded.rewrite || JSON.stringify(projects) !== JSON.stringify(recorded.projects))) writeProjectWiringRegistry(projects);
+  if (!readOnly && recorded.exists && (recorded.rewrite || JSON.stringify(projects) !== JSON.stringify(recorded.projects))) writeProjectWiringRegistry(projects);
   return { wirings, pruned };
 }
 
@@ -249,7 +299,7 @@ function syncRegisteredProjectPins({ ownedPins = ownedPinValues() } = {}) {
 }
 
 function registeredProjectPinDisagreements() {
-  const { wirings, pruned } = registeredProjectWiringReport();
+  const { wirings, pruned } = registeredProjectWiringReport({ readOnly: true });
   const expected = effectivePinValues();
   const disagreements = wirings.flatMap((wiring) => {
     const env = readSettingsForWrite(wiring.file).env || {};
@@ -281,8 +331,8 @@ function removeOwnedProjectWiring(file, targetBaseUrl) {
   if (!ourBaseUrls().includes(settings.env?.ANTHROPIC_BASE_URL) || settings.env.ANTHROPIC_BASE_URL === targetBaseUrl) return false;
   const entries = ownedGatewayEnvEntries(settings.env);
   if (!entries.length) return false;
-  for (const [key] of entries) delete settings.env[key];
-  if (!Object.keys(settings.env).length) delete settings.env;
+  const preserved = removeGatewayOwnedSettings(settings);
+  if (preserved.length) console.error(`model-gateway: preserved user pins in ${file}: ${preserved.join(', ')}`);
   writeSettings(file, settings);
   return true;
 }
@@ -425,7 +475,7 @@ function wiredMode() {
 
 
 module.exports = {
-  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isUnsupportedRemoteControlHttpsUrl, isWired,
+  removeGatewayOwnedSettings, projectWiringIssues, repairProjectWiring, cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isUnsupportedRemoteControlHttpsUrl, isWired,
   migrateLegacyProjectSettings, processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings,
   recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings, retireWiringModeConfig, selectedWiringScope,
   assertTestSafeSettingsPath, settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
