@@ -172,12 +172,7 @@ test('owned-root cleanup refuses removal while a recorded process is alive', asy
   observeGatewayChildClose(child);
   testContext.after(() => stopGatewayChild(child));
   const environment = gatewayTestEnvironment(testContext);
-  assert.equal(gatewayTestEnvironment(null, { HOME: environment.HOME }).HOME, environment.HOME);
-  const stateDirectory = path.join(environment.HOME, '.claude', 'model-gateway');
-  fs.mkdirSync(stateDirectory, { recursive: true });
   await once(child, 'message', { signal: AbortSignal.timeout(5000) });
-  fs.writeFileSync(path.join(stateDirectory, 'shim.pid'), `${child.pid}\n`);
-  fs.writeFileSync(path.join(stateDirectory, 'guardian.pid'), '\n');
 
   await assert.rejects(removeOwnedGatewayTestHome(environment.HOME, {
     shutdown: {
@@ -204,15 +199,12 @@ test('owned-root cleanup refuses removal while a recorded process is alive', asy
 
 test('failure diagnostics classify probe outcomes on a tracked live child', async (testContext) => {
   const environment = gatewayTestEnvironment(testContext);
-  const stateDirectory = path.join(environment.HOME, '.claude', 'model-gateway');
-  fs.mkdirSync(stateDirectory, { recursive: true });
   const child = spawnGatewayProcess(testContext, process.execPath, ['-e', IDLE_CHILD_SCRIPT], {
     cwd: environment.HOME,
     env: environment,
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   });
   await once(child, 'message', { signal: AbortSignal.timeout(5000) });
-  fs.writeFileSync(path.join(stateDirectory, 'shim.pid'), `${child.pid}\n`);
 
   for (const [diagnosticCode, expectedState] of [
     [null, 'probe-succeeded'],

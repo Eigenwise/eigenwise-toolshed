@@ -84,15 +84,19 @@ function releaseLatch() {
 function catalogGate() {
   const arrived = releaseLatch();
   const released = releaseLatch();
+  const requests = [];
   const responses = [];
   const handle = (request, response) => {
-    assert.equal(request.method, 'GET');
-    assert.equal(request.url.split('?')[0], '/v1/models');
+    const pathname = request.url.split('?')[0];
+    requests.push({ method: request.method, pathname });
+    if (request.method !== 'GET' || pathname !== '/v1/models') {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
     responses.push(response);
     arrived.release();
-    void released.promise.then(async () => {
-      // Delay completion briefly after release so health polling observes both fallback and proxy states.
-      await pause(25);
+    void released.promise.then(() => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ data: [{ id: 'gpt-5.2' }] }));
     });
@@ -101,13 +105,18 @@ function catalogGate() {
     arrived: arrived.promise,
     handle,
     release: released.release,
+    requests,
     responses,
   };
 }
 
 function assertProbesStillHeld(gate, bootStartedAt) {
   const budgetNote = `elapsed=${Date.now() - bootStartedAt}ms, workerProbeBudget=${WORKER_MODEL_PROBE_TIMEOUT_MS}ms`;
-  assert.ok(gate.responses.length > 0, 'an actual outbound model-list request arrived');
+  assert.ok(gate.requests.length > 0, 'an actual outbound model-list request arrived');
+  for (const request of gate.requests) {
+    assert.deepEqual(request, { method: 'GET', pathname: '/v1/models' }, 'outbound proxy probe only requests GET /v1/models');
+  }
+  assert.ok(gate.responses.length > 0, 'an actual outbound model-list request was gated');
   for (const response of gate.responses) {
     assert.equal(response.headersSent, false, `no model probe completed before the initial snapshot (${budgetNote})`);
     assert.equal(response.writableEnded, false, `all initial model probes remain gated (${budgetNote})`);
@@ -181,14 +190,8 @@ for (const listDispatch of [0, 1]) {
     const gate = catalogGate();
     const proxy = await startFixtureServer(testContext, gate.handle);
     const bootStartedAt = Date.now();
-    let gateway;
     try {
-      gateway = await startGateway(testContext, 'serve-worker', startupEnvironment(testContext, proxy.port, listDispatch));
-    } catch (error) {
-      gate.release();
-      throw error;
-    }
-    try {
+      const gateway = await startGateway(testContext, 'serve-worker', startupEnvironment(testContext, proxy.port, listDispatch));
       const probeOutcome = await Promise.race([
         gate.arrived,
         pause(WORKER_MODEL_PROBE_TIMEOUT_MS, 'timeout', { ref: false }),
@@ -210,9 +213,9 @@ for (const listDispatch of [0, 1]) {
       await waitForProxyCatalog(gateway.port);
       const authoritative = await readJson(gateway.port, '/v1/models', AbortSignal.timeout(5000));
       assertCatalog(authoritative, [...codexRows(['claude-gpt-5.2[1m]'], listDispatch), { id: 'claude-grok-4.5[1m]', family: 'grok' }]);
+      await closeOwnedWorker(gateway);
     } finally {
       gate.release();
-      await closeOwnedWorker(gateway);
     }
   });
 }
