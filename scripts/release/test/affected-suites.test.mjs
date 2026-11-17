@@ -207,7 +207,8 @@ test('workflow matrix carries module tests for both platforms', (context) => {
     assert.equal(entry.moduleTest, entry.path === 'plugins/sidequest'
       ? 'node scripts/test-guards-module.mjs' : 'claude plugin test .');
   }
-  assert.match(workflow, /run: npm install -g @anthropic-ai\/claude-code/);
+  assert.match(workflow, /CLAUDE_CODE_VERSION: '\d+\.\d+\.\d+'/);
+  assert.match(workflow, /run: npm install -g "@anthropic-ai\/claude-code@\$\{\{ env\.CLAUDE_CODE_VERSION \}\}"/);
   assert.match(workflow, /MODULE_TEST: \$\{\{ matrix.moduleTest \}\}/);
   assert.match(workflow, /run: eval \"\$MODULE_TEST\"/);
 });
