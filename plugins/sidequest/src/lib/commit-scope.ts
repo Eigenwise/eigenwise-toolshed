@@ -1055,12 +1055,37 @@ function validateCommitOrUndo(root: string, commit: string, scopes: readonly str
   return { ...validation, rolledBack: undone.ok, message: undone.ok ? undefined : undone.message };
 }
 
+// git add --all refuses a pathspec under an ignored directory even when the file in it is tracked, so
+// tracked content there is staged with --update, which never adds an ignored new file (GH-837).
+async function stageScopes(root: string, stageableScopes: readonly string[]) {
+  const underIgnore = stageableScopes.filter((scope) => gitResult(root, ['check-ignore', '--quiet', '--no-index', '--', scope]).ok);
+  const visible = stageableScopes.filter((scope) => !underIgnore.includes(scope));
+  if (visible.length) await execFileText('git', ['add', '--all', '--', ...visible], { cwd: root });
+  if (underIgnore.length) await execFileText('git', ['add', '--update', '--', ...underIgnore], { cwd: root });
+}
+
+function signoffFlags(root: string): string[] {
+  return repoRequestsSignoff(root) ? ['--signoff'] : [];
+}
+
+// git refuses a partial commit (--only with paths) while a merge is in progress. A resolved merge is
+// concluded whole, since it carries the other side's changes by definition; one with a conflict left in
+// it is refused by name instead of committed (GH-839).
+async function concludeMerge(root: string, message: unknown) {
+  const unmergedPaths = git(root, ['diff', '--name-only', '--diff-filter=U']).split('\n').filter(Boolean);
+  if (unmergedPaths.length) {
+    return { ok: false, reason: 'git_error', message: `a merge is in progress and these paths still have conflicts: ${unmergedPaths.join(', ')}. Resolve them, then commit again.` };
+  }
+  await execFileText('git', ['commit', ...signoffFlags(root), '-m', String(message || '')], { cwd: root });
+  const commit = git(root, ['rev-parse', 'HEAD']).trim();
+  return { ok: true, commit, paths: commitPaths(root, commit) };
+}
+
 async function commitWithinScope(root: string, message: unknown, scopes: readonly string[], stageableScopes: readonly string[], committableScopes: readonly string[]) {
-  if (stageableScopes.length) await execFileText('git', ['add', '--all', '--', ...stageableScopes], { cwd: root });
+  await stageScopes(root, stageableScopes);
+  if (gitResult(root, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']).ok) return concludeMerge(root, message);
   const previousHead = gitResult(root, ['rev-parse', '--verify', '--quiet', 'HEAD']);
-  const commitArgs = ['commit', '--only'];
-  if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
-  await execFileText('git', [...commitArgs, '-m', String(message || ''), '--', ...committableScopes], { cwd: root });
+  await execFileText('git', ['commit', '--only', ...signoffFlags(root), '-m', String(message || ''), '--', ...committableScopes], { cwd: root });
   const commit = git(root, ['rev-parse', 'HEAD']).trim();
   return Object.assign({ commit }, validateCommitOrUndo(root, commit, scopes, previousHead));
 }

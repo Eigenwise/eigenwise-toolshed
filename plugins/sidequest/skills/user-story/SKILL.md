@@ -1,16 +1,23 @@
 ---
 name: user-story
 description: >-
-  Plan and dispatch work with 3+ independently checkable pieces and a stated reason for a story or
-  wave. Bounded fixes default to one owner; small fixes in a few known files may run inline without
-  tickets. Read-only investigations need no ticket: prefer the route_recipe research spawn over native
-  Explore.
+  Take a feature or a reported problem from request to integrated work with the engineer in the loop:
+  investigate, reproduce a problem, lay out the options, agree the approach with the user, then plan
+  and dispatch. A story or wave needs 3+ independently checkable pieces and a stated reason. Bounded
+  fixes default to one owner; small fixes in a few known files may run inline without tickets.
+  Read-only investigations need no ticket: prefer the route_recipe research spawn over native Explore.
 ---
 
 # user-story
 
-A guided path from "build me X" to integrated, verified work on `main`. Two ideas run through all of
-it:
+A guided path from "build me X" or "this is broken" to integrated, verified work on `main`. Three
+ideas run through all of it:
+
+**The engineer decides what gets built and how it is shaped.** This flow is for software engineers
+who own their code and will have to explain every line of the diff. Before anything is built they see
+what you found, with `file:line` anchors, the options that exist and what each one costs, and they
+choose. Nothing is implemented from the request alone. Once they have agreed the plan, execution is
+yours: dispatch, merge, verify and ship without asking for a go-ahead again.
 
 **The orchestrator holds the plan; executors hold implementation.** Before dispatch, the orchestrator decides
 what improvement is worth making, its concrete benefit, the approach, and boundaries. Researchers return facts
@@ -27,7 +34,8 @@ wave. This skill is the sequence and the sizing, not a second copy of those rule
 
 ## Size it first
 
-Sizing is a call you make and state in a line, not a question you ask the user. Read these signals:
+Sizing is a call you make and state in a line, not a question you ask the user. They can overrule it
+in a word. Read these signals:
 
 - **Independently checkable pieces**: one, a handful, or many.
 - **Surfaces crossed**: one module, or store plus CLI plus MCP plus UI plus hooks plus docs.
@@ -45,8 +53,10 @@ Three sizes, and what each dial does at each:
 | Dial | One ticket | One wave | Multi-wave |
 | --- | --- | --- | --- |
 | Recon | inline `Read`/`Grep`/`Explore` | plus one exploration ticket when the seam is unclear | 2-3 parallel exploration tickets on distinct angles |
-| Questions | none, state assumptions | one batched round if a contract-changing call exists | one batched round, expect a real decision |
-| Design | write the contract yourself | one planning or spike ticket when the approach is open | 2-3 competing proposals, judged and merged into one contract |
+| Reproduction | a reported problem fails on demand before any fix is designed | the same, per defect | the same, per defect |
+| Options | the fix and the one alternative worth naming | 2-3 approaches written from recon | a design panel when the approach is contested and hard to reverse |
+| Discussion | one line to confirm the approach when there is a real choice; none for an exact fix | findings and options walked through with the user until the approach is agreed | the same, plus sign-off on the contract before any ticket is filed |
+| Design | write the contract yourself | the agreed approach written as one contract | the agreed proposals judged and merged into one contract |
 | Backlog | one ticket, no story | story plus the wave's full backlog | story plus the full backlog for every wave, dependency-linked |
 | Execution | one executor | one parallel wave | wave after wave, re-planned between |
 | Review | the done-oracle | a `review-audit` only for a named untested seam | a `review-audit` only where the contract names a seam it cannot test |
@@ -96,12 +106,18 @@ or three bounded proposals only when the approach is genuinely contested.
 ## The shape
 
 1. Frame the outcome, check this flow applies, and state the size.
-2. List the unknowns, then recon: sub-agents resolve what the code can answer.
-3. One question round for what they could not, or none.
-4. Design: write the contract, or run a panel and merge the winner.
-5. Story plus the complete backlog for every planned wave, filed before anything dispatches.
-6. Dispatch each ready wave in full, keep routine supervision quiet, allow declared live advice, and re-plan between waves.
-7. Review at the sized depth, integrate by oracle, publish, close out.
+2. Investigate: list the unknowns, then recon. Sub-agents resolve what the code can answer.
+3. Reproduce a reported problem before anyone designs a fix for it.
+4. Lay out the options: what could be done, where in the code, and what each one costs.
+5. Discuss it with the user until the approach is agreed. Their decisions, your recommendations.
+6. Write the agreed approach as one contract, play it back, and get a yes.
+7. Story plus the complete backlog for every planned wave, filed before anything dispatches.
+8. Dispatch each ready wave in full, keep routine supervision quiet, allow declared live advice, and re-plan between waves.
+9. Review at the sized depth, integrate by oracle, publish, close out.
+
+Steps 2 to 6 are the conversation. Nothing is filed or built until step 6 ends in a yes. Steps 7 to 9
+are execution, and they never go back to the user for a go-ahead: only for a decision the agreed plan
+did not cover.
 
 Track these with the task tools so the user can see where the feature is.
 
@@ -119,16 +135,17 @@ Drop out of this flow when it does not fit, and say so plainly:
 - Operational asks (run the build, start the dev server, open the dashboard, answer from what is
   already on screen): just do them.
 - A small bounded fix in a few known files: edit inline and run a focused check.
-- A single bug with a known cause: keep one owner, inline when it fits the bounded path.
+- A single bug with a known cause: reproduce it first (step 3), then keep one owner, inline when it
+  fits the bounded path.
 
-## 2. Unknowns first, then recon, bounded
+## 2. Investigate: unknowns first, then recon, bounded
 
 Before any reading, write down what the request leaves unclear: the outcome itself, which existing
 behavior it replaces, who consumes the result, what "done" looks like, and anything the user said in a
 way that has two readings. Then sort each unknown by who can answer it. The codebase, the git history,
 or an external source answers most of them; only the user answers the rest. That sort decides the next
-two steps: unknowns the code can answer become exploration tickets, and unknowns only the user can
-answer become the question round. Do not guess at either kind and call the guess a contract.
+steps that follow: unknowns the code can answer become exploration tickets, and unknowns only the
+user can answer go into the discussion in step 5. Do not guess at either kind and call the guess a contract.
 
 Recon answers exactly one question: **what does the contract need to say?** Stop the moment you can
 write the shared interfaces, the file boundaries, and a verify command per piece.
@@ -148,39 +165,46 @@ makes the expensive loop expensive, and it buys nothing the finding did not alre
 finding is too thin to write a contract from, the fix is a sharper deliverable on the next exploration
 ticket, not the orchestrator crawling the tree itself.
 
-## 3. One question round, or none
+## 3. Reproduce a reported problem
 
-The question round is what is left of the unknowns list after the sub-agents report: the ambiguities
-that neither the code nor the sources could settle. Ask them together in a single `AskUserQuestion`
-(up to four), each carrying what the investigation found so the user decides from evidence instead of
-from the same uncertainty you started with. Ask when the answer changes user-visible behavior,
-compatibility, migration, public API, dependencies, or expensive-to-reverse scope, and ask when the
-request itself is unclear enough that two careful readers would build different things. One round
-respects the user's attention and gets better answers, because they see the whole shape of the decision
-at once. Asking one question per ambiguity trains them to stop reading. Asking before the sub-agents
-report wastes the round on things the code would have answered.
+When the request is "this is broken", make it fail on demand before anyone designs a fix. A fix for a
+problem nobody reproduced is a guess, and its test proves nothing.
 
-Worth asking: a user-visible behavior with two defensible answers, a scope boundary that changes how
-much gets built, a compatibility break, a data migration, anything else expensive to reverse.
+- Find the shortest command, test or input that shows the failure, and run it. Keep the exact
+  command and what it printed.
+- Say what you observed against what was expected, and where the two part ways: the function and
+  line where the wrong value is first produced, when recon can name it.
+- If it does not reproduce, stop and say so with what you tried. Ask the user for the missing
+  condition (version, data, environment, steps). Never design around a failure you could not see.
+- The reproduction becomes the regression check: it goes into the ticket as the thing that fails
+  before the change and passes after it.
 
-Not worth asking: naming, file layout, test placement, error copy, ordering, and every other call you
-can make and change later. State the assumption in the contract and keep going. Explicit phrases such
-as "do your thing", "use your judgment", or "whatever you think" delegate the current feature: pick,
-record the pick, and move on. They do not create a durable standing preference.
+A feature request skips this step. A change to existing behavior does the nearest equivalent: show
+the current behavior first, so the discussion is about something everyone can see.
 
-This is where the generic flow is deliberately narrowed. It waits for answers before designing;
-Sidequest defaults autonomous, because a stalled feature costs the user more than a decision they can
-correct at review. That default covers calls you can make and change later. It never covers an unclear
-outcome: a contract guessed from a request nobody understood is a full wave of work in the wrong
-direction, and one question is cheaper than that.
+## 4. Options: what could be done
 
-## 4. Design: contract, or a panel
+Before the user is asked to choose, they need something real to choose between. For anything with a
+design choice, write down the approaches that would work. Two or three is usual. One is honest when
+the fix is exact, and then say why there is no second.
 
-The output of this step is always the same artifact: **one contract**. What changes with size is how
-much you spend arriving at it.
+For each option:
 
-**When the approach is settled**, write it. Three proposals for a foregone conclusion is three tickets
-of cost for an answer you already had.
+- **Where**: the files and functions it touches, as `file:line` anchors from recon.
+- **What changes**: the mechanism, in the terms the code already uses. An engineer should be able to
+  picture the diff.
+- **Why it works**: the cause it removes or the seam it extends, tied to the reproduction or the
+  finding that supports it.
+- **Cost and risk**: what it forecloses, what existing behavior shifts for people already using
+  this, what is hard to reverse, how it would be tested.
+
+Then give your recommendation and the reason, and name the option you would reject first and why.
+Also say plainly when the evidence suggests the request should change: it contradicts how the code
+works, it is larger than the problem needs, or a cheaper route exists (an existing feature, a smaller
+change, nothing at all). Raise that here, before the discussion, so the user reacts to it.
+
+**When the approach is settled**, one option with its reason is the whole step. Three proposals for a
+foregone conclusion is three tickets of cost for an answer you already had.
 
 **When the approach is genuinely contested** and hard to reverse, run a design panel. Two or three
 `spike-investigation` tickets, `readonly: true`, same problem, deliberately different mandates:
@@ -194,11 +218,55 @@ introduces, the signatures it pins, file boundaries per piece, what it costs, an
 Cap each proposal at roughly two thousand tokens. Three uncapped design docs landing in the
 orchestrator's context is the failure mode the panel is supposed to avoid.
 
-Then do the orchestrator's planning work: **judge the plans and merge them.**
-Pick a spine, graft the parts of the runners-up that are better than the winner's version, and write
-one contract out of the result. A panel whose output is "we went with proposal B" wasted the other
-two; the point is that the merged contract beats every individual proposal. Record in the story log
-why the losers lost, because the next session will otherwise re-propose them.
+Then do the orchestrator's planning work: **judge the plans and merge them** into the option you
+recommend in the discussion. Pick a spine, graft the parts of the runners-up that are better than the
+winner's version, and bring that merged proposal to the user beside the alternatives it came from. A
+panel whose output is "we went with proposal B" wasted the other two; the point is that the merged
+proposal beats every individual one. Record in the story log why the losers lost, because the next
+session will otherwise re-propose them.
+
+## 5. Discuss it with the user
+
+This is the step the rest of the flow is cut against. Walk the user through what you found and the
+options, then work through the decisions with them until the approach is agreed.
+
+Open with a short brief they can check against their own knowledge of the code: what exists today
+(anchors), the reproduction if there is one, the options, your recommendation. Then ask.
+
+- **Facts are your job, decisions are theirs.** Anything the code, the history or a source can
+  answer, you look up, with a read-only sub-agent where it helps. Never ask the user for something
+  you could find. Never record your own conclusion as their decision.
+- **Ask in rounds.** Put every decision whose prerequisites are settled into one round. A question
+  that depends on an answer still open waits for the next round. Keep going until nothing is left
+  that would change what gets built: there is no fixed number of rounds or questions.
+- **Every question carries what you found and your recommended answer**, worded so "yes" accepts it.
+  Closed choices with a clear default go through `AskUserQuestion`, recommended option first. Open
+  questions (how should this behave, what did you mean by X) go out as a short numbered list the user
+  answers in their own words.
+- **Ask about what gets built and how it is shaped**: user-visible behavior, the approach where
+  options differ, scope boundaries, compatibility, migration, public API, dependencies, anything
+  expensive to reverse, and any part of the request two careful readers would build differently.
+- **Do not ask about** naming, file layout, test placement, error copy or ordering. Make those calls,
+  state them in the contract, and let the user object there.
+- **Never ask for a go-ahead.** "Shall I proceed", "which should I start with" and "is it OK to
+  dispatch" are not decisions. Once the plan is agreed in step 6 the answer is always yes.
+
+If the engineer wants to go deeper (why this function, what calls it, what breaks if it moves),
+that is the point of the step: answer from the code, with anchors, and let the answer change the
+plan.
+
+Explicit phrases such as "do your thing", "use your judgment", or "whatever you think" delegate the
+current feature: take your recommended answer for everything still open, record each as decided by
+default, and move on. They do not create a durable standing preference.
+
+For story-sized work, an independent intake review (`../sidequest/references/intake.md`) can run
+before the first round to strike questions the evidence already answers. It is a filter on your
+draft, never a substitute for the discussion.
+
+## 6. The contract, played back
+
+The output of the discussion is always the same artifact: **one contract**, written from what the
+user agreed. What changes with size is how much you spent arriving at it.
 
 Whatever the route, a contract that makes fan-out safe pins:
 
@@ -214,13 +282,18 @@ Whatever the route, a contract that makes fan-out safe pins:
   end the turn retaining their claim until the parent explicitly hands off. Heavy commands use
   at most two workers, finite owned deadlines, and descendant cleanup, within the two-core heavy budget.
 
-Present the chosen approach and its main trade-off in a few lines. Ask for approval only when the
-choice is expensive to reverse: a schema or migration, a public API, a user-visible default, a new
-dependency. Otherwise state what you picked and proceed.
+Play the contract back before anything is filed: the outcome and non-goals, what changes where and
+why (the agreed option, with its anchors), how each piece will be verified, and every assumption you
+made without asking. Keep it short enough to read in a minute. Get an explicit yes. A correction
+goes back into the contract, and the changed part is played back again.
+
+That yes is the last approval this feature needs. From here, do not ask whether to file, dispatch,
+merge or publish. Come back to the user only for a decision the agreed contract did not cover, or
+when evidence invalidates it (the design-reopen evidence pinned above).
 
 Read-only native agents can resolve unclear call flows without tickets. Keep one owner once the bounded fix is clear. Use investigation tickets when routed execution or durable board tracking is useful.
 
-## 5. Story plus the whole backlog
+## 7. Story plus the whole backlog
 
 One owner covers a bounded fix. Inline work is allowed for small fixes in a few known files. A story or wave requires 3+ independently checkable pieces and a stated reason. For that admitted wave, pin the contract and every planned ticket under the story before the first dispatch: category from the live taxonomy, file scope, anchors,
 exact scoped verify, and `depends-on` links. Never hand-pick a model or effort.
@@ -256,7 +329,7 @@ Size implementation plus final verification to fit comfortably before 75 tool ro
 split along actual cohesive boundaries before dispatch. A resource pause does not automatically
 release/restart an executor or prove death.
 
-## 6. Run the waves
+## 8. Run the waves
 
 Fresh `dispatch <ref>` per ticket, every spawn field passed through unchanged, all of it in one
 message so the wave actually runs in parallel. Dispatch everything whose dependencies are met.
@@ -301,7 +374,7 @@ they belong to.
 A wave that straggles on one ticket while you sit idle is a sizing error, not a reason to poke it.
 Note it, and cut thinner slices next time.
 
-## 7. Review at the sized depth, then integrate
+## 9. Review at the sized depth, then integrate
 
 The floor is always the same: read the submission report, deliver the range, and run the merged-tree
 full gate once for the wave before versioning. Preserve the real pinned delivery verifier; reuse
@@ -338,7 +411,7 @@ the reviewer whose whole job it was. You judge plans and route fixes.
   no docs ticket is not done.
 - **Decisions**: log the contract calls, the rejected proposals and why, and the assumptions you made
   without asking, on the story, so the next session inherits the reasoning instead of re-deriving it.
-- **A short report**: use `completion <ref|US-n> --text` output, plus decisions logged on the story. Do not re-describe the work by hand.
+- **A short report**: use `completion <ref|US-n> --text` output, plus decisions logged on the story. Do not re-describe the work by hand. Add what an engineer reviewing the change needs and the completion text does not carry: where the change landed (files and functions), why that shape, and what was not checked.
 
 ---
 
@@ -350,8 +423,9 @@ Same beats, different owner for each, and every one of them sized:
 | --- | --- |
 | Parallel explorer agents reporting into main context | `codebase-exploration` tickets returning compressed findings |
 | Orchestrator reads every file the explorers named | contract written from the findings |
-| Ask, then wait, per ambiguity | one batched round for contract-changing calls only |
-| Three architect agents, always, then pick one | a panel when the approach is contested, and the winner gets merged with the runners-up |
+| Ask, then wait, per ambiguity | findings and options first, then discussion rounds with a recommended answer on every question, until the approach is agreed |
+| No reproduction step | a reported problem fails on demand before a fix is designed |
+| Three architect agents, always, then pick one | options written from recon; a panel when the approach is contested, merged, and the user chooses |
 | Orchestrator implements the chosen design | story, full backlog, one or many parallel waves |
 | Three reviewer agents on the finished diff, always | done-oracle, plus a `review-audit` for a named untested seam |
 | Summary | integrate per wave, publish, docs, story decisions, report |
@@ -365,6 +439,10 @@ Same beats, different owner for each, and every one of them sized:
 - **A panel that picks a winner and discards the rest.** Merge, or do not run the panel.
 - **Reading the whole subsystem before filing anything.** Recon has a stopping condition: the contract
   is writable.
+- **Building before the engineer agreed the approach.** A plan the user never saw is a wave of work
+  they have to reverse-engineer at review. Findings, options, discussion, yes: then build.
+- **Fixing a problem nobody reproduced.** The failing command comes first.
+- **Asking for a go-ahead.** After the yes in step 6, "shall I proceed" is noise. Decisions only.
 - **Guessing past an unclear request.** An unknown the code could have answered gets a sub-agent; one
   only the user can answer gets asked. Neither gets an assumption dressed up as a contract.
 - **A backlog that grows one ticket at a time.** Nobody can steer a plan they cannot see.

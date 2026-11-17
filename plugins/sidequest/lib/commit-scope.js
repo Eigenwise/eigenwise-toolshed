@@ -888,12 +888,29 @@ function validateCommitOrUndo(root, commit, scopes, previousHead) {
   const undone = previousHead.ok ? gitResult(root, ["reset", "--soft", previousHead.value]) : gitResult(root, ["update-ref", "-d", "HEAD"]);
   return { ...validation, rolledBack: undone.ok, message: undone.ok ? void 0 : undone.message };
 }
+async function stageScopes(root, stageableScopes) {
+  const underIgnore = stageableScopes.filter((scope) => gitResult(root, ["check-ignore", "--quiet", "--no-index", "--", scope]).ok);
+  const visible = stageableScopes.filter((scope) => !underIgnore.includes(scope));
+  if (visible.length) await (0, import_git_process.execFileText)("git", ["add", "--all", "--", ...visible], { cwd: root });
+  if (underIgnore.length) await (0, import_git_process.execFileText)("git", ["add", "--update", "--", ...underIgnore], { cwd: root });
+}
+function signoffFlags(root) {
+  return repoRequestsSignoff(root) ? ["--signoff"] : [];
+}
+async function concludeMerge(root, message) {
+  const unmergedPaths = git(root, ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean);
+  if (unmergedPaths.length) {
+    return { ok: false, reason: "git_error", message: `a merge is in progress and these paths still have conflicts: ${unmergedPaths.join(", ")}. Resolve them, then commit again.` };
+  }
+  await (0, import_git_process.execFileText)("git", ["commit", ...signoffFlags(root), "-m", String(message || "")], { cwd: root });
+  const commit = git(root, ["rev-parse", "HEAD"]).trim();
+  return { ok: true, commit, paths: commitPaths(root, commit) };
+}
 async function commitWithinScope(root, message, scopes, stageableScopes, committableScopes) {
-  if (stageableScopes.length) await (0, import_git_process.execFileText)("git", ["add", "--all", "--", ...stageableScopes], { cwd: root });
+  await stageScopes(root, stageableScopes);
+  if (gitResult(root, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).ok) return concludeMerge(root, message);
   const previousHead = gitResult(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-  const commitArgs = ["commit", "--only"];
-  if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
-  await (0, import_git_process.execFileText)("git", [...commitArgs, "-m", String(message || ""), "--", ...committableScopes], { cwd: root });
+  await (0, import_git_process.execFileText)("git", ["commit", "--only", ...signoffFlags(root), "-m", String(message || ""), "--", ...committableScopes], { cwd: root });
   const commit = git(root, ["rev-parse", "HEAD"]).trim();
   return Object.assign({ commit }, validateCommitOrUndo(root, commit, scopes, previousHead));
 }

@@ -3501,7 +3501,7 @@ test('session-start: keeps specific edits inline and proactive changes user-appr
   }
 });
 
-test('session-start: loads user-story for routed work beyond small tasks', () => {
+test('session-start: routed work beyond small tasks is agreed with the user before any ticket', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-routed-work-shape-'));
   const project = path.join(home, 'project');
   registerProject(home, project);
@@ -3511,16 +3511,16 @@ test('session-start: loads user-story for routed work beyond small tasks', () =>
       CLAUDE_PROJECT_DIR: project,
     });
     const inlineCarveOut = 'Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story';
-    const userStoryDefault = 'For work beyond a small task, load the user-story skill before ticketing or dispatching';
-    const dispatchDefault = 'A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request';
+    const userStoryDefault = 'Work beyond a small task starts with the user: load the user-story skill, investigate, reproduce a reported problem, lay out the options, and agree the approach with them before any ticket is filed';
+    const dispatchDefault = 'Once the plan is agreed, a usable Sidequest project route is standing authorization to file its tickets and dispatch returned executors without asking again';
     assert.match(context, new RegExp(inlineCarveOut, 'i'));
     assert.match(context, new RegExp(userStoryDefault, 'i'));
     assert.match(context, new RegExp(dispatchDefault, 'i'));
-    assert.match(context, /multi-file change, at an unknown location that needs discovery, or an investigation/i);
     const heading = source ? '=== sidequest (active — context restored) ===' : '=== sidequest (active) ===';
-    assert.ok(context.includes(`${heading}\n${dispatchDefault}`), 'the standing authorization is the first line of the orchestrator block');
+    assert.ok(context.includes(`${heading}\n${userStoryDefault}`), 'agreeing the approach with the user is the first line of the orchestrator block');
+    assert.ok(context.indexOf(userStoryDefault) < context.indexOf(dispatchDefault), 'the standing authorization only follows the agreed plan');
     assert.ok(context.indexOf(dispatchDefault) < context.indexOf('ROLE: ORCHESTRATOR'));
-    assert.ok(context.indexOf(inlineCarveOut) < context.indexOf(userStoryDefault));
+    assert.doesNotMatch(context, /without offering it or asking for a further user request/i);
     assert.doesNotMatch(context, /can ask to use it/i);
   }
 });

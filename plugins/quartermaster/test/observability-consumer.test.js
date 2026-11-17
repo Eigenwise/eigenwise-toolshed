@@ -16,8 +16,9 @@ const hookSources = hooks.modules.map((modulePath) => {
   assert.ok(fs.existsSync(filename), `registered hook module exists: ${modulePath}`);
   return fs.readFileSync(filename, 'utf8');
 }).join('\n');
-const skillNames = fs.readdirSync(path.join(producerRoot, 'skills')).map((directory) => {
-  const text = fs.readFileSync(path.join(producerRoot, 'skills', directory, 'SKILL.md'), 'utf8');
+const skillsRoot = path.join(producerRoot, 'skills');
+const skillNames = !fs.existsSync(skillsRoot) ? [] : fs.readdirSync(skillsRoot).map((directory) => {
+  const text = fs.readFileSync(path.join(skillsRoot, directory, 'SKILL.md'), 'utf8');
   return text.match(/^name:\s*(\S+)/m)[1];
 });
 const registeredCommands = [...hookSources.matchAll(/command\.register\(\{\s*name:\s*['"]([^'"]+)/g)]

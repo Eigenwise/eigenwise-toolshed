@@ -36,8 +36,14 @@ function recoveryGuidance(reason) {
   return `Model Gateway isn't ready: ${reason}. Run ${command} start (resumes an intentional stop), ${command} recover, or ${command} doctor. To remove project wiring, run ${command} env --remove. Then resubmit your prompt. Hooks disabled by the host and failures inside an active turn aren't covered by the prompt gate.`;
 }
 
+function parsedHookInput(text) {
+  try { return JSON.parse(text); }
+  catch { return {}; }
+}
+
 function readHookPayload() {
-  const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+  // Stdin the host cut short or left empty still gets a readiness check, from the inherited cwd.
+  const payload = parsedHookInput(fs.readFileSync(0, 'utf8'));
   // A deleted session cwd (a removed worktree) keeps the inherited cwd instead of blocking every prompt.
   if (typeof payload.cwd === 'string') try { process.chdir(payload.cwd); } catch {}
   return payload;

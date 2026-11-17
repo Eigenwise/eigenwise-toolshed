@@ -19,8 +19,11 @@ function withoutReadinessHooks(groups) {
   });
 }
 
+// No onFailure: 'block'. The gate blocks a prompt itself, with exit 2 and its guidance. A gate that
+// could not run at all (killed while the app shuts down, node missing) used to eat the prompt with
+// "No stderr output"; now that prompt goes through and a dead gateway answers with its own error.
 function recoveryHookGroup(event) {
-  const group = { hooks: [{ type: 'command', command: readinessCommand(), timeout: 35, onFailure: 'block' }] };
+  const group = { hooks: [{ type: 'command', command: readinessCommand(), timeout: 35 }] };
   if (event === 'SessionStart') group.matcher = 'startup|resume';
   return group;
 }

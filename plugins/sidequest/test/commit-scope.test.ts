@@ -388,6 +388,52 @@ test('ignored declared directories do not block tracked scoped commits', async (
 });
 
 
+test('GH-837: a tracked file under an ignored directory commits, and an ignored new file beside it stays out', async () => {
+  const root = repo();
+  fs.mkdirSync(path.join(root, '.config-dir'), { recursive: true });
+  // The directory itself is ignored: that, not a pattern on its children, is what makes git add refuse.
+  fs.writeFileSync(path.join(root, '.gitignore'), '.config-dir/\n');
+  fs.writeFileSync(path.join(root, '.config-dir', 'settings.json'), '{"enabled":false}\n');
+  git(root, ['add', '.gitignore']);
+  git(root, ['add', '-f', '.config-dir/settings.json']);
+  git(root, ['commit', '-m', 'track one ignored file']);
+  fs.writeFileSync(path.join(root, '.config-dir', 'settings.json'), '{"enabled":true}\n');
+  fs.writeFileSync(path.join(root, '.config-dir', 'local-cache.json'), '{}\n');
+
+  const committed = await commitScope.commitScoped(root, 'flip the setting', ['.config-dir/settings.json']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['.config-dir/settings.json']);
+  assert.equal(git(root, ['status', '--porcelain']), '');
+});
+
+test('GH-839: a resolved merge commits whole, and a merge with a conflict left in it is refused by name', async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'shared.js'), 'base\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'shared base']);
+  git(root, ['checkout', '-b', 'ticket']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'shared.js'), 'ticket\n');
+  git(root, ['commit', '-am', 'ticket change']);
+  git(root, ['checkout', 'main']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'shared.js'), 'main\n');
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'main-only.js'), 'main\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'main change']);
+  git(root, ['checkout', 'ticket']);
+  assert.throws(() => git(root, ['merge', 'main']));
+
+  const conflicted = await commitScope.commitScoped(root, 'merge main', ['README.md']);
+  assert.equal(conflicted.ok, false);
+  assert.match(conflicted.message as string, /still have conflicts: plugins\/sidequest\/shared\.js/);
+
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'shared.js'), 'ticket and main\n');
+  const merged = await commitScope.commitScoped(root, 'merge main', ['plugins/sidequest/shared.js']);
+  assert.equal(merged.ok, true, merged.message as string);
+  assert.equal(git(root, ['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ').length, 3, 'HEAD is a merge commit with two parents');
+  assert.equal(git(root, ['show', 'HEAD:plugins/other-plugin/main-only.js']), 'main');
+  assert.equal(git(root, ['status', '--porcelain']), '');
+});
+
 test('exact declared paths commit untracked additions', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
