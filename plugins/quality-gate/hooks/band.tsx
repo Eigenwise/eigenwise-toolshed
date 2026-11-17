@@ -45,9 +45,13 @@ export function registerBand(on: On) {
     if (!turn) return below
     const text = await bandText($, turn)
     const { Box, Text } = $.ui.resolve(event)
+    // The width sits on a Box of its own: newer engines refuse the row when the Box that holds the
+    // engine's own node carries a width, and then skip this hook, so the band disappears.
     return (
-      <Box flexDirection="column" width={event.props.bodyColumns}>
-        <Text dimColor wrap="truncate-end">{text}</Text>
+      <Box flexDirection="column">
+        <Box width={event.props.bodyColumns}>
+          <Text dimColor wrap="truncate-end">{text}</Text>
+        </Box>
         {below}
       </Box>
     )

@@ -24,7 +24,9 @@ For a bounded catch-up list, use MCP `changes {since, view:"catchup"}` or CLI `c
 
 ## Choose one owner before adding ceremony
 
-Before dispatching substantial or ambiguous work, pin a contract; see `user-story`. Check feasibility
+Before dispatching substantial or ambiguous work, pin a contract; see `user-story`. The user agrees the approach first:
+`user-story` runs the conversation (investigate, reproduce a reported problem, options, discussion) and
+nothing is filed before its contract gets a yes. Check feasibility
 before expensive implementation or tests for substantial/safety-sensitive work
 (`references/ticket-authoring.md`). Small deterministic fixes keep one owner and a focused check;
 a plan advisor needs a named architectural risk or contested approach, no mandatory panel.

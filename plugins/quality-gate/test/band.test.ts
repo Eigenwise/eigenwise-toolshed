@@ -37,7 +37,8 @@ test('no turn state returns the drawing beneath, then state writes redraw with S
   expect(await drawing.drawn()).toMatchObject(BELOW)
   await publish($)
   expect((await drawing.find({ type: 'Text', text: 'SPLIT' }))?.text).toBe('$1.23 · CC 6 SPLIT 1 · tests none stale · coverage not set up')
-  expect(await drawing.drawn()).toMatchObject({ type: 'Box', props: { width: 80, flexDirection: 'column' }, children: [expect.anything(), BELOW] })
+  const ownRow = { type: 'Box', props: { flexDirection: 'column' }, children: [{ type: 'Box', props: { width: 80 } }, expect.anything()] }
+  expect(await drawing.drawn()).toMatchObject({ type: 'Box', props: { flexDirection: 'column' }, children: [ownRow, BELOW] })
   await drawing.redraw()
   expect((await drawing.find({ type: 'Text', text: 'coverage not set up' }))?.text).toMatch('coverage not set up')
   await clock.advance(100)
