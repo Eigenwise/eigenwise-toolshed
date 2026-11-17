@@ -5,6 +5,7 @@ const { DEMONSTRATIONS_FILE } = require('./store/completion.js');
 
 import { committedBuildCommands } from './commit-scope.js';
 import { configuredProjectQualityPolicy } from './integration-quality.js';
+import { buildsOnCandidates } from './store/work-provenance.js';
 import type { VerificationKind, VerificationRequirement } from './kernel/verification.js';
 /**
  * sidequest - runtime exec agent sync (SQ-158)
@@ -661,7 +662,9 @@ function ticketContinuationPacket(ticket?: any) {
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${evidence}${replay}`.trim();
 }
 
-type RestoreTicket = { ref: string; links?: { type: string; ref: string }[]; dispatch?: { continuation?: { mode?: string } } };
+type RestoreTicket = { ref: string; links?: { type: string; ref: string }[]; dispatch?: { continuation?: { mode?: string }; workProvenance?: unknown } };
+type RelatedSource = { ref: string; submission?: { commit?: string; review?: { outcome?: string } } | null; rejectedSubmissions?: ({ commit?: string; supersededAt?: string } | null)[] };
+type RelatedCandidate = { ref: string; commit: string; rejected: boolean };
 
 function ownPinnedCandidate(project: string, ref: string): string | null {
   try {
@@ -671,16 +674,42 @@ function ownPinnedCandidate(project: string, ref: string): string | null {
   }
 }
 
+// A bound review verdict or an unsuperseded rejection record both mean a reviewer refused this exact commit.
+function candidateRejected(source: RelatedSource, commit: string): boolean {
+  if (source.submission?.review?.outcome === 'rejected') return true;
+  return (source.rejectedSubmissions || []).some((rejected) => rejected?.commit === commit && !rejected.supersededAt);
+}
+
+function relatedCandidates(ticket: RestoreTicket, slug: string): RelatedCandidate[] {
+  return (ticket.links || []).filter((link) => link.type === 'related').flatMap((link) => {
+    const source: RelatedSource | null = store.getTicket(slug, link.ref);
+    const commit = source?.submission?.commit;
+    return source && commit ? [{ ref: source.ref, commit, rejected: candidateRejected(source, commit) }] : [];
+  });
+}
+
+// Only this ticket's own earlier attempt and a dispatch-declared builds-on source are merged; a `related` link
+// alone never is, because the ticket text may forbid it or the candidate may be rejected (GH-838).
+function mergedCandidates(ticket: RestoreTicket, project: string): string[] {
+  const declared = buildsOnCandidates(ticket.dispatch?.workProvenance).map((candidate) => candidate.commit);
+  return [...new Set([ownPinnedCandidate(project, ticket.ref), ...declared].filter((commit): commit is string => Boolean(commit)))];
+}
+
+function relatedCandidateLine(candidate: RelatedCandidate): string {
+  const review = candidate.rejected ? 'review rejected' : 'review not rejected';
+  return `Related candidate ${candidate.ref} at ${candidate.commit} (${review}): a \`related\` link orders no merge. Inspect it with \`git show ${candidate.commit}\` and merge it only if this ticket's description says it repairs or continues that work.`;
+}
+
 function candidateRestorePacket(ticket: RestoreTicket, slug: string, project: string): string {
   migrateExperimentRoundRefs(project, ticket.ref);
   if (ticket.dispatch?.continuation) return '';
-  const related = (ticket.links || []).filter((link) => link.type === 'related')
-    .map((link) => store.getTicket(slug, link.ref)?.submission?.commit).filter(Boolean);
-  const candidates = [...new Set([...related, ownPinnedCandidate(project, ticket.ref)].filter(Boolean))];
-  if (!candidates.length) return '';
+  const merged = mergedCandidates(ticket, project);
+  const related = relatedCandidates(ticket, slug).filter((candidate) => !merged.includes(candidate.commit));
+  if (!merged.length && !related.length) return '';
   return [
-    'Inherited candidate restore (first step after claiming and synchronizing the dispatch baseline):',
-    ...candidates.map((candidate) => `Run \`git merge --no-ff ${candidate}\`. If it fails, stop and report the failure. Preserve the inherited commits as ancestors.`),
+    ...(merged.length ? ['Inherited candidate restore (first step after claiming and synchronizing the dispatch baseline):'] : []),
+    ...merged.map((candidate) => `Run \`git merge --no-ff ${candidate}\`. If it fails, stop and report the failure. Preserve the inherited commits as ancestors.`),
+    ...related.map(relatedCandidateLine),
     `refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket. Move it to the final committed candidate with \`git update-ref refs/sidequest/${ticket.ref} <final commit>\` before submitting.`,
   ].join('\n');
 }

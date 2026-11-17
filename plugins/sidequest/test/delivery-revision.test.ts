@@ -429,6 +429,162 @@ test('CLI groom-close threads --delivery-revision and --resolved-path through to
   assert.equal(integration.contentProof.resolved[0].by, 'orchestrator');
 });
 
+const lifecycleTools = require('../lib/mcp-lifecycle.js').tools as Array<{ name: string; handler(args: Record<string, unknown>): any }>;
+
+function lifecycleHandler(name: string) {
+  const tool = lifecycleTools.find((candidate) => candidate.name === name);
+  assert.ok(tool, `${name} tool is registered`);
+  return tool!.handler;
+}
+
+const SQUASHED_FILE = 'src/squashed.js';
+
+/**
+ * GH-834: commit A adds lines and commit B rewrites some of them, then both land
+ * on main as one squash commit whose tree matches B. A's own version of the
+ * rewritten lines is nowhere on main, so only the net candidate can be proven.
+ */
+function squashedTwoCommitFixture(label: string) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-delivery-squash-${label}-`));
+  git(['init', '-b', 'main'], repo);
+  git(['config', 'user.name', 'Sidequest Test'], repo);
+  git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.claude/*\n');
+  writeLines(repo, SQUASHED_FILE, baseLines());
+  commitAll(repo, 'base');
+
+  const worktree = path.join(repo, '.claude', 'worktrees', 'agent-squash');
+  git(['worktree', 'add', '-b', 'worktree-agent-squash', worktree, 'main'], repo);
+  const firstDraft = baseLines();
+  firstDraft.splice(20, 0, "const added1 = 'first draft';", "const added2 = 'first draft';");
+  writeLines(worktree, SQUASHED_FILE, firstDraft);
+  const firstCommit = commitAll(worktree, 'A: add the new lines');
+  const fixedUp = firstDraft.slice();
+  fixedUp[20] = "const added1 = 'fixed up';";
+  fixedUp[21] = "const added2 = 'fixed up';";
+  writeLines(worktree, SQUASHED_FILE, fixedUp);
+  const candidate = commitAll(worktree, 'B: fix up the lines A added');
+
+  const { slug } = store.ensureProject(repo);
+  const ticket = store.createTicket(slug, {
+    title: `squashed two-commit delivery ${label}`,
+    category: 'codebase-exploration',
+    description: 'A reviewed two-commit candidate that landed as one squash commit.',
+    files: ['src'],
+  });
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  git(['update-ref', gitRef, candidate], worktree);
+  const target = store.integrationTarget(slug);
+  const range = commitScope.submissionRange(worktree, { commit: candidate, gitRef, upstream: target.upstream, integrationBranch: target.branch });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  assert.equal(store.claimTicket(slug, ticket.ref, 'squash-worker', { direct: true, reason: 'The squash delivery fixture requires a local direct claim.' }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, 'squash-worker', { commit: candidate, gitRef, range, worktree, verify: nodeVerify('process.exit(0)') }).ok, true);
+
+  writeLines(repo, SQUASHED_FILE, fixedUp);
+  const landed = commitAll(repo, 'squash A and B into one commit');
+  assert.equal(git(['diff', candidate, landed], repo), '', 'the squash commit carries exactly the candidate tree');
+  return { repo, slug, ticket, firstCommit, candidate, landed };
+}
+
+const SQUASH_REASON = 'Both candidate commits were cherry-picked onto main as one squash commit and pushed.';
+
+test('GH-834: groomClose records a squashed two-commit candidate by its pinned commit with the landed squash as deliveryRevision', async () => {
+  const fixture = squashedTwoCommitFixture('documented');
+  const closed = await lifecycleHandler('groomClose')({
+    project: fixture.repo,
+    ref: fixture.ticket.ref,
+    by: 'orchestrator',
+    deliveryCommit: fixture.candidate,
+    deliveryMethod: 'manual',
+    deliveryRevision: fixture.landed,
+    reason: SQUASH_REASON,
+  });
+  assert.equal(closed.ok, true, closed.message);
+  const ticket = store.getTicket(fixture.slug, fixture.ticket.ref);
+  assert.equal(ticket.status, 'done');
+  assert.equal(ticket.submission.integration.contentProof.revision, fixture.landed);
+});
+
+test('GH-834: groomClose refuses deliveryMethod and deliveryRevision without deliveryCommit and names the pinned candidate', async () => {
+  const fixture = squashedTwoCommitFixture('no-commit');
+  const refused = await lifecycleHandler('groomClose')({
+    project: fixture.repo,
+    ref: fixture.ticket.ref,
+    by: 'orchestrator',
+    deliveryMethod: 'manual',
+    deliveryRevision: fixture.landed,
+    resolvedPaths: [SQUASHED_FILE],
+    reason: SQUASH_REASON,
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'delivery_commit_required', refused.message);
+  assert.match(refused.message, /deliveryMethod, deliveryRevision, resolvedPaths/);
+  assert.match(refused.message, new RegExp(`deliveryCommit: "${fixture.candidate}"`));
+  assert.notEqual(store.getTicket(fixture.slug, fixture.ticket.ref).status, 'done');
+});
+
+test('GH-834: groomClose also records a squashed two-commit candidate by the landed squash commit alone', async () => {
+  const fixture = squashedTwoCommitFixture('landed-as-commit');
+  const closed = await lifecycleHandler('groomClose')({
+    project: fixture.repo,
+    ref: fixture.ticket.ref,
+    by: 'orchestrator',
+    deliveryCommit: fixture.landed,
+    reason: SQUASH_REASON,
+  });
+  assert.equal(closed.ok, true, closed.message);
+  assert.equal(store.getTicket(fixture.slug, fixture.ticket.ref).submission.integration.contentEvidence, 'equivalent_squashed_range');
+});
+
+test('GH-834: the delivery_content_missing refusal keeps deliveryCommit on the pinned candidate and puts the landed commit in deliveryRevision', () => {
+  const fixture = deliveryFixture('content-missing-guidance');
+  const refused = record(fixture, {});
+  assert.equal(refused.reason, 'delivery_content_missing');
+  assert.match(refused.message, new RegExp(`deliveryCommit stays the pinned candidate ${fixture.candidate}`));
+  assert.match(refused.message, /landed commit goes in deliveryRevision/);
+});
+
+test('GH-834: the delivery_not_reachable refusal keeps deliveryCommit on the pinned candidate and puts the landed commit in deliveryRevision', () => {
+  const fixture = squashedTwoCommitFixture('not-reachable');
+  const refused = store.recordDeliveredSubmission(fixture.slug, fixture.ticket.ref, {
+    target: store.integrationTarget(fixture.slug),
+    deliveryCommit: fixture.candidate,
+    by: 'orchestrator',
+    reason: SQUASH_REASON,
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'delivery_not_reachable');
+  assert.match(refused.message, new RegExp(`deliveryCommit stays the pinned candidate ${fixture.candidate}`));
+  assert.match(refused.message, /landed commit goes in deliveryRevision/);
+});
+
+test('GH-833: integrate refuses deliveryMethod and deliveryRevision without deliveryCommit and merges nothing', async () => {
+  const fixture = squashedTwoCommitFixture('integrate');
+  const refused = await lifecycleHandler('integrate')({
+    project: fixture.repo,
+    ref: fixture.ticket.ref,
+    by: 'orchestrator',
+    deliveryMethod: 'manual',
+    deliveryRevision: fixture.landed,
+    reason: SQUASH_REASON,
+  });
+  assert.equal(refused.ok, false, JSON.stringify(refused.delivery || refused.integration || null));
+  assert.equal(refused.reason, 'delivery_commit_required', refused.message);
+  assert.match(refused.message, /deliveryCommit/);
+  assert.equal(head(fixture.repo), fixture.landed, 'main did not move');
+  assert.notEqual(store.getTicket(fixture.slug, fixture.ticket.ref).status, 'done');
+});
+
+test('GH-833: CLI integrate refuses --delivery-method and --delivery-revision without --delivery-commit and merges nothing', () => {
+  const fixture = squashedTwoCommitFixture('cli-integrate');
+  const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+  const refused = runCli(['integrate', fixture.ticket.ref, '--by', 'orchestrator',
+    '--delivery-method', 'manual', '--delivery-revision', fixture.landed, '--reason', SQUASH_REASON]);
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stderr, new RegExp(`deliveryCommit: "${fixture.candidate}"`));
+  assert.equal(head(fixture.repo), fixture.landed, 'main did not move');
+});
+
 
 const { stubGithub } = require('../../../scripts/release/test/gh-stub.mjs');
 const { emitPublishedExternalRefUpdates } = require('../../../scripts/release/lib/external-refs.mjs');

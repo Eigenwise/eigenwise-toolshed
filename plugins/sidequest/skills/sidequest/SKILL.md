@@ -217,6 +217,8 @@ cause with evidence (`file:line`), the fix, verification.
 **Don't invent tickets**: only file what the user raised. Reminders, stories, human assignment:
 `references/board-features.md`.
 
+**At a pause, report** Done / Running / Needs you / Next.
+
 
 ## Frozen work provenance
 

@@ -64,7 +64,7 @@ const {
 const { sourceRevisionBaseline } = require('./source-revision-capability');
 const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdictOutcome, reviewVerdictHistory } = require('./kernel/review-binding.js');
 const { correctReviewVerdict, finalizeReviewVerdict } = require('./mcp-review-correction.js');
-const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
+const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage, recordedDeliveryWithoutCommitRefusal, groomCloseWithoutCommitRefusal } = require('./refusal-guidance.js');
 import { compositionIncludesSource, compositionSubmissionScope } from './store/composition-admission';
 import { buildsOnCandidates } from './store/work-provenance';
 import type { CompositionDispatch, CompositionTicket } from './store/composition-admission';
@@ -942,7 +942,7 @@ const tools: ToolDefinition[] = [
         integration: { type: 'boolean' },
         deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Delivered source commit reachable from this ticket\'s prepared integration target, or pinned working-tree candidate.' },
         deliveryInteractionCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'A reviewed merged-tree interaction after deliveryCommit, limited to submitted candidate paths.' },
-        deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate. Use manual only after every pinned verifier and the full composed gate; omit integration:true.' },
+        deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate named by deliveryCommit; refused without it. Use manual only after every pinned verifier and the full composed gate; omit integration:true.' },
         worktree: { type: 'string', description: 'Existing worktree of this project to gate a recorded delivery in instead of the registered checkout: on the target branch, or a detached checkout of the observed target tip (not deliveryCommit when the tip is later). Refused with delivery_worktree_unavailable when not a worktree of this repository.' },
         deliveryRevision: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Landed revision, reachable from the target and never an ancestor of the candidate base: proves each submitted path at its tree instead of the working tree, for a candidate rebased or squash-merged before landing. Ignored on a reachable delivery.' },
         resolvedPaths: { type: 'array', items: { type: 'string' }, description: 'Submitted paths the deliveryRevision proof found diverging, attested as resolved by hand; reason records the evidence. Requires deliveryRevision, and is refused on a reachable delivery rather than ignored.' },
@@ -986,6 +986,8 @@ const tools: ToolDefinition[] = [
         }
       }
       const ticket = store.getTicket(slug, args.ref);
+      const missingDeliveryCommit = groomCloseWithoutCommitRefusal(args.ref, ticket?.submission?.commit, args);
+      if (missingDeliveryCommit) return mutationAck(slug, combinedRefusal(ticket, [missingDeliveryCommit]));
       const terminalSubmission = ticket?.dispatch?.terminalAt
         || ticket?.dispatch?.attempts?.some((attempt: any) => attempt?.outcome === 'submitted' && attempt.terminalAt);
       if (verificationSupersession !== undefined && (!ticket?.submission || !terminalSubmission)) {
@@ -1427,7 +1429,7 @@ const tools: ToolDefinition[] = [
         mode: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Defaults to the board delivery setting.' },
         deliveryCommit: { type: 'string', description: 'Reachable delivered source commit or pinned working-tree candidate.' },
         deliveryInteractionCommit: { type: 'string', description: 'Reviewed descendant interaction, limited to submitted paths; the wave gate and merged-tree verifier still pass.' },
-        deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate.' },
+        deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate named by deliveryCommit; refused without it.' },
         deliveryRevision: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Landed revision, reachable from the target and never an ancestor of the candidate base: proves each submitted path at its tree instead of the working tree, for a candidate rebased or squash-merged before landing. Ignored on a reachable delivery.' },
         resolvedPaths: { type: 'array', items: { type: 'string' }, description: 'Submitted paths the deliveryRevision proof found diverging, attested as resolved by hand; reason records the evidence. Requires deliveryRevision, and is refused on a reachable delivery rather than ignored.' },
         reason: { type: 'string' },
@@ -1459,6 +1461,8 @@ const tools: ToolDefinition[] = [
       }
       const failures: Array<{ reason: string; message: string }> = [];
       const ticket = store.getTicket(slug, refs[0]!);
+      const missingDeliveryCommit = recordedDeliveryWithoutCommitRefusal('integrate', args.ref, ticket?.submission?.commit, args);
+      if (missingDeliveryCommit) return mutationAck(slug, combinedRefusal(ticket, [missingDeliveryCommit]));
       if (mergeRefGroup(refs, args.deliveryCommit)) {
         const groupUsesGit = store.submissionUsesGit(ticket);
         if (groupUsesGit) {

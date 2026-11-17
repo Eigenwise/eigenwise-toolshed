@@ -2025,7 +2025,7 @@ ${verify.outputTail}` : null
           ok: false,
           reason: "delivery_not_reachable",
           ticket,
-          message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}. Record a reset, working-tree, or manual delivery with this pinned candidate and deliveryMethod, proving its content either in the integration working tree or, for a candidate rebased or squash-merged before it landed, at a deliveryRevision reachable from ${target.branch} (with resolvedPaths for every path resolved by hand).`
+          message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}. deliveryCommit stays the pinned candidate ${ticket.submission.commit}: record it with deliveryMethod reset, working-tree, or manual, proving its content either in the integration working tree or, for a candidate rebased or squash-merged before it landed, at the commit that landed it: the landed commit goes in deliveryRevision, reachable from ${target.branch} (with resolvedPaths for every path resolved by hand).`
         };
       }
       if (workingTreeDelivery && !pinnedCandidateMatches(repo, ticket, deliveryCommit)) {
@@ -2064,7 +2064,7 @@ ${verify.outputTail}` : null
           reason: "delivery_content_missing",
           ticket,
           ...completingApplyDelivery ? { divergentPaths: missing } : { missingCommits: missing },
-          message: completingApplyDelivery ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${missing.join(", ")}. Commit the applied tree unchanged and record that commit.` : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${missing.join(", ")}. When the candidate was rebased, squash-merged, or conflict-resolved before it landed, name that landed revision with deliveryRevision so the proof reads its tree instead of the working tree, plus resolvedPaths for every path you resolved by hand.`
+          message: completingApplyDelivery ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${missing.join(", ")}. Commit the applied tree unchanged and record that commit.` : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${missing.join(", ")}. When the candidate was rebased, squash-merged, or conflict-resolved before it landed, deliveryCommit stays the pinned candidate ${ticket.submission.commit} with deliveryMethod manual, and the landed commit goes in deliveryRevision so the proof reads its tree instead of the working tree, plus resolvedPaths for every path you resolved by hand.`
         };
       }
       const interaction = workingTreeDelivery ? { ok: true, interaction: null } : reviewedMergedTreeInteraction(repo, ticket, deliveryCommit, resultingHead, opts.deliveryInteractionCommit);
