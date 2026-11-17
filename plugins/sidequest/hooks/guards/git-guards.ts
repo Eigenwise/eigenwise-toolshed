@@ -225,11 +225,18 @@ async function plannedPublicationDenial($: EngineInterface, shell: Shell, invoca
   return publicationRepoDenial($, shell, invocation, repo)
 }
 
+// A cd target this guard cannot resolve (~, $VAR) says nothing about a missing directory, so read-only git
+// after it passes. The publication and destructive checks below still refuse what they cannot parse (GH-842).
+function resolvableDirectory(shell: Shell, index: number): string | null {
+  try { return invocationDirectory(shell.command, index, null, shell.cwd, shell.host) }
+  catch { return null }
+}
+
 async function missingChangedDirectoryDenial($: EngineInterface, shell: Shell): Promise<string | null> {
   for (const invocation of gitInvocations(shell.command)) {
     if (invocation.dashC) continue
-    const directory = invocationDirectory(shell.command, invocation.index, null, shell.cwd, shell.host)
-    if (await $.fs.exists(directory)) continue
+    const directory = resolvableDirectory(shell, invocation.index)
+    if (directory === null || await $.fs.exists(directory)) continue
     if (!plannedDirectory(shell.command, invocation.index, directory, shell.cwd, shell.host)) return missingDirectoryRefusal(directory, invocation.subcommand)
   }
   return null

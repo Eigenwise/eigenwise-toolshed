@@ -89,7 +89,6 @@ test('observability guides describe local opt-in recording and exact engine cost
   const observabilityManifest = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'plugins/observability/.claude-plugin/plugin.json'), 'utf8'));
   for (const file of [
     'plugins/observability/README.md',
-    'plugins/observability/skills/track/SKILL.md',
     'docs/src/content/docs/observability.md',
   ]) {
     const content = fs.readFileSync(path.join(repositoryRoot, file), 'utf8');
@@ -148,4 +147,23 @@ test('examples use portable current plugin guidance', function examplesUsePortab
   assert.match(haikuReadme, /an? unchanged rule\s+does not repeat on every prompt/);
   assert.doesNotMatch(haikuReadme, /(?:re-)?injects? `?INDEX\.md`? on every prompt/i);
   assert.match(codeAndOdeReadme, /atomic rule/i);
+});
+
+const commandNamesRegisteredBy = (pluginDirectory) => {
+  const hooksDirectory = path.join(pluginDirectory, 'hooks');
+  if (!fs.existsSync(hooksDirectory)) return [];
+  return fs.readdirSync(hooksDirectory, { recursive: true })
+    .filter((file) => /\.(ts|tsx|js|mjs)$/.test(String(file)))
+    .flatMap((file) => [...fs.readFileSync(path.join(hooksDirectory, String(file)), 'utf8')
+      .matchAll(/command\.register\(\{\s*name:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]));
+};
+
+test('no skill shares a name with a command its own plugin registers (GH-807)', () => {
+  const pluginsRoot = path.join(repositoryRoot, 'plugins');
+  for (const plugin of fs.readdirSync(pluginsRoot)) {
+    const skillsDirectory = path.join(pluginsRoot, plugin, 'skills');
+    const skills = fs.existsSync(skillsDirectory) ? fs.readdirSync(skillsDirectory) : [];
+    const shadowed = commandNamesRegisteredBy(path.join(pluginsRoot, plugin)).filter((name) => skills.includes(name));
+    assert.deepEqual(shadowed, [], `${plugin}: a skill with the same name wins over the registered command, which then never runs`);
+  }
 });
