@@ -631,6 +631,70 @@ test('SQ-1015: a dependency line carries the upstream plan path on blocks/blocke
   assert.match(upstreamBriefing, new RegExp(`- blocks: ${dependent.ref}$`, 'm'), 'the upstream side has no plan of its own to point at');
 });
 
+function relatedCandidateFixture(label: string) {
+  const store = require('../lib/store.js');
+  const project = tmpDir();
+  const run = (args: string[]) => spawnSync('git', args, { cwd: project, encoding: 'utf8', windowsHide: true }).stdout.trim();
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'fixture@example.invalid']);
+  run(['config', 'user.name', 'Fixture']);
+  const commit = (message: string) => { run(['commit', '-q', '--allow-empty', '-m', message]); return run(['rev-parse', 'HEAD']); };
+  commit('baseline');
+  const slug = store.ensureProject(project, label).slug;
+  const sourceTicket = store.createTicket(slug, { title: 'Earlier work', category: 'coding.normal', files: ['fixture.ts'] });
+  const ticket = store.createTicket(slug, { title: 'Follow-up', category: 'coding.normal', files: ['fixture.ts'] });
+  store.linkTickets(slug, ticket.ref, 'related', sourceTicket.ref);
+  const source = store.getTicket(slug, sourceTicket.ref);
+  source.submission = { commit: commit('related candidate') };
+  const db = require('../lib/db.js');
+  const persistSource = () => db.putRow(db.openDb(process.env.SIDEQUEST_HOME), 'tickets', {
+    id: source.id, project: slug, ref: source.ref, status: source.status, archived: 0, ord: source.order, claim_by: null, data: source,
+  });
+  return { store, slug, project, source, ticket: store.getTicket(slug, ticket.ref), run, commit, persistSource };
+}
+
+const briefingFor = (fixture: { slug: string; project: string; ticket: any }) => agentsync.renderTicketBriefing(fixture.ticket, 'restore-token', fixture.slug, fixture.project);
+
+test('GH-838: a pending related candidate without provenance is named for inspection, never merged', () => {
+  const fixture = relatedCandidateFixture('related pending candidate');
+  fixture.persistSource();
+  const briefing = briefingFor(fixture);
+  const candidate = fixture.source.submission.commit;
+  assert.doesNotMatch(briefing, /git merge --no-ff/);
+  assert.ok(briefing.includes(`Related candidate ${fixture.source.ref} at ${candidate} (review not rejected)`), briefing);
+  assert.ok(briefing.includes(`Inspect it with \`git show ${candidate}\` and merge it only if this ticket's description says it repairs or continues that work.`));
+});
+
+test('GH-838: a review-rejected related candidate is marked rejected and never merged', () => {
+  const fixture = relatedCandidateFixture('related rejected candidate');
+  fixture.source.submission.review = { ref: 'SQ-REVIEW', outcome: 'rejected' };
+  fixture.persistSource();
+  const briefing = briefingFor(fixture);
+  const candidate = fixture.source.submission.commit;
+  assert.doesNotMatch(briefing, /git merge --no-ff/);
+  assert.ok(briefing.includes(`Related candidate ${fixture.source.ref} at ${candidate} (review rejected)`), briefing);
+});
+
+test('GH-838: a source the dispatch declared builds-on is still restored with a merge', () => {
+  const fixture = relatedCandidateFixture('builds-on candidate');
+  fixture.persistSource();
+  const candidate = fixture.source.submission.commit;
+  const ticket = { ...fixture.ticket, dispatch: { workProvenance: { kind: 'builds-on', sources: [{ input: { ref: fixture.source.ref, commit: candidate }, files: [] }] } } };
+  const briefing = briefingFor({ ...fixture, ticket });
+  assert.ok(briefing.includes(`Run \`git merge --no-ff ${candidate}\`.`), briefing);
+  assert.doesNotMatch(briefing, /Related candidate /, 'the declared source is merged, not listed again as context');
+});
+
+test('GH-838: the ticket\'s own pinned candidate from a previous attempt is still restored with a merge', () => {
+  const fixture = relatedCandidateFixture('own pinned candidate');
+  fixture.persistSource();
+  const own = fixture.commit('own previous attempt');
+  fixture.run(['update-ref', `refs/sidequest/${fixture.ticket.ref}`, own]);
+  const briefing = briefingFor(fixture);
+  assert.ok(briefing.includes(`Run \`git merge --no-ff ${own}\`.`), briefing);
+  assert.doesNotMatch(briefing, new RegExp(`git merge --no-ff ${fixture.source.submission.commit}`));
+});
+
 test('story execution contracts lead member briefings from their dispatch snapshot', () => {
   const ticket = {
     ref: 'SQ-750', title: 'Member scope', model: 'opus', effort: 'high', category: {},

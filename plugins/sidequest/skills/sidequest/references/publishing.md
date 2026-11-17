@@ -131,6 +131,8 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   every submitted path against the integration working tree, reruns the delivery gate, then records
   the pinned candidate with the observed integration revision. A missing or different path refuses
   `delivery_content_missing`; a candidate deletion the tree also lacks counts as preserved.
+  `deliveryMethod`, `deliveryRevision`, or `resolvedPaths` without `deliveryCommit` refuses
+  `delivery_commit_required` on `integrate` and `groomClose`, before anything is merged or recorded.
 - A candidate that was rebased, squash-merged, or conflict-resolved before it landed never matches that
   working tree byte for byte, and later merges keep moving it. Add `--delivery-revision <sha>` (MCP
   `deliveryRevision`) naming the landed revision. It must resolve in the integration checkout and be
@@ -179,6 +181,9 @@ File the repair so all of this holds before dispatching it:
 
 - Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
   the overlap is refused; an unrelated submitted range is never inherited.
+- Say in the repair's description that it repairs the rejected candidate. A `related` link orders no merge:
+  the briefing names the source's commit, says whether its review was rejected, and tells the executor to
+  merge it only when the ticket description says the ticket repairs or continues that work.
 - The source's candidate needs an effective oracle-confirmed rejection: a bound `review-audit` ticket whose
   verdict rejected that exact candidate, or whose mistaken finalized acceptance has an authorized
   [MCP `verdict.correct`](invocation-contracts.md) rejection. Both binding halves must agree. A source-side
@@ -235,7 +240,9 @@ recovery:
 When the squash reached the target as its own commit, record that landed commit instead: `groomClose`
 with `deliveryCommit: <squash commit>` and no `deliveryMethod`. It passes when the squash commit's patch
 equals each candidate commit's patch or the patch of the whole submitted range. A squash that also
-carries another ticket's work matches neither and still refuses `delivery_content_missing`.
+carries another ticket's work matches neither and still refuses `delivery_content_missing`. On that
+refusal `deliveryCommit` stays the pinned candidate: pass it with `deliveryMethod: "manual"` and the
+squash commit as `deliveryRevision`, which proves the candidate's net change at the squash commit's tree.
 
 ### A conflict integrate cannot merge
 

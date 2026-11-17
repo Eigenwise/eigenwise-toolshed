@@ -453,7 +453,9 @@ the candidate must not ship, `accepted` approves the candidate, and `inconclusiv
 not override outcome. Ordinary verdict cannot reverse a finalized `accepted`; an evidenced main-thread
 `verdict.correct` appends the correction while preserving the original verdict. Do not guess.
 The source stays pending until a fresh repair is dispatched, reviewed, and integrated, then
-`supersede_submission` closes the oracle-rejected source against that repair. `rework` still bounces an
+`supersede_submission` closes the oracle-rejected source against that repair. The repair ticket says in its
+description that it repairs the rejected candidate: its `related` link alone never tells the executor to merge
+that candidate (see publishing.md, "A repair whose range inherits a rejected candidate"). `rework` still bounces an
 UNBOUND candidate back to `todo`: its owner by `by`, or the orchestrator from the main thread with `by` omitted.
 
 ## Natural orchestrator checkpoints

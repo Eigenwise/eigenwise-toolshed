@@ -12,7 +12,7 @@ const commitScope = require("../lib/commit-scope");
 const worktrees = require("../lib/worktrees");
 const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
-const { claimRefusalMessage } = require("../lib/refusal-guidance");
+const { claimRefusalMessage, recordedDeliveryWithoutCommitRefusal, groomCloseWithoutCommitRefusal } = require("../lib/refusal-guidance");
 const { collectGitSubmissionFacts, inheritedReleaseFragments, inheritedSubmissionPaths } = require("../lib/mcp-lifecycle");
 const { sourceRevisionBaseline } = require("../lib/source-revision-capability");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
@@ -262,6 +262,16 @@ async function advanceAndSweepAfterIntegration(slug, projectPath, ticket) {
     return { worktreeSweep: { failures: [{ path: null, message: error && error.message || String(error) }] } };
   }
 }
+function recordedDeliveryRequestFromOptions(opts) {
+  return {
+    deliveryCommit: opts["delivery-commit"],
+    deliveryMethod: opts["delivery-method"],
+    deliveryRevision: opts["delivery-revision"],
+    resolvedPaths: opts["resolved-path"],
+    integration: opts.integration,
+    abandonSubmission: opts["abandon-submission"]
+  };
+}
 async function cmdGroomClose(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('groom-close: pass a ticket id or ref, e.g. sidequest groom-close SQ-3 --reason "Already shipped in abc1234."');
@@ -270,6 +280,8 @@ async function cmdGroomClose(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
+  const missingDeliveryCommit = groomCloseWithoutCommitRefusal(idOrRef, ticket?.submission?.commit, recordedDeliveryRequestFromOptions(opts));
+  if (missingDeliveryCommit) fail(missingDeliveryCommit.message);
   const purpose = opts.integration ? "integration" : opts["delivery-commit"] ? "delivery" : "grooming";
   const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts["recovery-evidence"], sessionId: sessionId(opts) });
   if (!recovery.ok) {
@@ -683,6 +695,8 @@ async function cmdIntegrate(opts, positional) {
   const by = workerId(opts);
   const verificationWaiver = verificationWaiverFromOptions(opts);
   const ticket = store.getTicket(slug, idOrRef);
+  const missingDeliveryCommit = recordedDeliveryWithoutCommitRefusal("integrate", refs.join(","), ticket?.submission?.commit, recordedDeliveryRequestFromOptions(opts));
+  if (missingDeliveryCommit) fail(missingDeliveryCommit.message);
   const usesGit = store.submissionUsesGit(ticket);
   const publish = require("../lib/publish");
   const runtimeSessionId = sessionId(opts);

@@ -1377,11 +1377,13 @@ test('inherited unchanged tests need zero hand-written control markers', () => {
   assert.deepEqual(store.getTicket(slug, ticket.ref).submission.inheritedTests, result.inheritedTests);
 });
 
-test('related repair briefing restores the pinned candidate with a merge', () => {
-  const { ticket, candidate } = inheritedRepairFixture();
+test('related repair briefing names the rejected candidate and leaves the merge to the ticket description (GH-838)', () => {
+  const { ticket, candidate, source } = inheritedRepairFixture();
   const agentsync = require('../lib/agentsync.js');
   const briefing = agentsync.renderTicketBriefing(ticket, 'fixture-token', slug, PROJECT_DIR);
-  assert.ok(briefing.includes(`git merge --no-ff ${candidate}`));
+  assert.doesNotMatch(briefing, new RegExp(`git merge --no-ff ${candidate}`));
+  assert.ok(briefing.includes(`Related candidate ${source.ref} at ${candidate} (review rejected)`), briefing);
+  assert.ok(briefing.includes('merge it only if this ticket\'s description says it repairs or continues that work'));
   assert.doesNotMatch(briefing, /git cherry-pick/);
   assert.ok(briefing.includes(`refs/sidequest/${ticket.ref} from a previous attempt belongs to this ticket`));
   commitInheritedRepairFixture();

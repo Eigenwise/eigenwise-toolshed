@@ -174,6 +174,47 @@ test('builds-on freezes a submitted candidate, and a source file the follow-up c
   assert.deepEqual(buildsOnCandidates(readOnly), [], 'only builds-on declares a candidate to supersede');
 });
 
+// GH-843. A submodule pointer is a gitlink: git show cannot read it and the working side is a directory.
+const submodulePath = 'libs/Sub';
+
+function submodulePointerProducer() {
+  const fixture = repository();
+  const submoduleRoot = path.join(fixture.root, submodulePath);
+  fs.mkdirSync(submoduleRoot, { recursive: true });
+  const submoduleGit = (argumentsList: string[]) => execFileSync('git', argumentsList, { cwd: submoduleRoot, encoding: 'utf8', windowsHide: true }).trim();
+  submoduleGit(['init', '-q', '-b', 'main']);
+  submoduleGit(['config', 'user.name', 'Sidequest Test']);
+  submoduleGit(['config', 'user.email', 'sidequest-test@example.invalid']);
+  submoduleGit(['commit', '-q', '--allow-empty', '-m', 'submodule start']);
+  const pinned = submoduleGit(['rev-parse', 'HEAD']);
+  fixture.git(['update-index', '--add', '--cacheinfo', `160000,${pinned},${submodulePath}`]);
+  fixture.git(['commit', '-q', '-m', 'bump submodule pointer']);
+  const candidate = fixture.git(['rev-parse', 'HEAD']);
+  const producer = { id: 'tk_submodule', ref: 'SQ-8', claim: null, dispatchNonce: null,
+    dispatch: { preparedAt: '2026-11-17T10:00:00.000Z', terminalAt: '2026-11-17T11:00:00.000Z', outcome: 'submitted', commit: candidate,
+      baseCommit: fixture.base, declaredFiles: [submodulePath] },
+    submission: { commit: candidate, base: fixture.base, commits: [candidate], admittedScope: [submodulePath] } };
+  const declaration = { kind: 'builds-on', sources: [{ ref: 'SQ-8', preparedAt: producer.dispatch.preparedAt, commit: candidate }] };
+  return { ...fixture, submoduleRoot, submoduleGit, declaration, lookup: () => producer };
+}
+
+test('builds-on reads a submodule pointer as the commit it names, inherited until the follow-up moves it', () => {
+  const { root, git, submoduleRoot, submoduleGit, declaration, lookup } = submodulePointerProducer();
+  const provenance = prepareWorkProvenance(root, declaration, 'main-session', lookup);
+  assert.deepEqual(provenance.sources[0].files.map((file: { path: string }) => file.path), [submodulePath]);
+  const owned = () => ownedWorkPaths(root, provenance, [submodulePath, 'lib/follow-up.js'], lookup);
+  assert.deepEqual(owned(), ['lib/follow-up.js'], 'an initialized checkout at the pinned commit is inherited');
+
+  submoduleGit(['commit', '-q', '--allow-empty', '-m', 'submodule moved on']);
+  assert.deepEqual(owned(), [submodulePath, 'lib/follow-up.js'], 'a checkout moved past the pin is owned work');
+
+  fs.rmSync(path.join(submoduleRoot, '.git'), { recursive: true, force: true });
+  assert.deepEqual(owned(), ['lib/follow-up.js'], 'an uninitialized checkout reads the unchanged index entry as inherited');
+
+  git(['update-index', '--cacheinfo', `160000,${git(['rev-parse', 'HEAD'])},${submodulePath}`]);
+  assert.deepEqual(owned(), [submodulePath, 'lib/follow-up.js'], 'a moved index entry is owned work');
+});
+
 test('builds-on refuses a released preparation and an empty source list', () => {
   const { root, declaration, lookup } = producerAfterTrialMerge(false);
   assert.throws(() => prepareWorkProvenance(root, { ...declaration, kind: 'builds-on' }, 'main-session', lookup),
