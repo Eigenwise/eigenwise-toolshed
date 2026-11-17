@@ -11,6 +11,9 @@ permissions:
 env:
   GIT_TERMINAL_PROMPT: '0'
   GIT_CONFIG_NOSYSTEM: '1'
+  # Pinned so a new host release cannot turn every pull request red (2.1.326 did, GH-847).
+  # host-canary.yml runs the same module tests on the newest release as a non-blocking signal.
+  CLAUDE_CODE_VERSION: '2.1.326'
 
 concurrency:
   group: test-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
@@ -127,7 +130,7 @@ jobs:
           node-version: 22
       - name: Install Claude Code for module tests
         if: matrix.affected && matrix.moduleTest != '' && (matrix.shard == '' || startsWith(matrix.shard, '1/'))
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g "@anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}"
       - name: Test affected plugin
         shell: bash
         env:

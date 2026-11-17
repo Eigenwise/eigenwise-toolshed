@@ -7,6 +7,7 @@ checks, or manual dispatch as shown below.
 | Workflow | Trigger | Role |
 | --- | --- | --- |
 | `test.yml` | Push to `main` or `develop`, pull request | Runs release-engine tests, builds the plugin test matrix, tests affected plugins, then aggregates every result into `test-complete`. |
+| `host-canary.yml` | Daily schedule, manual dispatch, pull request that edits it | Runs every plugin's module tests on the newest Claude Code. `test.yml` pins the host version in `CLAUDE_CODE_VERSION`; this is the non-blocking signal that a newer host breaks a mod. Never a required check. |
 | `release-guard.yml` | Push to `main` or `develop`, pull request | Checks release invariants. It exits early while the repository variable `RELEASE_AUTOMATION` is paused or staged. |
 | `docs.yml` | Push to `main` for docs/source inputs, manual dispatch | Runs the docs build and deploys `docs/dist` to GitHub Pages. The build regenerates reference pages first. |
 | `release.yml` | Tags matching `v*`, daily schedule, manual dispatch | The sole GitHub Release publisher. Creates at most one GitHub Release per UTC day: tag pushes defer after that cap, and the daily catch-up publishes the newest unreleased `v*` tag with generated notes. |
