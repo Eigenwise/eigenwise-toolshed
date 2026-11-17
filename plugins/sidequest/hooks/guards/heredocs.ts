@@ -48,7 +48,14 @@ function commentStart(command: string, index: number): boolean {
   return previous === undefined || /[\s;&|(]/.test(previous);
 }
 
-export function withoutHereDocBodies(command: string): string {
+// A PowerShell literal here-string is text, and an apostrophe inside it unbalances the quote tracking, so a
+// `git push` in a message body read as a command and the whole call was refused.
+function withoutLiteralHereStringBodies(command: string): string {
+  return command.replace(/@'\r?\n[\s\S]*?\r?\n'@/g, "@''@");
+}
+
+export function withoutHereDocBodies(rawCommand: string): string {
+  const command = withoutLiteralHereStringBodies(rawCommand);
   let quote = '';
   let hereDocs: HereDoc[] = [];
   let result = '';

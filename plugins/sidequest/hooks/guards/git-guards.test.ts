@@ -340,6 +340,12 @@ test('a PowerShell or cmd directory change moves the repository a push is judged
   }
 })
 
+test('git text inside a PowerShell literal here-string is not a command, and a real push after it still is', async ($, on) => {
+  await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT], integrationBranch: 'dev' })
+  expect(await bash($, "$body = @'\nit's a note: git push origin main\n'@\ngit status")).toMatchObject({ text: 'ran' })
+  expect(await bash($, "$body = @'\nit's a note\n'@\ngit push origin main")).toMatchObject({ deny: expect.stringContaining('publish lock') })
+})
+
 test('unresolved cd still names the parse failure', async ($, on) => {
   await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT] })
   expect(await bash($, 'cd "$TARGET" && git push origin main')).toMatchObject({ deny: expect.stringContaining('could not parse command segment: cd "$TARGET"') })
