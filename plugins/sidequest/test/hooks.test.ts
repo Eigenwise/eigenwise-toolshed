@@ -3516,6 +3516,7 @@ test('session-start: routed work beyond small tasks is agreed with the user befo
     assert.match(context, new RegExp(inlineCarveOut, 'i'));
     assert.match(context, new RegExp(userStoryDefault, 'i'));
     assert.match(context, new RegExp(dispatchDefault, 'i'));
+    assert.match(context, /Reproduce and investigate through route_recipe\(category\)\.research, not yourself or native Explore; no ticket needed/);
     const heading = source ? '=== sidequest (active — context restored) ===' : '=== sidequest (active) ===';
     assert.ok(context.includes(`${heading}\n${userStoryDefault}`), 'agreeing the approach with the user is the first line of the orchestrator block');
     assert.ok(context.indexOf(userStoryDefault) < context.indexOf(dispatchDefault), 'the standing authorization only follows the agreed plan');
