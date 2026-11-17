@@ -37,10 +37,45 @@ test('owned readiness hooks preserve unrelated hooks, deduplicate and unwire exa
   syncReadinessHooks(settings, true);
   assert.equal(JSON.stringify(settings), expected);
   assert.equal(readinessHookPresent(settings), true);
-  assert.equal(settings.hooks.UserPromptSubmit[0].hooks[0].onFailure, 'block');
   assert.equal(settings.hooks.UserPromptSubmit[0].hooks[0].timeout, 35);
   syncReadinessHooks(settings, false);
   assert.deepEqual(settings, { hooks: { SessionStart: [unrelated], Stop: [{}] }, permissions: { allow: ['Read'] } });
+});
+
+test('a gate the host could not run never blocks the prompt, and an older fail-closed gate is rewritten', () => {
+  const settings = {};
+  syncReadinessHooks(settings, true);
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    assert.equal(Object.hasOwn(settings.hooks[event][0].hooks[0], 'onFailure'), false, event);
+  }
+  const failClosed = { ...settings.hooks.UserPromptSubmit[0].hooks[0], onFailure: 'block' };
+  const older = { hooks: { UserPromptSubmit: [{ hooks: [failClosed] }] } };
+  syncReadinessHooks(older, true);
+  assert.deepEqual(older.hooks.UserPromptSubmit, settings.hooks.UserPromptSubmit);
+});
+
+test('the stable gate survives stdin the host cut short', (t) => {
+  const fixture = installedGateFixture(t);
+  for (const input of ['', '{"hook_event_name":"UserPromptSubmit","cwd":"C:\\dev']) {
+    const result = spawnSync(process.execPath, [fixture.launcher, 'readiness-gate'], {
+      input, cwd: fixture.home, env: fixture.environment, encoding: 'utf8', timeout: 30000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
+test('a failed wiring repair never holds up a project that does not route through the gateway', (t) => {
+  const fixture = installedGateFixture(t);
+  const brokenInstall = path.join(fixture.home, 'broken-install');
+  fs.mkdirSync(path.join(brokenInstall, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(brokenInstall, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(brokenInstall, 'bin', 'model-gateway.js'), '');
+  fs.writeFileSync(path.join(brokenInstall, 'lib', 'settings-wiring.js'),
+    "module.exports = { repairProjectWiring() { throw new Error('settings file is locked'); } };\n");
+  fs.writeFileSync(fixture.registry, JSON.stringify({ plugins: { 'model-gateway@test': [{ version: '9.0.0', installPath: brokenInstall }] } }));
+  const result = invokeGate(fixture, 'UserPromptSubmit');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /wiring repair failed: settings file is locked/);
 });
 
 test('disabled hooks stay disabled and receive no new recovery gate', () => {

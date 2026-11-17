@@ -53,7 +53,8 @@ const gate = process.argv[2] === 'readiness-gate';
 let input;
 if (gate) {
   input = fs.readFileSync(0, 'utf8');
-  const payload = JSON.parse(input);
+  // Stdin the host cut short or left empty still gets a readiness check, from the inherited cwd.
+  const payload = (() => { try { return JSON.parse(input); } catch { return {}; } })();
   // A deleted session cwd (a removed worktree) keeps the inherited cwd instead of blocking every prompt.
   if (typeof payload.cwd === 'string') try { process.chdir(payload.cwd); } catch {}
   const { recoveryPolicy, pluginDisabledNotice } = (() => {
@@ -64,7 +65,12 @@ if (gate) {
   const policy = recoveryPolicy();
   if (policy === 'unwired') {
     const script = currentModelGatewayCli();
-    if (script) require(path.join(path.dirname(script), '..', 'lib', 'settings-wiring.js')).repairProjectWiring();
+    // A project that doesn't route through the gateway is never held up by a failed wiring repair.
+    try {
+      if (script) require(path.join(path.dirname(script), '..', 'lib', 'settings-wiring.js')).repairProjectWiring();
+    } catch (error) {
+      console.error('model-gateway: wiring repair failed: ' + error.message);
+    }
     process.exit(0);
   }
   if (policy === 'disabled') {

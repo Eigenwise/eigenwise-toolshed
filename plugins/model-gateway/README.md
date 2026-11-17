@@ -8,7 +8,7 @@ Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Cl
 
 The gate guards router health only (owned listener, installed serving version and `/healthz`); a Codex-only auth or upstream failure never blocks a prompt and stays visible in `doctor` and per-request errors.
 
-Wiring installs stable SessionStart startup/resume recovery and a synchronous UserPromptSubmit readiness gate in the same settings scope. Project wiring adds no global hooks. Updater `setup --preserve-wiring` migrates registered wiring without wiring new directories; restart Claude Code to load the hooks. SessionStart cannot block; failed prompt readiness blocks locally with recovery guidance (25-second child deadline, 35-second hook timeout, `onFailure: block`).
+Wiring installs stable SessionStart startup/resume recovery and a synchronous UserPromptSubmit readiness gate in the same settings scope. Project wiring adds no global hooks. Updater `setup --preserve-wiring` migrates registered wiring without wiring new directories; restart Claude Code to load the hooks. SessionStart cannot block; failed prompt readiness blocks locally with recovery guidance (25-second child deadline, 35-second hook timeout). A gate the host could not run at all does not block the prompt.
 
 Use the stable launcher with `recover` for settings-free readiness recovery, `doctor` for gate/stop/log diagnostics, or `start` to resume. `stop` persists across reboots and upgrades; automatic recovery honors it. Disabled hooks and failures inside an active turn remain outside prompt-gate coverage. Unwire each project with `env --remove`, and user fallback with `env --remove --write-user`, before removing the plugin.
 
