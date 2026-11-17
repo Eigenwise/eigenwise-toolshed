@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 (2026-11-17)
+
+Released in v3.623.0, up from 1.1.1.
+
+### Fixes
+
+- Intake agrees the approach with the engineer before any ticket is filed: investigate, reproduce, options, discussion, then build (GH-847) [`87f62a9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/87f62a918beb0fd968819f614c269a09d9849389)
+  Sidequest: the user-story flow now reproduces a reported problem, lays out the options with where they land in the code and what they cost, and discusses them with the user in rounds before a contract is played back for a yes. After that yes, execution never asks for a go-ahead. Model Gateway: a readiness gate the host could not run (app shutting down, node missing, truncated stdin) no longer blocks the prompt with no message; the gate still blocks by its own exit 2 when the gateway is not ready. Quartermaster: the SessionStart nudge no longer promises a Stop-time offer that holds a pause open. Quality Gate: the band draws again on Claude Code 2.1.326, which refuses a band row whose Box holds the engine's own node and carries a width.
+
 ## 1.1.1 (2026-11-10)
 
 Released in v3.621.0, up from 1.1.0.
