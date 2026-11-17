@@ -335,6 +335,14 @@ test('unresolved cd still names the parse failure', async ($, on) => {
   expect(await bash($, 'cd "$TARGET" && git push origin main')).toMatchObject({ deny: expect.stringContaining('could not parse command segment: cd "$TARGET"') })
 })
 
+test('GH-842: read-only git after a cd the guard cannot resolve runs, destructive git after it stays refused', async ($, on) => {
+  await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT] })
+  for (const command of ['cd ~/repo && git status', 'cd $REPO && git log --oneline -3', 'cd "$TARGET" && git diff --stat']) {
+    expect(await bash($, command)).toMatchObject({ text: 'ran' })
+  }
+  expect(await bash($, 'cd $REPO && git reset --hard HEAD')).toMatchObject({ deny: expect.stringContaining('could not parse command segment: cd $REPO') })
+})
+
 test('multiline quoted commits and heredoc commits allow harmless command chains', async ($, on) => {
   await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT], integrationBranch: 'dev' })
   for (const command of [

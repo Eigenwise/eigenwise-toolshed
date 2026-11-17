@@ -238,10 +238,11 @@ async function restartNoticeFor(data: HookInput, primarySession: boolean): Promi
   ].filter(Boolean).join('\n');
 }
 
-// The standing authorization leads the block: buried mid-paragraph, sessions kept offering dispatch instead of doing it (SQ-3181).
+// One opening line carries both halves. Agree the approach with the user first: without that, sessions built from the request alone.
+// Then never ask again: buried mid-paragraph, sessions kept offering dispatch instead of doing it (SQ-3181).
 const ROUTED_GUIDANCE = {
-  standingAuthorization: 'A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation.\n',
-  boardAuthorization: 'Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Read-only investigations need no ticket: spawn route_recipe(category).research, not native Explore, so they are routed. Ask before work beyond the approved scope unless explicit standing permission covers it.',
+  standingAuthorization: 'Work beyond a small task starts with the user: load the user-story skill, investigate, reproduce a reported problem, lay out the options, and agree the approach with them before any ticket is filed. Once the plan is agreed, a usable Sidequest project route is standing authorization to file its tickets and dispatch returned executors without asking again.\n',
+  boardAuthorization: 'Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Read-only investigations need no ticket: spawn route_recipe(category).research, not native Explore, so they are routed. Ask before work beyond the approved scope unless explicit standing permission covers it.',
   inlineBoundary: '',
   fanoutGuidance: '',
 };
