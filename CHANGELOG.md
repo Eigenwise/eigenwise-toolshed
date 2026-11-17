@@ -8,6 +8,25 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.624.0 (2026-11-17)
+
+### sidequest 6.10.0 → 6.10.1
+
+#### Fixes
+
+- A busy board list pages instead of silently dropping rows past the MCP result ceiling (GH-829) [`89d577d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/89d577dd2a2d32839fa86769c0fb83ba05a85296)
+  Sidequest: the list tool now costs each row the way it is emitted, so a page that would exceed the result ceiling hands the extra rows to the next cursor. Before, a page of many multi-line rows was cut after the cursor was computed and a cursor walk skipped those tickets.
+- integrate refuses deliveryMethod, deliveryRevision or resolvedPaths without deliveryCommit instead of running a default merge (GH-833) [`89d577d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/89d577dd2a2d32839fa86769c0fb83ba05a85296)
+  Sidequest: integrate (MCP and CLI) refuses with delivery_commit_required before anything is merged, and names the accepted call: deliveryCommit as the pinned candidate, deliveryMethod manual, and the landed commit as deliveryRevision.
+- groomClose says how to record a squashed candidate: deliveryCommit stays the pinned candidate, the landed commit goes in deliveryRevision (GH-834) [`89d577d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/89d577dd2a2d32839fa86769c0fb83ba05a85296)
+  Sidequest: groomClose (MCP and CLI) refuses delivery fields given without deliveryCommit instead of dropping them and closing as plain grooming. The delivery_not_reachable and delivery_content_missing refusals now name the pinned candidate and the deliveryRevision route, which already worked for a candidate squashed into one commit.
+- The executor briefing never orders a merge of a candidate that is only linked related (GH-838) [`89d577d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/89d577dd2a2d32839fa86769c0fb83ba05a85296)
+  Sidequest: for a related link the briefing names the candidate and whether its review was rejected, and leaves the merge to the ticket description. A repair ticket now states in its description that it repairs the rejected candidate. The ticket's own earlier candidate and a source declared builds-on at dispatch are still merged.
+- A builds-on dispatch works when the source commit moves a submodule pointer (GH-843) [`89d577d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/89d577dd2a2d32839fa86769c0fb83ba05a85296)
+  Sidequest: work provenance reads a submodule pointer as the commit it points at on both the committed and the working side, instead of failing on git show and on reading a directory. An unchanged pointer is inherited and a moved pointer is owned work, as for a file.
+- The git guards read PowerShell: a directory change moves the repository, and here-string text is not a command (GH-852) [`9c25e0e`](https://github.com/Eigenwise/eigenwise-toolshed/commit/9c25e0e4a84ca2c40a0de3b9b0935ae804733bbf)
+  Sidequest: a push after Set-Location, sl, Push-Location, pushd or chdir into another repository is judged in that repository, where it used to be refused for this session's publish lock. Git text inside a PowerShell literal here-string, such as a commit or pull request body, no longer counts as a git command. The Sidequest skill also names one shape for a status report: Done, Running, Needs you, Next.
+
 ## v3.623.0 (2026-11-17)
 
 ### model-gateway 0.56.2 → 0.56.3
