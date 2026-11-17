@@ -90,9 +90,17 @@ function gitLinesOrEmpty(root: string, argumentsList: readonly string[]): string
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
+// A submodule pointer (GH-843) has no blob for git show and is a directory on disk, so both sides name it by the
+// commit it points at.
+const gitlinkMode = '160000';
+function gitlinkIdentity(file: string, pointedCommit: string): FileIdentity {
+  return { path: file, sha256: sha256(Buffer.from(`gitlink:${pointedCommit}`)) };
+}
 function committedFile(root: string, commit: string, file: string): FileIdentity {
-  const exists = git(root, ['ls-tree', '--name-only', commit, '--', file]).toString().trim();
-  return { path: file, sha256: exists ? sha256(git(root, ['show', `${commit}:${file}`])) : null };
+  const [mode, , object = ''] = git(root, ['ls-tree', commit, '--', file]).toString().trim().split(/\s+/);
+  if (!mode) return { path: file, sha256: null };
+  if (mode === gitlinkMode) return gitlinkIdentity(file, object);
+  return { path: file, sha256: sha256(git(root, ['show', `${commit}:${file}`])) };
 }
 // A branch holding none of this generation's commits was merged in whole, like the trial branch a producer
 // fast-forwards as its authorized first step (SQ-3674), so that history is inherited, never authored here.
@@ -243,9 +251,21 @@ export function prepareWorkProvenance(root: string, declaration: WorkDeclaration
   return structuredClone({ kind: declaration.kind, authority: 'main-thread-attestation', sessionId,
     execution: 'UNVERIFIED', quality: 'UNVERIFIED', admission: 'UNVERIFIED', sources });
 }
+function submoduleCheckoutCommit(location: string): string | null {
+  if (!fs.existsSync(path.join(location, '.git'))) return null;
+  return git(location, ['rev-parse', 'HEAD']).toString().trim();
+}
+function workingGitlinkCommit(root: string, file: string): string | null {
+  const [entry = '', entryPath] = git(root, ['ls-files', '-z', '--stage', '--', file]).toString().split(/[\t\0]/);
+  const [mode, object = ''] = entry.split(' ');
+  if (mode !== gitlinkMode || entryPath !== file) return null;
+  return submoduleCheckoutCommit(path.join(root, file)) ?? object;
+}
 function workingFile(root: string, file: FileIdentity): FileIdentity {
   const location = path.join(root, file.path);
-  return { path: file.path, sha256: fs.existsSync(location) ? sha256(fs.readFileSync(location)) : null };
+  if (fs.statSync(location, { throwIfNoEntry: false })?.isFile()) return { path: file.path, sha256: sha256(fs.readFileSync(location)) };
+  const pointedCommit = workingGitlinkCommit(root, file.path);
+  return pointedCommit ? gitlinkIdentity(file.path, pointedCommit) : { path: file.path, sha256: null };
 }
 function unchangedGeneration(root: string, source: SourceOrigin, lookup: ProducerLookup, consumerRef: string): void {
   const derivedBase = source.derivedFacts?.find(fact => fact.fact === 'baseCommit');

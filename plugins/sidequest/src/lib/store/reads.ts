@@ -91,6 +91,18 @@ function decodeListCursor(cursor?: any) {
 // nextCursor is the next offset as a string, or null when the page reaches the
 // end. Because each page is a contiguous slice and the next cursor is exactly
 // where it stopped, following nextCursor to exhaustion yields every ticket once.
+// A row is emitted inside { tickets: [ ... ] }, so every one of its pretty-printed lines carries
+// four more spaces than a top-level serialization. Costing it at top level let a busy page
+// overshoot the MCP result ceiling and lose rows to the final projection (GH-829).
+const LIST_ROW_NESTED_INDENT_BYTES = 4;
+const LIST_ROW_SEPARATOR_BYTES = 8;
+
+function emittedListRowBytes(row: unknown) {
+  const serialized = JSON.stringify(row, null, 2);
+  const lineCount = serialized.split('\n').length;
+  return Buffer.byteLength(serialized, 'utf8') + lineCount * LIST_ROW_NESTED_INDENT_BYTES + LIST_ROW_SEPARATOR_BYTES;
+}
+
 function pageTickets(tickets?: any, opts?: any) {
   const total = tickets.length;
   const start = Math.min(decodeListCursor(opts.cursor), total);
@@ -106,9 +118,7 @@ function pageTickets(tickets?: any, opts?: any) {
     let size = 0;
     end = start;
     while (end < total) {
-      // Size against the same pretty UTF-8 serialization that MCP emits.
-      // The row separator costs eight ASCII bytes.
-      const cost = Buffer.byteLength(JSON.stringify(tickets[end], null, 2), 'utf8') + 8;
+      const cost = emittedListRowBytes(tickets[end]);
       if (end > start && size + cost > budget) break;
       size += cost;
       end++;

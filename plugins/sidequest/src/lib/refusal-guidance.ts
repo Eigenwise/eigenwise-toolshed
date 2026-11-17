@@ -211,6 +211,40 @@ export function manualCandidateDeliveryGuidance(): string {
   return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, then record them together with integrate using comma-separated refs, the same immutable deliveryCommit and deliveryMethod:"manual", or groomClose each at that unchanged clean head; omit integration:true. Recorded deliveries share one import-walk and full composed gate per exact commit and clean tree. Every pinned verifier still runs unless its exact command and cwd already passed in that shared gate, and any commit or dirty change invalidates sharing.';
 }
 
+export interface RecordedDeliveryRequest {
+  deliveryCommit?: unknown;
+  deliveryMethod?: unknown;
+  deliveryRevision?: unknown;
+  resolvedPaths?: unknown;
+}
+
+const RECORDED_DELIVERY_ONLY_FIELDS = ['deliveryMethod', 'deliveryRevision', 'resolvedPaths'] as const;
+
+function requestFieldGiven(value: unknown): boolean {
+  return Array.isArray(value) ? value.length > 0 : value != null;
+}
+
+// GH-833, GH-834: without deliveryCommit, integrate fell through to a real default merge and
+// groomClose to a plain grooming closure, both silently dropping these fields.
+export function recordedDeliveryWithoutCommitRefusal(tool: string, ref: string, pinnedCandidate: string | undefined, request: RecordedDeliveryRequest) {
+  if (request.deliveryCommit != null) return null;
+  const given = RECORDED_DELIVERY_ONLY_FIELDS.filter((field) => requestFieldGiven(request[field]));
+  if (!given.length) return null;
+  const candidate = pinnedCandidate || '<pinned candidate commit>';
+  return {
+    ok: false as const,
+    reason: 'delivery_commit_required',
+    message: `${tool}: refused ${ref}; ${given.join(', ')} only apply to a recorded delivery, and deliveryCommit is missing, so nothing was merged or recorded.`
+      + ` Record a candidate that already landed with deliveryCommit: "${candidate}" (the pinned candidate, CLI --delivery-commit), deliveryMethod: "manual", and the landed commit as deliveryRevision.`,
+  };
+}
+
+// Only the plain grooming fall-through drops these fields; integration and abandonSubmission keep their own refusals.
+export function groomCloseWithoutCommitRefusal(ref: string, pinnedCandidate: string | undefined, request: RecordedDeliveryRequest & { integration?: unknown; abandonSubmission?: unknown }) {
+  if (request.integration || request.abandonSubmission) return null;
+  return recordedDeliveryWithoutCommitRefusal('groomClose', ref, pinnedCandidate, request);
+}
+
 export function candidateReviewRequiredGuidance(): string {
   return 'A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it.'
     + ' The two sides are held to different proof. The submitting side may identify itself by the attempt\'s hook-bound agent id, by the token prefix and agent name recorded against a proven claim-token binding, or by the main-attestation session a main-thread direct claim records; an attempt older than bind-source recording proves that binding through its recorded bind time instead.'
@@ -252,7 +286,7 @@ export function landedWithoutSubmissionGuidance(ref: string): string {
 // itself, so each refusal names the missing half instead of hinting at a base
 // override that would shorten the range (SQ-2972).
 const INHERITED_REJECTED_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
-  not_related: 'that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate. A follow-up that builds on a pending candidate is declared by the main thread at dispatch with workProvenance kind `builds-on` naming that candidate; an executor stops here and reports the overlap to the orchestrator.',
+  not_related: 'that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate, and say so in this ticket\'s description, because a `related` link alone never orders the executor to merge it. A follow-up that builds on a pending candidate is declared by the main thread at dispatch with workProvenance kind `builds-on` naming that candidate; an executor stops here and reports the overlap to the orchestrator.',
   source_unavailable: 'that ticket or its submission could not be read, so no inherited boundary can be proven.',
   source_active: 'that ticket still holds a live claim, so its candidate is active work rather than a rejected one.',
   submission_integrated: 'its submission is already integrated or superseded, so there is nothing parked to inherit.',

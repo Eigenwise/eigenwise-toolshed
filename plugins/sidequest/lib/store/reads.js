@@ -60,6 +60,13 @@ function createReads(dependencies) {
     const n = Math.floor(Number(cursor));
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
+  const LIST_ROW_NESTED_INDENT_BYTES = 4;
+  const LIST_ROW_SEPARATOR_BYTES = 8;
+  function emittedListRowBytes(row) {
+    const serialized = JSON.stringify(row, null, 2);
+    const lineCount = serialized.split("\n").length;
+    return Buffer.byteLength(serialized, "utf8") + lineCount * LIST_ROW_NESTED_INDENT_BYTES + LIST_ROW_SEPARATOR_BYTES;
+  }
   function pageTickets(tickets, opts) {
     const total = tickets.length;
     const start = Math.min(decodeListCursor(opts.cursor), total);
@@ -74,7 +81,7 @@ function createReads(dependencies) {
       let size = 0;
       end = start;
       while (end < total) {
-        const cost = Buffer.byteLength(JSON.stringify(tickets[end], null, 2), "utf8") + 8;
+        const cost = emittedListRowBytes(tickets[end]);
         if (end > start && size + cost > budget) break;
         size += cost;
         end++;

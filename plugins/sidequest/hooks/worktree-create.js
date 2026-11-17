@@ -231,7 +231,7 @@ function worktreeBindingRefusalMessage(reason, repository, failure) {
   return `worktree lease refused creation: ${reason || "dispatch binding is incomplete"}${guidance ? `. ${guidance(repository, failure)}` : ""}`;
 }
 var INHERITED_REJECTED_REFUSALS = Object.freeze({
-  not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate. A follow-up that builds on a pending candidate is declared by the main thread at dispatch with workProvenance kind `builds-on` naming that candidate; an executor stops here and reports the overlap to the orchestrator.",
+  not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate, and say so in this ticket's description, because a `related` link alone never orders the executor to merge it. A follow-up that builds on a pending candidate is declared by the main thread at dispatch with workProvenance kind `builds-on` naming that candidate; an executor stops here and reports the overlap to the orchestrator.",
   source_unavailable: "that ticket or its submission could not be read, so no inherited boundary can be proven.",
   source_active: "that ticket still holds a live claim, so its candidate is active work rather than a rejected one.",
   submission_integrated: "its submission is already integrated or superseded, so there is nothing parked to inherit.",

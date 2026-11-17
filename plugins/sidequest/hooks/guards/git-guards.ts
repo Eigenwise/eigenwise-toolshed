@@ -3,7 +3,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { SnapshotRow } from './context-guards.js'
 import {
-  branchName, destructiveMatch, destructiveMatches, gitInvocations, invocationDirectory, isTagRef, plannedDirectory, pushesEverything, samePath, shellTokens, tagAction,
+  branchName, changesDirectory, destructiveMatch, destructiveMatches, gitInvocations, invocationDirectory, isTagRef, plannedDirectory, pushesEverything, samePath, shellTokens, tagAction,
 } from './git-command.js'
 import type { GitInvocation } from './git-command.js'
 import { withoutHereDocBodies } from './heredocs.js'
@@ -257,7 +257,7 @@ async function publicationDenial($: EngineInterface, shell: Shell): Promise<stri
 }
 
 function needsRepositoryCheck(command: string): boolean {
-  return Boolean(destructiveMatch(command)) || gitInvocations(command).some(publicationVerb) || /(?:^|[\n;&|])\s*cd\s/.test(command)
+  return Boolean(destructiveMatch(command)) || gitInvocations(command).some(publicationVerb) || changesDirectory(command)
 }
 
 // Read-only commands only need a directory check when the shell changes directory first.

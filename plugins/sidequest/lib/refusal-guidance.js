@@ -26,10 +26,12 @@ __export(refusal_guidance_exports, {
   crossedWorktreeRefusalMessage: () => crossedWorktreeRefusalMessage,
   filesystemSnapshotChildFailureGuidance: () => filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance: () => filesystemSnapshotLimitGuidance,
+  groomCloseWithoutCommitRefusal: () => groomCloseWithoutCommitRefusal,
   inheritedRejectedDuplicateGuidance: () => inheritedRejectedDuplicateGuidance,
   landedWithoutSubmissionGuidance: () => landedWithoutSubmissionGuidance,
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
+  recordedDeliveryWithoutCommitRefusal: () => recordedDeliveryWithoutCommitRefusal,
   routingDisabledMessage: () => routingDisabledMessage,
   worktreeCreationRefusalMessage: () => worktreeCreationRefusalMessage
 });
@@ -144,6 +146,25 @@ function routingDisabledMessage(ref) {
 function manualCandidateDeliveryGuidance() {
   return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, then record them together with integrate using comma-separated refs, the same immutable deliveryCommit and deliveryMethod:"manual", or groomClose each at that unchanged clean head; omit integration:true. Recorded deliveries share one import-walk and full composed gate per exact commit and clean tree. Every pinned verifier still runs unless its exact command and cwd already passed in that shared gate, and any commit or dirty change invalidates sharing.';
 }
+const RECORDED_DELIVERY_ONLY_FIELDS = ["deliveryMethod", "deliveryRevision", "resolvedPaths"];
+function requestFieldGiven(value) {
+  return Array.isArray(value) ? value.length > 0 : value != null;
+}
+function recordedDeliveryWithoutCommitRefusal(tool, ref, pinnedCandidate, request) {
+  if (request.deliveryCommit != null) return null;
+  const given = RECORDED_DELIVERY_ONLY_FIELDS.filter((field) => requestFieldGiven(request[field]));
+  if (!given.length) return null;
+  const candidate = pinnedCandidate || "<pinned candidate commit>";
+  return {
+    ok: false,
+    reason: "delivery_commit_required",
+    message: `${tool}: refused ${ref}; ${given.join(", ")} only apply to a recorded delivery, and deliveryCommit is missing, so nothing was merged or recorded. Record a candidate that already landed with deliveryCommit: "${candidate}" (the pinned candidate, CLI --delivery-commit), deliveryMethod: "manual", and the landed commit as deliveryRevision.`
+  };
+}
+function groomCloseWithoutCommitRefusal(ref, pinnedCandidate, request) {
+  if (request.integration || request.abandonSubmission) return null;
+  return recordedDeliveryWithoutCommitRefusal("groomClose", ref, pinnedCandidate, request);
+}
 function candidateReviewRequiredGuidance() {
   return "A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it. The two sides are held to different proof. The submitting side may identify itself by the attempt's hook-bound agent id, by the token prefix and agent name recorded against a proven claim-token binding, or by the main-attestation session a main-thread direct claim records; an attempt older than bind-source recording proves that binding through its recorded bind time instead. The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those. Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing. If the review never ran to a terminal done attempt, dispatch it and let it close normally. If it reviewed a different candidate, that candidate needs its own bound review. If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally. If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers this candidate: dispatch, rework, and reclaim all refuse it while it is under review, so carry the same change on a fresh ticket, review that candidate, and retire this one with supersede_submission once the fresh one integrates. Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.";
 }
@@ -154,7 +175,7 @@ function landedWithoutSubmissionGuidance(ref) {
   return `When the work already landed outside the executor's submit (it released, for example as technical_blocker or handback, and you committed or cherry-picked it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch; for a cherry-pick, pass the cherry-picked commit, not the executor's original.`;
 }
 const INHERITED_REJECTED_REFUSALS = Object.freeze({
-  not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate. A follow-up that builds on a pending candidate is declared by the main thread at dispatch with workProvenance kind `builds-on` naming that candidate; an executor stops here and reports the overlap to the orchestrator.",
+  not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate, and say so in this ticket's description, because a `related` link alone never orders the executor to merge it. A follow-up that builds on a pending candidate is declared by the main thread at dispatch with workProvenance kind `builds-on` naming that candidate; an executor stops here and reports the overlap to the orchestrator.",
   source_unavailable: "that ticket or its submission could not be read, so no inherited boundary can be proven.",
   source_active: "that ticket still holds a live claim, so its candidate is active work rather than a rejected one.",
   submission_integrated: "its submission is already integrated or superseded, so there is nothing parked to inherit.",
@@ -215,10 +236,12 @@ function filesystemSnapshotChildFailureGuidance(failure) {
   crossedWorktreeRefusalMessage,
   filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance,
+  groomCloseWithoutCommitRefusal,
   inheritedRejectedDuplicateGuidance,
   landedWithoutSubmissionGuidance,
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
+  recordedDeliveryWithoutCommitRefusal,
   routingDisabledMessage,
   worktreeCreationRefusalMessage
 });

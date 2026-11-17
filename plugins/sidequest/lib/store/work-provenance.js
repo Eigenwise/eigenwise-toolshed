@@ -102,9 +102,15 @@ function gitLinesOrEmpty(root, argumentsList) {
 function sha256(bytes) {
   return (0, import_node_crypto.createHash)("sha256").update(bytes).digest("hex");
 }
+const gitlinkMode = "160000";
+function gitlinkIdentity(file, pointedCommit) {
+  return { path: file, sha256: sha256(Buffer.from(`gitlink:${pointedCommit}`)) };
+}
 function committedFile(root, commit, file) {
-  const exists = git(root, ["ls-tree", "--name-only", commit, "--", file]).toString().trim();
-  return { path: file, sha256: exists ? sha256(git(root, ["show", `${commit}:${file}`])) : null };
+  const [mode, , object = ""] = git(root, ["ls-tree", commit, "--", file]).toString().trim().split(/\s+/);
+  if (!mode) return { path: file, sha256: null };
+  if (mode === gitlinkMode) return gitlinkIdentity(file, object);
+  return { path: file, sha256: sha256(git(root, ["show", `${commit}:${file}`])) };
 }
 function wholeInheritedBranchTips(root, baseCommit, ownedInRange) {
   return gitLines(root, [
@@ -280,9 +286,21 @@ function prepareWorkProvenance(root, declaration, sessionId, lookup, integration
     sources
   });
 }
+function submoduleCheckoutCommit(location) {
+  if (!import_node_fs.default.existsSync(import_node_path.default.join(location, ".git"))) return null;
+  return git(location, ["rev-parse", "HEAD"]).toString().trim();
+}
+function workingGitlinkCommit(root, file) {
+  const [entry = "", entryPath] = git(root, ["ls-files", "-z", "--stage", "--", file]).toString().split(/[\t\0]/);
+  const [mode, object = ""] = entry.split(" ");
+  if (mode !== gitlinkMode || entryPath !== file) return null;
+  return submoduleCheckoutCommit(import_node_path.default.join(root, file)) ?? object;
+}
 function workingFile(root, file) {
   const location = import_node_path.default.join(root, file.path);
-  return { path: file.path, sha256: import_node_fs.default.existsSync(location) ? sha256(import_node_fs.default.readFileSync(location)) : null };
+  if (import_node_fs.default.statSync(location, { throwIfNoEntry: false })?.isFile()) return { path: file.path, sha256: sha256(import_node_fs.default.readFileSync(location)) };
+  const pointedCommit = workingGitlinkCommit(root, file.path);
+  return pointedCommit ? gitlinkIdentity(file.path, pointedCommit) : { path: file.path, sha256: null };
 }
 function unchangedGeneration(root, source, lookup, consumerRef) {
   const derivedBase = source.derivedFacts?.find((fact) => fact.fact === "baseCommit");

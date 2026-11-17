@@ -1,0 +1,52 @@
+name: Host canary
+
+# Never a required check. test.yml pins Claude Code; this runs every plugin's module tests on the
+# newest release, so a host update that breaks a mod shows up here first and blocks nobody (GH-847).
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths: ['.github/workflows/host-canary.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  module-tests-on-newest-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install the newest Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest && claude --version
+      - name: Run the module tests of every plugin that ships a hooks module
+        run: |
+          node --input-type=module - <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import path from 'node:path';
+          import { readManifest } from './scripts/release/lib/manifests.mjs';
+          import { createSuiteResolver } from './scripts/release/lib/suites.mjs';
+          import { diskSource } from './scripts/release/lib/treesource.mjs';
+          const root = process.cwd();
+          const resolveSuite = createSuiteResolver(root);
+          const runInPlugin = (plugin, command) => spawnSync(command, { cwd: path.join(root, plugin.dir), shell: true, stdio: 'inherit' }).status === 0;
+          const broken = [];
+          for (const plugin of readManifest(diskSource(root), root).plugins.values()) {
+            const suite = resolveSuite(plugin);
+            if (!suite?.moduleTest) continue;
+            console.log(`::group::${plugin.name}: ${suite.moduleTest}`);
+            const passed = (!suite.setup || runInPlugin(plugin, suite.setup)) && runInPlugin(plugin, suite.moduleTest);
+            console.log('::endgroup::');
+            if (!passed) broken.push(plugin.name);
+          }
+          if (broken.length) {
+            console.error(`Module tests fail on the newest Claude Code for: ${broken.join(', ')}`);
+            process.exit(1);
+          }
+          NODE
