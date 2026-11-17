@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.625.0 (2026-11-17)
+
+### sidequest 6.10.1 → 6.10.2
+
+#### Fixes
+
+- The orchestrator sends reproduction and investigation to routed executors instead of doing them itself (GH-857) [`5e3a462`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5e3a46217d02cbf5d14de4939fa840191c84dc35)
+  Sidequest: the session-start block and the user-story reproduce step now say that a reproduction, a measurement or an investigation goes to a routed executor, and that the user is told what is running and what came back.
+
 ## v3.624.0 (2026-11-17)
 
 ### sidequest 6.10.0 → 6.10.1
