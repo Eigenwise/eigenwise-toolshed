@@ -14,7 +14,15 @@ const DESTRUCTIVE: Array<{ pattern: RegExp; label: string }> = [
 const INVOCATION = new RegExp(String.raw`(?:^\s*|[;&|\n]\s*|\$\(\s*)(?:&\s*)?git\s+((?:(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix)\s+${WORD}\s+|--?[^\s]+\s+)*)([a-z][a-z-]*)\b((?:"[^"]*"|'[^']*'|[^\n;|&])*)`, 'gi');
 // Case-sensitive: `-c name=value` sets config, only `-C` names a directory.
 const DASH_C = new RegExp(String.raw`(?:^|\s)-C\s+(${WORD})`, 'g');
-const CD = /(?:^|[\n;&|])\s*cd\s+((?:"[^"\n]*"|'[^'\n]*'|[^\n;&|])*)/gi;
+// PowerShell and cmd spell a directory change differently; reading only `cd` made a push after `Set-Location`
+// count against the session's own repository.
+const DIRECTORY_CHANGE_VERB = String.raw`(?:cd|chdir|pushd|sl|set-location|push-location)`;
+const CD = new RegExp(String.raw`(?:^|[\n;&|])\s*${DIRECTORY_CHANGE_VERB}\s+(?:-(?:literal)?path\s+)?((?:"[^"\n]*"|'[^'\n]*'|[^\n;&|])*)`, 'gi');
+const CHANGES_DIRECTORY = new RegExp(String.raw`(?:^|[\n;&|])\s*${DIRECTORY_CHANGE_VERB}\s`, 'i');
+
+export function changesDirectory(command: string): boolean {
+  return CHANGES_DIRECTORY.test(command);
+}
 
 export type GitInvocation = { index: number; dashC: string | null; subcommand: string; args: string };
 export type DestructiveMatch = { label: string; index: number; dashC: string | null };

@@ -330,6 +330,16 @@ test('every compound destructive or publishing segment keeps its own repository 
   expect(await bash($, 'git reset --hard HEAD; cd C:/other && git reset --hard HEAD')).toMatchObject({ deny: expect.stringContaining('other-work.txt') })
 })
 
+test('a PowerShell or cmd directory change moves the repository a push is judged in', async ($, on) => {
+  const other = { root: 'C:\\other', commonDir: 'C:/other/.git', dirty: [] }
+  await world(on, { cwd: PROJECT, repos: [projectRepo, other], registered: [PROJECT], integrationBranch: 'dev' })
+  expect(await bash($, 'git push origin main')).toMatchObject({ deny: expect.stringContaining('publish lock') })
+  const changes = ['Set-Location C:\\other', 'Set-Location -Path "C:\\other"', 'sl C:/other', 'Push-Location C:/other', 'pushd C:/other', 'chdir C:/other']
+  for (const change of changes) {
+    expect(await bash($, `${change}; git push origin main`)).toMatchObject({ text: 'ran' })
+  }
+})
+
 test('unresolved cd still names the parse failure', async ($, on) => {
   await world(on, { cwd: PROJECT, repos: [projectRepo], registered: [PROJECT] })
   expect(await bash($, 'cd "$TARGET" && git push origin main')).toMatchObject({ deny: expect.stringContaining('could not parse command segment: cd "$TARGET"') })
