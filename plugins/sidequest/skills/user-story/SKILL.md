@@ -170,6 +170,10 @@ ticket, not the orchestrator crawling the tree itself.
 When the request is "this is broken", make it fail on demand before anyone designs a fix. A fix for a
 problem nobody reproduced is a guess, and its test proves nothing.
 
+You orchestrate this step. A reproduction or measurement that takes more than one command you already
+know goes to a routed executor: a `debugging` ticket, or the `route_recipe` research spawn when it only
+reads. Tell the user what is running and on which model, and show what came back.
+
 - Find the shortest command, test or input that shows the failure, and run it. Keep the exact
   command and what it printed.
 - Say what you observed against what was expected, and where the two part ways: the function and
