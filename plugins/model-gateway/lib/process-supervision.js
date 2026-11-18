@@ -236,8 +236,12 @@ function recordStopRequest(operation, name) {
 function processProbeEnvironment() {
   return WIN ? undefined : { ...process.env, LC_ALL: 'C' };
 }
+// spawnSync stops at 1 MiB of output by default and fails the probe with ENOBUFS. A full process
+// table passes that on a busy multi-user host (measured: 1.1 to 1.5 MB of `ps -ww -eo ...args=`),
+// and a failed table read is indistinguishable from "no table" to every caller.
+const PROCESS_PROBE_MAX_BUFFER = 64 * 1024 * 1024;
 function commandResultSync(command, commandArgs) {
-  return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true, env: processProbeEnvironment() });
+  return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true, env: processProbeEnvironment(), maxBuffer: PROCESS_PROBE_MAX_BUFFER });
 }
 function listeningSocketInodesInProc(port) {
   if (process.platform !== 'linux') return new Set();
