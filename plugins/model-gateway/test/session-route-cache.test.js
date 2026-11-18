@@ -109,6 +109,31 @@ test('dispatch session route cache evicts the least recently used session', () =
   assert.deepEqual(cache.get('session-c'), routeC);
 });
 
+test('dispatch session route cache reload prunes expired ordinary routes and persists survivors', (t) => {
+  const now = 1000;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-session-route-load-'));
+  const routeCache = path.join(directory, 'dispatch-routes.json');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const activeKey = JSON.stringify(['active-session', null]);
+  const expiredKey = JSON.stringify(['expired-session', null]);
+  fs.writeFileSync(routeCache, JSON.stringify({ version: 1, routes: [
+    [activeKey, { model: 'gpt-5.6-sol', effort: 'xhigh', ticket: 'fixture-ticket', lastUsedAt: now - 50 }],
+    [expiredKey, { model: 'gpt-5.6-terra', effort: 'high', ticket: null, lastUsedAt: now - 100 }],
+  ] }) + '\n');
+
+  const cache = new DispatchSessionRouteCache({ cachePath: routeCache, now: () => now, ttlMs: 100 });
+
+  assert.deepEqual(cache.peek(activeKey), { model: 'gpt-5.6-sol', effort: 'xhigh', ticket: 'fixture-ticket' });
+  assert.equal(cache.peek(expiredKey), null);
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeCache, 'utf8')), {
+    version: 1,
+    routes: [[activeKey, {
+      model: 'gpt-5.6-sol', effort: 'xhigh', ticket: 'fixture-ticket', lastUsedAt: now - 50,
+    }]],
+  });
+});
+
 test('dispatch model reuses a session route after compaction and logs cache hits', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();

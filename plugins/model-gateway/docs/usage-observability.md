@@ -33,6 +33,14 @@ This uses the existing local transport, keeps model-gateway independent of the o
 
 The endpoint order is `CODEX_GATEWAY_USAGE_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT + /v1/logs`, then `http://127.0.0.1:4318/v1/logs`. Only loopback HTTP(S) endpoints are accepted. `CODEX_GATEWAY_USAGE_ENDPOINT=0` disables usage export. Gateway usage records emit the resolved repository-root label as `project_name`, never as `project.id`; the observer attaches a canonical repository ID from session hook history when known. Gateway usage records reach a configured sink only through the Observability observer's outbox, so they carry that observer's repository consent gate. A record that cannot be tied to an opted-in repository is dropped rather than exported. An un-updated gateway still denies usage from a repository subdirectory until it updates, because accepting that subdirectory basename would weaken the consent boundary.
 
+## Antigravity aggregate-only exception
+
+The experimental native Antigravity route uses the existing `gateway.token.usage`, `gateway.limit.signal` and consent-gated `codex_gateway.route` names with `backend: antigravity`. Its dedicated parser forwards only compact identity/aggregate usage to telemetry; it does not increase the legacy 4 MiB observer limit or retain opaque carriers for observation.
+
+Only validated nonnegative integer input, output, aggregate cache and reasoning counters supplied by the provider are recorded. Reasoning is not added to output again. Actual forwarded request bytes and upstream response wire bytes include opaque-carrier overhead and framing; they are not tokenizer measurements. The section-token, tool-result, MCP-footprint and prefix-cache estimates below **do not apply to Antigravity**. Missing attribution stays unavailable, and no cache TTL split, cache-price or subscription-spend value is synthesized. Native Google token accounting and live access remain unverified.
+
+Canonical `antigravity/...` model IDs use a model-specific sanitizer. Session, agent and correlation identifier validation is not relaxed. Project correlation and existing loopback/consent/opt-out controls remain in force. Carrier contents, native signatures, auth output and raw provider errors are never telemetry fields. A truncated/error/cancelled response does not fabricate successful usage. The real terminal frame is withheld until clean HTTP-body EOF and late-frame validation, within the existing stream budget; a keep-alive socket need not close. Multiline SSE framing is preserved apart from the exact envelope model token. Initial HTTP status and Retry-After are preserved by the relay; AGY generation is not automatically retried or rerouted.
+
 ## Record contract
 
 `gateway.token.usage` carries these identifiers and labels:

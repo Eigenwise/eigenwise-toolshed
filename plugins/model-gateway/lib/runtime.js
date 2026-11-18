@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const grokBackend = require('./grok-backend.js');
+const antigravity = require('./antigravity-contract.js');
 const { writeFileAtomically } = require('./atomic-file.js');
 
 const WIN = process.platform === 'win32';
@@ -49,6 +50,7 @@ const HOSTS_BLOCK_END = '# <<< model-gateway RC compatibility <<<';
 const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
 const CODEX_UNKNOWN_MODEL_WINDOW = 200000;
 const MODEL_WINDOW_POLICY = Object.freeze({
+  ...antigravity.WINDOW_POLICIES,
   default: Object.freeze({
     backend: 'codex',
     backendId: 'default',
@@ -251,6 +253,7 @@ function codexBillingNote(cap, compactAt = null) {
 }
 
 function gatewayBackendModelId(id) {
+  if (antigravity.isReservedModel(id)) return antigravity.resolveModel(id) || '';
   return typeof id === 'string' ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '') : '';
 }
 
@@ -259,21 +262,29 @@ function codexContextWindowModelId(id) {
   return baseId || 'default';
 }
 
+function legacyGatewayPolicy(id, backendId) {
+  if (backendId.startsWith('gpt-')) return MODEL_WINDOW_POLICY[backendId.replace(/-fast$/, '')] || MODEL_WINDOW_POLICY.default;
+  if (MODEL_WINDOW_POLICY[backendId]) return MODEL_WINDOW_POLICY[backendId];
+  return nativeAnthropicSelector(id) ? MODEL_WINDOW_POLICY.anthropic : null;
+}
+
+function nativeAnthropicSelector(id) {
+  return typeof id === 'string' && id.startsWith(PREFIX) && !id.startsWith(LEGACY_CODEX_PREFIX);
+}
+
+function policyPickerAlias(policy, backendId) {
+  if (policy.backendId === backendId && policy.pickerAlias) return policy.pickerAlias;
+  return policy.pickerAliasTemplate
+    ? policy.pickerAliasTemplate.replace('{backendId}', backendId)
+    : `${PREFIX}${backendId}[1m]`;
+}
+
 function resolveGatewayModelPolicy(id) {
   const backendId = gatewayBackendModelId(id);
-  const policyId = backendId.startsWith('gpt-') ? backendId.replace(/-fast$/, '') : backendId;
-  const policy = MODEL_WINDOW_POLICY[policyId]
-    || (backendId.startsWith('gpt-') ? MODEL_WINDOW_POLICY.default : null)
-    || (typeof id === 'string' && id.startsWith(PREFIX) && !id.startsWith(LEGACY_CODEX_PREFIX)
-      ? MODEL_WINDOW_POLICY.anthropic
-      : null);
+  if (antigravity.isReservedModel(id)) return MODEL_WINDOW_POLICY[backendId] || null;
+  const policy = legacyGatewayPolicy(id, backendId);
   if (!policy) return null;
-  const pickerAlias = policy.backendId === backendId && policy.pickerAlias
-    ? policy.pickerAlias
-    : policy.pickerAliasTemplate
-      ? policy.pickerAliasTemplate.replace('{backendId}', backendId)
-      : `${PREFIX}${backendId}[1m]`;
-  return { ...policy, backendId, pickerAlias };
+  return { ...policy, backendId, pickerAlias: policyPickerAlias(policy, backendId) };
 }
 
 function gatewayAdvertisedWindow(id) {
@@ -284,6 +295,7 @@ function gatewayAdvertisedWindow(id) {
 }
 
 function gatewayClientModelId(id) {
+  if (antigravity.isReservedModel(id)) return antigravity.pickerId(id) || id;
   const policy = resolveGatewayModelPolicy(id);
   if (!policy) return id;
   return gatewayAdvertisedWindow(id) > CODEX_UNKNOWN_MODEL_WINDOW
