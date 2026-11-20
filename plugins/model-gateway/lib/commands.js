@@ -2087,24 +2087,54 @@ function createShimRelay({
   // the loss of that worker justifies sending the request again: a resend to a
   // live worker is a second inference, billed to the user's subscription, that
   // the caller never sees.
-  function requestWorker(req, body) {
+  function requestWorker(req, body, res = null) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let clientClosed = false;
+      let retryTimer = null;
+      let currentUpstream = null;
+      const onClientClose = () => {
+        if (settled || res?.writableEnded) return;
+        clientClosed = true;
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        if (currentUpstream && !currentUpstream.destroyed && typeof currentUpstream.destroy === 'function') {
+          currentUpstream.destroy();
+        }
+        const abortError = Object.assign(new Error('client closed before worker response'), { clientClosed: true });
+        settle(reject, abortError);
+      };
       const settle = (finish, value) => {
         if (settled) return;
         settled = true;
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        if (res && typeof res.removeListener === 'function') {
+          res.removeListener('close', onClientClose);
+        }
         finish(value);
       };
+      if (res && typeof res.once === 'function') {
+        res.once('close', onClientClose);
+      }
       const lostWorkerRequest = (error, workerThatTookBody) => {
         onWorkerRequestLost(error, workerThatTookBody);
         return Object.assign(error, { bodyTakenByWorker: true });
       };
       const attempt = (attemptsLeft, acceptingWorker) => {
-        if (settled) return;
-        const canWait = () => attemptsLeft > 0 && !isStopped();
-        const waitForAnotherAttempt = (nextAcceptingWorker) => setTimeout(
-          () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
-        );
+        if (settled || clientClosed) return;
+        const canWait = () => attemptsLeft > 0 && !isStopped() && !clientClosed;
+        const waitForAnotherAttempt = (nextAcceptingWorker) => {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            attempt(attemptsLeft - 1, nextAcceptingWorker);
+          }, 50);
+          return retryTimer;
+        };
         if (acceptingWorker && getWorker() === acceptingWorker) {
           if (!canWait()) return settle(reject, lostWorkerRequest(new Error('shim worker never answered the request it had accepted'), acceptingWorker));
           return waitForAnotherAttempt(acceptingWorker);
@@ -2118,14 +2148,21 @@ function createShimRelay({
         const upstream = httpClient.request({
           host: '127.0.0.1', port: workerPort, method: req.method, path: req.url,
           headers: { ...req.headers, host: `127.0.0.1:${workerPort}` }, agent,
-        }, (response) => settle(resolve, response));
+        }, (response) => {
+          if (settled || clientClosed || res?.destroyed || res?.writableEnded) {
+            if (!response.destroyed && typeof response.destroy === 'function') response.destroy();
+            return;
+          }
+          settle(resolve, response);
+        });
+        currentUpstream = upstream;
         upstream.once('socket', (socket) => {
           const noteDelivered = () => { deliveredToWorker = getWorker(); };
           if (socket.connecting) socket.once('connect', noteDelivered);
           else noteDelivered();
         });
         upstream.once('error', (error) => {
-          if (settled) return;
+          if (settled || clientClosed) return;
           if (!canWait()) return settle(reject, deliveredToWorker ? lostWorkerRequest(error, deliveredToWorker) : error);
           waitForAnotherAttempt(deliveredToWorker);
         });
@@ -2144,6 +2181,17 @@ function createShimRelay({
     // and decides for itself whether to ask again.
     upstream.on('error', () => res.destroy());
     upstream.on('aborted', () => res.destroy());
+    const onClientClose = () => {
+      if (!res.writableEnded && !upstream.destroyed && typeof upstream.destroy === 'function') {
+        upstream.destroy();
+      }
+    };
+    if (typeof res.once === 'function') {
+      res.once('close', onClientClose);
+      res.once('finish', () => {
+        if (typeof res.removeListener === 'function') res.removeListener('close', onClientClose);
+      });
+    }
     if (req.url.split('?')[0] === '/healthz') {
       const response = [];
       upstream.on('data', (chunk) => response.push(chunk));
@@ -2189,8 +2237,9 @@ function createShimRelay({
     const body = await readShimRequestBody(req, res);
     if (body === null) return;
     try {
-      relayWorkerResponse(req, res, await requestWorker(req, body));
+      relayWorkerResponse(req, res, await requestWorker(req, body, res));
     } catch (error) {
+      if (error?.clientClosed || res.destroyed || res.writableEnded) return;
       sendWorkerFailure(res, error);
     }
   }
