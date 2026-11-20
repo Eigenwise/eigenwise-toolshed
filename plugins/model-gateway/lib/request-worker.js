@@ -1623,7 +1623,39 @@ function runWorker() {
     arm();
   }
 
+  const clientAbortTrackers = new WeakMap();
+
+  function getClientAbortTracker(clientRes) {
+    return clientAbortTrackers.get(clientRes) || null;
+  }
+
+  function clientAborted(clientRes) {
+    const tracker = getClientAbortTracker(clientRes);
+    return Boolean(tracker?.closed || clientRes.destroyed || clientRes.writableEnded);
+  }
+
+  function attachClientAbortTracker(clientRes) {
+    const existing = clientAbortTrackers.get(clientRes);
+    if (existing) return existing;
+    const tracker = { closed: false, currentUpReq: null, retryTimer: null };
+    clientAbortTrackers.set(clientRes, tracker);
+    clientRes.once('close', () => {
+      if (clientRes.writableFinished) return;
+      tracker.closed = true;
+      if (tracker.retryTimer) {
+        clearTimeout(tracker.retryTimer);
+        tracker.retryTimer = null;
+      }
+      if (tracker.currentUpReq && !tracker.currentUpReq.destroyed) {
+        tracker.currentUpReq.destroy();
+      }
+    });
+    return tracker;
+  }
+
   function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, contextModel = null, routeTelemetry = null, usageCapture = null, webSocketUpgradeRetries = 0, compactGuard = null) {
+    const tracker = getClientAbortTracker(clientRes);
+    if (clientAborted(clientRes)) return;
     const url = new URL(clientReq.url, target);
     let finishUsage = () => usageCapture?.finish();
     if (usageCapture) clientRes.once('finish', () => finishUsage());
@@ -1642,6 +1674,10 @@ function runWorker() {
       reqOptions.lookup = anthropicBypass.lookup;
     }
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
+      if (clientAborted(clientRes)) {
+        upRes.destroy();
+        return;
+      }
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
       // A compaction retry already committed the SSE status line on an earlier
@@ -1692,14 +1728,17 @@ function runWorker() {
           chunks.push(chunk);
         });
         upRes.on('error', () => {
+          if (clientAborted(clientRes)) return clientRes.destroy();
           routeTelemetry?.finish(upRes.statusCode, 'upstream_error');
           clientRes.destroy();
         });
         upRes.on('aborted', () => {
+          if (clientAborted(clientRes)) return clientRes.destroy();
           routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted');
           clientRes.destroy();
         });
         upRes.on('end', () => {
+          if (clientAborted(clientRes)) return;
           const upstreamBody = Buffer.concat(chunks);
           if (!isWebSocketUpgradeRejection(upRes.statusCode, upstreamBody)) {
             noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
@@ -1713,9 +1752,15 @@ function runWorker() {
             return clientRes.end(rewritten);
           }
           if (webSocketUpgradeRetries < WEBSOCKET_UPGRADE_RETRIES) {
-            return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
-              normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
-              usageCapture, webSocketUpgradeRetries + 1, compactGuard), WEBSOCKET_UPGRADE_RETRY_DELAY_MS);
+            const retryDelayTimer = setTimeout(() => {
+              if (tracker) tracker.retryTimer = null;
+              if (clientAborted(clientRes)) return;
+              forward(clientReq, clientRes, target, body, extraHeaderDrop,
+                normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
+                usageCapture, webSocketUpgradeRetries + 1, compactGuard);
+            }, WEBSOCKET_UPGRADE_RETRY_DELAY_MS);
+            if (tracker) tracker.retryTimer = retryDelayTimer;
+            return retryDelayTimer;
           }
           const transientError = transientWebSocketUpgradeError(webSocketUpgradeRetries + 1);
           usageCapture?.setResponse(503, resHeaders);
@@ -1892,9 +1937,16 @@ function runWorker() {
               usageCapture?.resetUsage();
               compactGuard.attempts++;
               upRes.destroy();
-              return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
-                normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
-                usageCapture, webSocketUpgradeRetries, compactGuard), COMPACT_STREAM_RETRY_DELAY_MS);
+              if (clientAborted(clientRes)) return;
+              const retryDelayTimer = setTimeout(() => {
+                if (tracker) tracker.retryTimer = null;
+                if (clientAborted(clientRes)) return;
+                forward(clientReq, clientRes, target, body, extraHeaderDrop,
+                  normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
+                  usageCapture, webSocketUpgradeRetries, compactGuard);
+              }, COMPACT_STREAM_RETRY_DELAY_MS);
+              if (tracker) tracker.retryTimer = retryDelayTimer;
+              return retryDelayTimer;
             }
             const outcome = compactOutcome(attempt, upRes.statusCode, statusOverride);
             const completed = ['completed', 'empty_summary'].includes(outcome);
@@ -2002,8 +2054,14 @@ function runWorker() {
       });
       upRes.pipe(clientRes); // never buffer successful SSE: Claude Code needs the stream live
     });
+    if (tracker) tracker.currentUpReq = upReq;
+    upReq.once('close', () => {
+      if (tracker && tracker.currentUpReq === upReq) tracker.currentUpReq = null;
+    });
     upReq.setTimeout(3600000, () => upReq.destroy(new Error('upstream timeout')));
     upReq.on('error', (e) => {
+      if (tracker && tracker.currentUpReq === upReq) tracker.currentUpReq = null;
+      if (clientAborted(clientRes)) return clientRes.destroy();
       if (compactGuard) {
         usageCapture?.setResponseComplete(false);
         routeTelemetry?.setCompaction({
@@ -2026,16 +2084,20 @@ function runWorker() {
   }
 
   async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, sessionId, routeTelemetry, usageCapture) {
+    const tracker = getClientAbortTracker(clientRes);
+    if (clientAborted(clientRes)) return;
     let token;
     try {
       token = await grokBackend.grokAccessToken();
     } catch (error) {
+      if (clientAborted(clientRes)) return;
       const body = JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: `model-gateway: ${error.message}` } });
       routeTelemetry?.finish(401, 'authentication_error');
       clientRes.writeHead(401, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
       clientRes.end(body);
       return;
     }
+    if (clientAborted(clientRes)) return;
     const inference = newCompactAttempt();
     const upstreamPayload = grokBackend.translateRequest(payload, model);
     const body = JSON.stringify(upstreamPayload);
@@ -2046,6 +2108,10 @@ function runWorker() {
       headers: { ...grokBackend.grokHeaders(token, model), 'content-length': Buffer.byteLength(body) },
       agent: target.protocol === 'https:' ? httpsAgent : httpAgent,
     }, (upstream) => {
+      if (clientAborted(clientRes)) {
+        upstream.destroy();
+        return;
+      }
       const responseHeaders = { ...upstream.headers };
       for (const header of ['transfer-encoding', 'connection', 'keep-alive']) delete responseHeaders[header];
       const streamed = String(upstream.headers['content-type'] || '').toLowerCase().includes('text/event-stream');
@@ -2131,8 +2197,14 @@ function runWorker() {
         if (!upstream.complete && !clientRes.writableEnded && !clientRes.destroyed) clientRes.destroy();
       });
     });
+    if (tracker) tracker.currentUpReq = request;
+    request.once('close', () => {
+      if (tracker && tracker.currentUpReq === request) tracker.currentUpReq = null;
+    });
     request.setTimeout(3600000, () => request.destroy(new Error('Grok upstream timeout')));
     request.on('error', (error) => {
+      if (tracker && tracker.currentUpReq === request) tracker.currentUpReq = null;
+      if (clientAborted(clientRes)) return clientRes.destroy();
       routeTelemetry?.finish(502, 'upstream_error');
       if (clientRes.headersSent) return clientRes.destroy();
       const errorBody = JSON.stringify({ type: 'error', error: { type: 'api_error', message: `model-gateway: Grok upstream failed: ${error.message}` } });
@@ -2209,9 +2281,11 @@ function runWorker() {
     // outlives its request and retains the telemetry closure until the client
     // finally disconnects.
     res.once('close', () => routeTelemetry.cancel());
+    attachClientAbortTracker(res);
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
+      if (clientAborted(res)) return;
       const raw = chunks.length ? Buffer.concat(chunks) : null;
       let requestedModel = null;
       let requestedEffort = null;

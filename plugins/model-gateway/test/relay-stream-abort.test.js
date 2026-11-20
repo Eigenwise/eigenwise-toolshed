@@ -7,7 +7,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startGateway } = require('./support.js');
+const { gatewayTestEnvironment, startGateway } = require('./support.js');
 
 // Long enough that a slow machine does not call a live stream dead, short
 // enough that a hang fails this test instead of the suite timeout.
@@ -173,5 +173,148 @@ for (const command of ['serve-worker', 'serve-shim']) {
     assert.equal(result.status, 200);
     assert.equal(result.complete, false);
     assert.match(result.body, /message_start/);
+  });
+
+  test(`${command}: client disconnect before response headers aborts stalled upstream without marking upstream unavailable`, async (t) => {
+    let upstreamPostCount = 0;
+    let resolveBodyReceived;
+    const bodyReceived = new Promise((resolve) => { resolveBodyReceived = resolve; });
+    let resolveUpstreamClosed;
+    const upstreamClosed = new Promise((resolve) => { resolveUpstreamClosed = resolve; });
+    const proxy = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/v1/models') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+      }
+      upstreamPostCount += 1;
+      req.resume();
+      req.once('end', resolveBodyReceived);
+      req.once('close', resolveUpstreamClosed);
+      req.socket?.once('close', resolveUpstreamClosed);
+    });
+    const proxyPort = await listen(proxy);
+    t.after(() => proxy.close());
+    const env = gatewayTestEnvironment(t, {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_USAGE_ENDPOINT: '0',
+    });
+    const { port } = await startGateway(t, command, env);
+
+    const payload = JSON.stringify({
+      model: 'claude-gpt-5.6-sol',
+      max_tokens: 512,
+      stream: true,
+      messages: [{ role: 'user', content: 'preheader disconnect test' }],
+    });
+    await new Promise((resolve, reject) => {
+      const clientReq = http.request({
+        host: '127.0.0.1',
+        port,
+        method: 'POST',
+        path: '/v1/messages',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
+      });
+      clientReq.on('error', () => {});
+      clientReq.end(payload, () => {
+        bodyReceived.then(() => {
+          setTimeout(() => {
+            clientReq.destroy();
+            resolve();
+          }, 80);
+        }, reject);
+      });
+    });
+
+    const closedQuickly = await Promise.race([
+      upstreamClosed.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 1500)),
+    ]);
+    assert.equal(closedQuickly, true, 'pre-header client disconnect did not close the upstream proxy request');
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(upstreamPostCount, 1, 'pre-header client disconnect must not trigger duplicate upstream attempts');
+
+    const health = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/healthz' }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString())));
+      }).on('error', reject);
+    });
+    assert.notEqual(
+      health.codexReadiness.state,
+      'upstream-unavailable',
+      `client abort should not mark codex upstream-unavailable: ${JSON.stringify(health.codexReadiness)}`,
+    );
+    assert.equal(health.codexReadiness.upstreamUnavailable, null);
+
+    const lifecyclePath = path.join(env.HOME, '.claude', 'model-gateway', 'logs', 'lifecycle.jsonl');
+    if (fs.existsSync(lifecyclePath)) {
+      const entries = fs.readFileSync(lifecyclePath, 'utf8').trim().split('\n').filter(Boolean);
+      for (const line of entries) {
+        const parsed = JSON.parse(line);
+        assert.notEqual(parsed.event, 'worker-request-lost', `client abort should not emit worker-request-lost: ${line}`);
+      }
+    }
+  });
+
+  test(`${command}: client disconnect during WebSocket-upgrade 403 retry backoff cancels retry attempt`, async (t) => {
+    let upstreamPostCount = 0;
+    let resolveFirstRejectionSent;
+    const firstRejectionSent = new Promise((resolve) => { resolveFirstRejectionSent = resolve; });
+    const proxy = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/v1/models') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+      }
+      upstreamPostCount += 1;
+      req.resume();
+      req.once('end', () => {
+        const errorBody = JSON.stringify({
+          type: 'error',
+          error: { type: 'permission_error', message: 'WebSocket upgrade was rejected' },
+        });
+        res.writeHead(403, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
+        res.end(errorBody, resolveFirstRejectionSent);
+      });
+    });
+    const proxyPort = await listen(proxy);
+    t.after(() => proxy.close());
+    const env = gatewayTestEnvironment(t, {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS: '300',
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_USAGE_ENDPOINT: '0',
+    });
+    const { port } = await startGateway(t, command, env);
+
+    const payload = JSON.stringify({
+      model: 'claude-gpt-5.6-sol',
+      max_tokens: 512,
+      stream: true,
+      messages: [{ role: 'user', content: 'backoff disconnect test' }],
+    });
+    await new Promise((resolve, reject) => {
+      const clientReq = http.request({
+        host: '127.0.0.1',
+        port,
+        method: 'POST',
+        path: '/v1/messages',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
+      });
+      clientReq.on('error', () => {});
+      clientReq.end(payload, () => {
+        firstRejectionSent.then(() => {
+          setTimeout(() => {
+            clientReq.destroy();
+            resolve();
+          }, 80);
+        }, reject);
+      });
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.equal(upstreamPostCount, 1, 'client disconnect during 403 backoff must cancel the pending retry timer');
   });
 }
