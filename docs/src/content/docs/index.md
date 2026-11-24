@@ -2,6 +2,10 @@
 title: Eigenwise Toolshed
 description: Six independent Claude Code plugins for keeping project context current, finishing tracked work, choosing models, and seeing local usage.
 template: splash
+banner:
+  content: |
+    Toolshed v1 is deprecated as of 25 November 2026: no more fixes or releases.
+    <a href="https://github.com/Eigenwise/eigenwise-toolshed/tree/v2">Toolshed v2 lives on the v2 branch.</a>
 ---
 
 <section class="hero">

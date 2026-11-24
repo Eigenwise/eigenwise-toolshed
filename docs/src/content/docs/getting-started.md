@@ -1,6 +1,10 @@
 ---
 title: Getting started
 description: Install Quartermaster, prepare a project, and choose the Toolshed plugin that fits the job.
+banner:
+  content: |
+    Toolshed v1 is deprecated as of 25 November 2026: no more fixes or releases.
+    <a href="https://github.com/Eigenwise/eigenwise-toolshed/tree/v2">Toolshed v2 lives on the v2 branch.</a>
 ---
 
 Eigenwise Toolshed is seven independent Claude Code plugins. Start with Quartermaster when you want a guided project setup. Install a different plugin directly when you already know what you need.
