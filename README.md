@@ -1,3 +1,23 @@
+# ⚠️ Toolshed v1 is deprecated
+
+> [!WARNING]
+> **This is Toolshed v1. As of 25 November 2026 it gets no more fixes and no new releases.**
+>
+> It stays here on `main` and your install keeps working. Issues and pull requests about v1 are closed as not planned.
+>
+> **Toolshed v2 is a rewrite.** It lives on the [`v2` branch](https://github.com/Eigenwise/eigenwise-toolshed/tree/v2) of this repository, under its own marketplace name, `toolshed-next`. Both can be installed side by side, and updating v1 does not get you v2.
+>
+> To move a project, run these from it, reload plugins, then run `/quartermaster:upgrade`:
+>
+> ```text
+> claude plugin marketplace add Eigenwise/eigenwise-toolshed#v2
+> claude plugin install quartermaster@toolshed-next --scope local
+> ```
+>
+> [UPGRADING.md](https://github.com/Eigenwise/eigenwise-toolshed/blob/v2/UPGRADING.md) on the `v2` branch has the rest. Found something wrong in v2? Open an issue with the label `v2`.
+
+Everything below describes v1.
+
 # Eigenwise Toolshed
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin_marketplace-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
