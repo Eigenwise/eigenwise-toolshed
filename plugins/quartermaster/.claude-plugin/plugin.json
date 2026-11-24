@@ -1,0 +1,10 @@
+{
+  "name": "quartermaster",
+  "version": "0.15.2",
+  "description": "Notices what you keep doing by hand, proposes one fix at a time, applies it when you say yes, and checks later whether it helped.",
+  "license": "MIT",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "author": { "name": "Eigenwise" },
+  "engines": { "claude-code": ">=2.1.325" },
+  "types": "./types/index.d.ts"
+}

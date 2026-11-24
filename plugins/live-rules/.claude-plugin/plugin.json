@@ -1,0 +1,8 @@
+{
+  "name": "live-rules",
+  "version": "0.6.0",
+  "description": "Write and audit native .claude/rules/ files. Runs no hooks and no process.",
+  "license": "MIT",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "author": { "name": "Eigenwise" }
+}

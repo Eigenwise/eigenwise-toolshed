@@ -1,0 +1,26 @@
+{
+  "grilling.md": [
+    "plugins/sidequest/skills/plan/references/grilling.md",
+    "plugins/quartermaster/skills/outfit/references/grilling.md"
+  ],
+  "result-contract.md": [
+    "plugins/sidequest/skills/run/references/result-contract.md"
+  ],
+  "config-directory.mjs": [
+    "plugins/sidequest/hooks/config-directory.mjs",
+    "plugins/quartermaster/hooks/config-directory.mjs",
+    "plugins/quartermaster/scripts/config-directory.mjs"
+  ],
+  "rule-files.mjs": [
+    "plugins/live-rules/scripts/rule-files.mjs",
+    "plugins/quartermaster/scripts/rule-files.mjs"
+  ],
+  "command-line.mjs": [
+    "plugins/live-rules/scripts/command-line.mjs",
+    "plugins/quartermaster/scripts/command-line.mjs"
+  ],
+  "config-directory.d.mts": [
+    "plugins/sidequest/hooks/config-directory.d.mts",
+    "plugins/quartermaster/hooks/config-directory.d.mts"
+  ]
+}

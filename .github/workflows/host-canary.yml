@@ -1,0 +1,27 @@
+name: host canary
+
+# Never a required check. check.yml pins Claude Code; this runs the same check on the newest
+# release, so a host update that breaks a mod shows up here first and blocks nobody.
+# When it goes red: fix the mod, then raise CLAUDE_CODE_VERSION in check.yml.
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths: ['.github/workflows/host-canary.yml']
+  push:
+    paths: ['.github/workflows/host-canary.yml']
+
+jobs:
+  check-on-newest-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the newest Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest && claude --version
+      - name: Validate and test every plugin
+        run: node scripts/check.mjs

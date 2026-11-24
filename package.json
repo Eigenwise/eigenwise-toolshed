@@ -1,0 +1,12 @@
+{
+  "name": "toolshed-next",
+  "private": true,
+  "type": "module",
+  "description": "Repository checks for the Toolshed marketplace. No dependencies.",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "sync": "node scripts/sync-shared.mjs",
+    "budgets": "node scripts/budgets.mjs",
+    "test": "node --test \"tests/*.test.mjs\""
+  }
+}
