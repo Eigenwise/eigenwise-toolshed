@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.626.0 (2026-11-25)
+
+### quartermaster 1.1.2 → 1.1.3
+
+#### Fixes
+
+- Toolshed v1 is deprecated: the session briefing and the update skill say so and point to v2 (GH-886) [`0e07c69`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0e07c699c9ff2d99dd493d3bd7f5b3ae8190dc9a)
+  Sidequest: the session-start block carries one line saying v1 is deprecated as of 25 November 2026 and where the move to v2 is described, and it no longer offers to file a GitHub issue for a v1 defect. Quartermaster: update-toolshed says v1 is deprecated before it updates and points at UPGRADING.md on the v2 branch. The README, the docs landing page and the marketplace description carry the same notice.
+
+### sidequest 6.10.2 → 6.10.3
+
+#### Fixes
+
+- Toolshed v1 is deprecated: the session briefing and the update skill say so and point to v2 (GH-886) [`0e07c69`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0e07c699c9ff2d99dd493d3bd7f5b3ae8190dc9a)
+  Sidequest: the session-start block carries one line saying v1 is deprecated as of 25 November 2026 and where the move to v2 is described, and it no longer offers to file a GitHub issue for a v1 defect. Quartermaster: update-toolshed says v1 is deprecated before it updates and points at UPGRADING.md on the v2 branch. The README, the docs landing page and the marketplace description carry the same notice.
+
 ## v3.625.0 (2026-11-17)
 
 ### sidequest 6.10.1 → 6.10.2
