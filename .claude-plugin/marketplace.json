@@ -4,7 +4,7 @@
     "name": "Eigenwise",
     "email": "kenny@eigenwise.io"
   },
-  "description": "Eigenwise Toolshed v1. Deprecated since 25 November 2026: no more fixes or releases. v2 lives on the v2 branch of this repository as toolshed-next.",
+  "description": "Eigenwise Toolshed v1. Not maintained. The current Toolshed is on the main branch of this repository.",
   "version": "3.626.0",
   "plugins": [
     {
