@@ -79,7 +79,7 @@ jobs:
       - name: Install the pinned Claude Code
         run: npm install -g "@anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}"
       # The checkout is the marketplace source on every event: it is the code under test, and the
-      # published v2 branch only holds the last release.
+      # published main only holds the last release.
       - name: Install every plugin into an empty config and test the installed copies
         run: node scripts/clean-room.mjs
 

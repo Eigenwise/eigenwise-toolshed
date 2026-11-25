@@ -1,0 +1,93 @@
+---
+title: Sidequest
+description: A work board in plain files, planning that reads before it asks, and model routing per kind of work.
+---
+
+import Frame from '../../../components/Frame.astro';
+import Terminal from '../../../components/Terminal.astro';
+import waitingView from '../../../mocks/waiting-view.txt?raw';
+
+<p class="lead">Give it a problem. It reads the code first, pushes back where the request looks off, asks only what you must decide, then splits the work across agents.</p>
+
+## The problem
+
+A big request in one chat goes wrong in familiar ways.
+
+- Claude starts building before it has read the code.
+- It asks ten questions, eight of which the code already answers.
+- Everything runs on one model, the expensive one.
+- When the chat is summarized, half the plan is gone.
+
+## What you get
+
+- **A board.** The board is the list of work in a project. Each piece of work is a ticket: one markdown file under `.sidequest/`. A pane, a panel beside the chat, shows what runs, what waits on you, what is next and what got done. It works the same in the terminal and in the desktop app, where the board is a side panel. The one difference is the **View** button on a running agent, which opens its transcript in the terminal only. With more than one piece of work in flight, it [groups by the piece of work](/guides/teams/#two-issues-at-once).
+- **A front door.** Every request is sized first. A small exact fix just happens, after one line that says the plan. Clear work with several parts gets a ticket. A vague or large request is planned with you first, and so is a tracker issue you name.
+- **Planning with you.** Claude reads first: the whole request, attachments included, and the code. A reported bug is made to fail. What it found goes on the board, with what is yours to decide, a few questions at a time. On code, that includes the design a reviewer would argue about. Each question comes with a recommended answer. You read and decide in one place, and the chat only points there. The plan comes back as proposed tickets, for one yes.
+- **Routing.** Each ticket has a category, a kind of work like `explore` or `build`. The category picks the route: the model and effort the work runs on. Cheap work runs on a cheap model.
+- **Review and landing.** Finished work gets an independent review, against the ticket and against the guidelines your repository wrote down. Reviewed branches are merged into one, checked once as a whole, and opened as one pull request.
+
+## What it does without asking
+
+You decide what gets built. How it is shipped is not a question to you. So with a git remote, finished board work is pushed as a branch and opened as a pull request.
+
+Where other people commit to the repository too, it stops there and the merge is yours. Where only you commit, it also merges once CI is green and the pull request is not a draft, unless a merge deploys.
+
+## What it never does
+
+<div class="never">
+
+- It never asks you for a go-ahead after you agreed to the plan, except at a stop you chose: a checkpoint, or a step before building.
+- It never puts a board id or its own name in a branch, a commit or a pull request.
+- It never sends a review reply, a tracker comment or a message under your name before you have seen the exact words.
+- It never asks you to put your name on code you have not seen. A yes to a commit, a push or a pull request is asked after the build, with the change on the board to read first.
+- It never lets an agent write the board. Agents return a result, the main session records it.
+- It never starts parked work by itself. A parked ticket waits for your word.
+- It never runs code from outside (a fork, a bot, a pasted script) on your machine before a read-only security pass.
+- It never loops on a failing ticket. Two failures stop it, and you are asked once.
+
+</div>
+
+## One real example
+
+The three tickets of the made-up task PAY-41 are built and reviewed, and the project's rules ask for your yes before anything is committed. The last ticket moves to **Waits on you**. The [walk-through](/start/walk-through/) follows this task from the first message.
+
+<Frame name="17-board-waits-on-you.png" />
+
+The question is written so you can answer it cold, even from a phone. This is what Claude pastes to you:
+
+<Terminal title="What waits on you" text={waitingView} caption="A text drawing of what Claude pastes into the chat." />
+
+You answer `A`. The answer is written on the ticket and the work carries on.
+
+You can also open the ticket in the pane and answer there:
+
+<Frame name="18-ticket-waits-on-you.png" />
+
+A ticket that waits on you opens as the question alone: the answers as picks, the extras as ticks, a field for your own words and **Send**. One send puts all of it in the chat as your message, and on the ticket. In every field on the board, Enter only keeps your words and **Send** sends. After a send the board shows what you sent and stops saying it waits on you.
+
+**Show the whole ticket** has the rest: its text, and up to three buttons.
+
+- **Approve**, on a checkpoint only. You looked and it is right, so what it blocks carries on.
+- **Set aside**. It stays on the board, and nothing starts it until you say so.
+- **Drop**. It is off the board and never offered again.
+
+A ticket that does not wait on you has a field to say something about it. So does the plan. What you type goes to the session as your message and is logged.
+
+## The files
+
+```text
+.sidequest/
+  board.json        id prefix, routing table, categories, settings
+  tickets/PL-12.md  one ticket per file
+  stories/PL-S3.md  the goal, the decisions, what is left out
+  briefs/PL-12.md   the brief last handed to that ticket's agent
+```
+
+The board is personal. The folder stays out of git, and your teammates do not see it. A team shares work through its tracker and its pull requests. See [Working in a team](/guides/teams/).
+
+## Go deeper
+
+- [A task, start to pull request](/guides/task-to-pull-request/)
+- [How routing picks a model](/guides/routing/)
+- [How quality is checked](/guides/quality/)
+- [Skills](/reference/skills/#sidequest) and [tools](/reference/tools/#sidequest) in the reference

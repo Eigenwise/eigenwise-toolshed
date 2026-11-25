@@ -101,8 +101,8 @@ const numberPrefix = (place: QuestionPlace): string => (place.number === undefin
 
 const answerWithoutOptions = (place: QuestionPlace, handle: string): string =>
   place.number === undefined
-    ? `To answer: done, or what you found. Ticket ${handle}.`
-    : `To answer: ${place.number} done, or ${place.number} and what you found. Ticket ${handle}.`
+    ? `To answer in this chat: done, or what you found. Ticket ${handle}.`
+    : `To answer in this chat: ${place.number} done, or ${place.number} and what you found. Ticket ${handle}.`
 
 const extrasExample = (forYou: ForYou, place: QuestionPlace): string =>
   forYou.alsoYours.map((_, index) => extraName(index, place)).slice(0, 2).join(' and ')
@@ -116,7 +116,7 @@ const howToAnswer = (place: QuestionPlace, forYou: ForYou, handle: string): stri
   if (forYou.options.length === 0) return answerWithoutOptions(place, handle)
   const answer = `${numberPrefix(place)}${recommendedLetter(forYou) ?? 'A'}`
 
-  return `To answer: ${letterForm(place)}, like ${answer}${alsoDoHint(forYou, place, answer)}. Ticket ${handle}.`
+  return `To answer in this chat: ${letterForm(place)}, like ${answer}${alsoDoHint(forYou, place, answer)}. Ticket ${handle}.`
 }
 
 const indented = (line: string): string => line.split('\n').map(part => `${BLOCK_INDENT}${part}`).join('\n')
@@ -160,9 +160,14 @@ const answeredStoryNames = (stories: readonly Story[]): string[] =>
     ...(story.playbackAnswerSent === undefined ? [] : [`the yes on ${story.id} (${oneLine(story.title)})`]),
   ])
 
+export const answeredOnTheBoardNames = (tickets: readonly Ticket[], stories: readonly Story[]): string[] => [
+  ...answeredTicketNames(tickets),
+  ...answeredStoryNames(stories),
+]
+
 // Answered on the board, so it is in the chat as the person's message and waits on the session, not on them.
 const answeredOnTheBoardLine = (tickets: readonly Ticket[], stories: readonly Story[]): string => {
-  const names = [...answeredTicketNames(tickets), ...answeredStoryNames(stories)]
+  const names = answeredOnTheBoardNames(tickets, stories)
 
   return names.length === 0 ? '' : `${NOT_TO_PASTE} answered on the board, so the answer is with you to record, or ask again: ${names.join(', ')}.`
 }
@@ -211,7 +216,8 @@ const standingPart = (standing: readonly PullRequestOfTicket[]): string => {
   return lines.length === 0 ? '' : ['Where the pull requests stand:', ...lines].join('\n')
 }
 
-const NOTHING_WAITS = 'Nothing waits on you.'
+const nothingWaits = (projectName: string | undefined): string =>
+  projectName === undefined ? 'Nothing waits on you.' : `Nothing waits on you in ${projectName}.`
 
 const EARLIER_WORK_HEADING = 'Still waiting on you from earlier sessions:'
 
@@ -227,7 +233,7 @@ const earlierWorkSplit = (written: readonly Ticket[], touched: ReadonlySet<strin
 }
 
 const earlierWorkLine = (ticket: Ticket, now: number | undefined): string =>
-  `- ${ticket.id} ${oneLine(ticket.title)}, waiting ${daysWords(millisecondsSince(lastTouchedOf(ticket), now ?? Number.NaN))}`
+  `- ${ticket.id} ${oneLine(ticket.title)}, waiting ${daysWords(millisecondsSince(lastTouchedOf(ticket), now ?? Number.NaN))}. To answer in this chat: ask for ticket ${ticketHandle(ticket)}, then answer it.`
 
 const earlierWorkPart = (earlier: readonly Ticket[], now: number | undefined): string =>
   earlier.length === 0 ? '' : [EARLIER_WORK_HEADING, ...earlier.map(ticket => earlierWorkLine(ticket, now))].join('\n')
@@ -299,8 +305,11 @@ const questionsAndReturns = (moment: WaitingMoment, cameBack: readonly PullReque
   return { blocks: [...current.map(ticket => questionBlock(ticket, moment.now)), ...cameBack.map(pullRequestBlock)], earlier }
 }
 
-const MOST_BLOCKING_LEAD = 'Waiting on you, most blocking first:'
-const BY_PIECE_LEAD = 'Waiting on you, by piece of work:'
+const waitingLead = (projectName: string | undefined, order: string): string =>
+  projectName === undefined ? `Waiting on you, ${order}:` : `Waiting on you in ${projectName}, ${order}:`
+
+const MOST_BLOCKING_ORDER = 'most blocking first'
+const BY_PIECE_ORDER = 'by piece of work'
 
 export const waitingText = (
   tickets: readonly Ticket[],
@@ -316,9 +325,9 @@ export const waitingText = (
   const { blocks: waitingBlocks, earlier } = questionsAndReturns({ ...board, now }, cameBack)
   const { isByPiece, numbered } = numberedWaiting(waitingBlocks, board)
   const blocks = withHeadings(numbered)
-  const blocksLead = isByPiece ? BY_PIECE_LEAD : MOST_BLOCKING_LEAD
+  const blocksLead = waitingLead(storiesAndCheckout.projectName, isByPiece ? BY_PIECE_ORDER : MOST_BLOCKING_ORDER)
   const lead = blocks.length > 0 || earlier.length > 0 ? blocksLead : ''
-  const nothing = waiting.length + cameBack.length === 0 ? NOTHING_WAITS : ''
+  const nothing = waiting.length + cameBack.length === 0 ? nothingWaits(storiesAndCheckout.projectName) : ''
   const unwritten = unwrittenLine(waiting.filter(ticket => !hasQuestion(ticket)))
   const standing = standingPart(withStates.filter(pullRequest => !cameBack.includes(pullRequest)))
   const answered = answeredOnTheBoardLine(tickets, storiesAndCheckout.stories)
@@ -333,13 +342,14 @@ export type WaitingAround = StoriesAndCheckout & { touched: ReadonlySet<string>;
 const NOTHING_AROUND: WaitingAround = { ...NO_STORIES, touched: new Set() }
 
 export const waitingAroundWrite = (
-  { stories, checkedOutBranch }: StoriesAndCheckout,
+  { stories, checkedOutBranch, projectName }: StoriesAndCheckout,
   touchedBefore: ReadonlySet<string>,
   writtenIds: Iterable<string>,
   stamp: string,
 ): WaitingAround => ({
   stories,
   ...(checkedOutBranch === undefined ? {} : { checkedOutBranch }),
+  ...(projectName === undefined ? {} : { projectName }),
   touched: new Set([...touchedBefore, ...writtenIds]),
   now: Date.parse(stamp),
 })
@@ -349,9 +359,12 @@ export const waitingAroundWrite = (
 const nowWaitingBlocks = (ids: ReadonlySet<string>, tickets: readonly Ticket[], around: WaitingAround): string[] => {
   const moment = { ...around, tickets }
   const { numbered } = numberedWaiting(questionsAndReturns(moment, []).blocks, moment, true)
+  const blocks = withHeadings(numbered.filter(block => ids.has(block.ticket.id)))
 
-  return withHeadings(numbered.filter(block => ids.has(block.ticket.id)))
+  return blocks.length === 0 ? blocks : [...projectLine(around.projectName), ...blocks]
 }
+
+const projectLine = (projectName: string | undefined): string[] => (projectName === undefined ? [] : [`Waiting on you in ${projectName}:`])
 
 export const nowWaitingBlocksText = (nowWaiting: readonly Ticket[], tickets: readonly Ticket[], around: WaitingAround): string =>
   nowWaitingBlocks(new Set(nowWaiting.map(ticket => ticket.id)), tickets, around).join('\n\n')

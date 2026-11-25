@@ -1,4 +1,4 @@
-import { dayOf } from './events'
+import { dayOf, failureLabel, repeatsAnError } from './events'
 import type { SensedEvent } from './events'
 import type { QuartermasterCandidate, QuartermasterCandidateKind } from '../types'
 
@@ -9,6 +9,9 @@ export const REPEATED_FAILURE_DAYS = 2
 export const REPEATED_DENIALS = 4
 export const STILL_HAPPENING_DAYS = 7
 export const UNUSED_SKILL_DAYS = 30
+
+// A skill is judged unused over everything the evidence read reaches, so the two are one number.
+export const EVIDENCE_WINDOW_DAYS = UNUSED_SKILL_DAYS
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -55,9 +58,10 @@ const candidateFrom = (kind: CandidateKind, group: Group, sentence: string): Can
 const commandSightings = (events: readonly SensedEvent[]): Sighting[] =>
   events.flatMap(event => (event.kind === 'typed' ? [{ target: event.prefix, at: event.at }] : []))
 
+// A fix is offered for an error text that comes back, never for a command name that only fails now and then for other reasons.
 const failureSightings = (events: readonly SensedEvent[]): Sighting[] =>
   events.flatMap(event =>
-    event.kind === 'failure' ? [{ target: `${event.tool}: ${event.signature}`.trim(), at: event.at }] : [],
+    event.kind === 'failure' && repeatsAnError(event) ? [{ target: failureLabel(event), at: event.at }] : [],
   )
 
 const denialSightings = (events: readonly SensedEvent[]): Sighting[] =>
@@ -112,9 +116,15 @@ export const repeatedDenials = (events: readonly SensedEvent[]): Candidate[] =>
 
 /**
  * The events in the window, and whether any day file is older than it: only
- * then has the human had the whole window to use a skill.
+ * then has the human had the whole window to use a skill. `sessionFiles` are
+ * the names of the day files read, one per session per day, so sessions are
+ * counted without reading their events again.
  */
-export type SensedHistory = { events: readonly SensedEvent[]; reachesBeforeWindow: boolean }
+export type SensedHistory = {
+  events: readonly SensedEvent[]
+  reachesBeforeWindow: boolean
+  sessionFiles?: readonly string[]
+}
 
 const exercisedSkillsSince = (events: readonly SensedEvent[], since: number): Set<string> =>
   new Set(events.flatMap(event => (event.kind === 'skill' && Date.parse(event.at) >= since ? [event.skill] : [])))

@@ -56,7 +56,7 @@ const FIELD_KIND_WORDS: Record<FieldKind, string> = {
   list: 'an array of strings',
   number: 'a whole number',
   yesNo: 'true or false',
-  decisions: 'an array of { question, answer, decidedBy }',
+  decisions: 'an array of { question, answer, decidedBy, words }',
   questions: 'an array of { question, recommended, otherCosts }, each a string, recommended also a list of strings',
   path: 'an array of { what, file, line, note }, line a whole number',
   excerpts: 'an array of { file, firstLine, lines }, firstLine a whole number',

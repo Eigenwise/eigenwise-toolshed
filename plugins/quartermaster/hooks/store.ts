@@ -8,6 +8,8 @@ import type { ChangeRecord, FileBytes, RollbackStep, TouchedFile } from './chang
 import { parseRejections, serializeRejections, withRejections } from './rejections'
 import type { Rejection } from './rejections'
 import { impressionLine, parseImpressions } from './impressions'
+import { hasUsableCreated, isInTrial } from './standing-due'
+import type { AppliedChange } from './standing-due'
 import type { Impression } from './impressions'
 
 export type DirectoryEntry = { name: string; kind: 'file' | 'dir' | 'other' }
@@ -91,7 +93,7 @@ const readEventsFrom = async (files: FileSystem, eventsDirectory: string, firstD
   const inWindow = days.filter(name => name.slice(0, 10) >= firstDay)
   const texts = await Promise.all(inWindow.map(name => files.read(`${eventsDirectory}/${name}`)))
 
-  return { events: texts.flatMap(parseEventLines), reachesBeforeWindow: inWindow.length < days.length }
+  return { events: texts.flatMap(parseEventLines), reachesBeforeWindow: inWindow.length < days.length, sessionFiles: inWindow }
 }
 
 /** Reads every folder given, so events saved to the project when the home folder refused a write are not lost. */
@@ -107,6 +109,7 @@ export const readEventsSince = async (
   return {
     events: histories.flatMap(history => history.events),
     reachesBeforeWindow: histories.some(history => history.reachesBeforeWindow),
+    sessionFiles: histories.flatMap(history => history.sessionFiles ?? []),
   }
 }
 
@@ -233,6 +236,20 @@ export const readChange = async (files: FileSystem, cwd: string, proposal: strin
 
 export const hasChangeRecord = (files: FileSystem, cwd: string, proposal: string): Promise<boolean> =>
   files.exists(`${changeDirectory(cwd, proposal)}/change.json`)
+
+/** The change records of the proposals still on trial: what a review has yet to judge. */
+export const readChangesInTrial = async (files: FileSystem, cwd: string): Promise<AppliedChange[]> => {
+  const { proposals } = await readProposals(files, cwd)
+  const records = await Promise.all(
+    proposals.filter(isInTrial).map(async proposal => {
+      const record = await readChange(files, cwd, proposal.id).catch(() => undefined)
+
+      return record === undefined || !hasUsableCreated(record.created) ? [] : [{ id: record.id, proposal: proposal.id, kind: proposal.kind, target: proposal.target, created: record.created }]
+    }),
+  )
+
+  return records.flat()
+}
 
 /** `leftAlone` holds one report per file a person changed after the change, which a rollback does not overwrite. */
 export type RollbackOutcome = { restored: string[]; toDelete: string[]; leftAlone: string[] }

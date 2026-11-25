@@ -7,25 +7,25 @@ Most projects are not empty. Outfit changes as little as it can and never decide
 A team project is one with other git authors or a committed `.claude/settings.json`.
 
 - In a team project, install with `--scope local` until the human says the team adopts it. Local scope writes `.claude/settings.local.json`, which stays out of git, so nothing changes for anyone else.
-- A project-scope install is a team decision. Say what will then run for every contributor. Declare the marketplace in the same change (`claude plugin marketplace add Eigenwise/eigenwise-toolshed#v2 --scope project`), or teammates get an enabled plugin they cannot resolve.
+- A project-scope install is a team decision. Say what will then run for every contributor. Declare the marketplace in the same change (`claude plugin marketplace add Eigenwise/eigenwise-toolshed --scope project`), or teammates get an enabled plugin they cannot resolve.
 - In a solo project, project scope is fine.
 
 ## A plugin of the same name from another marketplace
 
-`claude plugin list --json` shows the marketplace after the `@`. A plugin with our name from another marketplace (a fork, a copy) is a clash, never an install. The older Toolshed is the one exception and has its own section below: outfit leaves it to `upgrade`. For any other marketplace: both would load, their skills share one namespace, and the other one's hooks keep firing on our work.
+`claude plugin list --json` shows the marketplace after the `@`. A plugin with our name from another marketplace (a fork, a copy) is a clash, never an install. Two are not: the older Toolshed, which shares our marketplace name `eigenwise-toolshed` and is told apart by its version, and `toolshed-next`, this version under its earlier name. Both have their own section below, and outfit leaves both to `upgrade`. For any other marketplace: both would load, their skills share one namespace, and the other one's hooks keep firing on our work.
 
 - Say which plugins clash and at which scope each is enabled.
 - Offer to disable the other one, one plugin at a time: `claude plugin disable <name>@<marketplace> --scope <scope>`.
 - One enabled in the committed settings is the team's. Leave that file alone and disable it at local scope instead, which overrides it for this person only.
 - If they keep the other one, skip our plugin of that name and say so. Never run both.
 
-## The project is on the older version
+## The project is on the older version, or on the earlier name
 
-When the exploration prints a line from `upgrade-scan.mjs --line`, say that line as it is, once, in what you found. It is no upgrade: outfit changes nothing about the older plugins, asks nothing about them and carries on with what it was asked. The `upgrade` skill moves the project, when the person wants that.
+When the exploration prints a line from `upgrade-scan.mjs --line`, say that line as it is, once, in what you found. It is no upgrade: outfit changes nothing about the older plugins or the earlier name, asks nothing about them and carries on with what it was asked. The `upgrade` skill updates or moves them, when the person wants that.
 
-Never install our plugin of a name the older version has on in this project: both would load. Skip it, say so, and leave the clash to `upgrade`.
+Never install a plugin of ours while an older version of it is installed here (the line says update first), or while it is installed as `<name>@toolshed-next`: both would load. Skip it, say so, and leave it to `upgrade`.
 
-## A v2 plugin installed by hand
+## A plugin of ours installed by hand
 
 Each line from `found-installed.mjs` is a plugin of ours that is installed here with no change record, so the undo would miss it, except a line that says installed for all projects: that one is only listed, because its undo would remove it from every project. Say what was found in one line, then write the records:
 

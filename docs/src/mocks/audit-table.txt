@@ -1,0 +1,18 @@
+$ node <plugin folder>/scripts/audit-rules.mjs --table
+Rules in photo-library/.claude/rules
+
+FILE             SCOPE        BYTES  FINDINGS
+commit-style.md  always          75  0
+money.md         paths           55  1
+old.md           always          29  2
+
+WARNING money.md: paths glob "src/payments" matches no file in the project
+  fix: Fix the glob, or delete the rule if that code is gone.
+WARNING old.md: "globs" is a live-rules v1 key and Claude Code ignores it
+  fix: Rename the key to "paths".
+WARNING old.md: "priority" is a live-rules v1 key and Claude Code ignores it
+  fix: Rules have no priority. Delete the key.
+
+Skipped 4 codebase map files (codebase-map.md and map/): this is the codebase map, checked by the map's own status check; the index's 262 bytes are in the always-loaded total.
+
+Always loaded: 3 rules, 366 bytes. 0 errors, 3 warnings.

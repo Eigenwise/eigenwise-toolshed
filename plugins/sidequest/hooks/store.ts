@@ -24,6 +24,7 @@ import { boardJsonWrittenAgainNotice, hasWorkOnDisk, isBlank, VANISHED_BOARD_NOT
 import { choosePrefix, prefixFactsFrom, withPrefixFromDisk } from './board-prefix'
 import type { PrefixFacts } from './board-prefix'
 import { branchInHead } from './branch-and-issue'
+import { projectNameOf } from './project-name'
 import { NO_PROVIDERS, providersOf } from './routing'
 import type { Providers } from './routing'
 import { serializeStory, serializeTicket } from './tickets'
@@ -41,6 +42,7 @@ export type BoardFiles = {
   tickets: Ticket[]
   stories: Story[]
   checkedOutBranch?: string
+  projectName?: string
   folderRead?: string
   unusableFiles?: readonly UnusableFile[]
   idsOnDisk?: { tickets: readonly string[]; stories: readonly string[] }
@@ -164,6 +166,7 @@ async function readBoardAndTexts($: Engine, location: BoardLocation): Promise<Bo
     readBoardFolder($, location, STORY_READING),
     readCheckedOutBranch($, location),
   ])
+  const projectName = projectNameOf(location.root)
   const config = remembered(withPrefixFromDisk(configIn(configText), tickets.idsOnDisk, stories.idsOnDisk))
   const files: BoardFiles = {
     config,
@@ -174,6 +177,7 @@ async function readBoardAndTexts($: Engine, location: BoardLocation): Promise<Bo
     idsOnDisk: { tickets: tickets.idsOnDisk, stories: stories.idsOnDisk },
     folderRead: boardPath(location),
     ...(checkedOutBranch === undefined ? {} : { checkedOutBranch }),
+    ...(projectName === undefined ? {} : { projectName }),
   }
 
   return { files, ticketTexts: tickets.texts }
@@ -402,7 +406,7 @@ const hasEarlierWork = (config: BoardConfig, idsOnFile: number): boolean =>
   idsOnFile > 0 || config.nextTicket > 1 || config.nextStory > 1
 
 // A bare repository's folder is named x.git, and the prefix comes from the project's name, not git's.
-const folderNameOf = (root: string): string => trimTrailingSlash(root).split(/[\\/]/).at(-1)?.replace(/\.git$/, '') || root
+const folderNameOf = (root: string): string => projectNameOf(root) ?? root
 
 const idsTheFirstWriteWouldTake = (location: BoardLocation, checkedOutBranch: string | undefined): BoardIds =>
   boardIdsOf(choosePrefix(prefixFactsFrom(folderNameOf(location.root), [checkedOutBranch ?? ''])).prefix)

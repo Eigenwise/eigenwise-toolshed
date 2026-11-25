@@ -43,6 +43,8 @@ export type Ticket = ReadingNotes & {
   // What the person sent from the board's form while the ticket waited on them. Until the session moves the ticket or
   // writes its For you again, the answer is with the session and the ticket no longer waits on the person.
   answerSent?: string
+  // The minute the answer was sent, so the pane can say when. Absent on an answer sent before it was kept.
+  answerSentAt?: string
   log: string[]
   otherFields: Frontmatter
   otherSections: Section[]
@@ -93,12 +95,16 @@ export type Story = ReadingNotes & {
   // mark, again: until then that part no longer waits on them.
   decisionPicksSent?: string[]
   decisionWordsSent?: string
+  decisionDaySent?: string
   playbackAnswerSent?: string
   otherFields: Frontmatter
   otherSections: Section[]
 }
 
-export type Decision = { question: string; answer: string; decidedBy: string }
+export type Decision = { question: string; answer: string; decidedBy: string; decidedOn?: string; words?: string }
+
+// Two short sentences: an answer and its reason, and still one line on a page.
+export const DECISION_WORDS_LIMIT = 200
 
 export type StoryPatch = Partial<Pick<Story, 'title' | 'destination' | 'inShort' | 'outOfScope' | 'handOver' | 'analysis' | 'path' | 'excerpts' | 'questions'>> & {
   decisions?: Decision[]
@@ -107,12 +113,14 @@ export type StoryPatch = Partial<Pick<Story, 'title' | 'destination' | 'inShort'
 
 const OPTIONAL_TICKET_FIELDS = ['story', 'branch', 'issue', 'pullRequest', 'startedBy'] as const
 const ANSWER_SENT = 'answerSent'
-const TICKET_FIELD_NAMES = ['id', 'title', 'status', 'kind', 'mode', 'category', ...OPTIONAL_TICKET_FIELDS, 'blockedBy', 'decisions', 'uses', 'created', 'updated', ANSWER_SENT]
+const ANSWER_SENT_AT = 'answerSentAt'
+const TICKET_FIELD_NAMES = ['id', 'title', 'status', 'kind', 'mode', 'category', ...OPTIONAL_TICKET_FIELDS, 'blockedBy', 'decisions', 'uses', 'created', 'updated', ANSWER_SENT, ANSWER_SENT_AT]
 const AWAITS_YES = 'awaitsYes'
 const DECISION_PICKS_SENT = 'decisionPicksSent'
 const DECISION_WORDS_SENT = 'decisionWordsSent'
+const DECISION_DAY_SENT = 'decisionDaySent'
 const PLAYBACK_ANSWER_SENT = 'playbackAnswerSent'
-const STORY_FIELD_NAMES = ['id', 'title', 'created', 'updated', AWAITS_YES, DECISION_PICKS_SENT, DECISION_WORDS_SENT, PLAYBACK_ANSWER_SENT]
+const STORY_FIELD_NAMES = ['id', 'title', 'created', 'updated', AWAITS_YES, DECISION_PICKS_SENT, DECISION_WORDS_SENT, DECISION_DAY_SENT, PLAYBACK_ANSWER_SENT]
 export const RECOMMENDED_PICK = 'recommended'
 export const OTHER_PICK = 'other'
 const TICKET_SECTION_NAMES = ['For you', 'What', 'Done when', 'Log']
@@ -212,10 +220,28 @@ export const withoutEmptyOptionalFields = (ticket: Ticket): Ticket => {
   return kept
 }
 
-const answerSentField = (fields: Frontmatter): Pick<Ticket, 'answerSent'> => {
+const answerSentField = (fields: Frontmatter): Pick<Ticket, 'answerSent' | 'answerSentAt'> => {
   const answer = textField(fields, ANSWER_SENT)
+  const sentAt = textField(fields, ANSWER_SENT_AT)
 
-  return answer === '' ? {} : { answerSent: answer }
+  return answer === '' ? {} : { answerSent: answer, ...(sentAt === '' ? {} : { answerSentAt: sentAt }) }
+}
+
+// Seen in a real run: a copy that kept no answerSent field logged the answer twice and the ticket kept waiting. Such a
+// ticket is read as answered when the last thing on its log is the answer pressed on the board.
+const ANSWER_LOG_LINE = /^(\S+) answered by human in the board: (.+)$/s
+
+const answerSentFromLog = (status: string, log: readonly string[]): Pick<Ticket, 'answerSent' | 'answerSentAt'> => {
+  if (status !== 'needs-you') return {}
+  const [, sentAt = '', answer = ''] = ANSWER_LOG_LINE.exec(log.at(-1) ?? '') ?? []
+
+  return answer === '' ? {} : { answerSent: answer, answerSentAt: sentAt }
+}
+
+const answerSentOf = (fields: Frontmatter, status: string, log: readonly string[]): Pick<Ticket, 'answerSent' | 'answerSentAt'> => {
+  const written = answerSentField(fields)
+
+  return written.answerSent === undefined ? answerSentFromLog(status, log) : written
 }
 
 const usesField = (fields: Frontmatter): Pick<Ticket, 'uses'> => {
@@ -243,6 +269,7 @@ export const parseTicket = (text: string, fallbackId = ''): Ticket => {
   const document = parseFrontmatter(text)
   const { fields, body } = document
   const sections = parseSections(body)
+  const log = logLines(sectionText(sections, 'Log'))
 
   return {
     ...readingNotesOf(document),
@@ -261,8 +288,8 @@ export const parseTicket = (text: string, fallbackId = ''): Ticket => {
     what: sectionText(sections, 'What'),
     doneWhen: sectionText(sections, 'Done when'),
     forYou: sectionText(sections, 'For you'),
-    ...answerSentField(fields),
-    log: logLines(sectionText(sections, 'Log')),
+    ...answerSentOf(fields, textField(fields, 'status'), log),
+    log,
     otherFields: fieldsOutside(fields, TICKET_FIELD_NAMES),
     otherSections: sectionsOutside(sections, TICKET_SECTION_NAMES),
   }
@@ -288,6 +315,7 @@ export const serializeTicket = (ticket: Ticket): string => {
     created: ticket.created,
     updated: ticket.updated,
     answerSent: ticket.answerSent,
+    answerSentAt: ticket.answerSent === undefined ? undefined : ticket.answerSentAt,
   }
   const sections = [
     ...forYouSection(ticket.forYou),
@@ -332,6 +360,7 @@ export const newTicket = (id: string, patch: TicketPatch, stamp: string): Ticket
 export const withoutSentAnswer = (ticket: Ticket): Ticket => {
   const kept = { ...ticket }
   delete kept.answerSent
+  delete kept.answerSentAt
 
   return kept
 }
@@ -396,15 +425,21 @@ export const validateTicket = (ticket: Ticket, ids: IdsOnBoard): string[] =>
 
 const awaitsYesOf = (awaitsYes: boolean | undefined): Pick<Story, 'awaitsYes'> => (awaitsYes ? { awaitsYes: true } : {})
 
-type DecisionsSent = Pick<Story, 'decisionPicksSent' | 'decisionWordsSent'>
+type DecisionsSent = Pick<Story, 'decisionPicksSent' | 'decisionWordsSent' | 'decisionDaySent'>
 type SentFromTheBoard = DecisionsSent & Pick<Story, 'playbackAnswerSent'>
 
 const decisionsSentIn = (fields: Frontmatter): DecisionsSent => {
   const picks = listField(fields, DECISION_PICKS_SENT)
-  const words = textField(fields, DECISION_WORDS_SENT)
   if (picks.length === 0) return {}
 
-  return words === '' ? { decisionPicksSent: picks } : { decisionPicksSent: picks, decisionWordsSent: words }
+  const words = textField(fields, DECISION_WORDS_SENT)
+  const day = textField(fields, DECISION_DAY_SENT)
+
+  return {
+    decisionPicksSent: picks,
+    ...(words === '' ? {} : { decisionWordsSent: words }),
+    ...(day === '' ? {} : { decisionDaySent: day }),
+  }
 }
 
 const sentFromTheBoard = (fields: Frontmatter): SentFromTheBoard => {
@@ -417,6 +452,7 @@ const sentFromTheBoardFields = (story: Story): Frontmatter =>
   definedFields({
     [DECISION_PICKS_SENT]: story.decisionPicksSent,
     [DECISION_WORDS_SENT]: story.decisionWordsSent,
+    [DECISION_DAY_SENT]: story.decisionDaySent,
     [PLAYBACK_ANSWER_SENT]: story.playbackAnswerSent,
   })
 
@@ -475,15 +511,61 @@ export const serializeStory = (story: Story): string => {
 
 const decisionCount = (decisionsText: string): number => decisionsText.split('\n').filter(line => /^- D-\d+/.test(line.trim())).length
 
-const decisionLine = (decision: Decision, number: number): string =>
-  `- D-${number}: ${decision.question} Answer: ${decision.answer} Decided by: ${decision.decidedBy}`
+// What a person sees as one character can be several code points: a flag is two, a joined emoji up to seven, an
+// accented letter two. A cut that counts code points kept half a flag and dropped an accent.
+const charactersAsSeen = (text: string): string[] =>
+  Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), piece => piece.segment)
 
-export const withDecisions = (decisionsText: string, decisions: readonly Decision[]): string => {
+export const wordsKept = (typed: string): string =>
+  charactersAsSeen(oneLine(typed.replace(/\r/g, '\n')))
+    .slice(0, DECISION_WORDS_LIMIT)
+    .join('')
+
+const decidedOnPart = (day: string | undefined): string => (day === undefined ? '' : ` on ${day}`)
+
+// A default is no one's words, so only a decision the person took keeps them.
+const theirWordsPart = (decision: Decision): string => {
+  const words = decision.decidedBy === 'human' ? wordsKept(decision.words ?? '') : ''
+
+  return words === '' ? '' : `. Their words: "${words}"`
+}
+
+const decisionLine = (decision: Decision, number: number, day: string): string =>
+  `- D-${number}: ${decision.question} Answer: ${decision.answer} Decided by: ${decision.decidedBy}${decidedOnPart(decision.decidedOn ?? day)}${theirWordsPart(decision)}`
+
+export const withDecisions = (decisionsText: string, decisions: readonly Decision[], day: string): string => {
   const first = decisionCount(decisionsText) + 1
-  const lines = decisions.map((decision, index) => decisionLine(decision, first + index))
+  const lines = decisions.map((decision, index) => decisionLine(decision, first + index, day))
 
   return [decisionsText, ...lines].filter(line => line !== '').join('\n')
 }
+
+const DECISION_LINE_START = /^- D-\d+: /
+// The first status that runs to the end of the line, so a person's words that quote one stay words.
+const DECISION_STATUS = / Decided by: (human|default)(?: on (\d{4}-\d{2}-\d{2}))?(?:\. Their words: "([\s\S]*)")?$/
+const ANSWER_MARK = ' Answer: '
+
+const questionAndAnswer = (text: string): Pick<Decision, 'question' | 'answer'> => {
+  const markAt = text.indexOf(ANSWER_MARK)
+
+  return markAt < 0 ? { question: text, answer: '' } : { question: text.slice(0, markAt), answer: text.slice(markAt + ANSWER_MARK.length) }
+}
+
+const withoutMissing = (fields: Pick<Decision, 'decidedOn' | 'words'>): Pick<Decision, 'decidedOn' | 'words'> =>
+  Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
+
+const decisionRead = (line: string): Decision[] => {
+  const text = line.trim()
+  const start = DECISION_LINE_START.exec(text)
+  const status = DECISION_STATUS.exec(text)
+  if (start === null || status === null) return []
+  const [, decidedBy = '', decidedOn, words] = status
+
+  return [{ ...questionAndAnswer(text.slice(start[0].length, status.index)), decidedBy, ...withoutMissing({ decidedOn, words }) }]
+}
+
+// A line with no day reads with no day and no words. A retired decision has no answer and reads with an empty one.
+export const decisionsRead = (decisionsText: string): Decision[] => decisionsText.split('\n').flatMap(decisionRead)
 
 export const newStory = (id: string, title: string, stamp: string): Story => ({
   id,
@@ -519,6 +601,7 @@ const decisionsSentKept = (sent: DecisionsSent, patch: StoryPatch): DecisionsSen
 const presentDecisionsSent = (sent: DecisionsSent): DecisionsSent => ({
   ...(sent.decisionPicksSent === undefined ? {} : { decisionPicksSent: sent.decisionPicksSent }),
   ...(sent.decisionWordsSent === undefined ? {} : { decisionWordsSent: sent.decisionWordsSent }),
+  ...(sent.decisionDaySent === undefined ? {} : { decisionDaySent: sent.decisionDaySent }),
 })
 
 const playbackAnswerKept = (sent: string | undefined, patch: StoryPatch): SentFromTheBoard =>
@@ -533,15 +616,15 @@ export const withoutPlaybackAnswer = (story: Story): Story => {
 
 export const applyStoryPatch = (story: Story, patch: StoryPatch, stamp: string): Story => {
   const { decisions, awaitsYes, ...replacements } = patch
-  const { awaitsYes: awaitedBefore, decisionPicksSent, decisionWordsSent, playbackAnswerSent, ...rest } = story
+  const { awaitsYes: awaitedBefore, decisionPicksSent, decisionWordsSent, decisionDaySent, playbackAnswerSent, ...rest } = story
 
   return {
     ...rest,
     ...awaitsYesOf(awaitsYes ?? awaitedBefore),
-    ...decisionsSentKept({ decisionPicksSent, decisionWordsSent }, patch),
+    ...decisionsSentKept({ decisionPicksSent, decisionWordsSent, decisionDaySent }, patch),
     ...playbackAnswerKept(playbackAnswerSent, patch),
     ...replacements,
-    decisions: withDecisions(story.decisions, decisions ?? []),
+    decisions: withDecisions(story.decisions, decisions ?? [], dayOf(stamp)),
     updated: dayOf(stamp),
   }
 }

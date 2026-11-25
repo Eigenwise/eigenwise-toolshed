@@ -50,7 +50,7 @@ Follow `references/grilling.md`. Skip what exploration settled.
 - `codebase-mapper`: a codebase map as path-scoped rules. Fits any real codebase.
 - `live-rules`: write and audit `.claude/rules/`. Fits conventions people keep repeating.
 
-Install with `claude plugin install <name>@toolshed-next --scope local` in a team project until the human says the team adopts it, `--scope project` in a solo one. Never shorten the command: `@toolshed-next` is part of the name, and a bare name or another marketplace installs a different plugin. The permission prompt is the human's approval. For a same-named plugin already installed from elsewhere, and for a team's own map, rules and workflow, follow `references/existing-project.md`.
+Install with `claude plugin install <name>@eigenwise-toolshed --scope local` in a team project until the human says the team adopts it, `--scope project` in a solo one. Never shorten the command: `@eigenwise-toolshed` is part of the name, and a bare name or another marketplace installs a different plugin. The permission prompt is the human's approval. For a same-named plugin already installed from elsewhere, and for a team's own map, rules and workflow, follow `references/existing-project.md`.
 
 If you installed anything, ask the human to run `/reload-plugins` and to say when it is done (after a `git init` here, a restart instead: `references/new-folder.md`). That is the one stop; the next sections use those plugins.
 

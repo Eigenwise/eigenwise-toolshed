@@ -1,4 +1,5 @@
 import type { Candidate } from './detectors'
+import { failureLabel } from './events'
 import type { SensedEvent } from './events'
 
 export const TOP_FAILURES = 5
@@ -35,7 +36,7 @@ const commandPrefixes = (events: readonly SensedEvent[]): string[] =>
   events.flatMap(event => (event.kind === 'typed' ? [event.prefix] : []))
 
 const failureNames = (events: readonly SensedEvent[]): string[] =>
-  events.flatMap(event => (event.kind === 'failure' ? [`${event.tool}: ${event.signature}`.trim()] : []))
+  events.flatMap(event => (event.kind === 'failure' ? [failureLabel(event)] : []))
 
 /**
  * The bounded aggregate a model may read: counts and the candidates' sentences,

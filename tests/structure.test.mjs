@@ -14,7 +14,8 @@ import {
 
 const emDash = String.fromCharCode(0x2014);
 const forbiddenCommandHookEvents = ["PreToolUse", "PostToolUse", "UserPromptSubmit"];
-const marketplaceEntries = readMarketplace().plugins;
+const marketplace = readMarketplace();
+const marketplaceEntries = marketplace.plugins;
 const plugins = listPlugins();
 
 function readPluginManifest(plugin) {
@@ -69,9 +70,59 @@ const isHostWrittenTypes = (path) => /[\\/]\.claude-plugin[\\/]types[\\/]/.test(
 
 function listFilesCheckedForEmDashes() {
   const rootMarkdown = readdirSync(repositoryRoot).filter((name) => name.endsWith(".md")).map((name) => join(repositoryRoot, name));
-  const folders = ["plugins", "shared", ".out-of-scope"].flatMap((folder) => listFilesRecursively(join(repositoryRoot, folder)));
-  return [...rootMarkdown, ...folders].filter((path) => !/\.(png|jpg|gif|ico)$/i.test(path) && !isHostWrittenTypes(path));
+  const docsMarkdown = readdirSync(join(repositoryRoot, "docs")).filter((name) => name.endsWith(".md")).map((name) => join(repositoryRoot, "docs", name));
+  const folders = ["plugins", "shared", ".out-of-scope", "docs/src", "docs/scripts"].flatMap((folder) => listFilesRecursively(join(repositoryRoot, folder)));
+  return [...rootMarkdown, ...docsMarkdown, ...folders].filter(
+    (path) => !/\.(png|jpg|gif|ico)$/i.test(path) && !isHostWrittenTypes(path) && !isGeneratedReference(relativeToRepository(path)),
+  );
 }
+
+const earlierMarketplaceName = "toolshed-next";
+
+// Written by docs/scripts/generate-reference.mjs from the plugins, which are checked themselves, and not committed.
+const isGeneratedReference = (relativePath) => relativePath.startsWith("docs/src/content/docs/reference/");
+
+function isShippedFile(path) {
+  const relativePath = relativeToRepository(path);
+  return /^(plugins|shared)\//.test(relativePath) || (/^docs\/(src|scripts)\//.test(relativePath) && !isGeneratedReference(relativePath)) || /^[^/]+\.(md|json)$/.test(relativePath);
+}
+
+// The earlier name is only named where it is handled: the notice, the upgrade, the pages about moving, and tests that use it as sample data.
+function isPlaceThatHandlesTheEarlierName(path) {
+  const relativePath = relativeToRepository(path);
+  return (
+    /(^|\/)older-toolshed[^/]*$/.test(relativePath) ||
+    /\.test\.(mjs|tsx?)$/.test(relativePath) ||
+    /^plugins\/quartermaster\/(scripts|skills\/(upgrade|inspect|outfit))\//.test(relativePath) ||
+    relativePath === "plugins/quartermaster/README.md" ||
+    /^(UPGRADING|ARCHITECTURE)\.md$/.test(relativePath) ||
+    relativePath === "docs/src/content/docs/guides/upgrading.mdx"
+  );
+}
+
+describe("the marketplace name", () => {
+  it("is eigenwise-toolshed", () => {
+    assert.equal(marketplace.name, "eigenwise-toolshed");
+  });
+
+  it("lists no entry that points outside this tree", () => {
+    const entriesOutsideThisTree = marketplace.plugins.filter((entry) => typeof entry.source !== "string" || !entry.source.startsWith("./"));
+    assert.deepEqual(entriesOutsideThisTree, []);
+    for (const entry of marketplaceEntries) {
+      assert.ok(existsSync(join(repositoryRoot, entry.source, ".claude-plugin", "plugin.json")), `${entry.name}: no folder at ${entry.source}`);
+    }
+  });
+
+  it("is not named toolshed-next by a shipped file outside the places that handle the earlier name", () => {
+    const shippedFolders = ["plugins", "shared", "docs/src", "docs/scripts"].flatMap((folder) => listFilesRecursively(join(repositoryRoot, folder)));
+    const rootFiles = readdirSync(repositoryRoot).map((name) => join(repositoryRoot, name)).filter((path) => /\.(md|json)$/.test(path));
+    const offenders = [...shippedFolders, ...rootFiles]
+      .filter((path) => isShippedFile(path) && !isHostWrittenTypes(path) && !isPlaceThatHandlesTheEarlierName(path))
+      .filter((path) => readFileSync(path, "utf8").includes(earlierMarketplaceName))
+      .map(relativeToRepository);
+    assert.deepEqual(offenders, []);
+  });
+});
 
 describe("marketplace entries", () => {
   for (const entry of marketplaceEntries) {
@@ -124,7 +175,7 @@ describe("hooks and commands", () => {
 });
 
 describe("text rules", () => {
-  it("no em dash appears in plugins/, shared/, .out-of-scope/ or the root markdown files", () => {
+  it("no em dash appears in plugins/, shared/, .out-of-scope/, the docs source or the root markdown files", () => {
     const offenders = listFilesCheckedForEmDashes()
       .filter((path) => readFileSync(path, "utf8").includes(emDash))
       .map(relativeToRepository);

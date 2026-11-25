@@ -35,14 +35,17 @@ export const approvedByHuman = (ticket: Ticket, stamp: string): HumanWrite | und
 }
 
 // The view a send comes from can be older than the file: a ticket that waits no more takes the answer on its log only.
-const withAnswerSent = (ticket: Ticket, answer: string): Ticket => (waitsOnHuman(ticket) ? { ...ticket, answerSent: answer } : ticket)
+const withAnswerSent = (ticket: Ticket, answer: string, stamp: string): Ticket =>
+  waitsOnHuman(ticket) ? { ...ticket, answerSent: answer, answerSentAt: stamp } : ticket
 
+// Seen in a real run: a second press on the same question logged the answer twice. The first answer stands until the
+// session takes it up or asks again.
 export const answeredByHuman = (ticket: Ticket, typed: string, stamp: string): HumanWrite | undefined => {
   const answer = oneLine(typed)
-  if (answer === '') return undefined
+  if (answer === '' || isAnswerWithSession(ticket)) return undefined
 
   return {
-    ticket: appendLogLine(withAnswerSent(ticket, answer), stamp, `answered by human in the board: ${answer}`),
+    ticket: appendLogLine(withAnswerSent(ticket, answer, stamp), stamp, `answered by human in the board: ${answer}`),
     sessionLine: `My answer on ${ticket.id} (${ticket.title}), written on the ticket from the board: ${answer}`,
   }
 }
@@ -162,17 +165,18 @@ export const saidYesOnThePlan = (story: Story, count: number, typed: string, sta
   sessionLine: `Yes, build it: my yes on ${story.id} (${story.title}) and ${proposedCount(count)}, from the board.${wordsBeside(typed)}`,
 })
 
-// Kept on the story as sent, so the plan view draws each pick and the words in place of the form until the session
-// records them or asks again.
-const withDecisionsSent = (story: Story, otherAnswers: readonly number[], words: string): Story => ({
+// Kept on the story as sent, with the day and the words as typed, so the plan view draws them in place of the form
+// until the session records them or asks again. A decision line cuts the words, not this.
+const withDecisionsSent = (story: Story, otherAnswers: readonly number[], answer: PlanAnswer, stamp: string): Story => ({
   ...story,
   decisionPicksSent: story.questions.map((_, index) => (otherAnswers.includes(index) ? OTHER_PICK : RECOMMENDED_PICK)),
-  ...(words === '' ? {} : { decisionWordsSent: words }),
+  decisionDaySent: stamp.slice(0, 10),
+  ...(answer.words === '' ? {} : { decisionWordsSent: answer.words }),
 })
 
 export const planAnsweredByHuman = (story: Story, otherAnswers: readonly number[], typed: string, stamp: string): StoryRemark => {
   const answer = planAnswer(story.questions, otherAnswers, typed)
-  const sent = withDecisionsSent(story, otherAnswers, answer.words)
+  const sent = withDecisionsSent(story, otherAnswers, answer, stamp)
 
   return {
     story: { ...sent, otherSections: withLogLine(story.otherSections, `${stamp} answered by human in the board: ${planAnswerOnOneLine(answer)}`), updated: stamp.slice(0, 10) },

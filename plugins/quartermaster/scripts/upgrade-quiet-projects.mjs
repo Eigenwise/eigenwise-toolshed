@@ -2,12 +2,12 @@
 import { copyFileSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { COMMITTED_SETTINGS, GATEWAY_PLUGIN, LOCAL_SETTINGS, heldSourceOf, olderPluginsOnAtUserScope, olderPluginsStillOn, userScopeWaitLine } from "./upgrade-findings.mjs";
+import { COMMITTED_SETTINGS, GATEWAY_PLUGIN, LOCAL_SETTINGS, olderPluginsOnAtUserScope, olderPluginsStillOn, userScopeWaitLine } from "./upgrade-findings.mjs";
 import { QUIET_DAYS, lastUseWords, orderedByLastUse } from "./upgrade-last-use.mjs";
 import { backupNameFor, judgeProject, planQuietProjects, settingsWithOlderPluginsOff, switchOffNames } from "./upgrade-quiet.mjs";
-import { USER_SCOPE, olderPluginsHeldByTrackedSources, readInstalledProjects, readJsonOrEmpty, readLastUse, readOptions } from "./upgrade-scan.mjs";
+import { USER_SCOPE, readInstalledProjects, readJsonOrEmpty, readLastUse, readOptions } from "./upgrade-scan.mjs";
 
-const GATEWAY_LEFT_ON = "left on: model-gateway, the gateway plugin. Switching it off while its wiring is in a settings file stops every request there; the home cleanup's gateway question covers it";
+const GATEWAY_LEFT_ON = "left on: model-gateway, the gateway plugin. Uninstalling it while a project is wired to it blocks every prompt there, and switching it off sends prompts to a port nobody listens on once the running gateway stops; the gateway question covers it";
 
 function readLocalSettings(projectPath) {
   const path = join(projectPath, LOCAL_SETTINGS);
@@ -24,12 +24,10 @@ function readLocalSettings(projectPath) {
 function readFreshProject(projectPath, configDirectory, localSettings) {
   const isFolderPresent = existsSync(projectPath);
   const committed = readJsonOrEmpty(join(projectPath, COMMITTED_SETTINGS));
-  const olderPluginsOn = olderPluginsStillOn(committed, localSettings.settings);
   return {
     path: projectPath,
     isFolderPresent,
-    olderPluginsOn,
-    olderPluginsHeld: isFolderPresent ? olderPluginsHeldByTrackedSources(projectPath, olderPluginsOn) : [],
+    olderPluginsOn: olderPluginsStillOn(committed, localSettings.settings),
     lastUse: readLastUse(configDirectory, projectPath, isFolderPresent),
   };
 }
@@ -43,10 +41,10 @@ function copyBesideSettings(settingsPath, today) {
 
 function switchOff(project, localSettings, today) {
   const settingsPath = join(project.path, LOCAL_SETTINGS);
-  const names = switchOffNames(project.olderPluginsOn, project.olderPluginsHeld);
+  const names = switchOffNames(project.olderPluginsOn);
   const copyPath = localSettings.state === "read" ? copyBesideSettings(settingsPath, today) : undefined;
   writeFileSync(settingsPath, `${JSON.stringify(settingsWithOlderPluginsOff(localSettings.settings, names), null, 2)}\n`);
-  return { path: project.path, outcome: "switched-off", names, settingsPath, copyPath, keepsGateway: project.olderPluginsOn.includes(GATEWAY_PLUGIN), keepsHeld: project.olderPluginsHeld };
+  return { path: project.path, outcome: "switched-off", names, settingsPath, copyPath, keepsGateway: project.olderPluginsOn.includes(GATEWAY_PLUGIN) };
 }
 
 // The listing may be hours old, so the last use and the settings are read again before anything is written.
@@ -54,21 +52,17 @@ export function applyToProject(entry, context) {
   const localSettings = readLocalSettings(entry.path);
   const project = readFreshProject(entry.path, context.configDirectory, localSettings);
   const verdict = judgeProject(project, context.nowMs, context.days);
-  if (verdict !== "quiet") return { path: entry.path, outcome: verdict, lastUse: project.lastUse, keepsGateway: project.olderPluginsOn.includes(GATEWAY_PLUGIN), keepsHeld: project.olderPluginsHeld };
+  if (verdict !== "quiet") return { path: entry.path, outcome: verdict, lastUse: project.lastUse, keepsGateway: project.olderPluginsOn.includes(GATEWAY_PLUGIN) };
   if (localSettings.state === "unreadable") return { path: entry.path, outcome: "settings-unreadable" };
   return switchOff(project, localSettings, context.today);
 }
 
-const heldKeptOnWords = (outcome) => (outcome.keepsHeld ?? []).map((name) => heldSourceOf(name).keptOnWords);
-
-const keptOnWords = (outcome) => [...(outcome.keepsGateway ? ["the gateway plugin"] : []), ...heldKeptOnWords(outcome)].join(" and ");
-
-const heldLeftOnLines = (entry, indent) => (entry.keepsHeld ?? []).map((name) => `${indent}${heldSourceOf(name).leftOnLine}`);
+const gatewayLeftOnWords = (outcome) => (outcome.keepsGateway ? ", the gateway plugin left on" : "");
 
 const SKIPPED_WORDS = {
   "folder-gone": () => "skipped, the folder is gone",
   "used-recently": (outcome) => `skipped, ${lastUseWords(outcome.lastUse)}, which is inside the window`,
-  "nothing-to-switch-off": (outcome) => `nothing to switch off, ${keptOnWords(outcome)} left on`,
+  "nothing-to-switch-off": (outcome) => `nothing to switch off${gatewayLeftOnWords(outcome)}`,
   "settings-unreadable": () => `skipped, ${LOCAL_SETTINGS} is not valid JSON and is left alone`,
 };
 
@@ -82,7 +76,6 @@ function appliedLines(outcome) {
     `  switched off: ${outcome.names.join(", ")}, written to ${outcome.settingsPath}`,
     ...copyLines,
     ...(outcome.keepsGateway ? [`  ${GATEWAY_LEFT_ON}`] : []),
-    ...heldLeftOnLines(outcome, "  "),
   ];
 }
 
@@ -91,7 +84,7 @@ export const outcomeLines = (outcome) => (outcome.outcome === "switched-off" ? a
 function listedLines(entry) {
   const gateway = entry.keepsGateway ? [`      ${GATEWAY_LEFT_ON}`] : [];
   const action = entry.switchOff.length === 0 ? "nothing to switch off here" : `would switch off: ${entry.switchOff.join(", ")}`;
-  return [`  ${entry.path}  ${lastUseWords(entry.lastUse)}`, `      ${action}`, ...gateway, ...heldLeftOnLines(entry, "      ")];
+  return [`  ${entry.path}  ${lastUseWords(entry.lastUse)}`, `      ${action}`, ...gateway];
 }
 
 const isListed = (entry) => entry.verdict === "quiet" || entry.verdict === "nothing-to-switch-off";

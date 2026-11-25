@@ -15,7 +15,7 @@ All calls below go to `mcp__quartermaster__proposal`. When that tool is missing 
 
 Read it with `operation: list` and its `id`, which returns the whole proposal (or open `.claude/quartermaster/proposals/<id>.md`).
 
-Refuse unless its status is `accepted`. Say the status you saw and the next move in one line, for example "P-0007 is `draft`. Approve it in `/qm` first." Never apply any other status, and never treat this request itself as the approval.
+Refuse unless its status is `accepted`. Say the status you saw and the next move in one line, for example "P-0007 is `draft`. Approve it in `/quartermaster` first." Never apply any other status, and never treat this request itself as the approval.
 
 ## 2. Record before writing
 
@@ -51,7 +51,7 @@ A few lines:
 
 - what changed, by file
 - the check and its real result, or "pending, read by review after a few sessions"
-- the rollback, as one step: roll back `<id>` from `/qm` or `/quartermaster:review`, or copy the files in `changes/C-<n>/prior/` back over the originals (only if nobody edited them since)
+- the rollback, as one step: roll back `<id>` from `/quartermaster` or `/quartermaster:review`, or copy the files in `changes/C-<n>/prior/` back over the originals (only if nobody edited them since)
 - anything that needs `/reload-plugins` or a restart first
 
 ## 6. Rolling back on failure

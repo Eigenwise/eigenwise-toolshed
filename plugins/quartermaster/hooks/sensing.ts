@@ -1,16 +1,10 @@
-import { commandPrefix, failureSignature } from './events'
+import { commandPrefix, failureSignature, isShellTool } from './events'
 import type { DenialEvent, SensedEvent } from './events'
+import { errorWordsOf, failedCommandName, wasCutShort, wasRejectedByPerson } from './shell-failure'
 
 export type ToolOutcome = { tool: string; command?: unknown; isError: boolean; errorText: string }
 
-const SHELL_TOOLS: readonly string[] = ['Bash', 'PowerShell']
-
-const isShell = (tool: string): boolean => SHELL_TOOLS.includes(tool)
-
 const shellPrefixOf = (command: unknown): string => (typeof command === 'string' ? commandPrefix(command) : '')
-
-const failureSignatureOf = (outcome: ToolOutcome): string =>
-  isShell(outcome.tool) ? shellPrefixOf(outcome.command) : failureSignature(outcome.errorText)
 
 /**
  * The only way a command becomes evidence of what a person does by hand.
@@ -38,8 +32,21 @@ export const typedShellEvents = (commandText: string, at: string): SensedEvent[]
   return prefix === '' ? [] : [{ kind: 'typed', at, prefix }]
 }
 
-const failureEventsOf = (outcome: ToolOutcome, at: string): SensedEvent[] =>
-  outcome.isError ? [{ kind: 'failure', at, tool: outcome.tool, signature: failureSignatureOf(outcome) }] : []
+const shellFailureEvents = (outcome: ToolOutcome, at: string): SensedEvent[] => {
+  const command = typeof outcome.command === 'string' ? outcome.command : ''
+  const signature = failedCommandName(command, outcome.errorText)
+
+  return signature === undefined
+    ? []
+    : [{ kind: 'failure', at, tool: outcome.tool, signature, error: errorWordsOf(outcome.errorText) }]
+}
+
+const failureEventsOf = (outcome: ToolOutcome, at: string): SensedEvent[] => {
+  if (!outcome.isError || wasRejectedByPerson(outcome.errorText) || wasCutShort(outcome.errorText)) return []
+  if (isShellTool(outcome.tool)) return shellFailureEvents(outcome, at)
+
+  return [{ kind: 'failure', at, tool: outcome.tool, signature: failureSignature(outcome.errorText) }]
+}
 
 /**
  * What the permission path said about a call. A denial, by a rule or the
@@ -66,7 +73,7 @@ export const denialEvent = (tool: string, input: unknown, at: string): DenialEve
   kind: 'denial',
   at,
   tool,
-  target: isShell(tool) ? shellPrefixOf(commandOf(input)) : tool,
+  target: isShellTool(tool) ? shellPrefixOf(commandOf(input)) : tool,
 })
 
 export class TurnBuffer {

@@ -109,6 +109,10 @@ const doneWhenSection = (ticket: Ticket): string => {
   return PERSONS_WORDS.test(doneWhen) ? `## Done when\n${doneWhen}\n\n${PERSONS_WORDS_RULE}` : `## Done when\n${doneWhen}`
 }
 
+// A section the board has no field for is still part of what was asked: one written by hand, or one a version before
+// 0.42.4 split off when a session wrote `## Approach` inside a field. Seen twice: a worker's brief came without the approach.
+const sectionsWithNoField = (ticket: Ticket): string[] => ticket.otherSections.map(section => `## ${section.heading}\n${section.text}`)
+
 export const briefFor = (ticket: Ticket, story?: Story, delivery?: string, sharedRun?: SharedRun, resume?: ResumeFacts, noGitFolder?: string): string =>
   [
     ticketRefLine(ticket),
@@ -117,6 +121,7 @@ export const briefFor = (ticket: Ticket, story?: Story, delivery?: string, share
     ...storySections(story, ticket),
     `## What\n${ticket.what || '(not written yet)'}`,
     doneWhenSection(ticket),
+    ...sectionsWithNoField(ticket),
     ...earlierRunSection(earlierRunOf(ticket)),
     ...humanAnswersSection(ticket),
     ...resumeSection(resume, earlierRunOf(ticket)?.branch),

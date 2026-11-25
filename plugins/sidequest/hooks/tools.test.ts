@@ -113,7 +113,7 @@ test('the first ticket creates the board and excludes it from git', async ($, on
 
   expect(textOf(answer)).toBe(`created REPO-1, created REPO-2, created REPO-S1. ${PREFIX_NOTE}\n${EXCLUDE_NOTICE}`)
   expect(files.get(`${TICKETS}/REPO-2.md`)).toContain('blockedBy: [REPO-1]')
-  expect(files.get(`${ROOT}/.sidequest/stories/REPO-S1.md`)).toContain('- D-1: Retries? Answer: Three Decided by: human')
+  expect(files.get(`${ROOT}/.sidequest/stories/REPO-S1.md`)).toContain('- D-1: Retries? Answer: Three Decided by: human on 2026-11-16')
   expect(JSON.parse(files.get(`${ROOT}/.sidequest/board.json`) ?? '{}').nextTicket).toBe(3)
   expect(JSON.parse(files.get(`${ROOT}/.sidequest/board.json`) ?? '{}').prefix).toBe('REPO')
   expect(files.get(`${ROOT}/.git/info/exclude`)).toBe('# git ls-files --others\n.sidequest/\n')
@@ -124,6 +124,29 @@ test('the first ticket creates the board and excludes it from git', async ($, on
     doing: 0,
     review: 0,
   })
+})
+
+test('a decision written through the ticket tool keeps its day, and the words of the person only when they decided it, cut at 200 characters', async ($, on) => {
+  const files = new Map([[`${ROOT}/.git/info/exclude`, '']])
+  standInForEngine(on, files)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+
+  await createTickets($, [
+    {
+      op: 'story',
+      title: 'Uploads',
+      decisions: [
+        { question: 'Retries?', answer: 'Three', decidedBy: 'human', words: `Three, ${'x'.repeat(300)}` },
+        { question: 'Backoff?', answer: 'Doubling', decidedBy: 'default', words: 'not theirs' },
+        { question: 'Jitter?', answer: 'None' },
+      ],
+    },
+  ])
+
+  const stored = files.get(`${ROOT}/.sidequest/stories/REPO-S1.md`) ?? ''
+  expect(stored).toContain(`- D-1: Retries? Answer: Three Decided by: human on 2026-11-16. Their words: "Three, ${'x'.repeat(193)}"`)
+  expect(stored).toContain('- D-2: Backoff? Answer: Doubling Decided by: default on 2026-11-16\n')
+  expect(stored).toContain('- D-3: Jitter? Answer: None Decided by: human on 2026-11-16\n')
 })
 
 test('a second write to the board adds no exclude line and says nothing about it', async ($, on) => {
@@ -301,7 +324,7 @@ test('the board tool answers each view', async ($, on) => {
   const view = async (input: Record<string, unknown>) => textOf(await $.tool.call({ tool: 'mcp__sidequest__board', ...input }))
 
   expect(await view({ view: 'summary' })).toBe(
-    '1 waiting on you, 2 ready to start, 0 in progress, 0 being checked. Ready to start: REPO-1. The waiting view writes what waits on the person, ready to pass on.',
+    '1 waiting on you, 2 ready to start, 0 in progress, 0 being checked. Ready to start: REPO-1. The waiting view writes what waits on the person in repo, ready to pass on, to answer in this chat.',
   )
   expect(await view({ view: 'frontier' })).toBe('REPO-1 ready build First')
   expect(await view({ view: 'list', status: 'ready' })).toBe('REPO-1 ready build First\nREPO-2 ready build Second')
@@ -310,7 +333,7 @@ test('the board tool answers each view', async ($, on) => {
     'REPO-1 ready build First\nREPO-2 ready build Second\nREPO-3 needs-you build Third\nstatus "started" is not one of inbox, ready, doing, review, needs-you, done, parked, dropped, so this is every ticket.',
   )
   expect(await view({ view: 'everything', filter: 'all' })).toBe(
-    '1 waiting on you, 2 ready to start, 0 in progress, 0 being checked. Ready to start: REPO-1. The waiting view writes what waits on the person, ready to pass on.\nview "everything" is not one of summary, waiting, now, closing, frontier, list, ticket, routing, planning, diagram, so this is the summary.\nIgnored "filter": this tool takes view, status, id, of.',
+    '1 waiting on you, 2 ready to start, 0 in progress, 0 being checked. Ready to start: REPO-1. The waiting view writes what waits on the person in repo, ready to pass on, to answer in this chat.\nview "everything" is not one of summary, waiting, now, closing, frontier, list, ticket, routing, planning, diagram, so this is the summary.\nIgnored "filter": this tool takes view, status, id, of.',
   )
   expect(await view({})).toContain('No view was given, so this is the summary.')
   expect(await view({ view: 'ticket', id: 'REPO-9' })).toContain('deny: No ticket or story REPO-9 on this board.')
@@ -420,7 +443,7 @@ test('the brief carries the story the human agreed to', async ($, on) => {
   const withoutStory = textOf(await $.tool.call({ tool: 'mcp__sidequest__start', id: 'REPO-2' }))
 
   expect(JSON.parse(withStory.slice(withStory.indexOf('{'), withStory.lastIndexOf('}') + 1)).prompt).toContain('## Where this is going\nUploads survive a flaky network.')
-  expect(JSON.parse(withStory.slice(withStory.indexOf('{'), withStory.lastIndexOf('}') + 1)).prompt).toContain('## Decisions already made\n- D-1: Retries? Answer: Three Decided by: human')
+  expect(JSON.parse(withStory.slice(withStory.indexOf('{'), withStory.lastIndexOf('}') + 1)).prompt).toContain('## Decisions already made\n- D-1: Retries? Answer: Three Decided by: human on 2026-11-16')
   expect(withoutStory).not.toContain('Where this is going')
 })
 
@@ -1489,7 +1512,7 @@ test('the waiting view lists what waits on the person most blocking first, ready
 
   expect(waiting).toBe(
     [
-      'Waiting on you, most blocking first:',
+      'Waiting on you in repo, most blocking first:',
       '',
       '1. Which payment provider do we sign up with?',
       '   Why now: The checkout page cannot take money until one is picked.',
@@ -1497,19 +1520,19 @@ test('the waiting view lists what waits on the person most blocking first, ready
       '   B. Paddle: Sales tax handled for you. Costs: 5% of each sale.',
       '   Recommended: A (Stripe, the cheaper of the two)',
       '   If you never answer: Checkout stays switched off.',
-      '   To answer: 1 and a letter, like 1A. Ticket REPO-2.',
+      '   To answer in this chat: 1 and a letter, like 1A. Ticket REPO-2.',
       '',
       '2. Does the sign-up page look right on your phone?',
       '   Why now: The launch post links to it.',
       '   If you never answer: It launches as it is.',
       '   Steps: Open the staging site on your phone.',
       '   Look for buttons cut off at the right edge.',
-      '   To answer: 2 done, or 2 and what you found. Ticket REPO-1.',
+      '   To answer in this chat: 2 done, or 2 and what you found. Ticket REPO-1.',
       '',
       'For the session, not to paste: waiting, not yet written for a cold read: REPO-3 (Pick a backoff). Patch each with forYou.',
     ].join('\n'),
   )
-  expect(summary).toContain('The waiting view writes what waits on the person, ready to pass on.')
+  expect(summary).toContain('The waiting view writes what waits on the person in repo, ready to pass on, to answer in this chat.')
 })
 
 test('a ticket carries the branch it was created on and a tracker key, and the board says when the checkout moved on', async ($, on) => {
@@ -1533,7 +1556,7 @@ test('a ticket carries the branch it was created on and a tracker key, and the b
       'REPO-4 ready build Tidy the logs',
     ].join('\n'),
   )
-  expect(await view({ view: 'waiting' })).toContain('   To answer: a letter, like A. Ticket PAY-41 REPO-3 (branch bugfix/PAY-41-retry).')
+  expect(await view({ view: 'waiting' })).toContain('   To answer in this chat: a letter, like A. Ticket PAY-41 REPO-3 (branch bugfix/PAY-41-retry).')
 
   files.set(`${ROOT}/.git/HEAD`, 'ref: refs/heads/main\n')
   await createTickets($, [
@@ -1591,7 +1614,7 @@ test('parking a ticket whose For you section is complete answers with the rule a
     '   A. Stripe: Cards and wallets on day one. Costs: 2.9% of each sale.',
     '   B. Paddle: Sales tax handled for you. Costs: 5% of each sale.',
     '   Recommended: A (Stripe, the cheaper of the two)',
-    '   To answer: 2 and a letter, like 2A. Ticket REPO-2.',
+    '   To answer in this chat: 2 and a letter, like 2A. Ticket REPO-2.',
   ].join('\n')
   const coldReadBlock = [
     '2. Which payment provider do we sign up with?',
@@ -1600,7 +1623,7 @@ test('parking a ticket whose For you section is complete answers with the rule a
     '   B. Paddle: Sales tax handled for you. Costs: 5% of each sale.',
     '   Recommended: A (Stripe, the cheaper of the two)',
     '   If you never answer: Checkout stays switched off.',
-    '   To answer: 2 and a letter, like 2A. Ticket REPO-2.',
+    '   To answer in this chat: 2 and a letter, like 2A. Ticket REPO-2.',
   ].join('\n')
 
   expect(moved).toBe(
@@ -1608,6 +1631,8 @@ test('parking a ticket whose For you section is complete answers with the rule a
       'moved REPO-2 to needs-you.',
       'Keep it waiting only if it cannot be undone, spends money or reaches outside the project, or is taste or product direction only the person has. Otherwise take the recommended answer now, note on the ticket what you chose and how to undo it, and move the ticket on.',
       'Show the person this as it is:',
+      'Waiting on you in repo:',
+      '',
       chatBlock,
     ].join('\n'),
   )
@@ -1647,11 +1672,11 @@ test('one waiting question prints with no number, lettered answers and numbered 
     '   1. Move the issue to In review (if you say nothing: it stays in To do)',
     '   2. Add a diagram to the pull request (if you say nothing: no diagram)',
     '   3. Fix the 500 on a null body as its own piece of work (if you say nothing: it stays noted)',
-    '   To answer: a letter, like A, plus any extras to do too, like A, plus 1 and 2. Ticket REPO-1.',
+    '   To answer in this chat: a letter, like A, plus any extras to do too, like A, plus 1 and 2. Ticket REPO-1.',
   ]
 
   expect(moved.slice(moved.indexOf('Show the person this as it is:\n') + 'Show the person this as it is:\n'.length)).toBe(
-    ['Commit, push and open the pull request?', ...answersAndExtras, ...extras].join('\n'),
+    ['Waiting on you in repo:', '', 'Commit, push and open the pull request?', ...answersAndExtras, ...extras].join('\n'),
   )
   expect(waiting).toContain(
     ['Commit, push and open the pull request?', '   Why now: The project asks before every commit and push.', ...answersAndExtras, '   If you never answer: Nothing is committed.', ...extras].join('\n'),
@@ -1670,7 +1695,7 @@ test('with several waiting questions each keeps its number and its extras carry 
 
   expect(waiting).toContain('\n\n2. Commit, push and open the pull request?\n')
   expect(waiting).toContain('   2.1. Move the issue to In review (if you say nothing: it stays in To do)')
-  expect(waiting).toContain('   To answer: 2 and a letter, like 2A, plus any extras to do too, like 2A, plus 2.1 and 2.2. Ticket REPO-2.')
+  expect(waiting).toContain('   To answer in this chat: 2 and a letter, like 2A, plus any extras to do too, like 2A, plus 2.1 and 2.2. Ticket REPO-2.')
 })
 
 type AgentCallArgs = { prompt: string; description: string; subagent_type?: string; effort?: EffortLevel }

@@ -5,17 +5,15 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { configDirectoryOf } from "./config-directory.mjs";
 import { RECORDS_FOLDER, keepRecordsOutOfGit, writeInto } from "./records-folder.mjs";
-import { CURRENT_MARKETPLACE, PLUGINS_WITH_A_NAMESAKE } from "./upgrade-findings.mjs";
+import { THIS_VERSION, TOOLSHED_MARKETPLACE, toolshedInstallsOf } from "./toolshed-installs.mjs";
 import { isSamePath, readJsonOrEmpty } from "./upgrade-scan.mjs";
 
 const STATUSES_THAT_MEAN_INSTALLED = ["applied", "loaded", "exercised", "useful"];
 const SCOPES_WITH_A_PROJECT = ["project", "local"];
 
+// The older version under the same name, and this version under its earlier name, are the upgrade's to move, not installs to record.
 export function currentInstallEntries(record) {
-  return Object.entries(record.plugins ?? {})
-    .filter(([id, entries]) => id.endsWith(`@${CURRENT_MARKETPLACE}`) && Array.isArray(entries))
-    .flatMap(([id, entries]) => entries.map((entry) => ({ name: id.slice(0, id.lastIndexOf("@")), scope: entry.scope, projectPath: entry.projectPath })))
-    .filter((entry) => PLUGINS_WITH_A_NAMESAKE.includes(entry.name));
+  return toolshedInstallsOf(record).filter((entry) => entry.state === THIS_VERSION);
 }
 
 export function isInstalledHere(entry, project) {
@@ -48,7 +46,7 @@ export function recordedPluginTargets(project) {
     .map((text) => frontmatterValue(text, "target"));
 }
 
-const targetOf = (entry) => `${entry.name}@${CURRENT_MARKETPLACE}`;
+const targetOf = (entry) => `${entry.name}@${TOOLSHED_MARKETPLACE}`;
 
 export const undoCommand = (entry) => `claude plugin uninstall ${targetOf(entry)} --scope ${entry.scope}`;
 

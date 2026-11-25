@@ -13,9 +13,10 @@ import { EVIDENCE_TOOL, PROPOSAL_TOOL } from './tool-specs'
 import { forgetStoredProposals } from './store'
 import type { FileSystem } from './store'
 import { homeOf } from './home'
+import { tellAboutOlderToolshedForAll } from './register-older-notice'
 import { stringField } from './tool-input'
 import type { ToolInput } from './tool-input'
-import { logIgnoredOffer, offerAtPause, registerViews, startInbox } from './views/register-views'
+import { logIgnoredOffer, noteSkillRun, offerAtPause, registerViews, startInbox } from './views/register-views'
 
 let memory: Promise<SessionMemory> | undefined
 
@@ -52,6 +53,7 @@ const memoryOf = ($: EngineInterface): Promise<SessionMemory> =>
 const publish = async ($: EngineInterface, published: Published): Promise<void> => {
   await $.state.set({ plugin: 'quartermaster', key: 'inbox' } as const, { waiting: published.waiting })
   await $.state.set({ plugin: 'quartermaster', key: 'candidates' } as const, published.candidates)
+  await $.state.set({ plugin: 'quartermaster', key: 'due' } as const, published.due)
 }
 
 const isoNow = async ($: EngineInterface): Promise<string> => new Date(await $.clock.now()).toISOString()
@@ -103,6 +105,7 @@ const startSession: Hook<'session.start'> = async ($, e, next) => {
   const session = await remember(openMemory($, e.cwd))
   await publish($, await session.published(await $.clock.now()))
   await startInbox($)
+  await tellAboutOlderToolshedForAll($, e.cwd).catch(() => undefined)
 
   return next(e)
 }
@@ -159,6 +162,7 @@ const senseClassifierDenial: Hook<'classic.PermissionDenied'> = async ($, e, nex
 
 const senseSkill: Hook<'skill.prompt'> = async ($, e, next) => {
   await sense($, [{ kind: 'skill', at: await isoNow($), skill: e.skill }])
+  await noteSkillRun($, e.skill).catch(() => undefined)
 
   return next(e)
 }

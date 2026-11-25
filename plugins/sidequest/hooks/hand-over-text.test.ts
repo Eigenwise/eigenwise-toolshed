@@ -45,6 +45,6 @@ test('the waiting view calls a question earlier work by the same rule as the ban
   const fromThisSession = waitingTicket('SQ-40', 'Pick the limit', '2026-11-23T09:00Z')
   const text = waitingText([threeDaysOld, fromThisSession], undefined, NOW, new Set(['SQ-40']))
 
-  expect(text).toContain('\n\nWhat about Pick the limit?\n   To answer: done, or what you found.')
-  expect(text).toContain('Still waiting on you from earlier sessions:\n- SQ-3 Two things from outside, waiting 3 days')
+  expect(text).toContain('\n\nWhat about Pick the limit?\n   To answer in this chat: done, or what you found.')
+  expect(text).toContain('Still waiting on you from earlier sessions:\n- SQ-3 Two things from outside, waiting 3 days. To answer in this chat: ask for ticket SQ-3, then answer it.')
 })

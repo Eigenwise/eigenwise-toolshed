@@ -85,7 +85,7 @@ Say it at a real pause only (something finished, something needs them, or they a
 
 - **Done**: paste view `closing`, what a review found, and what is unverified.
 - **Running**: what, on which model. While something runs, what else can move comes from the `mcp__sidequest__board` view `now`.
-- **Needs you**: paste the `mcp__sidequest__board` view `waiting` as it is, most blocking first. A line that only names a ticket id is a failure.
+- **Needs you**: paste the `mcp__sidequest__board` view `waiting` as it is, most blocking first. A line that only names a ticket id is a failure. Keep the project and the place with every question: the view names the project at the top and ends each item with where to answer it, so never cut either. A question you word yourself names its project and says where it is answered (in this chat with the words to type, or in the board of that project).
 - **Next**: what you do without being asked.
 
 ## Next skills

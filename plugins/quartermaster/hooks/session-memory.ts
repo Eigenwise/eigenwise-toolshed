@@ -5,9 +5,11 @@ import { projectSlug } from './events'
 import { currentEvidence, firstDayOfWindow } from './evidence-tool'
 import type { EvidenceSources } from './evidence-tool'
 import { rejectedFingerprints } from './rejections'
-import { appendDayEvents, eventsByDay, keepRecordsOutOfGit, projectEventsDirectory, readProposals, readRejections } from './store'
+import { appendDayEvents, eventsByDay, keepRecordsOutOfGit, projectEventsDirectory, readChangesInTrial, readProposals, readRejections } from './store'
 import type { FileSystem, WrittenDayFiles } from './store'
 import { TurnBuffer } from './sensing'
+import { dueOffersOrNone } from './standing-due'
+import type { AppliedChange, Due } from './standing-due'
 
 const WAITING_STATUSES: readonly string[] = ['draft', 'offered']
 
@@ -21,7 +23,7 @@ export const eventsDirectoryFor = (home: string | undefined, cwd: string): strin
 export const impressionsPathFor = (home: string | undefined, cwd: string): string =>
   `${eventsDirectoryFor(home, cwd)}/impressions.jsonl`
 
-export type Published = { waiting: number; candidates: Candidate[] }
+export type Published = { waiting: number; candidates: Candidate[]; due: Due[] }
 
 /**
  * What one session keeps between hooks: the sensed events not yet written,
@@ -32,6 +34,8 @@ export class SessionMemory {
   readonly buffer = new TurnBuffer()
   private window: SensedEvent[] = []
   private reachesBeforeWindow = false
+  private sessionFiles: readonly string[] = []
+  private changesInTrial: AppliedChange[] = []
   private rejected = new Set<string>()
   private readonly writtenDayFiles: WrittenDayFiles = new Map()
 
@@ -58,6 +62,8 @@ export class SessionMemory {
     const evidence = await currentEvidence(this.sources(now))
     this.window = [...evidence.history.events]
     this.reachesBeforeWindow = evidence.history.reachesBeforeWindow
+    this.sessionFiles = evidence.history.sessionFiles ?? []
+    this.changesInTrial = await readChangesInTrial(this.files, this.cwd).catch(() => [])
     this.rejected = rejectedFingerprints(await readRejections(this.files, this.cwd))
 
     return this.published(now)
@@ -71,7 +77,9 @@ export class SessionMemory {
       now,
     ), this.rejected)
 
-    return { waiting: proposals.filter(proposal => WAITING_STATUSES.includes(proposal.status)).length, candidates }
+    const due = dueOffersOrNone({ events: this.window, sessionFiles: this.sessionFiles, candidates, proposals, changes: this.changesInTrial, now })
+
+    return { waiting: proposals.filter(proposal => WAITING_STATUSES.includes(proposal.status)).length, candidates, due }
   }
 
   async refreshRejections(now: number): Promise<Published> {

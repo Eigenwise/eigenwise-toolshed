@@ -10,7 +10,9 @@
 
 **Changed on 2026-11-19:** routing to other providers is planned to come back, replacing not-for-now.
 
-**2026-11-25:** v2 went public without it. It is still not built and not offered, and waits for its turn.
+**2026-11-25:** v2 went public without it. It is still not built and not offered.
+
+**Decided by the owner on 2026-11-25:** this version ships with Claude models only, and that does not hold the release back. Models from other providers are the first story after the release.
 
 **What must stay open until then:**
 

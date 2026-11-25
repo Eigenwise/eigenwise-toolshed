@@ -6,7 +6,7 @@ import type { Story, Ticket } from './tickets'
 // A person with two or three tracker issues in flight reads a view by the work, so the views group by it. A piece of
 // work is a story; tickets with no story but one tracker key are one piece; a ticket with neither belongs to none.
 
-export type StoriesAndCheckout = { stories: readonly Story[]; checkedOutBranch?: string }
+export type StoriesAndCheckout = { stories: readonly Story[]; checkedOutBranch?: string; projectName?: string }
 
 export const NO_STORIES: StoriesAndCheckout = { stories: [] }
 

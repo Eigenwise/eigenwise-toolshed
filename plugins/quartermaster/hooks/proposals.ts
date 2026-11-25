@@ -1,3 +1,5 @@
+import { EVIDENCE_WINDOW_DAYS } from './detectors'
+
 export const PROPOSAL_KINDS = [
   'skill',
   'skill-improvement',
@@ -17,6 +19,7 @@ export const PROPOSAL_STATUSES = [
   'offered',
   'accepted',
   'declined',
+  'handled',
   'applied',
   'loaded',
   'exercised',
@@ -42,6 +45,8 @@ export type Proposal = {
   baseline: number
   created: string
   body: string
+  answered?: string
+  reason?: string
 }
 
 /**
@@ -49,19 +54,30 @@ export type Proposal = {
  * is read as written; this table only binds the tools.
  */
 export const STATUS_TRANSITIONS: Readonly<Record<ProposalStatus, readonly ProposalStatus[]>> = {
-  draft: ['offered', 'accepted', 'declined', 'expired'],
-  offered: ['accepted', 'declined', 'expired'],
-  accepted: ['applied', 'declined', 'expired'],
+  draft: ['offered', 'accepted', 'declined', 'handled', 'expired'],
+  offered: ['accepted', 'declined', 'handled', 'expired'],
+  accepted: ['applied', 'declined', 'handled', 'expired'],
   applied: ['loaded', 'rolled-back'],
   loaded: ['exercised', 'rolled-back'],
   exercised: ['useful', 'rolled-back'],
   useful: ['rolled-back'],
   declined: [],
+  handled: [],
   'rolled-back': [],
   expired: [],
 }
 
 export const canMove = (from: ProposalStatus, to: ProposalStatus): boolean => STATUS_TRANSITIONS[from].includes(to)
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * A proposal closed as already handled settles its evidence only while the events it came from are still counted,
+ * which is the evidence window. A hand-written file with no answered day counts from the day it was made, so it
+ * cannot settle for ever.
+ */
+export const isHandledPastItsWindow = (proposal: Pick<Proposal, 'answered' | 'created'> & { status: string }, now: number): boolean =>
+  proposal.status === 'handled' && Date.parse(proposal.answered ?? proposal.created) <= now - EVIDENCE_WINDOW_DAYS * DAY_MS
 
 const ID_DIGITS = 4
 
@@ -115,6 +131,11 @@ export const proposalProblems = (proposal: Proposal): string[] => [
   ...(/^\d{4}-\d{2}-\d{2}$/.test(proposal.created) ? [] : ['created must be a date like 2026-11-16']),
 ]
 
+const answerLines = (proposal: Proposal): string[] => [
+  ...(proposal.answered === undefined ? [] : [`answered: ${proposal.answered}`]),
+  ...(proposal.reason === undefined ? [] : [`reason: ${proposal.reason.replace(/\s+/g, ' ').trim()}`]),
+]
+
 export const serializeProposal = (proposal: Proposal): string =>
   [
     '---',
@@ -127,6 +148,7 @@ export const serializeProposal = (proposal: Proposal): string =>
     `expect: ${proposal.expect}`,
     `baseline: ${proposal.baseline}`,
     `created: ${proposal.created}`,
+    ...answerLines(proposal),
     '---',
     '',
     proposal.body.trim(),
@@ -173,12 +195,17 @@ const enumProblems = (frontmatter: Frontmatter): string[] => [
 
 const countFrom = (text: string): number => (text.trim() === '' ? Number.NaN : Number(text))
 
+const answerOn = (frontmatter: Frontmatter): Pick<Proposal, 'answered' | 'reason'> => ({
+  ...(frontmatter.answered === undefined ? {} : { answered: frontmatter.answered }),
+  ...(frontmatter.reason === undefined ? {} : { reason: frontmatter.reason }),
+})
+
 const proposalFrom = (frontmatter: Frontmatter, body: string): Proposal | undefined => {
   const { id = '', kind, target = '', status, authority, evidence = '', expect = '', baseline = '', created = '' } =
     frontmatter
   if (!isProposalKind(kind) || !isProposalStatus(status) || !isAuthority(authority)) return undefined
 
-  return { id, kind, target, status, authority, evidence: inlineList(evidence), expect, baseline: countFrom(baseline), created, body }
+  return { id, kind, target, status, authority, evidence: inlineList(evidence), expect, baseline: countFrom(baseline), created, body, ...answerOn(frontmatter) }
 }
 
 const validated = (proposal: Proposal): ParsedProposal => {

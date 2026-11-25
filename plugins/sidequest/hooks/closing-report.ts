@@ -1,5 +1,5 @@
 import { handleDetails } from './branch-and-issue'
-import { waitsOnHuman } from './human-answers'
+import { awaitsHumanAnswer, isAnswerWithSession, waitsOnHuman } from './human-answers'
 import type { InterruptedWork } from './interrupted-work'
 import { NOTHING_WAS_CHECKED, wasFinishedUnchecked } from './nothing-checked'
 import { headedTickets, NO_STORIES, OTHER_TICKETS_HEADING, piecesOfWork, spansSeveralPieces, ticketNameUnder, titleWithoutKey } from './pieces-of-work'
@@ -52,7 +52,10 @@ const sessionPart = (changes: SessionChanges, board: BoardWork): string[] => {
 
 type EarlierCount = { words: string; counts: (ticket: Ticket, interrupted: InterruptedWork) => boolean }
 
-const isWaiting = (ticket: Ticket, interrupted: InterruptedWork): boolean => waitsOnHuman(ticket) && !interrupted.has(ticket.id)
+const isWaiting = (ticket: Ticket, interrupted: InterruptedWork): boolean => awaitsHumanAnswer(ticket) && !interrupted.has(ticket.id)
+
+const isAnswered = (ticket: Ticket, interrupted: InterruptedWork): boolean =>
+  waitsOnHuman(ticket) && isAnswerWithSession(ticket) && !interrupted.has(ticket.id)
 
 const isPlainOpen = (ticket: Ticket, interrupted: InterruptedWork): boolean =>
   !NOT_OPEN.includes(ticket.status) && !interrupted.has(ticket.id) && !waitsOnHuman(ticket)
@@ -61,6 +64,7 @@ const EARLIER_COUNTS: EarlierCount[] = [
   { words: 'open', counts: isPlainOpen },
   { words: 'stopped', counts: (ticket, interrupted) => interrupted.has(ticket.id) },
   { words: 'waiting on you', counts: isWaiting },
+  { words: 'answered, with the session to act on', counts: isAnswered },
   { words: 'set aside', counts: ticket => ticket.status === 'parked' },
 ]
 

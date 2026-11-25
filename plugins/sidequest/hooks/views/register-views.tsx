@@ -23,6 +23,7 @@ import type { CodePathElements } from './code-path-drawing'
 import {
   answeredByHuman,
   approvedByHuman,
+  isAnswerWithSession,
   paneAnswerText,
   planAnsweredByHuman,
   saidAboutStory,
@@ -213,11 +214,25 @@ const handWriteOn = (tickets: readonly Ticket[], id: string, humanWriteOf: Human
   return human ? { human, change: { tickets: [human.ticket], stories: [] } } : {}
 }
 
-async function writeByHand($: EngineInterface, id: string, humanWriteOf: HumanWriteOf): Promise<string | undefined> {
+const ANSWER_STANDS = 'The first answer stands, it is with the session. To change it, say so in the chat.'
+
+// A send from a view behind the file is refused: the ticket is drawn again with what was sent, and the person is told.
+async function showRefusedAnswer($: EngineInterface, id: string, tickets: readonly Ticket[]): Promise<void> {
+  const ticket = tickets.find(one => one.id === id)
+  if (ticket === undefined || !isAnswerWithSession(ticket)) return
+  await showTickets($, tickets)
+  $.ui.toast(ANSWER_STANDS)
+}
+
+async function writeByHand($: EngineInterface, id: string, humanWriteOf: HumanWriteOf, isAnswer = false): Promise<string | undefined> {
   const stamp = minuteStamp(await $.clock.now())
   const written = await writeBoardDecision($, await boardLocation($), files => handWriteOn(files.tickets, id, humanWriteOf, stamp))
   if (written.saved.notes.length > 0) $.ui.toast(written.saved.notes.join(' '))
-  if (written.saved.tickets.length === 0) return undefined
+  if (written.saved.tickets.length === 0) {
+    if (isAnswer) await showRefusedAnswer($, id, written.files.tickets)
+
+    return undefined
+  }
   rememberSessionChanges(written.files.tickets, written.saved.tickets)
   const after = withChangedTickets(written.files.tickets, written.saved.tickets)
   await showTickets($, after)
@@ -233,8 +248,8 @@ async function tellSession($: EngineInterface, line: string | undefined): Promis
   if (entered.drop !== undefined) $.ui.toast(`It is on the ticket, but the session did not take it: ${entered.drop}`)
 }
 
-async function decideByHand($: EngineInterface, id: string, humanWriteOf: HumanWriteOf): Promise<void> {
-  const line = await queueBoardWrite(() => writeByHand($, id, humanWriteOf))
+async function decideByHand($: EngineInterface, id: string, humanWriteOf: HumanWriteOf, isAnswer = false): Promise<void> {
+  const line = await queueBoardWrite(() => writeByHand($, id, humanWriteOf, isAnswer))
   await tellSession($, line).catch(() => $.ui.toast('It is on the ticket, but the session could not be told. Say it in the chat.'))
 }
 
@@ -305,7 +320,7 @@ async function sendTicketAnswer($: EngineInterface, id: string): Promise<void> {
   const text = paneAnswerText({ picked: current.picked, alsoDo, words: current.typed })
   if (text === '') return
   await update($, ticketForm, () => NO_TICKET_FORM)
-  await decideByHand($, id, (ticket, stamp) => answeredByHuman(ticket, text, stamp))
+  await decideByHand($, id, (ticket, stamp) => answeredByHuman(ticket, text, stamp), true)
 }
 
 async function sendTicketRemark($: EngineInterface, id: string): Promise<void> {

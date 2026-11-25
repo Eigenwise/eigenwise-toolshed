@@ -51,7 +51,7 @@ const startSession = async ($: Engine, on: On, beneath: (on: On) => void = () =>
   on('command.list', () => ({ value: [] }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('agent.list', () => ({ value: [] }))
-  on('command.register', () => ({ value: { command: 'qm' } }))
+  on('command.register', () => ({ value: { command: 'quartermaster' } }))
   on('ui.status', (_, e) => {
     statuses.push(e.text)
 
@@ -180,7 +180,7 @@ test('a classifier-denied call leaves one denial and no failure', async ($, on) 
 
 test('a turn writes its events once, with prefixes and never arguments', async ($, on) => {
   const files = await startSession($, on, beneath => {
-    beneath('tool.call', () => ({ result: 'output', text: 'secret output', isError: true }))
+    beneath('tool.call', () => ({ result: 'output', text: 'Exit code 127\nnpm: command not found for token abc123\nsecret output', isError: true }))
   })
 
   await $.tool.call({ tool: 'Bash', command: 'npm run build -- --token=abc123' })
@@ -192,6 +192,7 @@ test('a turn writes its events once, with prefixes and never arguments', async (
   expect(written.includes('"kind":"typed"')).toBe(false)
   expect(written.includes('"kind":"turn"')).toBe(true)
   expect(written.includes('abc123') || written.includes('secret output')).toBe(false)
+  expect(written.includes('"error":"npm: command not found for token"')).toBe(true)
 })
 
 test('one burst of failures in a single sitting is evidence the tool reports, not a candidate', async ($, on) => {
@@ -257,7 +258,7 @@ test('an illegal move and a rejected fingerprint are refused', async ($, on) => 
   await call(draft)
   const skipped = await call({ operation: 'update', id: 'P-0001', status: 'useful' })
   expect(skipped.deny).toBe(
-    'quartermaster: P-0001 is draft and cannot become useful; from draft it can become offered, accepted, declined, expired',
+    'quartermaster: P-0001 is draft and cannot become useful; from draft it can become offered, accepted, declined, handled, expired',
   )
 
   await call({ operation: 'decide', id: 'P-0001', decision: 'reject', reason: 'I push by hand on purpose' })

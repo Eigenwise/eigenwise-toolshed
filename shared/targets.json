@@ -9,7 +9,11 @@
   "config-directory.mjs": [
     "plugins/sidequest/hooks/config-directory.mjs",
     "plugins/quartermaster/hooks/config-directory.mjs",
-    "plugins/quartermaster/scripts/config-directory.mjs"
+    "plugins/quartermaster/scripts/config-directory.mjs",
+    "plugins/codebase-mapper/hooks/config-directory.mjs",
+    "plugins/live-rules/hooks/config-directory.mjs",
+    "plugins/observability/hooks/config-directory.mjs",
+    "plugins/observability/scripts/config-directory.mjs"
   ],
   "rule-files.mjs": [
     "plugins/live-rules/scripts/rule-files.mjs",
@@ -21,6 +25,45 @@
   ],
   "config-directory.d.mts": [
     "plugins/sidequest/hooks/config-directory.d.mts",
-    "plugins/quartermaster/hooks/config-directory.d.mts"
+    "plugins/quartermaster/hooks/config-directory.d.mts",
+    "plugins/codebase-mapper/hooks/config-directory.d.mts",
+    "plugins/live-rules/hooks/config-directory.d.mts",
+    "plugins/observability/hooks/config-directory.d.mts"
+  ],
+  "older-toolshed.ts": [
+    "plugins/sidequest/hooks/older-toolshed.ts",
+    "plugins/quartermaster/hooks/older-toolshed.ts",
+    "plugins/codebase-mapper/hooks/older-toolshed.ts",
+    "plugins/live-rules/hooks/older-toolshed.ts"
+  ],
+  "older-toolshed-session.ts": [
+    "plugins/sidequest/hooks/older-toolshed-session.ts",
+    "plugins/quartermaster/hooks/older-toolshed-session.ts",
+    "plugins/codebase-mapper/hooks/older-toolshed-session.ts",
+    "plugins/live-rules/hooks/older-toolshed-session.ts"
+  ],
+  "older-toolshed.test.ts": [
+    "plugins/sidequest/hooks/older-toolshed.test.ts",
+    "plugins/quartermaster/hooks/older-toolshed.test.ts",
+    "plugins/codebase-mapper/hooks/older-toolshed.test.ts",
+    "plugins/live-rules/hooks/older-toolshed.test.ts"
+  ],
+  "older-toolshed-session.test.ts": [
+    "plugins/sidequest/hooks/older-toolshed-session.test.ts",
+    "plugins/quartermaster/hooks/older-toolshed-session.test.ts",
+    "plugins/codebase-mapper/hooks/older-toolshed-session.test.ts",
+    "plugins/live-rules/hooks/older-toolshed-session.test.ts"
+  ],
+  "older-gateway.ts": [
+    "plugins/sidequest/hooks/older-gateway.ts",
+    "plugins/quartermaster/hooks/older-gateway.ts",
+    "plugins/codebase-mapper/hooks/older-gateway.ts",
+    "plugins/live-rules/hooks/older-gateway.ts"
+  ],
+  "older-gateway.test.ts": [
+    "plugins/sidequest/hooks/older-gateway.test.ts",
+    "plugins/quartermaster/hooks/older-gateway.test.ts",
+    "plugins/codebase-mapper/hooks/older-gateway.test.ts",
+    "plugins/live-rules/hooks/older-gateway.test.ts"
   ]
 }

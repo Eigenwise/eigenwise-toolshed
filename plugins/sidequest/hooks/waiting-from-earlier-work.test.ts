@@ -19,7 +19,7 @@ test('a question this session did not touch and that waited a week comes after, 
 
   expect(text).toContain('\n\nWhat about Pick the limit?')
   expect(text).not.toContain('What about Two things from outside?')
-  expect(text.endsWith('Still waiting on you from earlier sessions:\n- SQ-3 Two things from outside, waiting 12 days')).toBe(true)
+  expect(text.endsWith('Still waiting on you from earlier sessions:\n- SQ-3 Two things from outside, waiting 12 days. To answer in this chat: ask for ticket SQ-3, then answer it.')).toBe(true)
   expect(text.indexOf('Pick the limit')).toBeLessThan(text.indexOf('Still waiting on you from earlier sessions:'))
 })
 

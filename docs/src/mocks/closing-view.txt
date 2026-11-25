@@ -1,0 +1,4 @@
+What this session changed on the board:
+- PAY-41 PL-1 Retry a failed upload once before giving up: done (pull request #1)
+- PAY-41 PL-2 Show which photos failed to upload: done (pull request #1)
+- PAY-41 PL-3 Try the failed photos again: done (pull request #1)

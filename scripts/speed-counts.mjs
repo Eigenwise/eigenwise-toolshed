@@ -187,8 +187,8 @@ export function judgeRiggedTicket(runs) {
 export function overallVerdict(fixReasons, riggedReasons, runsThatMetIt, runCount) {
   if (runsThatMetIt === 0) return { exitCode: 1, text: "the rigged scenario was NOT EXERCISED, no run got as far as a red verify, so nothing is said about the failure loop" };
   const metIn = `the rigged failure was met in ${runsThatMetIt} of ${runCount} runs`;
-  if (fixReasons.length + riggedReasons.length > 0) return { exitCode: 1, text: `stop and look, v2 has become slower or louder (${metIn})` };
-  return { exitCode: 0, text: `v2 is not slower than the baseline (${metIn})` };
+  if (fixReasons.length + riggedReasons.length > 0) return { exitCode: 1, text: `stop and look, this version has become slower or louder (${metIn})` };
+  return { exitCode: 0, text: `this version is not slower than the baseline (${metIn})` };
 }
 
 // A flag with no transcript says nothing about its cause: a fault met in 1 run of 6 took three more passes to see.

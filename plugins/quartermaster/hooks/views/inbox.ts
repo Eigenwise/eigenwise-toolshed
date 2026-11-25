@@ -1,4 +1,5 @@
 import { fingerprintOf } from '../detectors'
+import { isHandledPastItsWindow } from '../proposals'
 import type { Proposal } from '../proposals'
 import type { QuartermasterCandidate, QuartermasterProposalCard, QuartermasterRecords } from '../../types'
 
@@ -8,7 +9,10 @@ export type Candidate = QuartermasterCandidate
 
 const WAITING_STATUSES: readonly string[] = ['offered', 'draft']
 
+export const isWaiting = (card: Pick<ProposalCard, 'status'>): boolean => WAITING_STATUSES.includes(card.status)
+
 export const WAITING_HEADING = 'Waiting on you'
+export const SET_ASIDE_HEADING = 'Set aside with Later'
 export const NOTICED_HEADING = 'Noticed in this project'
 export const NOTICED_HINT = 'Press one to have a fix drafted, or to stop hearing about it.'
 export const NOTHING_TO_SHOW =
@@ -18,12 +22,17 @@ export const WHAT_EACH_PRESS_DOES =
   'Ignore in this project: it is never brought up here again.'
 
 export const WHAT_EACH_ANSWER_DOES =
-  'Approve makes the change now, and it can be undone. Reject is remembered for this project. Later hides it for a few days.'
-export const REASON_LABEL = 'Why not? (optional)'
+  'Approve makes the change now, and it can be undone. Reject is remembered for this project. ' +
+  'Already handled closes it without that, so it may come back if the same thing keeps happening. Later hides it for a few days.'
+export const REASON_LABEL = 'Your reason (optional)'
+export const REASON_HINT =
+  'Type it in the field below. Enter keeps the words; Reject or Already handled sends them with your answer.'
 
 export const EMPTY_RECORDS: Records = { proposals: [], rejected: [] }
 
 export const proposalCard = (proposal: Proposal): ProposalCard => ({
+  ...(proposal.answered === undefined ? {} : { answered: proposal.answered }),
+  ...(proposal.reason === undefined ? {} : { reason: proposal.reason }),
   id: proposal.id,
   kind: proposal.kind,
   target: proposal.target,
@@ -36,21 +45,41 @@ export const proposalCard = (proposal: Proposal): ProposalCard => ({
 })
 
 export const waitingProposals = (records: Records): ProposalCard[] =>
-  records.proposals.filter(card => WAITING_STATUSES.includes(card.status))
+  records.proposals.filter(isWaiting)
 
 export const proposalFingerprint = (card: Pick<ProposalCard, 'kind' | 'target'>): string => fingerprintOf(card.kind, card.target)
 
-/** Later on a proposal hides it from the pane until its wait is over, as Later does on a noticed line. It still counts as waiting. */
-export const proposalsInSight = (records: Records): ProposalCard[] => {
-  const setAside = new Set(records.setAsideForNow ?? [])
+const isSetAside = (records: Records, card: ProposalCard): boolean =>
+  (records.setAsideForNow ?? []).includes(proposalFingerprint(card))
 
-  return waitingProposals(records).filter(card => !setAside.has(proposalFingerprint(card)))
+/** What is waiting and in sight: a proposal set aside with Later is not waiting until its wait is over. */
+export const proposalsInSight = (records: Records): ProposalCard[] =>
+  waitingProposals(records).filter(card => !isSetAside(records, card))
+
+export const proposalsSetAside = (records: Records): ProposalCard[] =>
+  waitingProposals(records).filter(card => isSetAside(records, card))
+
+export const setAsideLine = (card: ProposalCard, records: Records): string => {
+  const until = records.setAsideUntil?.[proposalFingerprint(card)]
+
+  return `${proposalInWords(card)}: set aside${until === undefined ? ' for now' : ` until ${until}`}`
 }
 
-const proposedFingerprints = (records: Records): Set<string> =>
-  new Set(records.proposals.flatMap(card => [proposalFingerprint(card), ...card.evidence]))
+const fingerprintsOf = (card: ProposalCard): string[] => [proposalFingerprint(card), ...card.evidence]
 
-// A repeated failure names no fix a person could approve, so it stays evidence for an improvement round and off the list.
+const proposedFingerprints = (records: Records): Set<string> =>
+  new Set([
+    ...records.proposals.filter(card => card.status !== 'handled').flatMap(fingerprintsOf),
+    ...(records.handledWithinWindow ?? []),
+  ])
+
+/** The fingerprints a proposal closed as already handled still settles: those whose window has not passed. */
+export const handledWithinWindow = (cards: readonly ProposalCard[], now: number): string[] =>
+  cards
+    .filter(card => card.status === 'handled' && !isHandledPastItsWindow(card, now))
+    .flatMap(fingerprintsOf)
+
+// A repeated failure names no fix a person could approve, so it stays evidence for a resupply round and off the list.
 const KINDS_WITH_A_FIX_TO_OFFER: readonly string[] = ['script', 'permission', 'retire']
 
 /** Candidates with a fix to offer that nobody has proposed anything for, turned down or set aside for now. */
@@ -118,12 +147,37 @@ export const seenBetween = (candidate: Candidate): string =>
     ? `Watched from ${dayOf(candidate.firstSeen)} to ${dayOf(candidate.lastSeen)}.`
     : `Seen ${candidate.count} times, first on ${dayOf(candidate.firstSeen)}, last on ${dayOf(candidate.lastSeen)}.`
 
+// The status line is one row of the terminal beside other entries, and a proposal's target can be a whole command.
+// The cut counts whole characters, so it never leaves half an emoji.
+const STATUS_TITLE_MAX_LENGTH = 60
+
+const cutForStatus = (title: string): string => {
+  const characters = Array.from(title)
+
+  return characters.length <= STATUS_TITLE_MAX_LENGTH
+    ? title
+    : `${characters.slice(0, STATUS_TITLE_MAX_LENGTH - 3).join('').trimEnd()}...`
+}
+
+const reviewStatus = ([first, ...others]: readonly ProposalCard[]): string => {
+  if (first === undefined) return ''
+  const title = cutForStatus(proposalInWords(first))
+  const named = others.length === 0 ? title : `${title} and ${others.length} more`
+
+  return `Quartermaster: ${others.length + 1} to review: ${named} (/quartermaster)`
+}
+
 export const statusLine = (records: Records, writeProblem?: string): string | undefined => {
-  const waiting = waitingProposals(records).length
-  const parts = [waiting === 0 ? '' : `Quartermaster: ${waiting} to review`, writeProblem ?? ''].filter(part => part !== '')
+  const parts = [reviewStatus(proposalsInSight(records)), writeProblem ?? ''].filter(part => part !== '')
 
   return parts.length === 0 ? undefined : parts.join(' | ')
 }
+
+const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
+/** What the open session is told after the person answered, so the agent hears why in their words. */
+export const answerLine = (answer: 'rejected' | 'already handled', card: ProposalCard, reason: string): string =>
+  `Quartermaster: the person answered "${oneLine(proposalInWords(card))}" (${card.id}) as ${answer}: ${oneLine(reason)}`
 
 export type SkillRun = { command: string; args: string }
 
@@ -136,16 +190,32 @@ export const typedLine = (run: SkillRun): string => `/${run.command} ${run.args}
 const section = (title: string, lines: readonly string[]): string[] =>
   lines.length === 0 ? [] : [`${title}:`, ...lines.map(line => `- ${line}`)]
 
-/** The inbox where nothing draws a pane: what waits, and how to answer in words. */
-export const inboxText = (records: Records, candidates: readonly Candidate[]): string => {
-  const waiting = waitingProposals(records).map(card => `${proposalLine(card)}. ${expectationLine(card)}`)
+const FOLDER_SEPARATORS = /[\\/]+/
+
+// Sessions work in worktrees under .claude/worktrees, and the project is the checkout that holds them.
+const WORKTREES_FOLDER = /[\\/]\.claude[\\/]worktrees[\\/].*$/
+
+export const UNNAMED_PROJECT = 'this folder'
+
+export const projectNameOf = (folder: string): string =>
+  folder.replace(WORKTREES_FOLDER, '').split(FOLDER_SEPARATORS).filter(part => part !== '').pop() ?? UNNAMED_PROJECT
+
+const answerInThisChat = (exampleId: string): string =>
+  `Answer in this chat, by id: say "approve ${exampleId}", "reject ${exampleId}", "already handled ${exampleId}" or "later ${exampleId}".`
+
+/** The inbox where nothing draws a pane: what waits in which project, and how to answer in words. */
+export const inboxText = (records: Records, candidates: readonly Candidate[], projectName: string): string => {
+  const [firstCardInSight] = proposalsInSight(records)
+  const waiting = proposalsInSight(records).map(card => `${proposalLine(card)}. ${expectationLine(card)}`)
+  const setAside = proposalsSetAside(records).map(card => `${card.id} ${setAsideLine(card, records)}`)
   const noticed = noticedCandidates(candidates, records).map(candidate => candidate.sentence)
   const lines = [
     ...section(WAITING_HEADING, waiting),
+    ...section(SET_ASIDE_HEADING, setAside),
     ...section(NOTICED_HEADING, noticed),
   ]
-  if (lines.length === 0) return 'Quartermaster has nothing for you.'
-  const answer = waiting.length === 0 ? [] : ['', 'Answer by id, like "approve P-0001", "reject P-0001" or "later P-0001".']
+  if (lines.length === 0) return `Quartermaster has nothing for you in ${projectName}.`
+  const answer = firstCardInSight === undefined ? [] : ['', answerInThisChat(firstCardInSight.id)]
 
-  return [...lines, ...answer].join('\n')
+  return [`Quartermaster inbox in ${projectName}:`, ...lines, ...answer].join('\n')
 }

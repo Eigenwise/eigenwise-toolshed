@@ -5,13 +5,14 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { configDirectoryOf } from "./config-directory.mjs";
-import { CURRENT_MARKETPLACE, HOME_GROUP_IDS, WORKTREE_GROUP, homeGroups, projectsStillOnOlderVersion } from "./upgrade-findings.mjs";
+import { HOME_GROUP_IDS, WORKTREE_GROUP, homeGroups, projectsStillOnOlderVersion } from "./upgrade-findings.mjs";
+import { EARLIER_NAME, THIS_VERSION, toolshedInstallsOf } from "./toolshed-installs.mjs";
 import { isSamePath, olderWorktreeFolders, olderWorktreeRootOf, readHomeFacts, readInstalledProjects, readJsonOrEmpty } from "./upgrade-scan.mjs";
 
 const SAFE = "safe";
 const KEEP = "keep";
 const DEFAULT_ALLOWANCE_SECONDS = 5;
-const SIDEQUEST_MISSING = `sidequest from ${CURRENT_MARKETPLACE} is not installed, so no worktree verdict ran and no worktree folder is offered`;
+const SIDEQUEST_MISSING = "sidequest of this version is not installed, so no worktree verdict ran and no worktree folder is offered";
 
 const keepFolder = (path, reason) => ({ path, verdict: KEEP, reasons: [reason] });
 
@@ -25,10 +26,11 @@ const entriesWords = (count) => counted(count, "entry", "entries");
 
 const hasInstallPath = (entry) => typeof entry?.installPath === "string" && entry.installPath !== "";
 
+const isThisVersionsSidequest = (entry) => entry.name === "sidequest" && [THIS_VERSION, EARLIER_NAME].includes(entry.state);
+
 export function sidequestWorktreesScript(configDirectory) {
-  const record = readJsonOrEmpty(join(configDirectory, "plugins", "installed_plugins.json"));
-  const entries = record.plugins?.[`sidequest@${CURRENT_MARKETPLACE}`];
-  return (Array.isArray(entries) ? entries : [])
+  return toolshedInstallsOf(readJsonOrEmpty(join(configDirectory, "plugins", "installed_plugins.json")))
+    .filter(isThisVersionsSidequest)
     .filter(hasInstallPath)
     .map((entry) => join(entry.installPath, "scripts", "worktrees.mjs"))
     .find((path) => existsSync(path));
@@ -469,7 +471,7 @@ function groupNamesRefusal(groupIds) {
 function stillInUseRefusal(configDirectory) {
   const stillOn = projectsStillOnOlderVersion(readInstalledProjects(configDirectory)).length;
   if (stillOn === 0) return "";
-  return `Nothing removed: ${stillOn} project(s) still have the older version on and use this state. The home cleanup waits until none does.`;
+  return `Nothing removed: ${stillOn} project(s) still have the older version on or installed and use this state. The home cleanup waits until none does.`;
 }
 
 function refusalOf(options) {

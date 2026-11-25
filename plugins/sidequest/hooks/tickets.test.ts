@@ -5,6 +5,8 @@ import {
   appendLogLine,
   applyStoryPatch,
   applyTicketPatch,
+  DECISION_WORDS_LIMIT,
+  decisionsRead,
   idNumber,
   newStory,
   newTicket,
@@ -14,6 +16,8 @@ import {
   serializeTicket,
   validateTicket,
 } from './tickets'
+import type { Decision } from './tickets'
+import { decisionsAsDrawn } from './views/first-screen'
 
 const TICKET_FILE = `---
 id: SQ-12
@@ -112,9 +116,115 @@ test('a story keeps numbered decisions', () => {
   const reread = parseStory(serializeStory(second))
 
   expect(reread.decisions).toBe(
-    '- D-1: Retries? Answer: Three Decided by: human\n- D-2: Backoff? Answer: Doubling Decided by: default',
+    '- D-1: Retries? Answer: Three Decided by: human on 2026-11-16\n- D-2: Backoff? Answer: Doubling Decided by: default on 2026-11-16',
   )
   expect(reread.destination).toBe('Uploads survive a flaky network.')
+})
+
+test('a decision the person took keeps their words up to 200 characters, and a default keeps none', () => {
+  const stamp = '2026-11-25T16:15Z'
+  const story = applyStoryPatch(
+    newStory('ST-1', 'Uploads', stamp),
+    {
+      decisions: [
+        { question: 'Retries?', answer: 'Three', decidedBy: 'human', words: 'Three, more feels slow.' },
+        { question: 'Backoff?', answer: 'Doubling', decidedBy: 'human', words: 'x'.repeat(250) },
+        { question: 'Jitter?', answer: 'No', decidedBy: 'default', words: 'ignored' },
+      ],
+    },
+    stamp,
+  )
+  const [retries, backoff, jitter] = decisionsRead(parseStory(serializeStory(story)).decisions)
+
+  expect(retries).toEqual({ question: 'Retries?', answer: 'Three', decidedBy: 'human', decidedOn: '2026-11-25', words: 'Three, more feels slow.' })
+  expect(backoff?.words).toBe('x'.repeat(DECISION_WORDS_LIMIT))
+  expect(jitter).toEqual({ question: 'Jitter?', answer: 'No', decidedBy: 'default', decidedOn: '2026-11-25' })
+})
+
+test('a story file written before decisions kept a day still parses, and its decisions read with no day', () => {
+  const older = [
+    '---',
+    'id: ST-1',
+    'title: Uploads',
+    'created: 2026-11-10',
+    'updated: 2026-11-10',
+    '---',
+    '',
+    '## Decisions',
+    '- D-1: Retries? Answer: Three Decided by: human',
+    '- D-2: Backoff? Answer: Doubling Decided by: default',
+    '',
+  ].join('\n')
+
+  expect(decisionsRead(parseStory(older).decisions)).toEqual([
+    { question: 'Retries?', answer: 'Three', decidedBy: 'human' },
+    { question: 'Backoff?', answer: 'Doubling', decidedBy: 'default' },
+  ])
+})
+
+const decisionsOf = (decisions: Decision[], stamp = '2026-11-25T16:15Z'): Decision[] =>
+  decisionsRead(parseStory(serializeStory(applyStoryPatch(newStory('ST-1', 'Uploads', stamp), { decisions }, stamp))).decisions)
+
+test('decisions of one day keep their order, day and who decided, and a question decided again keeps each line', () => {
+  const read = decisionsOf([
+    { question: 'Retries?', answer: 'Three', decidedBy: 'human', words: 'Three is plenty' },
+    { question: 'Backoff?', answer: 'Doubling', decidedBy: 'default' },
+    { question: 'Retries?', answer: 'Five', decidedBy: 'human', words: 'Five after all' },
+  ])
+
+  expect(read.map(decision => [decision.question, decision.answer, decision.decidedBy, decision.decidedOn, decision.words])).toEqual([
+    ['Retries?', 'Three', 'human', '2026-11-25', 'Three is plenty'],
+    ['Backoff?', 'Doubling', 'default', '2026-11-25', undefined],
+    ['Retries?', 'Five', 'human', '2026-11-25', 'Five after all'],
+  ])
+})
+
+test('words are cut by whole characters, so an emoji at the cut is kept whole or left out', () => {
+  const [decision] = decisionsOf([{ question: 'Mood?', answer: 'Good', decidedBy: 'human', words: `${'a'.repeat(199)}\u{1F600}\u{1F600}` }])
+
+  expect(decision?.words).toBe(`${'a'.repeat(199)}\u{1F600}`)
+  expect(decision?.words).not.toContain('\uFFFD')
+})
+
+test('a flag, a joined emoji or an accented letter at the cut is kept whole or left out, never halved', () => {
+  const flag = '\u{1F1E7}\u{1F1EA}'
+  const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'
+  const accented = 'e\u0301'
+  const wordsOf = (typed: string) => decisionsOf([{ question: 'Mood?', answer: 'Good', decidedBy: 'human', words: typed }])[0]?.words
+
+  expect(wordsOf(`${'a'.repeat(199)}${flag}${flag}`)).toBe(`${'a'.repeat(199)}${flag}`)
+  expect(wordsOf(`${'a'.repeat(200)}${flag}`)).toBe('a'.repeat(200))
+  expect(wordsOf(`${'a'.repeat(199)}${family}`)).toBe(`${'a'.repeat(199)}${family}`)
+  expect(wordsOf(`${'a'.repeat(199)}${accented}z`)).toBe(`${'a'.repeat(199)}${accented}`)
+  expect(wordsOf(family.repeat(250))).toBe(family.repeat(200))
+})
+
+test('words with a lone carriage return or the text of a status line stay words and read back as typed', () => {
+  const lookalike = 'fine. Decided by: default. Their words: "no"'
+  const read = decisionsOf([
+    { question: 'Carriage?', answer: 'Yes', decidedBy: 'human', words: 'one\rtwo' },
+    { question: 'Lookalike?', answer: 'Yes', decidedBy: 'human', words: lookalike },
+  ])
+
+  expect(read.map(decision => [decision.answer, decision.decidedBy, decision.words])).toEqual([
+    ['Yes', 'human', 'one two'],
+    ['Yes', 'human', lookalike],
+  ])
+})
+
+test('a decision that retired another has no answer and still reads', () => {
+  const text = '- D-4: Superseded by D-8: an early scope of only the first-prompt line. Decided by: human\n- D-5: Why? Answer: Because. Decided by: default'
+
+  expect(decisionsRead(text)).toEqual([
+    { question: 'Superseded by D-8: an early scope of only the first-prompt line.', answer: '', decidedBy: 'human' },
+    { question: 'Why?', answer: 'Because.', decidedBy: 'default' },
+  ])
+})
+
+test('the board speaks the status of a decision and leaves a person\'s quoted words as they said them', () => {
+  const text = '- D-1: Retries? Answer: Three Decided by: human on 2026-11-25. Their words: "Decided by: human, and Decided by: default"'
+
+  expect(decisionsAsDrawn(text)).toBe('- D-1: Retries? Answer: Three Decided by: you on 2026-11-25. Their words: "Decided by: human, and Decided by: default"')
 })
 
 const HAND_EDITED_LINES = ['id: SQ-3', 'title: Retry failed uploads', 'status: ready', 'kind: build', 'mode: afk', 'category: build']

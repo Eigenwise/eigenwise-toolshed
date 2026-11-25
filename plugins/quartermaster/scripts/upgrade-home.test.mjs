@@ -6,15 +6,15 @@ import { dirname, join, resolve, sep } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { contextOf, measureSize, readGroups, readOptions, realOperations, removeEntry, renderGroups, renderRemovals, sizeWords } from "./upgrade-home.mjs";
+import { contextOf, measureSize, readGroups, readOptions, realOperations, removeEntry, renderGroups, renderRemovals, sidequestWorktreesScript, sizeWords } from "./upgrade-home.mjs";
 import { readOptions as readScanOptions, scan } from "./upgrade-scan.mjs";
 import { KEPT_RECORD } from "./upgrade-kept.mjs";
 
 const scriptsFolder = dirname(fileURLToPath(import.meta.url));
 const scriptPath = join(scriptsFolder, "upgrade-home.mjs");
 const sidequestPlugin = resolve(scriptsFolder, "..", "..", "sidequest");
-const OLDER = "eigenwise-toolshed";
-const CURRENT = "toolshed-next";
+const TOOLSHED = "eigenwise-toolshed";
+const EARLIER = "toolshed-next";
 
 const gitEnvironment = { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com" };
 
@@ -46,7 +46,7 @@ const forgetWorktree = (repository, name) => rmSync(join(repository, ".git", "wo
 const nothingStillOn = (claudeFolder, extraPlugins = {}) =>
   writeJson(join(claudeFolder, "plugins", "installed_plugins.json"), {
     version: 2,
-    plugins: { [`sidequest@${CURRENT}`]: [{ scope: "user", installPath: sidequestPlugin, version: "0.0.0" }], ...extraPlugins },
+    plugins: { [`sidequest@${TOOLSHED}`]: [{ scope: "user", installPath: sidequestPlugin, version: "7.0.0" }], ...extraPlugins },
   });
 
 function buildHome(scratch) {
@@ -168,7 +168,7 @@ describe("the home cleanup on a made-up home folder", () => {
     const worktrees = readGroups(options, context).find((group) => group.id === "worktree-folders");
     assert.deepEqual(worktrees.offered, []);
     assert.equal(worktrees.keeps.length, 4);
-    assert.match(worktrees.note, /sidequest from toolshed-next is not installed/);
+    assert.match(worktrees.note, /sidequest of this version is not installed/);
   });
 
   test("a removal approved for one group removes that group only and names what was removed and kept", () => {
@@ -285,17 +285,17 @@ describe("the home cleanup while a project still has the older version on", () =
     scratch = mkdtempSync(join(tmpdir(), "quartermaster-home-busy-"));
     const claudeFolder = join(scratch, "home", ".claude");
     const project = join(scratch, "still-on");
-    writeJson(join(project, ".claude", "settings.json"), { enabledPlugins: { [`sidequest@${OLDER}`]: true } });
-    nothingStillOn(claudeFolder, { [`sidequest@${OLDER}`]: [{ scope: "project", projectPath: project, installPath: "cache" }] });
+    writeJson(join(project, ".claude", "settings.json"), { enabledPlugins: { [`sidequest@${TOOLSHED}`]: true } });
+    nothingStillOn(claudeFolder, { [`sidequest@${TOOLSHED}`]: [{ scope: "project", projectPath: project, installPath: "cache", version: "6.10.3" }] });
     writeFile(join(claudeFolder, "sidequest", "dispatch", "run.json"), "{}");
   });
 
   after(() => rmSync(scratch, { recursive: true, force: true }));
 
-  test("removes nothing and says why", () => {
+  test("removes nothing while an older version is installed, even with nothing of the older version switched off, and says why", () => {
     const result = run("--home", join(scratch, "home"), "--remove", "records");
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /1 project\(s\) still have the older version on/);
+    assert.match(result.stderr, /1 project\(s\) still have the older version on or installed/);
     assert.equal(existsSync(join(scratch, "home", ".claude", "sidequest", "dispatch", "run.json")), true);
   });
 });
@@ -304,12 +304,12 @@ describe("the home cleanup with only a gateway left on", () => {
   let scratch;
   const projectNamed = (name) => join(scratch, name);
   const entry = (projectPath) => ({ scope: "local", projectPath, installPath: "cache" });
-  const gatewayInstalledIn = (...projects) => ({ [`model-gateway@${OLDER}`]: projects.map(entry) });
+  const gatewayInstalledIn = (...projects) => ({ [`model-gateway@${TOOLSHED}`]: projects.map(entry) });
 
   before(() => {
     scratch = mkdtempSync(join(tmpdir(), "quartermaster-home-gateway-"));
     const claudeFolder = join(scratch, "home", ".claude");
-    for (const name of ["answered", "unanswered"]) writeJson(join(projectNamed(name), ".claude", "settings.local.json"), { enabledPlugins: { [`model-gateway@${OLDER}`]: true } });
+    for (const name of ["answered", "unanswered"]) writeJson(join(projectNamed(name), ".claude", "settings.local.json"), { enabledPlugins: { [`model-gateway@${TOOLSHED}`]: true } });
     writeFile(join(projectNamed("answered"), KEPT_RECORD), "- gateway: kept 2026-11-20, they use other providers' models\n");
     nothingStillOn(claudeFolder, gatewayInstalledIn(projectNamed("answered"), projectNamed("unanswered")));
     writeFile(join(claudeFolder, "sidequest", "dispatch", "run.json"), "{}");
@@ -327,51 +327,73 @@ describe("the home cleanup with only a gateway left on", () => {
   });
 });
 
-describe("the home cleanup with only a mapper left on that holds a map git tracks", () => {
+describe("the home cleanup on a machine where this version arrived by update", () => {
   let scratch;
   let claudeFolder;
   let project;
 
   before(() => {
-    scratch = mkdtempSync(join(tmpdir(), "quartermaster-home-held-mapper-"));
+    scratch = mkdtempSync(join(tmpdir(), "quartermaster-home-arrived-"));
     claudeFolder = join(scratch, "home", ".claude");
-    project = makeRepository(join(scratch, "held"));
+    project = makeRepository(join(scratch, "project"));
     writeFile(join(project, ".claude", ".codebase-info", "INDEX.md"), "the map\n");
     git(project, "add", "--", ".claude/.codebase-info");
     git(project, "commit", "-q", "-m", "commit the map");
-    writeJson(join(project, ".claude", "settings.local.json"), { enabledPlugins: { [`codebase-mapper@${OLDER}`]: true } });
-    nothingStillOn(claudeFolder, { [`codebase-mapper@${OLDER}`]: [{ scope: "local", projectPath: project, installPath: "cache" }] });
+    writeJson(join(project, ".claude", "settings.local.json"), { enabledPlugins: { [`codebase-mapper@${TOOLSHED}`]: true } });
+    nothingStillOn(claudeFolder, { [`codebase-mapper@${TOOLSHED}`]: [{ scope: "local", projectPath: project, installPath: "cache", version: "3.0.0" }] });
+    writeJson(join(claudeFolder, "plugins", "known_marketplaces.json"), { [TOOLSHED]: {} });
+    writeFile(join(claudeFolder, "plugins", "cache", TOOLSHED, "codebase-mapper", "3.0.0", "plugin.json"), "{}");
     writeFile(join(claudeFolder, "sidequest", "dispatch", "run.json"), "{}");
   });
 
   after(() => rmSync(scratch, { recursive: true, force: true }));
 
-  test("the folder groups go while the mapper stays on", () => {
+  test("a tracked old map no longer holds anything: the folder groups go and the mapper key stays as it is", () => {
     const allowed = run("--home", join(scratch, "home"), "--remove", "records");
     assert.equal(allowed.status, 0, allowed.stderr);
     assert.equal(existsSync(join(claudeFolder, "sidequest", "dispatch", "run.json")), false);
-    assert.equal(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf8")).enabledPlugins[`codebase-mapper@${OLDER}`], true);
+    assert.equal(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf8")).enabledPlugins[`codebase-mapper@${TOOLSHED}`], true);
   });
 
-  test("the other-plugins group leaves the mapper's own state in place and removes the rest", () => {
-    const mapperData = join(claudeFolder, "plugins", "data", `codebase-mapper-${OLDER}`);
-    const rulesData = join(claudeFolder, "plugins", "data", `live-rules-${OLDER}`);
-    for (const path of [join(claudeFolder, "codebase-mapper-state"), mapperData, rulesData, join(claudeFolder, "live-rules-state")]) writeFile(join(path, "state.json"), "{}");
+  test("other-plugins takes the older state and the data of the plugins only the older version had, never this version's data, cache or marketplace record", () => {
+    const thisVersionsData = ["codebase-mapper", "live-rules", "sidequest", "quartermaster"].map((name) => join(claudeFolder, "plugins", "data", `${name}-${TOOLSHED}`));
+    const olderOnlyData = join(claudeFolder, "plugins", "data", `quality-gate-${TOOLSHED}`);
+    for (const path of [join(claudeFolder, "codebase-mapper-state"), join(claudeFolder, "live-rules-state"), olderOnlyData, ...thisVersionsData]) writeFile(join(path, "state.json"), "{}");
     const removed = run("--home", join(scratch, "home"), "--remove", "other-plugins");
     assert.equal(removed.status, 0, removed.stderr);
-    assert.equal(existsSync(join(claudeFolder, "codebase-mapper-state")), true);
-    assert.equal(existsSync(mapperData), true);
-    assert.equal(existsSync(rulesData), false);
+    assert.equal(existsSync(join(claudeFolder, "codebase-mapper-state")), false);
     assert.equal(existsSync(join(claudeFolder, "live-rules-state")), false);
+    assert.equal(existsSync(olderOnlyData), false);
+    for (const path of thisVersionsData) assert.equal(existsSync(path), true, path);
+    assert.equal(existsSync(join(claudeFolder, "plugins", "cache", TOOLSHED, "codebase-mapper", "3.0.0", "plugin.json")), true);
+    assert.deepEqual(JSON.parse(readFileSync(join(claudeFolder, "plugins", "known_marketplaces.json"), "utf8")), { [TOOLSHED]: {} });
   });
 
-  test("an untracked map does not hold it", () => {
-    git(project, "rm", "-q", "--cached", "-r", ".claude/.codebase-info");
+  test("an older mapper still installed holds it", () => {
+    nothingStillOn(claudeFolder, { [`codebase-mapper@${TOOLSHED}`]: [{ scope: "local", projectPath: project, installPath: "cache", version: "2.15.10" }] });
     writeFile(join(claudeFolder, "sidequest", "dispatch", "run.json"), "{}");
     const refused = run("--home", join(scratch, "home"), "--remove", "records");
     assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /1 project\(s\) still have the older version on/);
+    assert.match(refused.stderr, /1 project\(s\) still have the older version on or installed/);
   });
+});
+
+test("the worktree verdicts come from this version's Sidequest, under either name, never the older one", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "quartermaster-home-script-"));
+  try {
+    const claudeFolder = join(scratch, "home", ".claude");
+    const olderCopy = join(scratch, "older-sidequest");
+    writeFile(join(olderCopy, "scripts", "worktrees.mjs"), "older\n");
+    const record = (plugins) => writeJson(join(claudeFolder, "plugins", "installed_plugins.json"), { version: 2, plugins });
+    record({ [`sidequest@${TOOLSHED}`]: [{ scope: "user", installPath: olderCopy, version: "6.10.3" }] });
+    assert.equal(sidequestWorktreesScript(claudeFolder), undefined);
+    record({ [`sidequest@${EARLIER}`]: [{ scope: "user", installPath: sidequestPlugin, version: "0.42.4" }] });
+    assert.equal(sidequestWorktreesScript(claudeFolder), join(sidequestPlugin, "scripts", "worktrees.mjs"));
+    record({ [`sidequest@${TOOLSHED}`]: [{ scope: "user", installPath: sidequestPlugin, version: "7.0.0" }] });
+    assert.equal(sidequestWorktreesScript(claudeFolder), join(sidequestPlugin, "scripts", "worktrees.mjs"));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 test("measureSize counts every file when it has the time, and stops at once with none", () => {

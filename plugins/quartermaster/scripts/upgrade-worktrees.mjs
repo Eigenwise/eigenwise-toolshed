@@ -66,7 +66,7 @@ export function readLinkedWorktrees(project) {
 
 const AGENT_BRANCHES = "refs/heads/worktree-agent-*";
 
-// A branch checked out in a worktree is judged with that worktree, and a live v2 agent's branch is no leftover at all.
+// A branch checked out in a worktree is judged with that worktree, and a live agent's branch is no leftover at all.
 export function readAgentBranches(project, linked) {
   const checkedOut = new Set(linked.map((entry) => entry.branch));
   const countFree = (mergeFilter) =>

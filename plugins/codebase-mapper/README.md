@@ -3,11 +3,11 @@
 A map of your codebase that Claude Code loads by itself. The map is plain rules files in your project, so a teammate who never installed this plugin still gets it.
 
 ```bash
-claude plugin marketplace add Eigenwise/eigenwise-toolshed#v2
+claude plugin marketplace add Eigenwise/eigenwise-toolshed
 ```
 
 ```bash
-claude plugin install codebase-mapper@toolshed-next
+claude plugin install codebase-mapper@eigenwise-toolshed
 ```
 
 ## What you get
@@ -56,7 +56,7 @@ Globs are git glob pathspecs, so no braces and no negation: list each pattern on
 
 ## The session line
 
-The plugin's one hook runs at session start. Where the card folder exists, it starts the status script in the background, never waiting for it, so the session opens at normal speed. If any card is stale it pins one line under the prompt, for example `map: 2 of 7 cards stale`. A fresh map, no map, no `node` on the PATH or any failure shows nothing. It never blocks, never asks the model anything and never writes a file. The line is a snapshot from session start. It does not change after a refresh; the next session shows the new state.
+The plugin's one hook runs at session start. Where the card folder exists, it starts the status script in the background, never waiting for it, so the session opens at normal speed. If any card is stale it pins one line under the prompt, for example `Codebase map: 2 of 7 areas out of date. /codebase-mapper:refresh updates them.` A fresh map, no map, no `node` on the PATH or any failure shows nothing. It never blocks, never asks the model anything and never writes a file. The line is a snapshot from session start. It does not change after a refresh; the next session shows the new state.
 
 ## In a team
 
@@ -74,9 +74,11 @@ No acknowledgment line, no Stop hook, no per-turn documentation check, no hash m
 
 ## Moving from an older map
 
+Where `.claude/.codebase-info/` exists and this map does not, the first session in that project says once that the older map is not used and that `/codebase-mapper:map` builds a new one from it. Later sessions say nothing. When Quartermaster is installed it says it instead.
+
 Older versions kept the map in `.claude/.codebase-info/` and injected it with hooks. Run `map` in that project. It reads the old documents as source material, checks what it uses against the code, and writes the new index and cards. It then asks whether to delete `.claude/.codebase-info/`, and removes it only on a yes. Not everything in an old map describes code. A style guide, a how-to or an evaluation guide that someone wrote by hand never goes on a card, because `refresh` rewrites a card from the code and would erase it. `map` copies each such document to `.claude/rules/guides/<name>.md`, in its own words, with `paths` for the files it is about, and `refresh` never touches that folder. Lessons and incident notes go to your memory when the map is your own, and into a guide when git tracks the map, so the team keeps them. `map` ends by listing every old document and where it went.
 
-Where git tracks the old folder, the map is the team's, so move it for everyone in one commit: the new index and cards, the old folder removed, and the older mapper switched off in the committed settings with `"codebase-mapper@eigenwise-toolshed": false`. Set to `false`, the key switches it off in this repository even for a teammate who has it on for all their projects; a key that is only removed leaves it on for them. Until that commit merges, everyone keeps the older mapper: one person's own copy of the new map drifts from the team's in both directions. After the merge a teammate needs to install nothing to get the map. A branch that still edits a file in the old folder gets a conflict when it merges the move, and puts that fact on the card instead.
+Where git tracks the old folder, the map is the team's, so move it for everyone in one commit: the new index and cards and the old folder removed. The plugin key in the committed settings needs no edit: keep it for `map` and `refresh`, or take it out. The cards are plain rules files, so they load with the plugin off or never installed. Until that commit merges, a teammate on this version has no map, and one person's own copy drifts from the team's. After the merge a teammate needs to install nothing. A branch that still edits a file in the old folder gets a conflict when it merges the move, and puts that fact on the card instead.
 
 ## Check it
 

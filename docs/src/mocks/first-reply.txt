@@ -1,0 +1,8 @@
+> Let's do PAY-41
+
+● PAY-41 asks that a failed photo upload is tried once more, and that
+  the summary lists the photos that still failed. I would put the
+  retry inside uploadPhoto(), so every caller gets it.
+
+The analysis and 3 decisions are on the board (/board opens it).
+Pick there and Send, or type yes to take the recommended answers.

@@ -13,6 +13,7 @@ For every question:
 - Lead with what you found, in a line or two, so the question stands on its own.
 - Give your recommended answer and why.
 - Word it so "yes" accepts the recommendation.
+- Keep the project and the place with it: name the project the question belongs to, and say where it is answered (in this chat with the words to type, or in the board or inbox of that project).
 - If the evidence already answers it, do not ask. Say what you decided and move on.
 
 **Challenge before you ask.** Where the request contradicts the code, is larger than the problem needs, or has a cheaper route, say so first and suggest the alternative. Mark each suggestion Strong, Worth exploring or Speculative.

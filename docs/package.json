@@ -1,0 +1,32 @@
+{
+  "name": "toolshed-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "reference": "tsx scripts/generate-reference.mjs",
+    "predev": "npm run reference",
+    "dev": "astro dev --host 127.0.0.1 --port 4330",
+    "prebuild": "npm run reference",
+    "build": "astro build",
+    "preview": "astro preview --host 127.0.0.1 --port 4330",
+    "precheck": "npm run reference",
+    "check": "astro check && node scripts/check-screen-types.mjs",
+    "links": "node scripts/check-links.mjs",
+    "screens": "tsx screens/render.mts"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/starlight": "^0.37.7",
+    "@mermaid-js/layout-elk": "^0.2.1",
+    "astro": "^5.18.1",
+    "elkjs": "^0.11.1",
+    "mermaid": "^11.14.0",
+    "sharp": "^0.33.5",
+    "typescript": "^5.7.0"
+  },
+  "devDependencies": {
+    "starlight-llms-txt": "0.7.0",
+    "tsx": "^4.19.2"
+  }
+}

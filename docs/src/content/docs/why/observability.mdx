@@ -1,0 +1,56 @@
+---
+title: Observability
+description: A local record of what each turn cost, per project, on your machine. A usage page draws it, and Claude reads you the figures.
+---
+
+import Frame from '../../../components/Frame.astro';
+
+<p class="lead">You want to know what a project cost this week, which kind of work is expensive, and whether routing sent each agent where it should. Observability keeps that record on your machine, for the projects you switch on.</p>
+
+## The problem
+
+Claude Code's own `/usage` answers for the session you are in and for your plan's limits. It does not keep a history per project or per ticket. So "what did this feature cost" and "which tool keeps failing" have no answer a week later.
+
+## What you get
+
+One line per finished turn goes to a file in your Claude config folder: the session's first prompt line (up to 60 characters), a ticket id, models, tokens, the engine's cost, timings, and tool and agent counts. Never your prompts, answers, code or tool inputs.
+
+Nothing leaves your machine: no network calls, and the usage page is a local HTML file.
+
+| Command | What it does |
+| --- | --- |
+| `/track on` | Starts recording this project. Nothing is recorded before this. |
+| `/track off` | Stops. The history stays. |
+| `/track status` | Says whether this project is recorded, and where the ledger is. |
+| `/usage-page` | Builds the usage page from every recorded project and opens it. |
+
+These are the names to type, with no `observability:` in front.
+
+<Frame name="usage-page.png" />
+
+Then ask Claude "what did this project cost this week" or "which kind of work costs the most". Its `usage-report` skill runs a small script over the ledger and reads you the figures, or says "not recorded".
+
+## Where it records
+
+Switch it on in an interactive session; `claude -p` runs record once it is on.
+
+The ledger lives on the machine the session runs on.
+
+A session in a worktree records into the main checkout's ledger, with the main checkout's switch.
+
+From your phone over Remote Control, `/usage-page` writes the page on the computer the session runs on and tells you where it is. The text report works from anywhere.
+
+## What it never does
+
+<div class="never">
+
+- It never records a project you did not switch on.
+- It never sends anything off your machine.
+- It never estimates a cost. Every figure is what Claude Code reported.
+- It never needs another plugin. With Sidequest it also records which model each routed agent ran on.
+
+</div>
+
+## Coming from the older version
+
+It updates in place. A project that was recording keeps recording, `/track` is the same, and every row the older version wrote is still read. The page's command is now `/usage-page`: the older version called it `/board`, which in this version opens the work board.

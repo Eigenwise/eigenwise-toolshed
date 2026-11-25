@@ -3,7 +3,7 @@ import { AUTHORITIES, PROPOSAL_KINDS, PROPOSAL_STATUSES } from './proposals'
 export const EVIDENCE_TOOL = {
   name: 'evidence',
   description:
-    'What Quartermaster has noticed in this project over the last 30 days: each candidate with its fingerprint, count and a plain sentence ("ran `npm run` by hand 14 times over 3 days"), the skills that ran and how often, the shell command prefixes run most by hand, the most common tool failures and the most common permission denials. Counts only, never raw events. Candidates the human rejected are left out. Read it before drafting a proposal. Pass since to count only from a date on, like when a change landed.',
+    'What Quartermaster has noticed in this project over the last 30 days: each candidate with its fingerprint, count and a plain sentence ("ran `npm run` by hand 14 times over 3 days"), the skills that ran and how often, the shell command prefixes run most by hand, the most common tool failures (a shell failure is named after the command that failed; a call the person rejected and exit 1 from grep, rg, diff, test or git diff are not failures; a fix candidate from a shell failure needs the same error of the setup to repeat, such as a command not found, a permission or a missing file, not a failing test, lint or build, and never a command name alone) and the most common permission denials. Counts only, never raw events. Candidates the human rejected are left out. Read it before drafting a proposal. Pass since to count only from a date on, like when a change landed.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -20,7 +20,7 @@ export const EVIDENCE_TOOL = {
 export const PROPOSAL_TOOL = {
   name: 'proposal',
   description:
-    'Write Quartermaster proposals in .claude/quartermaster/proposals/. One operation per call. create drafts a proposal and allocates its id. update edits fields or moves status one rung along the ladder (draft, offered, applied, loaded, exercised, useful), or to expired when it went stale. decide records the human\'s answer: approve (accepted), reject with their reason (declined, never offered again), or later. record-change saves every file an accepted proposal will touch, once, before you edit them. rollback puts those files back (rolled-back), but only the ones still holding what the change wrote; a file edited since is left alone and named, and the proposal keeps its status. list shows proposals; with id it returns that one proposal in full, body, expect and baseline included. Subagents may only list. Illegal moves are refused with the moves that are allowed.',
+    'Write Quartermaster proposals in .claude/quartermaster/proposals/. One operation per call. create drafts a proposal and allocates its id. update edits fields or moves status one rung along the ladder (draft, offered, applied, loaded, exercised, useful), or to expired when it went stale. decide records the human\'s answer: approve (accepted), reject with their reason (declined, never offered again), handled (the human says it is right and already dealt with: closed as handled with their reason, not remembered as never again, so the same evidence may be proposed again once it is still piling up 30 days after the day of that answer), or later. record-change saves every file an accepted proposal will touch, once, before you edit them. rollback puts those files back (rolled-back), but only the ones still holding what the change wrote; a file edited since is left alone and named, and the proposal keeps its status. list shows proposals; with id it returns that one proposal in full, body, expect and baseline included. Subagents may only list. Illegal moves are refused with the moves that are allowed.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -68,14 +68,14 @@ export const PROPOSAL_TOOL = {
         type: 'string',
         enum: [...PROPOSAL_STATUSES],
         description:
-          'update: the status to move to; accepted and declined go through decide, rolled-back through rollback. list: only show proposals in this status.',
+          'update: the status to move to; accepted, declined and handled go through decide, rolled-back through rollback. list: only show proposals in this status.',
       },
       decision: {
         type: 'string',
-        enum: ['approve', 'reject', 'later'],
+        enum: ['approve', 'reject', 'handled', 'later'],
         description: 'decide only: the human\'s answer. Record only what the human said, never your own call.',
       },
-      reason: { type: 'string', description: 'decide with reject: the human\'s reason, in their words.' },
+      reason: { type: 'string', description: 'decide with reject (required) or handled (optional): the human\'s reason, in their words.' },
       files: {
         type: 'array',
         items: { type: 'string' },

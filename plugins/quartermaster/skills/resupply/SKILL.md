@@ -1,12 +1,14 @@
 ---
 name: resupply
-description: Run a Quartermaster improvement round. Use when asked what would make this work easier, after an accepted Quartermaster offer, or for one named candidate.
+description: Run a Quartermaster resupply round. Use when asked what would make this work easier, after an accepted Quartermaster offer, or for one named candidate.
 argument-hint: "[candidate fingerprint]"
 ---
 
 # Resupply
 
-Find what this workspace is short of and draft at most three proposals for it. Proposals go to the `/qm` inbox. Nothing is applied here: the human approves in `/qm` and the `apply` skill makes the change.
+Find what this workspace is short of and draft at most three proposals for it. Proposals go to the `/quartermaster` inbox. Nothing is applied here: the human approves in `/quartermaster` and the `apply` skill makes the change.
+
+Quartermaster offers a resupply round in a toast at a pause once 15 sessions, on 7 days, and 30 snags have piled up since the last one and a candidate has no proposal yet. The offer only names this skill and starts nothing.
 
 If an argument was given, it is one candidate fingerprint. Work on that candidate only.
 
@@ -16,7 +18,7 @@ Call `mcp__quartermaster__evidence`. It returns the candidates (each a fingerpri
 
 If the evidence tool is missing, the mod is not loaded. Say so in one line, then fall back to hindsight: `node "${CLAUDE_PLUGIN_ROOT}/scripts/mine.mjs" "${CLAUDE_PROJECT_DIR}"`, plus `.claude/quartermaster/proposals/` and `.claude/quartermaster/rejected.md` read directly.
 
-Drop every candidate that already has a proposal, and anything in `rejected.md`. A rejection is the human's no and is never proposed again.
+Drop every candidate that already has a proposal, and anything in `rejected.md`. A rejection is the human's no and is never proposed again. A proposal in status `handled` (the human said it was right and already dealt with) is not a no: it keeps its candidate off the list for the 30 days after the day it was answered (the evidence window), and after that the same evidence, if it keeps piling up, may be proposed again.
 
 ## 2. Look for what should already cover it
 
@@ -55,6 +57,6 @@ This skill never writes to the project or the human's setup. Drafting is all it 
 
 ## 5. Say what happened
 
-A few lines: what you looked at, each proposal by id and title with its evidence, and that `/qm` shows them with Approve, Reject and Later.
+A few lines: what you looked at, each proposal by id and title with its evidence, and that `/quartermaster` shows them with Approve, Reject, Already handled and Later.
 
-Proposing nothing is a valid outcome. When nothing is worth the human's time, say so plainly ("looked at 4 candidates, none worth a change: ...") and stop. Never pad a round to look useful.
+Proposing nothing is a valid outcome. When nothing is worth the human's time, say so plainly ("looked at 4 candidates, none worth a change: ...") and stop. Never pad a resupply round to look useful.

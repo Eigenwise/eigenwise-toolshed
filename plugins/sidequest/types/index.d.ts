@@ -121,6 +121,8 @@ export type TicketDetail = {
   takesAnswer: boolean
   // What the person sent from the board while the answer is with the session, drawn in place of the form; else empty.
   answerSent: string
+  // The minute it was sent, as `2026-11-25T16:20Z`; empty when not known.
+  answerSentAt: string
 }
 
 // One open question as the plan view draws it, in the words the chat shows: the numbered question, the recommended

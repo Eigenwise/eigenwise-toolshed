@@ -1,0 +1,68 @@
+---
+title: Codebase Mapper
+description: A map of your code as plain rules files. Claude Code loads the right card by itself when it works in that area.
+---
+
+import Terminal from '../../../components/Terminal.astro';
+import mapLine from '../../../mocks/map-line.txt?raw';
+
+<p class="lead">A short description of your codebase, split into one card per area. The right card shows up when Claude touches that area.</p>
+
+## The problem
+
+Every new session starts knowing nothing about your code. So Claude explores: it lists folders, opens files, guesses at the layout. That costs time and tokens every single time, and it still misses things only your team knows.
+
+Writing it all into one big instruction file does not work either. The whole file loads every session, whether the task needs it or not.
+
+## What you get
+
+```text
+.claude/rules/codebase-map.md     the index: what the system is, the areas, the key flows
+.claude/rules/map/<area>.md       one card per area
+.claude/rules/guides/<name>.md    guidance a person wrote in an older map, kept as it was
+```
+
+- **The index** is always loaded. It stays under 40 lines.
+- **A card** covers one area. It lists the file patterns of its area, so Claude Code loads it the first time a file there is touched. Cards stay around 2 KB.
+- **These are plain rules files.** Claude Code loads them by itself. A teammate who never installed this plugin still gets the map.
+
+Two skills do the work.
+
+| Skill | What it does |
+| --- | --- |
+| `/codebase-mapper:map` | Creates the map. It investigates first, proposes the areas in one message, and writes only after you confirm. |
+| `/codebase-mapper:refresh` | Brings stale cards back in line with the code. It rewrites a stale card from the source and shows you the diff. |
+
+## Stale cards
+
+A card is **stale** when code in its area changed after the card was last checked. Each card records the commit it was checked against, so staleness is a count of commits, per card.
+
+When a session starts and any card is stale, one line appears under the message box:
+
+<Terminal title="Under the message box" text={mapLine} caption="A text drawing of the line the status script prints with --line." />
+
+A fresh map shows nothing. Neither does a project with no map.
+
+The simplest way to keep a card fresh: change it in the same commit as the code it describes. That commit then vouches for the card.
+
+## What it never does
+
+<div class="never">
+
+- It never touches `CLAUDE.md`.
+- It never injects the map with a hook. The files load the way any rule loads.
+- It never refreshes by itself. The map changes when you ask and say yes to the diff.
+- It never commits. Both skills leave the files in your working tree.
+- It never holds up a commit or a turn over a stale card. The line only tells you.
+
+</div>
+
+## One real example
+
+Your project has three areas: upload, thumbnails and import. Someone changes the upload code twice and the thumbnail code once, and does not touch the cards.
+
+The next session shows `Codebase map: 2 of 3 areas out of date.` You run `/codebase-mapper:refresh`. It re-reads only those two areas, rewrites the two cards and shows the diff. The import card is left alone, because nothing under it changed.
+
+## In a team
+
+The map is committed like code, and a committed map moves for the whole team or not at all. Read [Working in a team](/guides/teams/#the-codebase-map) before you change one.

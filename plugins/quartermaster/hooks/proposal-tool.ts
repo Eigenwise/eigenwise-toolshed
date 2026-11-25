@@ -12,6 +12,7 @@ import {
 } from './proposals'
 import type { Proposal, ProposalStatus } from './proposals'
 import { rejectedFingerprints } from './rejections'
+import type { Rejection } from './rejections'
 import {
   addRejections,
   applyRollback,
@@ -33,7 +34,8 @@ import type { ToolInput } from './tool-input'
 
 export type Workspace = { files: FileSystem; cwd: string; impressionsPath: string; now: number }
 
-export type ToolAnswer = { deny: string } | { text: string }
+/** `neverAgainError` is set when a rejection was kept on the proposal but its never-again line could not be written. */
+export type ToolAnswer = { deny: string } | { text: string; neverAgainError?: string }
 
 const refuse = (text: string): ToolAnswer => ({ deny: `quartermaster: ${text}` })
 
@@ -117,6 +119,7 @@ const create = async (input: ToolInput, workspace: Workspace): Promise<ToolAnswe
 const OPERATION_FOR_STATUS: Partial<Record<ProposalStatus, string>> = {
   accepted: 'decide',
   declined: 'decide',
+  handled: 'decide',
   'rolled-back': 'rollback',
 }
 
@@ -146,14 +149,42 @@ const approve = async (proposal: Proposal, workspace: Workspace): Promise<ToolAn
   return problem === undefined ? saved(workspace, { ...proposal, status: 'accepted' }, 'approved') : refuse(problem)
 }
 
-const reject = async (proposal: Proposal, reason: string | undefined, workspace: Workspace): Promise<ToolAnswer> => {
-  const problem = reason?.trim() ? moveProblem(proposal, 'declined') : 'a rejection needs the reason the human gave'
-  if (problem !== undefined) return refuse(problem)
-  const date = today(workspace)
-  const rejections = proposalFingerprints(proposal).map(fingerprint => ({ fingerprint, reason: reason ?? '', date }))
-  await addRejections(workspace.files, workspace.cwd, rejections)
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
-  return saved(workspace, { ...proposal, status: 'declined' }, 'rejected and kept in rejected.md')
+const neverAgainWritten = async (workspace: Workspace, rejections: readonly Rejection[]): Promise<string | undefined> =>
+  addRejections(workspace.files, workspace.cwd, rejections).then(
+    () => undefined,
+    error => errorMessage(error),
+  )
+
+const rejectionProblem = (proposal: Proposal, reason: string | undefined): string | undefined =>
+  reason?.trim() ? moveProblem(proposal, 'declined') : 'a rejection needs the reason the human gave'
+
+const neverAgainLines = (proposal: Proposal, reason: string | undefined, workspace: Workspace): Rejection[] =>
+  proposalFingerprints(proposal).map(fingerprint => ({ fingerprint, reason: reason ?? '', date: today(workspace) }))
+
+const rejectedWithoutNeverAgain = (id: string, neverAgainError: string): ToolAnswer => ({
+  text: `${id} is rejected and stays declined, but the never-again line was not written to rejected.md: ${neverAgainError}. A new proposal for the same thing is not blocked until that line is added.`,
+  neverAgainError,
+})
+
+const reject = async (proposal: Proposal, reason: string | undefined, workspace: Workspace): Promise<ToolAnswer> => {
+  const problem = rejectionProblem(proposal, reason)
+  if (problem !== undefined) return refuse(problem)
+  const declined = await saved(workspace, { ...proposal, status: 'declined' }, 'rejected and kept in rejected.md')
+  if ('deny' in declined) return declined
+  const neverAgainError = await neverAgainWritten(workspace, neverAgainLines(proposal, reason, workspace))
+
+  return neverAgainError === undefined ? declined : rejectedWithoutNeverAgain(proposal.id, neverAgainError)
+}
+
+const markHandled = async (proposal: Proposal, reason: string | undefined, workspace: Workspace): Promise<ToolAnswer> => {
+  const problem = moveProblem(proposal, 'handled')
+  if (problem !== undefined) return refuse(problem)
+  const words = reason?.trim()
+  const closed: Proposal = { ...proposal, status: 'handled', answered: today(workspace), ...(words ? { reason: words } : {}) }
+
+  return saved(workspace, closed, 'closed as already handled, not remembered as never again')
 }
 
 const later = async (proposal: Proposal, workspace: Workspace): Promise<ToolAnswer> => {
@@ -165,14 +196,21 @@ const later = async (proposal: Proposal, workspace: Workspace): Promise<ToolAnsw
   return answer(`${proposal.id} stays ${proposal.status}; asked again later.`)
 }
 
+type Decide = (proposal: Proposal, input: ToolInput, workspace: Workspace) => Promise<ToolAnswer>
+
+const DECISIONS: ReadonlyMap<string, Decide> = new Map<string, Decide>([
+  ['approve', (proposal, _input, workspace) => approve(proposal, workspace)],
+  ['reject', (proposal, input, workspace) => reject(proposal, stringField(input, 'reason'), workspace)],
+  ['handled', (proposal, input, workspace) => markHandled(proposal, stringField(input, 'reason'), workspace)],
+  ['later', (proposal, _input, workspace) => later(proposal, workspace)],
+])
+
 const decide = async (input: ToolInput, workspace: Workspace): Promise<ToolAnswer> => {
   const proposal = await loadProposal(workspace, stringField(input, 'id'))
   if (typeof proposal === 'string') return refuse(proposal)
-  const decision = stringField(input, 'decision')
-  if (decision === 'approve') return approve(proposal, workspace)
-  if (decision === 'reject') return reject(proposal, stringField(input, 'reason'), workspace)
+  const decision = DECISIONS.get(stringField(input, 'decision') ?? '')
 
-  return decision === 'later' ? later(proposal, workspace) : refuse('decision must be approve, reject or later')
+  return decision === undefined ? refuse('decision must be approve, reject, handled or later') : decision(proposal, input, workspace)
 }
 
 const changeProblem = (proposal: Proposal, paths: readonly string[]): string | undefined => {

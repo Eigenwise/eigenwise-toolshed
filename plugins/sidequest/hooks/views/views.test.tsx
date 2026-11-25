@@ -1900,7 +1900,7 @@ test('any ticket and the plan take one field to say something, which reaches the
   await ui.press({ key: 'SQ-1' })
   expect((await ui.findAll({ type: 'Input' })).map(input => input.key)).toEqual(['say'])
   expect(await ui.find({ type: 'Text', text: 'Same as typing in the chat, with this ticket named.' })).toBeDefined()
-  await ui.input({ key: 'say', text: 'Yes, doc AI only,\ndo not touch the Laravel', kind: 'change' })
+  await ui.input({ key: 'say', text: 'Yes, the uploads only,\ndo not touch the reports', kind: 'change' })
   await ui.press({ key: 'send-remark' })
   await ui.press({ key: 'back' })
   await ui.press({ key: 'SQ-3' })
@@ -1912,10 +1912,10 @@ test('any ticket and the plan take one field to say something, which reaches the
   await ui.unmount()
 
   expect(standIn.submitted).toEqual([
-    'About SQ-1 (Retry failed uploads), from the board: "Yes, doc AI only, do not touch the Laravel"',
+    'About SQ-1 (Retry failed uploads), from the board: "Yes, the uploads only, do not touch the reports"',
     'About ST-1 (Tags on items), from the board: "Keep tags short."',
   ])
-  expect(files.get(`${TICKETS}/SQ-1.md`)).toContain('- 2026-11-16T10:02Z said by human in the board: Yes, doc AI only, do not touch the Laravel')
+  expect(files.get(`${TICKETS}/SQ-1.md`)).toContain('- 2026-11-16T10:02Z said by human in the board: Yes, the uploads only, do not touch the reports')
   expect(files.get(`${TICKETS}/SQ-1.md`)).toContain('status: ready')
   expect(files.get(`${STORIES}/ST-1.md`)).toContain('## Log\n- 2026-11-16T10:02Z said by human in the board: Keep tags short.')
 })
@@ -2465,11 +2465,31 @@ test('from the send of the plan answers on, nothing says the decisions wait on t
   expect(await ui.find({ type: 'Button', key: 'decisions-ST-1' })).toBeUndefined()
   expect((await ui.find({ type: 'Button', key: 'story-ST-1' }))?.text).toContain('your answers are with the session')
   expect(files.get(`${STORIES}/ST-1.md`)).toContain('decisionPicksSent: [recommended, other]')
+  const stored = files.get(`${STORIES}/ST-1.md`) ?? ''
+  expect(stored).toContain('decisionWordsSent: keep the store dumb')
+  expect(stored).toMatch(/decisionDaySent: \d{4}-\d{2}-\d{2}/)
 
   await $.tool.call({ tool: 'mcp__sidequest__ticket', operations: [{ op: 'patch', id: 'ST-1', questions: RETRY_QUESTIONS.slice(1) }] })
   await ui.press({ key: 'back-from-story' })
   expect((await ui.find({ type: 'Button', key: 'decisions-ST-1' }))?.text).toBe('1 decision on the plan')
   expect(files.get(`${STORIES}/ST-1.md`)).not.toContain('decisionPicksSent')
+  await ui.unmount()
+})
+
+test('the words sent on a plan are stored and shown as typed, and a decision line cuts them later', async ($, on) => {
+  const files = seededBoard()
+  standInForEngine(on, files)
+  await startSession($)
+  await $.tool.call({ tool: 'mcp__sidequest__ticket', operations: [{ op: 'story', title: 'Uploads', destination: 'Uploads retry.', analysis: 'Asked: retry.', questions: RETRY_QUESTIONS }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'back-from-story' })
+  await ui.press({ key: 'decisions-ST-1' })
+  const typed = 'word '.repeat(60).trim()
+  await ui.input({ key: 'decisions-words', text: typed, kind: 'change' })
+  await ui.press({ key: 'send-decisions' })
+
+  expect(await ui.find({ type: 'Text', text: `Your words: ${typed}` })).toBeDefined()
+  expect(files.get(`${STORIES}/ST-1.md`)).toContain(`decisionWordsSent: ${typed}`)
   await ui.unmount()
 })
 
@@ -2545,17 +2565,42 @@ test('from the send of an answer on a waiting ticket on, the pane and the band n
   expect(keys).not.toContain('send-answer')
   expect(keys).not.toContain('option-B')
   expect(keys).not.toContain('answer')
-  expect(await ui.find({ type: 'Text', text: 'You sent: B. Ten seconds' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'You sent: B. Ten seconds (2026-11-16 10:02 UTC)' })).toBeDefined()
   await ui.press({ key: 'back' })
   expect(await ui.find({ type: 'Text', text: 'WAITS ON YOU' })).toBeUndefined()
   expect((await ui.find({ type: 'Button', key: 'SQ-3' }))?.text).toContain('your answer is with the session')
   expect(await band()).toBeUndefined()
   expect(files.get(`${TICKETS}/SQ-3.md`)).toContain('answerSent: B. Ten seconds')
-  expect(await boardView($, 'waiting')).toContain('Nothing waits on you.')
+  expect(files.get(`${TICKETS}/SQ-3.md`)).toContain('answerSentAt: 2026-11-16T10:02Z')
+  expect(await boardView($, 'waiting')).toContain('Nothing waits on you in repo.')
 
   await askAgain($, 'SQ-3')
   expect(await ui.find({ type: 'Text', text: 'WAITS ON YOU' })).toBeDefined()
   expect(await band()).toBe('1 ticket needs you')
+  await ui.unmount()
+})
+
+test('a send from a view behind the file draws what was already sent, says the first answer stands, and writes nothing more', async ($, on) => {
+  const files = seededBoard()
+  const askedThisMorning = ticketFile('SQ-3', 'Pick a backoff', 'needs-you', ['2026-11-16T09:30Z asked the person'])
+  files.set(`${TICKETS}/SQ-3.md`, askedThisMorning.replace('## What', `${FOR_YOU_SECTION}\n## What`))
+  const standIn = standInForEngine(on, files)
+  standInForEngineDrawing(on)
+  await startSession($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'SQ-3' })
+  await ui.press({ key: 'option-B' })
+  const behind = files.get(`${TICKETS}/SQ-3.md`) ?? ''
+  files.set(`${TICKETS}/SQ-3.md`, behind.replace('status: needs-you', 'status: needs-you\nanswerSent: A. Five seconds\nanswerSentAt: 2026-11-16T09:50Z'))
+
+  await ui.press({ key: 'send-answer' })
+
+  expect(standIn.submitted).toHaveLength(0)
+  expect(standIn.toasts.join(' ')).toContain('The first answer stands')
+  expect(await ui.find({ type: 'Text', text: /You sent: A. Five seconds/ })).toBeDefined()
+  expect(await keysOf(ui)).not.toContain('send-answer')
+  expect(files.get(`${TICKETS}/SQ-3.md`)).not.toContain('answered by human')
+  expect(await ui.find({ type: 'Text', text: /waiting on you/ })).toBeUndefined()
   await ui.unmount()
 })
 

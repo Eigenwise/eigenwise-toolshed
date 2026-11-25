@@ -1,0 +1,11 @@
+Waiting on you in photo-library, most blocking first:
+
+Commit, push and open the pull request?
+   Why now: The three changes are built, reviewed and proven on a made-up import. Nothing is committed yet.
+   A. Commit, push and open the pull request: PAY-41 is up for review with the text shown here. Costs: Your reviewers are notified.
+   B. Commit only: The change is on PAY-41-retry in your checkout. Costs: Nobody sees it until you push.
+   Recommended: A (Commit, push and open the pull request.)
+   If you never answer: The change stays uncommitted on PAY-41-retry.
+   Also yours, say which to do too:
+   1. The review noted the retry has no delay between tries. (if you say nothing: Left as it is.)
+   To answer in this chat: a letter, like A, plus any extras to do too, like A, plus 1. Ticket PAY-41 PL-3 (branch PAY-41-retry).

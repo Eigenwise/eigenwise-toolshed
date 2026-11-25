@@ -1,5 +1,5 @@
 {
-  "name": "toolshed-next",
+  "name": "eigenwise-toolshed",
   "private": true,
   "type": "module",
   "description": "Repository checks for the Toolshed marketplace. No dependencies.",

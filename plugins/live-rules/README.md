@@ -1,13 +1,13 @@
 # live-rules
 
-Write and check project rules. Claude Code loads `.claude/rules/` on its own, so this plugin has no hooks and runs no process. It is the authoring and audit side.
+Write and check project rules. Claude Code loads `.claude/rules/` on its own, so this plugin is the authoring and audit side. Its one hook runs at session start, reads a few files and starts no process.
 
 ```bash
-claude plugin marketplace add Eigenwise/eigenwise-toolshed#v2
+claude plugin marketplace add Eigenwise/eigenwise-toolshed
 ```
 
 ```bash
-claude plugin install live-rules@toolshed-next
+claude plugin install live-rules@eigenwise-toolshed
 ```
 
 ## What you get
@@ -60,6 +60,10 @@ Dependency-free Node, and it needs Node 22.5 or later. Older Node stops with one
 The codebase map is not audited: `codebase-map.md` and everything under `map/` are skipped, with one line in the table saying so, because the map has its own limits and its own status check. Files under `guides/` are ordinary rules and are audited.
 
 It also reports the total always-loaded bytes, which is what every session pays. Glob matching is skipped when the rules folder belongs to your home directory, since no project applies.
+
+## Older rules
+
+Where `.claude/live-rules/` or `.claude/live-rules.md` exists, the first session in that project says once that those rules no longer apply and that `/quartermaster:upgrade` converts them. Later sessions say nothing. When Quartermaster is installed it says it instead.
 
 ## Tests
 

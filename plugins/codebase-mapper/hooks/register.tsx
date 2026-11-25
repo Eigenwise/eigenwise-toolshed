@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
+import { tellAboutOlderToolshed } from './older-toolshed-session'
 import { staleLine } from './stale-line'
 
 const CARD_DIRECTORY = '.claude/rules/map'
@@ -14,7 +15,8 @@ const showStaleLine = async ($: EngineInterface, cwd: string): Promise<void> => 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     void showStaleLine($, e.cwd).catch(() => undefined)
+    await tellAboutOlderToolshed($, e.cwd, 'map').catch(() => undefined)
 
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 }

@@ -28,7 +28,7 @@ import type { Story, Ticket } from './tickets'
 import { ignoredFieldsNote, textOf } from './tool-input'
 import type { JsonRecord, ToolAnswer } from './tool-input'
 import { alsoOnBoardLines, withHowToSee } from './unnamed-work'
-import { waitingText } from './waiting-view'
+import { answeredOnTheBoardNames, waitingText } from './waiting-view'
 import { whatCanMoveText } from './what-can-move'
 
 export const BOARD_VIEWS = ['summary', 'waiting', 'now', 'closing', 'frontier', 'list', 'ticket', 'routing', 'planning', 'diagram'] as const
@@ -89,8 +89,22 @@ const emptyBoardLines = (files: BoardFiles): string[] =>
 const withProblems = (files: BoardFiles, text: string): string =>
   [...boardProblemsOf(files).map(problem => `board.json problem: ${problem}`), text].join('\n')
 
-const waitingViewLine = (tickets: readonly Ticket[]): string =>
-  tickets.some(waitsOnHuman) ? ' The waiting view writes what waits on the person, ready to pass on.' : ''
+const waitingViewLine = (tickets: readonly Ticket[], projectName: string | undefined): string => {
+  if (!tickets.some(waitsOnHuman)) return ''
+  const inProject = projectName === undefined ? '' : ` in ${projectName}`
+
+  return ` The waiting view writes what waits on the person${inProject}, ready to pass on, to answer in this chat.`
+}
+
+// The answer is on the board and in the file, but nothing has moved the ticket yet: the session reading this picks it up.
+const answeredNotActedOnLines = (files: BoardFiles): string[] => {
+  const names = answeredOnTheBoardNames(files.tickets, files.stories)
+
+  if (names.length === 0) return []
+  const them = names.length === 1 ? 'it' : 'them'
+
+  return [`Answered on the board, nobody has acted on ${them} yet, so act on ${them} or ask again: ${names.join(', ')}.`]
+}
 
 // Measured on a board of 2,000 tickets: the summary named all 116 ready ids. Ten say what is next, the count the rest.
 const MOST_READY_NAMED = 10
@@ -109,7 +123,7 @@ const summaryText = (files: BoardFiles, interrupted: InterruptedWork, team: Team
   const counts = summarize(files.tickets)
   const startable = frontierOf(inIdOrder(files.tickets), files.config.settings.worktrees)
   const nextLine = readyToStartLine(startable.map(ticket => ticket.id), counts.ready)
-  const counted = `${statusCountsInWords(counts)}. ${nextLine}${waitingViewLine(files.tickets)}`
+  const counted = `${statusCountsInWords(counts)}. ${nextLine}${waitingViewLine(files.tickets, files.projectName)}`
   const inboxCount = files.tickets.filter(ticket => ticket.status === 'inbox').length
   const unnamedWorkLines = withHowToSee(
     inboxLines(files.tickets, startable.length === 0, now),
@@ -120,6 +134,7 @@ const summaryText = (files: BoardFiles, interrupted: InterruptedWork, team: Team
   const lines = [
     ...finishNowLines(files.tickets),
     counted,
+    ...answeredNotActedOnLines(files),
     ...blockedLines(files, startable),
     ...unnamedWorkLines,
     ...interruptedSummaryLines(files.tickets, withoutTheirs(interrupted, theirs), changes.size > 0),
@@ -279,6 +294,7 @@ const planningText = (files: BoardFiles, interrupted: InterruptedWork): string =
 const storiesAndCheckoutOf = (files: BoardFiles): StoriesAndCheckout => ({
   stories: files.stories,
   ...(files.checkedOutBranch === undefined ? {} : { checkedOutBranch: files.checkedOutBranch }),
+  ...(files.projectName === undefined ? {} : { projectName: files.projectName }),
 })
 
 type ViewAnswer = (

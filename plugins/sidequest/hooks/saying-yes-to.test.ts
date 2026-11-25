@@ -39,6 +39,6 @@ test('the waiting line names the branch the ticket carries, and a ticket with no
   const withNoBranch = { ...newTicket('SQ-1', { title: 'Retry uploads', status: 'needs-you' }, STAMP), forYou }
   const checkout = { stories: [], checkedOutBranch: 'main' }
 
-  expect(waitingText([onItsBranch], undefined, undefined, undefined, checkout).split('\n').at(-1)).toBe('   To answer: a letter, like A. Ticket SQ-1 (branch fix/retries).')
-  expect(waitingText([withNoBranch], undefined, undefined, undefined, checkout).split('\n').at(-1)).toBe('   To answer: a letter, like A. Ticket SQ-1.')
+  expect(waitingText([onItsBranch], undefined, undefined, undefined, checkout).split('\n').at(-1)).toBe('   To answer in this chat: a letter, like A. Ticket SQ-1 (branch fix/retries).')
+  expect(waitingText([withNoBranch], undefined, undefined, undefined, checkout).split('\n').at(-1)).toBe('   To answer in this chat: a letter, like A. Ticket SQ-1.')
 })

@@ -60,6 +60,7 @@ import { textOf } from './tool-input'
 import type { JsonRecord, ToolAnswer } from './tool-input'
 import type { LiveAgent } from '../types'
 import { sidequestToolsOn } from './tool-specs'
+import { tellAboutOlderToolshed } from './older-toolshed-session'
 import { rememberRunningPlugin, warnWhenOutdated } from './register-staleness'
 import { askedIn } from './views/finished-agents'
 import { registerViews, showTickets, startBoardViews } from './views/register-views'
@@ -400,6 +401,7 @@ const startSession: Hook<'session.start'> = async ($, e, next) => {
   await publishSummary($, tickets)
   await startBoardViews($, tickets)
   await senseWorktrees($, location).catch(() => undefined)
+  await tellAboutOlderToolshed($, location.root, 'board').catch(() => undefined)
 
   return next(e)
 }

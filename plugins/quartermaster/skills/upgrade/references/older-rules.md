@@ -1,6 +1,6 @@
 # Converting the older rules
 
-Read this only when the scan lists `rules-folder` or `rules-page` with the verdict convert. The older rules plugin injected rules through hooks. Claude Code now loads `.claude/rules/` itself, so each old rule becomes a native rule file or a project skill. The converter ships with Quartermaster: it needs no rules plugin loaded, older or v2.
+Read this only when the scan lists `rules-folder` or `rules-page` with the verdict convert. The older rules plugin injected rules through hooks. Claude Code now loads `.claude/rules/` itself, so each old rule becomes a native rule file or a project skill. The converter ships with Quartermaster: it needs no rules plugin loaded, older or this version.
 
 Two older forms are read: the folder `.claude/live-rules/rules/*.md`, and the single page `.claude/live-rules.md` when there is no folder. If both exist the folder wins, since that is what the older plugin loaded first. The first line of the output says which one was read.
 
@@ -36,4 +36,4 @@ If git ignored or excluded the old folder or page, those rules were personal. Th
 
 ## 3. The old rules
 
-The output's last line depends on git. When git tracks the old folder or page, the line says it stays and that removing it is a committed change: it goes only in the committed change (step 14 of `team-repository.md`). When git does not track it, the line names the path to delete. Delete nothing here either way: the old folder or page goes with the scan's deletion list, and only on the person's yes to that list. The older rules plugin goes off in the plugin switch, so the old and new rules never both apply.
+The output's last line depends on git. When git tracks the old folder or page, the line says it stays and that removing it is a committed change: it goes only in the committed change (step 14 of `team-repository.md`). When git does not track it, the line names the path to delete. Delete nothing here either way: the old folder or page goes with the scan's deletion list, and only on the person's yes to that list. The update replaced the older rules plugin with this version, which has no hooks for the old rules, so they stopped applying at the update and the old and new never both apply. Until the conversion, nothing loads them: say so.

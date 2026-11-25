@@ -7,13 +7,15 @@ import type { Ticket } from '../tickets'
 // control the person came for sits there and the long read follows.
 
 const DECISION_START = /^- D-\d+\b/
-const DECIDED_BY_DEFAULT = /\s*Decided by: default\s*$/
-const DECIDED_BY_HUMAN = /\bDecided by: human\b/g
-const DECIDED_BY_DEFAULT_ANYWHERE = /\bDecided by: default\b/g
+const DECIDED_BY_DEFAULT = /\s*Decided by: default(?: on \d{4}-\d{2}-\d{2})?\s*$/
+const DECIDED_BY_STATUS = /\bDecided by: (human|default)\b/
 
-// The story file keeps `human` and `default`; the board speaks to that person.
-export const decisionsAsDrawn = (decisionsText: string): string =>
-  decisionsText.replace(DECIDED_BY_HUMAN, 'Decided by: you').replace(DECIDED_BY_DEFAULT_ANYWHERE, 'Taken by default')
+const statusAsDrawn = (line: string): string =>
+  line.replace(DECIDED_BY_STATUS, (_, decidedBy: string) => (decidedBy === 'human' ? 'Decided by: you' : 'Taken by default'))
+
+// The story file keeps `human` and `default`; the board speaks to that person. Only the first status of a line is
+// one: a later one sits in the person's own words, which are shown as they said them.
+export const decisionsAsDrawn = (decisionsText: string): string => decisionsText.split('\n').map(statusAsDrawn).join('\n')
 
 const PARAGRAPH_BREAK = /\n\s*\n/
 

@@ -46,3 +46,10 @@ const isImpression = (value: unknown): value is Impression =>
 export const parseImpressions = (text: string): Impression[] => jsonLines(text).filter(isImpression)
 
 export const impressionLine = (impression: Impression): string => `${JSON.stringify(impression)}\n`
+
+/** The day a Later wait ends, for a line that is set aside. */
+export const waitEndsOn = (fingerprint: string, impressions: readonly Impression[]): string | undefined => {
+  const timing = nextOffer(fingerprint, impressions)
+
+  return timing.kind === 'after' ? new Date(timing.at).toISOString().slice(0, 10) : undefined
+}

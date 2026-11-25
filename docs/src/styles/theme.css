@@ -1,0 +1,61 @@
+/* Starlight treats bare :root as the dark palette and [data-theme="light"] as the light one. */
+
+:root {
+  --sl-color-accent-low: #06302c;
+  --sl-color-accent: #14b8a6;
+  --sl-color-accent-high: #99f6e4;
+  --sl-content-width: 46rem;
+  --sl-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --sl-font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #eef2f6;
+  --sl-color-gray-2: #c3cad3;
+  --sl-color-gray-3: #8b95a3;
+  --sl-color-gray-4: #525b68;
+  --sl-color-gray-5: #2a313b;
+  --sl-color-gray-6: #1a1f27;
+  --sl-color-black: #0e1116;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ccfbf1;
+  --sl-color-accent: #0f766e;
+  --sl-color-accent-high: #134e4a;
+}
+
+.sl-markdown-content :is(h1, h2, h3) {
+  letter-spacing: -0.015em;
+}
+
+.sl-markdown-content pre {
+  border-radius: 10px;
+}
+
+/* One idea per page reads better with room between the blocks. */
+.sl-markdown-content > :is(h2) {
+  margin-top: 2.5rem;
+}
+
+/* A short lead under the title. */
+.sl-markdown-content .lead {
+  font-size: var(--sl-text-lg);
+  color: var(--sl-color-gray-2);
+  line-height: 1.6;
+}
+
+:root[data-theme='light'] .sl-markdown-content .lead {
+  color: var(--sl-color-gray-3);
+}
+
+/* "You get / It never" pairs on the why pages. */
+.sl-markdown-content .never li::marker {
+  content: '✕  ';
+  color: var(--sl-color-gray-3);
+}
+
+.sl-markdown-content table {
+  font-size: var(--sl-text-sm);
+}

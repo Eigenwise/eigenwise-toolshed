@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const STALE_OUTPUT = '{"stale":2,"line":"map: 2 of 7 cards stale"}'
 const processResult = (stdout: string) => ({
@@ -80,10 +80,15 @@ test('a project with no card folder starts no process', async ($, on) => {
     return processResult(STALE_OUTPUT)
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  mock.env(on, { HOME: '/home' })
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('fs.read', (_, e) => ({ deny: `ENOENT ${e.path}` }))
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   for (let turn = 0; turn < 10; turn++) await Promise.resolve()
 
-  expect(checkedPaths.map(path => path.replaceAll('\\', '/').replace(/^[A-Za-z]:/, ''))).toEqual(['/repo/.claude/rules/map'])
+  const portablePaths = checkedPaths.map(path => path.replaceAll('\\', '/').replace(/^[A-Za-z]:/, ''))
+  expect(portablePaths).toEqual(['/repo/.claude/rules/map', '/repo/.claude/.codebase-info'])
   expect(processStarts).toBe(0)
 })

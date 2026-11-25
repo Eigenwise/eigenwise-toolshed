@@ -27,19 +27,43 @@ export type QuartermasterProposalCard = {
   baseline: number
   created: string
   body: string
+  answered?: string
+  reason?: string
 }
 
-/** `setAsideForNow` holds what the person pressed Later on, while that wait lasts. */
-export type QuartermasterRecords = { proposals: QuartermasterProposalCard[]; rejected: string[]; setAsideForNow?: string[] }
+/**
+ * `handledWithinWindow` holds the fingerprints of proposals the person closed with Already handled while the
+ * evidence window still covers what they were proposed for. `setAsideForNow` holds what the person pressed Later
+ * on, while that wait lasts; `setAsideUntil` gives the day each wait ends.
+ */
+export type QuartermasterRecords = {
+  proposals: QuartermasterProposalCard[]
+  rejected: string[]
+  handledWithinWindow?: string[]
+  setAsideForNow?: string[]
+  setAsideUntil?: Record<string, string>
+}
 
 /** Which detail the inbox pane shows; neither set means the list. */
 export type QuartermasterInboxView = { proposal?: string; candidate?: string }
 
-/** The one offer this session made, and whether /qm was opened since. */
+/** The one offer this session made, and whether /quartermaster was opened since. */
 export type QuartermasterOffer = { fingerprint: string; isReviewed: boolean }
+
+/**
+ * Something Quartermaster may offer once the evidence allows it. A round waits for sessions and snags since the
+ * last one (`since` is that round's day, absent when none is on record); a review waits for the sessions since an
+ * applied change, and `more` counts the other changes due beside the one named.
+ */
+export type QuartermasterDue =
+  | { kind: 'resupply'; sessions: number; snags: number; since?: string }
+  | { kind: 'review'; change: string; proposalKind: string; target: string; sessions: number; more: number }
 
 /** What the person has typed so far as the reason for rejecting the proposal on screen. */
 export type QuartermasterRejectionReason = string
+
+/** What went wrong with the last press, shown in the pane until the next press works or Back is pressed. */
+export type QuartermasterPressProblem = string
 
 declare module 'claude-code' {
   interface PluginState {
@@ -49,7 +73,9 @@ declare module 'claude-code' {
       records: QuartermasterRecords
       view: QuartermasterInboxView
       offer: QuartermasterOffer
+      due: QuartermasterDue[]
       rejectionReason: QuartermasterRejectionReason
+      pressProblem: QuartermasterPressProblem
     }
   }
 }

@@ -146,13 +146,13 @@ test('the waiting view brings back a done ticket whose pull request got changes 
 
   expect(waiting).toBe(
     [
-      'Waiting on you, most blocking first:',
-      '1. Which backoff should retries use?\n   To answer: 1 done, or 1 and what you found. Ticket SQ-4.',
+      'Waiting on you in repo, most blocking first:',
+      '1. Which backoff should retries use?\n   To answer in this chat: 1 done, or 1 and what you found. Ticket SQ-4.',
       [
         '2. The pull request for "Retry failed uploads" came back with changes requested. Take the work up again?',
         '   Why now: the work was marked done here, and this came in since.',
         '   Steps: open https://example.test/o/r/pull/130, read what came back, and say whether to take the work up again.',
-        '   To answer: 2 done, or 2 and what you found. Ticket PAY-41 SQ-1 (branch main, pull request #130).',
+        '   To answer in this chat: 2 done, or 2 and what you found. Ticket PAY-41 SQ-1 (branch main, pull request #130).',
       ].join('\n'),
       [
         'Where the pull requests stand:',
@@ -178,7 +178,7 @@ test('red checks bring a ticket back too, and a waiting ticket keeps its own que
 
   const waiting = await view($, 'waiting')
 
-  expect(waiting.startsWith('Waiting on you, by piece of work:\n\nPAY-41\n\n1. The pull request for "Retry failed uploads" came back with failing checks. Take the work up again?')).toBe(true)
+  expect(waiting.startsWith('Waiting on you in repo, by piece of work:\n\nPAY-41\n\n1. The pull request for "Retry failed uploads" came back with failing checks. Take the work up again?')).toBe(true)
   expect(waiting).not.toContain('Why now: the work was marked done here')
   expect(waiting).toContain('PAY-42\n\n2. How many retries?')
   expect(waiting).toContain('- "Decide the limit", pull request #141: changes requested.')
@@ -223,7 +223,7 @@ test('with no remote, no tracker command line or a lookup that runs out of time,
   const waiting = await view($, 'waiting')
   const started = await start($, 'SQ-8')
 
-  expect(waiting).toBe(waitingText([...TEAM_BOARD, KEYED_TICKET]))
+  expect(waiting).toBe(waitingText([...TEAM_BOARD, KEYED_TICKET], undefined, undefined, undefined, { stories: [], projectName: 'repo' }))
   expect(started).not.toContain('Someone else')
   expect(calls).toEqual([])
 })
@@ -236,7 +236,7 @@ test('lookups that cannot start or run out of time leave the waiting view and th
   const waiting = await view($, 'waiting')
   const started = await start($, 'SQ-8')
 
-  expect(waiting).toBe(waitingText([...TEAM_BOARD, KEYED_TICKET]))
+  expect(waiting).toBe(waitingText([...TEAM_BOARD, KEYED_TICKET], undefined, undefined, undefined, { stories: [], projectName: 'repo' }))
   expect(started).not.toContain('Someone else')
   expect(calls.some(call => call.command.startsWith('gh'))).toBe(true)
 })

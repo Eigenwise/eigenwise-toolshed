@@ -1,0 +1,199 @@
+{
+  "about": "What the repository cannot say about itself in a manifest: one plain line per file a plugin writes and per script it ships. Every entry carries a proof, a string the generator must find in that plugin's own files. When the proof is gone the build fails, so this page cannot quietly go stale.",
+  "files": {
+    "sidequest": [
+      {
+        "path": ".sidequest/board.json",
+        "what": "The board's id prefix, routing table, categories, settings and id counters.",
+        "shared": "Personal. Kept out of git.",
+        "proof": "board.json"
+      },
+      {
+        "path": ".sidequest/tickets/<id>.md",
+        "what": "One ticket per file: flat frontmatter, then What, Done when and Log.",
+        "shared": "Personal. Kept out of git.",
+        "proof": "tickets/"
+      },
+      {
+        "path": ".sidequest/stories/<id>.md",
+        "what": "One story per file: the destination, the decisions and what is out of scope. Also the analysis of a plan, and the hand-over when the plan has a step before building.",
+        "shared": "Personal. Kept out of git.",
+        "proof": "stories/"
+      },
+      {
+        "path": ".sidequest/briefs/<id>.md",
+        "what": "The brief the start tool last printed for that ticket, kept so the reviewer and a wave of agents can read it.",
+        "shared": "Personal. Kept out of git.",
+        "proof": "BRIEF_FOLDER = 'briefs'"
+      },
+      {
+        "path": ".git/info/exclude",
+        "what": "A line for `.sidequest/`, added by the write that first creates the board, so the board stays out of git. Not added when git already tracks or ignores the folder. A line for `.claude/worktrees/`, added by the first start that puts an agent in a worktree, so those folders stay out of `git status`. Not added when this file or the root `.gitignore` already lists it.",
+        "shared": "Personal. Never committed.",
+        "proof": ".git/info/exclude"
+      }
+    ],
+    "quartermaster": [
+      {
+        "path": "~/.claude/quartermaster/events/<project-slug>/<date>.<session>.jsonl",
+        "what": "Evidence: one line per sensed event, append-only, one file per session per day. Written in every session while Quartermaster is installed.",
+        "shared": "Personal. Lives in your home folder.",
+        "proof": "quartermaster/events"
+      },
+      {
+        "path": "~/.claude/quartermaster/events/<project-slug>/impressions.jsonl",
+        "what": "Each time an offer was shown, so an ignored offer backs off.",
+        "shared": "Personal. Lives in your home folder.",
+        "proof": "impressions.jsonl"
+      },
+      {
+        "path": ".claude/quartermaster/proposals/P-0007.md",
+        "what": "One proposal per file: kind, target, evidence, the check with today's baseline, the exact change and the rollback.",
+        "shared": "Personal by default. Delete the folder's `.gitignore` to share it.",
+        "proof": "quartermaster/proposals"
+      },
+      {
+        "path": ".claude/quartermaster/changes/C-0007/change.json",
+        "what": "The record of an applied change. `prior/` beside it holds the bytes of every file as it was before.",
+        "shared": "Personal by default.",
+        "proof": "quartermaster/changes"
+      },
+      {
+        "path": ".claude/quartermaster/rejected.md",
+        "what": "What you said no to, with your reason. Never proposed again.",
+        "shared": "Personal by default.",
+        "proof": "rejected.md"
+      },
+      {
+        "path": ".claude/quartermaster/upgrade-kept.md",
+        "what": "What you kept on purpose during an upgrade, one line each with the date and your reason.",
+        "shared": "Personal by default.",
+        "proof": "upgrade-kept.md"
+      },
+      {
+        "path": ".claude/quartermaster/.gitignore",
+        "what": "Keeps the whole records folder out of git, because it also holds saved copies of your local settings.",
+        "shared": "Delete it to commit the records.",
+        "proof": "/.gitignore"
+      }
+    ],
+    "codebase-mapper": [
+      {
+        "path": ".claude/rules/codebase-map.md",
+        "what": "The index: what the system is, the areas, the key flows. Always loaded. Stays under 40 lines.",
+        "shared": "Committed like code.",
+        "proof": "codebase-map.md"
+      },
+      {
+        "path": ".claude/rules/map/<area>.md",
+        "what": "One card per area, with `paths` globs and a `verified-at` commit.",
+        "shared": "Committed like code.",
+        "proof": ".claude/rules/map"
+      },
+      {
+        "path": ".claude/rules/guides/<name>.md",
+        "what": "Guidance a person wrote in an older map, such as a style guide or a how-to, kept in its own words with `paths` frontmatter. Written only when an older map held some. Refresh never touches it.",
+        "shared": "Committed like code.",
+        "proof": ".claude/rules/guides/<name>.md"
+      }
+    ],
+    "live-rules": [
+      {
+        "path": ".claude/rules/<name>.md",
+        "what": "A rule, with `paths` frontmatter when it applies to part of the project only.",
+        "shared": "Committed like code.",
+        "proof": ".claude/rules/"
+      },
+      {
+        "path": ".claude/skills/<name>/SKILL.md",
+        "what": "A project skill, for an instruction that a word in the request should trigger.",
+        "shared": "Committed like code.",
+        "proof": ".claude/skills/"
+      },
+      {
+        "path": "~/.claude/rules/<name>.md and ~/.claude/skills/<name>/SKILL.md",
+        "what": "The same two files for all your projects. Written only when you ask for user scope or say \"everywhere\".",
+        "shared": "Personal. Lives in your home folder.",
+        "proof": "~/.claude/rules/"
+      }
+    ],
+    "observability": [
+      {
+        "path": "~/.claude/observability/ledger/<project>-<hash>.<session>.jsonl",
+        "what": "One line per finished turn, one file per session: the session's first prompt line, a ticket id, models, tokens, the engine's cost, timings, tool and agent counts. Only in a project switched on with `/track on`.",
+        "shared": "Personal. Lives in your config folder and never leaves the machine.",
+        "proof": "observability/ledger"
+      },
+      {
+        "path": "~/.claude/observability/board.html",
+        "what": "The usage page, a self-contained page written when you run `/usage-page`. The file keeps the older version's name.",
+        "shared": "Personal. Lives in your config folder.",
+        "proof": "observability/board.html"
+      }
+    ]
+  },
+  "scripts": {
+    "sidequest": [
+      {
+        "file": "scripts/boards.mjs",
+        "what": "Lists the boards on this machine with counts and last change. Removes one only with `--remove=<project folder>`."
+      },
+      {
+        "file": "scripts/worktrees.mjs",
+        "what": "Gives every linked worktree a verdict, safe or keep. `--remove-safe` removes the safe ones."
+      }
+    ],
+    "quartermaster": [
+      {
+        "file": "scripts/mine.mjs",
+        "what": "Install-day hindsight: counts from the transcripts you already have. Prints one JSON object, never prompts or file contents."
+      },
+      {
+        "file": "scripts/inspect-facts.mjs",
+        "what": "The facts behind `inspect`: this project's plugin rows, and cancelled hooks in the newest transcript."
+      },
+      {
+        "file": "scripts/found-installed.mjs",
+        "what": "Finds Toolshed plugins installed by hand with no change record. `--record` writes the records."
+      },
+      {
+        "file": "scripts/upgrade-scan.mjs",
+        "what": "Read-only scan of what is left of the older version in a project, with a verdict per leftover."
+      },
+      {
+        "file": "scripts/upgrade-kept.mjs",
+        "what": "Records what you kept on purpose during an upgrade."
+      },
+      {
+        "file": "scripts/upgrade-quiet-projects.mjs",
+        "what": "Lists projects with the older version on and no session or commit in 30 days. `--switch-off` switches it off there after your yes."
+      },
+      {
+        "file": "scripts/upgrade-rules-convert.mjs",
+        "what": "Converts the older rules (`.claude/live-rules/` or the single `.claude/live-rules.md` page) into `.claude/rules/` and project skills. Prints the plan; `--write` applies it."
+      },
+      {
+        "file": "scripts/upgrade-home.mjs",
+        "what": "The home folder cleanup after the last project moved, one group at a time."
+      }
+    ],
+    "codebase-mapper": [
+      {
+        "file": "scripts/map-status.mjs",
+        "what": "Says which map cards are stale. `--line` prints one line, the default is JSON."
+      }
+    ],
+    "live-rules": [
+      {
+        "file": "scripts/audit-rules.mjs",
+        "what": "Audits `.claude/rules/`: dead globs, oversized or duplicate rules, leftover old keys."
+      }
+    ],
+    "observability": [
+      {
+        "file": "scripts/summarize.mjs",
+        "what": "Reads a project's usage ledger and prints cost and tokens by day, model, category, ticket or routing, or the costliest turns, as a small JSON table."
+      }
+    ]
+  }
+}

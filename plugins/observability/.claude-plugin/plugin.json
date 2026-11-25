@@ -1,0 +1,10 @@
+{
+  "name": "observability",
+  "version": "2.0.0",
+  "description": "A local usage ledger and usage page. One JSON line per turn with the engine's own cost, tokens by model, tool calls and agent spawns. Off until /track on in a project. Nothing leaves the machine.",
+  "license": "MIT",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "author": { "name": "Eigenwise" },
+  "types": "./types/index.d.ts",
+  "engines": { "claude-code": ">=2.1.325" }
+}

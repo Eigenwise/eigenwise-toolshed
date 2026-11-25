@@ -138,6 +138,7 @@ const decisionFrom = (value: unknown): Decision => {
     question: textOr(record, 'question', ''),
     answer: textOr(record, 'answer', ''),
     decidedBy: textOr(record, 'decidedBy', 'human'),
+    ...(typeof record.words === 'string' ? { words: record.words } : {}),
   }
 }
 
@@ -237,6 +238,7 @@ type Working = {
   problems: string[]
   stamp: string
   checkedOutBranch: string | undefined
+  projectName: string | undefined
   turn: SessionTurn
   leftovers: RunLeftovers[]
   // Only for a board with no prefix and nothing on it yet: what its first id needs to choose one.
@@ -359,10 +361,16 @@ const withReplacedValuesLogged = (working: Working, before: Ticket, after: Ticke
   return replaced.length === 0 ? after : appendLogLine(after, working.stamp, `patched ${replaced.join(', ')}${pressSuffix(working)}`)
 }
 
+// A ticket read as answered from its log goes back to waiting only when the log says something after the answer.
+const withReaskLogged = (working: Working, before: Ticket, after: Ticket): Ticket =>
+  before.answerSent !== undefined && after.answerSent === undefined && after.log.length === before.log.length
+    ? appendLogLine(after, working.stamp, 'asked again after the answer from the board')
+    : after
+
 const patchedTicket = (working: Working, ticket: Ticket, operation: JsonRecord): Ticket => {
   const patch = repairedPatchFor(working, ticket, ticketPatchFrom(operation))
   const patched = withoutEmptyOptionalFields(withForYouInput(applyTicketPatch(ticket, patch, working.stamp), operation.forYou))
-  const logged = withWordsChangeLogged(working, ticket, withReplacedValuesLogged(working, ticket, patched))
+  const logged = withReaskLogged(working, ticket, withWordsChangeLogged(working, ticket, withReplacedValuesLogged(working, ticket, patched)))
   noteProposedWrite(working, logged, ticket)
 
   return logged
@@ -511,6 +519,7 @@ const workingFrom = (files: BoardFiles, stamp: string, turn: SessionTurn, prefix
   problems: [],
   stamp,
   checkedOutBranch: files.checkedOutBranch,
+  projectName: files.projectName,
   turn,
   leftovers: [],
   prefixFacts,
@@ -623,7 +632,7 @@ const sameKeyAsCreated = (working: Working, files: BoardFiles, saidPairs: Readon
 
 const waitingAroundOf = (working: Working): WaitingAround =>
   waitingAroundWrite(
-    { stories: [...working.stories.values()], checkedOutBranch: working.checkedOutBranch },
+    { stories: [...working.stories.values()], checkedOutBranch: working.checkedOutBranch, projectName: working.projectName },
     working.turn.ticketsThisSessionTouched ?? new Set(),
     working.changedTickets,
     working.stamp,

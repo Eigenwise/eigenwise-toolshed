@@ -16,6 +16,7 @@ import {
   withPlainToolName,
   withoutRejected,
 } from './detectors'
+import { eventLines, parseEventLines } from './events'
 import type { SensedEvent } from './events'
 import { currentEvidence } from './evidence-tool'
 import type { DirectoryEntry, FileSystem } from './store'
@@ -52,6 +53,41 @@ test('the same failure coming back on another day is a fix candidate, one below 
 
 test('one burst of the same failure on a single day is one mistake, not a candidate', async () => {
   expect(repeatedFailures(failuresOver(84, 1))).toEqual([])
+})
+
+const shellFailuresOver = (count: number, days: number, errorsOf: (index: number) => string): SensedEvent[] =>
+  Array.from({ length: count }, (_, index) => ({
+    kind: 'failure',
+    at: daysAgo(index % days),
+    tool: 'Bash',
+    signature: 'rg',
+    error: errorsOf(index),
+  }))
+
+test('one command name failing many times with different errors is no fix candidate', async () => {
+  const differentErrors = ['regex parse error', 'no such file', 'permission denied', 'broken pipe', 'bad flag', 'too many open files']
+
+  expect(repeatedFailures(shellFailuresOver(12, 3, index => differentErrors[index % differentErrors.length] ?? ''))).toEqual([])
+})
+
+test('the same error text from the same command repeating is a fix candidate that names both', async () => {
+  const repeated = shellFailuresOver(REPEATED_FAILURES, REPEATED_FAILURE_DAYS, () => 'path is outside the allowed roots')
+
+  expect(repeatedFailures(repeated).map(candidate => candidate.sentence)).toEqual([
+    'Bash: rg: path is outside the allowed roots failed 5 times over 2 days',
+  ])
+})
+
+test('shell failures written before the error words were kept are read but never make a candidate', async () => {
+  const older: SensedEvent[] = Array.from({ length: 20 }, (_, index) => ({
+    kind: 'failure',
+    at: daysAgo(index % 3),
+    tool: 'Bash',
+    signature: 'cd',
+  }))
+
+  expect(repeatedFailures(older)).toEqual([])
+  expect(parseEventLines(eventLines(older))).toEqual(older)
 })
 
 const failuresThatStopped = (daysSinceLast: number): SensedEvent[] =>

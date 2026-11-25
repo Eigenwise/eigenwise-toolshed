@@ -167,7 +167,7 @@ const THREE_RULE_PAGE = [
   "",
 ].join("\n");
 
-test("a single-file rules page becomes three v2 rules and says it was read as a single file", () => {
+test("a single-file rules page becomes three native rules and says it was read as a single file", () => {
   const root = makePage(THREE_RULE_PAGE);
   const plan = planOf(root);
   assert.equal(plan.form, "single-file");
@@ -334,11 +334,25 @@ function switchOlderRulesPluginOn(root) {
   return root;
 }
 
-function upgradeVerdictFor(root, kind) {
-  const home = scratchFolder("older-rules-home-");
+function upgradeVerdictFor(root, kind, home = scratchFolder("older-rules-home-")) {
   const report = scan(readOptions(["--home", home, "--project", root], {}, root));
   return report.project.leftovers.find((leftover) => leftover.kind === kind)?.verdict;
 }
+
+function homeWithRulesPluginAt(version) {
+  const home = scratchFolder("rules-home-");
+  const recordPath = path.join(home, ".claude", "plugins", "installed_plugins.json");
+  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+  fs.writeFileSync(recordPath, JSON.stringify({ version: 2, plugins: { "live-rules@eigenwise-toolshed": [{ scope: "user", installPath: "cache", version }] } }));
+  return home;
+}
+
+test("after the update the rules plugin of the same name is this version's, and the old rules still convert", () => {
+  const root = switchOlderRulesPluginOn(makeProject({ "react.md": '---\ndescription: React conventions\nglobs: ["**/*.tsx"]\n---\n- Use hooks.\n' }));
+  assert.equal(upgradeVerdictFor(root, "rules-folder", homeWithRulesPluginAt("3.0.0")), "convert");
+  assert.equal(upgradeVerdictFor(root, "older-plugin", homeWithRulesPluginAt("3.0.0")), undefined);
+  assert.equal(upgradeVerdictFor(root, "older-install", homeWithRulesPluginAt("2.11.2")), "convert");
+});
 
 test("the upgrade converts an older rules folder: the scan says convert and --write gives the rule and the skill", () => {
   const root = switchOlderRulesPluginOn(makeProject({

@@ -1,10 +1,10 @@
-# Routing: the older categories and v2's tiers
+# Routing: the older categories and this version's tiers
 
-The older board routed each category through a profile to a model and effort. v2 routes a category to one of four tiers in `.sidequest/board.json` (light, standard, deep, top), and its default categories cover the starter coding profile. The scan prints this project's old routes; show them with the lines below and what has no place yet.
+The older board routed each category through a profile to a model and effort. This version routes a category to one of four tiers in `.sidequest/board.json` (light, standard, deep, top), and its default categories cover the starter coding profile. The scan prints this project's old routes; show them with the lines below and what has no place yet.
 
-## The older categories in v2
+## The older categories in this version
 
-| Older category (coding profile) | v2 category, tier | What is lost |
+| Older category (coding profile) | Category here, tier | What is lost |
 | --- | --- | --- |
 | codebase-exploration, implementation-explanation | explore, light | the "may write one map file" scope |
 | source-lookup, evidence-research, spike-investigation | research, deep | source-lookup was a cheaper bounded lookup; a custom category on light keeps that |
@@ -17,9 +17,9 @@ The older board routed each category through a profile to a model and effort. v2
 | general | `settings.unrouted` (default build) | |
 | experiment (a person judges blind rounds on pinned refs) | no place; nearest is a `hitl` ticket on hard | the round machinery |
 
-The scan carries the same list: it offers as custom only the older categories this table gives no v2 category (experiment, and any of the project's own), since v2's defaults already route the rest.
+The scan carries the same list: it offers as custom only the older categories this table gives no category here (experiment, and any of the project's own), since the defaults already route the rest.
 
-What maps: category to tier, the model alias, the effort (v2 takes `low` to `max`, so `xhigh` maps), one fallback per tier. A route or fallback on the top model goes to the `top` tier.
+What maps: category to tier, the model alias, the effort (this version takes `low` to `max`, so `xhigh` maps), one fallback per tier. A route or fallback on the top model goes to the `top` tier.
 
 ## Converted by hand
 
@@ -39,7 +39,7 @@ A project whose older board ran every agent in the main checkout (worktree isola
 
 Say these plainly, once, when the scan shows them:
 
-- **Routes and fallbacks on models from other providers** (`other-provider-routes`): v2 has no way to run them yet. A tier on such a model falls back to a Claude model with a named reason. The old routes stay readable in the old board until the home cleanup.
-- A contract per category: v2 has a one-line description. A contract that matters becomes a rule or a skill.
-- A fallback per category: v2 has one per tier.
+- **Routes and fallbacks on models from other providers** (`other-provider-routes`): this version has no way to run them yet. A tier on such a model falls back to a Claude model with a named reason. The old routes stay readable in the old board until the home cleanup.
+- A contract per category: this version has a one-line description. A contract that matters becomes a rule or a skill.
+- A fallback per category: this version has one per tier.
 - Artifact roots, evidence writes, demonstrations, profile revisions.

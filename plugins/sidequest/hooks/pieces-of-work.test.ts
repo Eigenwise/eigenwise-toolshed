@@ -71,7 +71,7 @@ test('waiting groups by the piece of work, the work this session touched first, 
         '   A. Yes',
         '   B. No',
         '   Recommended: A',
-        '   To answer: 1 and a letter, like 1A. Ticket Write the CSV header (LA-3).',
+        '   To answer in this chat: 1 and a letter, like 1A. Ticket Write the CSV header (LA-3).',
       ].join('\n'),
       'Tidy the settings page (branch main)',
       [
@@ -79,7 +79,7 @@ test('waiting groups by the piece of work, the work this session touched first, 
         '   A. Yes',
         '   B. No',
         '   Recommended: A',
-        '   To answer: 2 and a letter, like 2A. Ticket Move the toggles (LA-7).',
+        '   To answer in this chat: 2 and a letter, like 2A. Ticket Move the toggles (LA-7).',
       ].join('\n'),
       'PAY-41 Refunds can be partial (branch PAY-41-partial-refunds)',
       [
@@ -87,7 +87,7 @@ test('waiting groups by the piece of work, the work this session touched first, 
         '   A. Yes',
         '   B. No',
         '   Recommended: A',
-        '   To answer: 3 and a letter, like 3A. Ticket The remaining amount shows on the payment (LA-2).',
+        '   To answer in this chat: 3 and a letter, like 3A. Ticket The remaining amount shows on the payment (LA-2).',
       ].join('\n'),
     ].join('\n\n'),
   )
@@ -142,7 +142,7 @@ test('a board with one piece of work prints no heading, and its line names the k
         '   A. Yes',
         '   B. No',
         '   Recommended: A',
-        '   To answer: a letter, like A. Ticket PAY-41 LA-2 (branch PAY-41-partial-refunds).',
+        '   To answer in this chat: a letter, like A. Ticket PAY-41 LA-2 (branch PAY-41-partial-refunds).',
       ].join('\n'),
     ].join('\n\n'),
   )
@@ -208,7 +208,7 @@ test('the note pasted when a write parks a ticket carries the number and name th
     '   A. Yes',
     '   B. No',
     '   Recommended: A',
-    '   To answer: 2 and a letter, like 2A. Ticket Name the file (LA-4).',
+    '   To answer in this chat: 2 and a letter, like 2A. Ticket Name the file (LA-4).',
   ].join('\n')
   const waiting = view('waiting', after, new Map([['LA-4', 'ready']]))
 

@@ -17,3 +17,14 @@ test('a heading a session writes inside a ticket field stays in that field, and 
   expect(readBack.otherSections).toEqual([])
   expect(briefFor(readBack)).toContain('### Approach\nWrap send in uploadWithRetry.')
 })
+
+test('a ticket file that already holds a section of its own, split off earlier or written by hand, gives it to the brief', () => {
+  const written = serializeTicket(newTicket('SQ-2', { title: 'Retry', what: 'Retry failed uploads.', doneWhen: '- [ ] retried' }, STAMP))
+  const splitOffEarlier = written.replace('## Done when', '## Approach\nWrap send in uploadWithRetry.\n\n## Done when')
+  const readBack = parseTicket(splitOffEarlier, 'SQ-2')
+
+  expect(readBack.otherSections).toEqual([{ heading: 'Approach', text: 'Wrap send in uploadWithRetry.' }])
+  expect(readBack.what).toBe('Retry failed uploads.')
+  expect(briefFor(readBack)).toContain('## Approach\nWrap send in uploadWithRetry.')
+  expect(briefFor(readBack)).toContain('## What\nRetry failed uploads.')
+})

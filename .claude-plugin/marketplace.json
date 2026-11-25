@@ -1,11 +1,12 @@
 {
-  "name": "toolshed-next",
+  "name": "eigenwise-toolshed",
   "owner": { "name": "Eigenwise" },
-  "metadata": { "description": "A Claude Code harness that improves with you, and keeps you the one who decides." },
+  "metadata": { "description": "The Eigenwise Toolshed: a Claude Code harness that improves with you, and keeps you the one who decides." },
   "plugins": [
     { "name": "quartermaster", "source": "./plugins/quartermaster" },
     { "name": "sidequest", "source": "./plugins/sidequest" },
     { "name": "codebase-mapper", "source": "./plugins/codebase-mapper" },
-    { "name": "live-rules", "source": "./plugins/live-rules" }
+    { "name": "live-rules", "source": "./plugins/live-rules" },
+    { "name": "observability", "source": "./plugins/observability" }
   ]
 }

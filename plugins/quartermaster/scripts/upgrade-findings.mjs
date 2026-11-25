@@ -1,12 +1,19 @@
-export const OLDER_MARKETPLACE = "eigenwise-toolshed";
-export const CURRENT_MARKETPLACE = "toolshed-next";
+import { gatewayHookLines, gatewayHooksOf, isWiredToTheGateway, sortEnvironmentEntriesByWhoWroteThem } from "./gateway-wiring.mjs";
+import {
+  EARLIER_NAME,
+  EARLIER_NAME_OF_THIS_VERSION,
+  OLDER_ONLY_PLUGINS,
+  TOOLSHED_MARKETPLACE,
+  TOOLSHED_SOURCE,
+  installWords,
+  installWordsWithId,
+  isOlderVersionOfThisVersionsPlugin,
+  splitPluginId,
+} from "./toolshed-installs.mjs";
 
-export const PLUGINS_WITH_A_NAMESAKE = ["sidequest", "quartermaster", "codebase-mapper", "live-rules"];
-export const OLDER_PLUGINS_WITHOUT_A_SUCCESSOR = ["quality-gate", "observability"];
 export const GATEWAY_PLUGIN = "model-gateway";
 export const MAPPER_PLUGIN = "codebase-mapper";
 export const RULES_PLUGIN = "live-rules";
-const KNOWN_OLDER_PLUGINS = [...PLUGINS_WITH_A_NAMESAKE, ...OLDER_PLUGINS_WITHOUT_A_SUCCESSOR, GATEWAY_PLUGIN];
 
 const KEEP = "keep";
 const CONVERT = "convert";
@@ -18,25 +25,10 @@ export const USER_SCOPE = "(user)";
 export const COMMITTED_SETTINGS = ".claude/settings.json";
 export const LOCAL_SETTINGS = ".claude/settings.local.json";
 
-const GATEWAY_WIRING_KEYS = [
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-  "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
-  "ENABLE_TOOL_SEARCH",
-  "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-  "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  "ANTHROPIC_DEFAULT_FABLE_MODEL",
-  "ANTHROPIC_CUSTOM_MODEL_OPTION",
-  "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
-  "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-];
 const TELEMETRY_SWITCHES = ["CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"];
 const LOOPBACK_ADDRESS = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i;
-const GATEWAY_HOOK_COMMAND = /model-gateway|readiness-gate/;
 
-// Names only the older version had: its board's MCP tools, its executor agents and the skills v2 does not ship.
+// Names only the older version had: its board's MCP tools, its executor agents and the skills this version does not ship.
 const OLDER_ONLY_NAMES = [
   "mcp__plugin_sidequest_board__",
   "sidequest-exec",
@@ -65,143 +57,89 @@ export function olderNamesIn(text) {
   return OLDER_ONLY_NAMES.filter((name) => text.includes(name));
 }
 
-function splitPluginKey(key) {
-  const at = key.lastIndexOf("@");
-  return { name: key.slice(0, at), marketplace: key.slice(at + 1) };
-}
-
 export function olderPluginKeys(settings) {
   return Object.entries(recordOf(settings.enabledPlugins))
-    .map(([key, value]) => ({ ...splitPluginKey(key), key, isOn: value === true }))
-    .filter((plugin) => plugin.marketplace === OLDER_MARKETPLACE);
+    .map(([key, value]) => ({ ...splitPluginId(key), key, isOn: value === true }))
+    .filter((plugin) => plugin.marketplace === TOOLSHED_MARKETPLACE && OLDER_ONLY_PLUGINS.includes(plugin.name));
 }
 
-const isOursMarketplace = (marketplace) => marketplace === OLDER_MARKETPLACE || marketplace === CURRENT_MARKETPLACE;
+const isOursMarketplace = (marketplace) => marketplace === TOOLSHED_MARKETPLACE || marketplace === EARLIER_NAME_OF_THIS_VERSION;
 
 // A key for one of ours, true or false, means that plugin was on here at some point: switching off keeps the key.
 export function pluginNamesInSettings(...settingsFiles) {
   const keys = settingsFiles.flatMap((settings) => Object.keys(recordOf(settings.enabledPlugins)));
-  return [...new Set(keys.map(splitPluginKey).filter((plugin) => isOursMarketplace(plugin.marketplace)).map((plugin) => plugin.name))];
+  return [...new Set(keys.map(splitPluginId).filter((plugin) => isOursMarketplace(plugin.marketplace)).map((plugin) => plugin.name))];
 }
 
-const isOnIn = (settings, name, marketplace) => recordOf(settings.enabledPlugins)[`${name}@${marketplace}`] === true;
-const isOffIn = (settings, name, marketplace) => recordOf(settings.enabledPlugins)[`${name}@${marketplace}`] === false;
-
-export function isSwitchedOverLocally(local, name) {
-  return isOnIn(local, name, CURRENT_MARKETPLACE) && isOffIn(local, name, OLDER_MARKETPLACE);
-}
+const isOnIn = (settings, name) => recordOf(settings.enabledPlugins)[`${name}@${TOOLSHED_MARKETPLACE}`] === true;
 
 const isNamedIn = (settings, key) => key in recordOf(settings.enabledPlugins);
 
-// A retired plugin's key does nothing, so only the ones v2 has a namesake or a gateway answer for count here.
 export function olderPluginsOnOnlyAtUserScope(committed, local, user) {
   return olderPluginKeys(user)
-    .filter((plugin) => plugin.isOn && KNOWN_OLDER_PLUGINS.includes(plugin.name))
+    .filter((plugin) => plugin.isOn)
     .filter((plugin) => !isNamedIn(committed, plugin.key) && !isNamedIn(local, plugin.key))
     .map((plugin) => plugin.name);
 }
 
+// Only the plugins this version does not have: a key of a shared name is this version's own once it is updated.
 // The local file wins over the committed one, and the committed one over the user settings, key by key, as the host reads them.
 export function olderPluginsStillOn(committed, local, user = {}) {
   const names = new Set([...olderPluginKeys(committed), ...olderPluginKeys(local)].map((plugin) => plugin.name));
   const onInTheProjectFiles = [...names].filter((name) => {
-    const localValue = recordOf(local.enabledPlugins)[`${name}@${OLDER_MARKETPLACE}`];
-    return localValue === undefined ? isOnIn(committed, name, OLDER_MARKETPLACE) : localValue === true;
+    const localValue = recordOf(local.enabledPlugins)[`${name}@${TOOLSHED_MARKETPLACE}`];
+    return localValue === undefined ? isOnIn(committed, name) : localValue === true;
   });
   return [...onInTheProjectFiles, ...olderPluginsOnOnlyAtUserScope(committed, local, user)];
 }
 
 const olderPluginsOnHere = (facts) => olderPluginsStillOn(facts.committed, facts.local, facts.user ?? {});
 
-// An older plugin that is the only thing loading something git tracks: it moves for everyone with the committed change, never for one person.
-export const OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES = [
-  {
-    plugin: MAPPER_PLUGIN,
-    sources: [{ fact: "olderMap", path: ".claude/.codebase-info" }],
-    isConverted: (paths) => paths.currentMap === true,
-    heldWhy: `stays on: git tracks the map in .claude/.codebase-info/, so it is the repository's and loads only through this plugin. The mapper moves for everyone with the committed change, never for one person; ${MAPPER_PLUGIN}@${CURRENT_MARKETPLACE} stays off here until then`,
-    putBackWhy: `put the older mapper back on here: git tracks the map in .claude/.codebase-info/, it loads only through this plugin and no v2 map exists, so sessions here load no map. Run claude plugin enable ${MAPPER_PLUGIN}@${OLDER_MARKETPLACE} --scope local, and claude plugin disable ${MAPPER_PLUGIN}@${CURRENT_MARKETPLACE} --scope local when that one is on here. Undo: the same commands the other way round`,
-    onNote: "(stays on: the map git tracks loads through it)",
-    leftOnLine: `left on: ${MAPPER_PLUGIN}, the map git tracks loads through it`,
-    keptOnWords: "the mapper, whose map git tracks,",
-    stateKind: "older-mapper-state",
-    stateEntries: [`${MAPPER_PLUGIN}-state`, `plugins/data/${MAPPER_PLUGIN}-${OLDER_MARKETPLACE}`],
-    stateWhy: (count) =>
-      `the older mapper still loads a map git tracks in ${count} project(s), and this is its state: it stays until that map moves with the committed change`,
-  },
-  {
-    plugin: RULES_PLUGIN,
-    sources: [
-      { fact: "rulesFolder", path: ".claude/live-rules" },
-      { fact: "rulesPage", path: ".claude/live-rules.md" },
-    ],
-    isConverted: (paths) => paths.convertedRules === true,
-    heldWhy: `stays on: git tracks the old rules, so they are the repository's and load only through this plugin. The rules move for everyone with the committed change, never for one person; ${RULES_PLUGIN}@${CURRENT_MARKETPLACE} stays off here until then`,
-    putBackWhy: `put the older rules plugin back on here: git tracks the old rules, they load only through this plugin and no converted rules exist, so sessions here load none of them. Run claude plugin enable ${RULES_PLUGIN}@${OLDER_MARKETPLACE} --scope local, and claude plugin disable ${RULES_PLUGIN}@${CURRENT_MARKETPLACE} --scope local when that one is on here. Undo: the same commands the other way round`,
-    onNote: "(stays on: the rules git tracks load through it)",
-    leftOnLine: `left on: ${RULES_PLUGIN}, the rules git tracks load through it`,
-    keptOnWords: "the rules plugin, whose rules git tracks,",
-    stateKind: "older-rules-state",
-    stateEntries: [`${RULES_PLUGIN}-state`, `plugins/data/${RULES_PLUGIN}-${OLDER_MARKETPLACE}`],
-    stateWhy: (count) =>
-      `the older rules plugin still loads rules git tracks in ${count} project(s), and this is its state: it stays until those rules move with the committed change`,
-  },
-];
+const SCOPE_OF_FILE = { [COMMITTED_SETTINGS]: "project", [LOCAL_SETTINGS]: "local" };
 
-export const heldSourceOf = (plugin) => OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES.find((held) => held.plugin === plugin);
+const scopeOfKey = (plugin) => (plugin.isUserScope ? "user" : SCOPE_OF_FILE[plugin.file] ?? "local");
 
-const isSourceTrackedHere = (paths, tracked) => (source) => paths[source.fact] === true && tracked[source.fact] === true;
+const uninstallCommand = (plugin) => `claude plugin uninstall ${plugin.name}@${TOOLSHED_MARKETPLACE} --scope ${scopeOfKey(plugin)}`;
 
-export const isTrackedSourceTheOnlySource = (held, paths, tracked) => !held.isConverted(paths) && held.sources.some(isSourceTrackedHere(paths, tracked));
+const wiredPlacesWords = (places) => places.join(", ");
 
-const heldSourcesHere = (facts) => OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES.filter((held) => isTrackedSourceTheOnlySource(held, facts.paths, facts.tracked));
+const userScopeWhy = (plugin) => {
+  const afterUnwiring = plugin.name === GATEWAY_PLUGIN ? ", once no project is wired to the gateway" : "";
+  return `on for every project at user scope: ${uninstallCommand(plugin)} takes it out everywhere${afterUnwiring}. The home part names it; a project's run never writes the user settings file`;
+};
 
-const isKeyOnWhileHeldByTrackedSource = (plugin) => plugin.isOn && plugin.heldSource !== undefined;
+const HOW_TO_CHECK_A_PROJECT = "a project is wired when its .claude/settings.local.json has ANTHROPIC_BASE_URL under env, or a hook there whose command runs model-gateway.js with readiness-gate";
 
-const isKeySwitchedOffLocallyWhileHeldByTrackedSource = (plugin) => !plugin.isOn && plugin.file === LOCAL_SETTINGS && plugin.heldSource !== undefined;
+const isGateway = (plugin) => plugin.name === GATEWAY_PLUGIN;
 
-const USER_SCOPE_WHY = (plugin) =>
-  `on for every project at user scope: install ${plugin.name}@${CURRENT_MARKETPLACE} at local scope and switch this one off for this project with claude plugin disable ${plugin.name}@${OLDER_MARKETPLACE} --scope local; the user settings file is not changed by a project's run`;
-
+// The launcher the wiring runs finds the gateway's code through its install: uninstalled while a project is still wired, every prompt there is blocked.
+// The scan sees only the projects the gateway's own list and the install record name, so "wired nowhere" needs that list read whole.
 const PLUGIN_KEY_RULES = [
+  { applies: (plugin) => plugin.isUserScope === true, verdict: KEEP, why: userScopeWhy },
   {
-    applies: (plugin) => !KNOWN_OLDER_PLUGINS.includes(plugin.name),
-    verdict: REMOVE,
-    why: () => "a retired plugin of the older version; the key does nothing",
-  },
-  {
-    applies: isKeySwitchedOffLocallyWhileHeldByTrackedSource,
-    verdict: CONVERT,
-    why: (plugin) => plugin.heldSource.putBackWhy,
-  },
-  {
-    applies: (plugin) => !plugin.isOn && plugin.isSwitchedOver,
-    verdict: KEEP,
-    why: () => "switched off here with v2 on beside it; the half-moved part that already works",
-  },
-  { applies: (plugin) => !plugin.isOn, verdict: KEEP, why: () => "switched off; nothing to do" },
-  { applies: isKeyOnWhileHeldByTrackedSource, verdict: KEEP, why: (plugin) => plugin.heldSource.heldWhy, isHeld: true },
-  {
-    applies: (plugin) => plugin.name === GATEWAY_PLUGIN,
+    applies: (plugin) => isGateway(plugin) && plugin.gateway.wiredPlaces.length > 0,
     verdict: ASK,
-    why: () => "the gateway has no v2 counterpart; follows the home question on the gateway, unwire before switching it off",
-  },
-  {
-    applies: (plugin) => OLDER_PLUGINS_WITHOUT_A_SUCCESSOR.includes(plugin.name),
-    verdict: CONVERT,
+    followsHomeAnswer: true,
     why: (plugin) =>
-      `v2 has no plugin of this name, so nothing replaces it: switch it off for this project with claude plugin disable ${plugin.name}@${OLDER_MARKETPLACE} --scope local, and say in the report that it is gone. Undo: claude plugin enable ${plugin.name}@${OLDER_MARKETPLACE} --scope local`,
+      `the gateway is not in this version and must stay installed and switched on until it is unwired. Unwire every place wired to it first (its env --remove, from each project's folder; the lines in your user settings by hand), and only then ${uninstallCommand(plugin)}: uninstalled while a place is still wired, every prompt there is blocked. Still wired: ${wiredPlacesWords(plugin.gateway.wiredPlaces)}`,
   },
-  { applies: (plugin) => plugin.isUserScope === true, verdict: CONVERT, why: USER_SCOPE_WHY },
   {
-    applies: (plugin) => plugin.file === LOCAL_SETTINGS,
-    verdict: CONVERT,
-    why: (plugin) => `install ${plugin.name}@${CURRENT_MARKETPLACE} at local scope and set this key to false`,
+    applies: (plugin) => isGateway(plugin) && !plugin.gateway.canSeeEveryPlace,
+    verdict: ASK,
+    followsHomeAnswer: true,
+    why: (plugin) =>
+      `the gateway is not in this version, and the scan cannot see every project wired to it: its own list (model-gateway/wired-projects.json) is missing or cannot be read. Nothing it can see is wired, but check each project that used the gateway (${HOW_TO_CHECK_A_PROJECT}) and unwire it first; only then ${uninstallCommand(plugin)}, on the person's word`,
+  },
+  {
+    applies: isGateway,
+    verdict: REMOVE,
+    why: (plugin) =>
+      `the gateway, wired nowhere the scan can see: ${uninstallCommand(plugin)} takes it out with this key. The scan sees only what the older gateway recorded and the projects the install record names, so a project it missed that is still wired would have every prompt blocked (${HOW_TO_CHECK_A_PROJECT}). To keep it on purpose, record --keep gateway instead (it can no longer be updated or installed again from this marketplace)`,
   },
   {
     applies: () => true,
-    verdict: CONVERT,
-    why: (plugin) => `swap the key to ${plugin.name}@${CURRENT_MARKETPLACE}, show the diff, the person commits`,
+    verdict: REMOVE,
+    why: (plugin) => `not in this version, so it no longer loads: ${uninstallCommand(plugin)} takes it out with this key. It cannot be installed again from the marketplace`,
   },
 ];
 
@@ -209,30 +147,63 @@ function firstMatchingRule(rules, subject) {
   return rules.find((rule) => rule.applies(subject));
 }
 
-export function pluginKeyLeftovers(file, settings, local, heldSources = [], isUserScope = false) {
+const GATEWAY_UNSEEN = { wiredPlaces: [], canSeeEveryPlace: false };
+
+export function pluginKeyLeftovers(file, settings, gateway = GATEWAY_UNSEEN, isUserScope = false) {
   return olderPluginKeys(settings).map((plugin) => {
-    const heldSource = heldSources.find((held) => held.plugin === plugin.name);
-    const subject = { ...plugin, file, isSwitchedOver: isSwitchedOverLocally(local, plugin.name), heldSource, isUserScope };
+    const subject = { ...plugin, file, gateway, isUserScope };
     const rule = firstMatchingRule(PLUGIN_KEY_RULES, subject);
-    const followsHomeAnswer = plugin.name === GATEWAY_PLUGIN && plugin.isOn;
-    const held = rule.isHeld === true ? { isHeldByTrackedSource: true } : {};
-    return { kind: "older-plugin", file, where: `${file} enabledPlugins ${plugin.key}`, verdict: rule.verdict, why: rule.why(subject), followsHomeAnswer, ...held };
+    const answerSubject = plugin.name === GATEWAY_PLUGIN ? { answerSubject: "gateway" } : {};
+    return { kind: "older-plugin", file, where: `${file} enabledPlugins ${plugin.key}`, verdict: rule.verdict, why: rule.why(subject), followsHomeAnswer: rule.followsHomeAnswer === true, ...answerSubject };
   });
 }
 
-function userScopeLeftovers(facts, heldSources) {
+function userScopeLeftovers(facts) {
   const names = olderPluginsOnOnlyAtUserScope(facts.committed, facts.local, facts.user ?? {});
-  const onlyThoseKeys = { enabledPlugins: Object.fromEntries(names.map((name) => [`${name}@${OLDER_MARKETPLACE}`, true])) };
-  return pluginKeyLeftovers(facts.userSettingsFile, onlyThoseKeys, facts.local, heldSources, true);
+  const onlyThoseKeys = { enabledPlugins: Object.fromEntries(names.map((name) => [`${name}@${TOOLSHED_MARKETPLACE}`, true])) };
+  return pluginKeyLeftovers(facts.userSettingsFile, onlyThoseKeys, GATEWAY_UNSEEN, true);
 }
 
-const presentKeys = (environment, keys) => keys.filter((key) => key in environment);
+const GATEWAY_WIRING_WHY = "the gateway wrote these; follows the home question. Unwire with the gateway's own env --remove BEFORE the gateway is uninstalled";
+const GATEWAY_LEFTOVER_WHY = "the gateway left these and nothing here routes to it any more, so they do not hold its uninstall; take them out of the file";
+const KEPT_OWN_ENTRY_WHY = "set by you, not a value the gateway writes, so it stays and the gateway's own unwiring leaves it too";
+const KEPT_OWN_PIN_WHY = `${KEPT_OWN_ENTRY_WHY}. If it names a model your provider does not have, change it yourself`;
 
-function gatewayWiringLeftover(file, environment) {
-  if (!LOOPBACK_ADDRESS.test(String(environment.ANTHROPIC_BASE_URL ?? ""))) return [];
-  const why = "the gateway wrote these; follows the home question. Unwire with the gateway's own env --remove BEFORE switching the gateway off";
-  const where = `${file} env ${presentKeys(environment, GATEWAY_WIRING_KEYS).join(", ")}`;
-  return [{ kind: "gateway-wiring", file, where, verdict: ASK, why, followsHomeAnswer: true }];
+const linesOf = (entries) => entries.map((entry) => entry.line);
+const keysOf = (entries) => entries.map((entry) => entry.key).join(", ");
+
+function ownEntryLeftovers(file, own) {
+  const groups = [
+    { entries: own.filter((entry) => entry.isPin), why: KEPT_OWN_PIN_WHY },
+    { entries: own.filter((entry) => !entry.isPin), why: KEPT_OWN_ENTRY_WHY },
+  ];
+  return groups
+    .filter((group) => group.entries.length > 0)
+    .map((group) => ({ kind: "gateway-kept-entries", file, where: `${file} env ${keysOf(group.entries)}`, verdict: KEEP, why: group.why, readyLines: linesOf(group.entries) }));
+}
+
+function gatewayWiringLeftover(file, settings, gatewayWasOnThisMachine) {
+  const { gateway, own } = sortEnvironmentEntriesByWhoWroteThem(settings, gatewayWasOnThisMachine);
+  const isRouted = isWiredToTheGateway(settings);
+  const leftover = isRouted
+    ? { verdict: ASK, why: GATEWAY_WIRING_WHY, followsHomeAnswer: true }
+    : { verdict: REMOVE, why: GATEWAY_LEFTOVER_WHY };
+  const wiring = gateway.length === 0 ? [] : [{ kind: "gateway-wiring", file, where: `${file} env ${keysOf(gateway)}`, ...leftover }];
+  return [...wiring, ...ownEntryLeftovers(file, own)];
+}
+
+const USERS_OWN_FILE_WHY = "yours to change: the scan never edits your user settings file. Copy it, then delete these lines";
+const USERS_ROUTED_FILE_WHY = `${USERS_OWN_FILE_WHY}; the gateway's uninstall waits until they are gone`;
+
+// The home settings file is never written by a scan, so what the gateway left there is shown with its exact lines and left to the person.
+function userSettingsGatewayLeftovers(facts) {
+  const settings = facts.user ?? {};
+  const file = facts.userSettingsFile;
+  const { gateway, own } = sortEnvironmentEntriesByWhoWroteThem(settings, facts.gatewayWasOnThisMachine === true);
+  const lines = [...linesOf(gateway), ...gatewayHookLines(settings)];
+  const why = isWiredToTheGateway(settings) ? USERS_ROUTED_FILE_WHY : USERS_OWN_FILE_WHY;
+  const wiring = lines.length === 0 ? [] : [{ kind: "gateway-wiring-user", file, where: `${file} (user settings)`, verdict: KEEP, why, readyLines: lines }];
+  return [...wiring, ...ownEntryLeftovers(file, own)];
 }
 
 function telemetryLeftover(file, environment) {
@@ -243,7 +214,7 @@ function telemetryLeftover(file, environment) {
   if (!LOOPBACK_ADDRESS.test(String(endpoint))) {
     return [{ kind: "telemetry-export", file, where, verdict: KEEP, why: `not the older Toolshed's: it points at ${endpoint}, so it stays` }];
   }
-  const why = `v2 telemetry does not use them; copy the file first. Ask instead when something listens on ${endpoint}`;
+  const why = `this version's telemetry does not use them; copy the file first. Ask instead when something listens on ${endpoint}`;
   return [{ kind: "telemetry-export", file, where, verdict: REMOVE, why }];
 }
 
@@ -252,7 +223,7 @@ const SINGLE_KEY_ENVIRONMENT_RULES = [
   { key: "PYTHONIOENCODING", kind: "python-encoding", verdict: KEEP, why: "harmless and still useful to Python on Windows" },
 ];
 
-export function environmentLeftovers(file, settings) {
+export function environmentLeftovers(file, settings, gatewayWasOnThisMachine = false) {
   const environment = recordOf(settings.env);
   const single = SINGLE_KEY_ENVIRONMENT_RULES.filter((rule) => rule.key in environment).map((rule) => ({
     kind: rule.kind,
@@ -261,21 +232,14 @@ export function environmentLeftovers(file, settings) {
     verdict: rule.verdict,
     why: rule.why,
   }));
-  return [...gatewayWiringLeftover(file, environment), ...telemetryLeftover(file, environment), ...single];
-}
-
-function hookCommandsOf(settings) {
-  return Object.values(recordOf(settings.hooks))
-    .flatMap((groups) => (Array.isArray(groups) ? groups : []))
-    .flatMap((group) => (Array.isArray(group?.hooks) ? group.hooks : []))
-    .map((hook) => String(hook?.command ?? ""));
+  return [...gatewayWiringLeftover(file, settings, gatewayWasOnThisMachine), ...telemetryLeftover(file, environment), ...single];
 }
 
 function gatewayHookLeftover(file, settings) {
-  const count = hookCommandsOf(settings).filter((command) => GATEWAY_HOOK_COMMAND.test(command)).length;
+  const count = gatewayHooksOf(settings).length;
   if (count === 0) return [];
-  const why = "the gateway's readiness hooks; its env --remove takes them out, switching the plugin off does not";
-  return [{ kind: "gateway-hooks", file, where: `${file} hooks (${count})`, verdict: ASK, why, followsHomeAnswer: true }];
+  const why = "the gateway's readiness hooks; its env --remove takes them out, uninstalling the plugin does not";
+  return [{ kind: "gateway-hooks", file, where: `${file} hooks (${count})`, verdict: ASK, why, followsHomeAnswer: true, readyLines: gatewayHookLines(settings) }];
 }
 
 function permissionLeftover(file, settings) {
@@ -287,20 +251,38 @@ function permissionLeftover(file, settings) {
 
 function autoApproveLeftover(file, settings) {
   if (!("autoApprovePermissions" in recordOf(settings.quartermaster))) return [];
-  return [{ kind: "auto-approve-switch", file, where: `${file} quartermaster.autoApprovePermissions`, verdict: REMOVE, why: "v2 does not read it" }];
+  return [{ kind: "auto-approve-switch", file, where: `${file} quartermaster.autoApprovePermissions`, verdict: REMOVE, why: "this version does not read it" }];
 }
 
-function marketplaceLeftover(file, settings) {
-  if (!(OLDER_MARKETPLACE in recordOf(settings.extraKnownMarketplaces))) return [];
-  const why = `declares the older marketplace; goes with its plugin keys (declare ${CURRENT_MARKETPLACE} from Eigenwise/eigenwise-toolshed with ref v2 in the same change when the plugins move here)`;
-  return [{ kind: "older-marketplace", file, where: `${file} extraKnownMarketplaces ${OLDER_MARKETPLACE}`, verdict: REMOVE, why }];
+const earlierNameKeys = (settings) =>
+  Object.entries(recordOf(settings.enabledPlugins))
+    .map(([key, value]) => ({ ...splitPluginId(key), key, value }))
+    .filter((plugin) => plugin.marketplace === EARLIER_NAME_OF_THIS_VERSION);
+
+function earlierNameKeyLeftovers(file, settings) {
+  return earlierNameKeys(settings).map((plugin) => ({
+    kind: "earlier-name-key",
+    file,
+    where: `${file} enabledPlugins ${plugin.key}`,
+    verdict: CONVERT,
+    why: `this version under its earlier name: becomes "${plugin.name}@${TOOLSHED_MARKETPLACE}": ${JSON.stringify(plugin.value)} in this file, replacing any key of that name, shown as a diff first. The move's uninstall and install at this file's scope write it; a key with no install behind it is rewritten by hand`,
+    isPartOfTheMove: true,
+  }));
 }
 
-export function settingsLeftovers(file, settings, local, heldSources = []) {
+function earlierNameMarketplaceLeftover(file, settings) {
+  if (!(EARLIER_NAME_OF_THIS_VERSION in recordOf(settings.extraKnownMarketplaces))) return [];
+  const entry = JSON.stringify({ source: { source: "github", repo: TOOLSHED_SOURCE } });
+  const why = `declares this version under its earlier name: becomes "${TOOLSHED_MARKETPLACE}": ${entry}, with no ref, shown as a diff first. Where a ${TOOLSHED_MARKETPLACE} entry is there already, this one only goes`;
+  return [{ kind: "earlier-name-marketplace", file, where: `${file} extraKnownMarketplaces ${EARLIER_NAME_OF_THIS_VERSION}`, verdict: CONVERT, why, isPartOfTheMove: true }];
+}
+
+export function settingsLeftovers(file, settings, gateway = GATEWAY_UNSEEN) {
   return [
-    ...pluginKeyLeftovers(file, settings, local, heldSources),
-    ...marketplaceLeftover(file, settings),
-    ...environmentLeftovers(file, settings),
+    ...pluginKeyLeftovers(file, settings, gateway),
+    ...earlierNameKeyLeftovers(file, settings),
+    ...earlierNameMarketplaceLeftover(file, settings),
+    ...environmentLeftovers(file, settings, gateway.wasOnThisMachine === true),
     ...gatewayHookLeftover(file, settings),
     ...permissionLeftover(file, settings),
     ...autoApproveLeftover(file, settings),
@@ -309,7 +291,7 @@ export function settingsLeftovers(file, settings, local, heldSources = []) {
 
 const TRACKED_SETTINGS_WHY = {
   [COMMITTED_SETTINGS]:
-    "the committed file is tracked by git: switch the person over in local settings now, and put this in the committed change only when they say so",
+    "the committed file is tracked by git: what changes for this person goes into local settings now, and this goes into the committed change only when they say so",
   [LOCAL_SETTINGS]: "git tracks this local settings file, so it is committed work: it stays as it is until the committed change, and no deletion in this run touches it",
 };
 
@@ -325,12 +307,27 @@ export function handCommittedFileToCommittedChange(leftover, trackedFiles) {
   return isTrackedFile ? { ...leftover, verdict: ASK, why, isCommittedChange: true } : leftover;
 }
 
-const SWITCH_WRITES_INTO_TRACKED_FILE_WHY =
-  "git tracks this file and the plugin switch has to write into it (there is no other personal place for it here): the switch shows as a change in git status and nothing is committed";
+const UNINSTALL_WRITES_INTO_TRACKED_FILE_WHY =
+  "git tracks this file and the uninstall at local scope writes into it (there is no other personal place for it here): it shows as a change in git status and nothing is committed";
 
 function trackedLocalSettingsNote(facts) {
   if (!facts.isLocalSettingsTracked || olderPluginsOnHere(facts).length === 0) return [];
-  return [{ kind: "tracked-local-settings", file: LOCAL_SETTINGS, where: LOCAL_SETTINGS, verdict: KEEP, why: SWITCH_WRITES_INTO_TRACKED_FILE_WHY }];
+  return [{ kind: "tracked-local-settings", file: LOCAL_SETTINGS, where: LOCAL_SETTINGS, verdict: KEEP, why: UNINSTALL_WRITES_INTO_TRACKED_FILE_WHY }];
+}
+
+const OLDER_INSTALL_WHY =
+  "the older version of a plugin this version has: update it first with the commands under Update first, then reload plugins and scan again. Nothing in this project moves before that";
+
+const EARLIER_NAME_INSTALL_WHY = (entry) =>
+  `this version under its earlier name: the move, on one yes, reinstalls it as ${entry.name}@${TOOLSHED_MARKETPLACE} at the same scope, with its commands in order under The earlier name`;
+
+function installLeftovers(facts) {
+  const installs = facts.installs ?? [];
+  const older = installs.filter(isOlderVersionOfThisVersionsPlugin).map((entry) => ({ kind: "older-install", where: installWordsWithId(entry), verdict: CONVERT, why: OLDER_INSTALL_WHY }));
+  const earlier = installs
+    .filter((entry) => entry.state === EARLIER_NAME)
+    .map((entry) => ({ kind: "earlier-name-install", where: installWordsWithId(entry), verdict: ASK, why: EARLIER_NAME_INSTALL_WHY(entry), isPartOfTheMove: true }));
+  return [...older, ...earlier];
 }
 
 const reviewRefsCount = (facts) =>
@@ -342,18 +339,23 @@ const reviewRefsCount = (facts) =>
 export const LARGE_OLD_MAP_LINES = 400;
 
 const TRACKED_OLDER_MAP_WHY =
-  "git tracks it, so it is the repository's map: it moves for everyone with the committed change (converted to .claude/rules/, this folder removed and the committed settings switched in one commit), never as one person's copy, and no deletion in this run touches it";
+  "git tracks it, so it is the repository's map: it moves for everyone with the committed change (converted to .claude/rules/ and this folder removed, in one commit), never as one person's copy, and no deletion in this run touches it. Nothing has loaded it since the update";
+
+const BUILDS_NEW_MAP_FROM_IT = "; codebase-mapper:map builds the new map from it";
 
 const TWO_MAPS_WHY =
-  "; a v2 map is here beside it, so this checkout has two maps that drift apart until the committed change takes the v2 one into the repository and removes this one";
+  "; a map of this version is here beside it, so this checkout has two maps that drift apart until the committed change takes the new one into the repository and removes this one";
 
 const lengthNote = (facts) =>
   facts.paths.olderMapLines > LARGE_OLD_MAP_LINES ? `; ${facts.paths.olderMapLines} lines, so converting it is the long part of that change` : "";
 
-const trackedOlderMapWhy = (facts) => `${TRACKED_OLDER_MAP_WHY}${lengthNote(facts)}${facts.paths.currentMap ? TWO_MAPS_WHY : ""}`;
+const trackedOlderMapWhy = (facts) =>
+  facts.paths.currentMap
+    ? `${TRACKED_OLDER_MAP_WHY}${lengthNote(facts)}${TWO_MAPS_WHY}`
+    : `${TRACKED_OLDER_MAP_WHY}${BUILDS_NEW_MAP_FROM_IT}${lengthNote(facts)}`;
 
 const TRACKED_OLDER_RULES_WHY =
-  "git tracks it, so these are the repository's rules: they move for everyone with the committed change (converted to .claude/rules/ and .claude/skills/, the old ones removed and the committed settings switched in one commit), never as one person's copy, and no deletion in this run touches it";
+  "git tracks it, so these are the repository's rules: they move for everyone with the committed change (converted to .claude/rules/ and .claude/skills/ and the old ones removed, in one commit), never as one person's copy, and no deletion in this run touches it";
 
 // Only where a personal copy would otherwise be made: a copy drifts from the rules the team keeps editing.
 const trackedOlderRulesWhy = (facts) =>
@@ -392,14 +394,14 @@ const OLDER_PATHS = [
     trackedWhy: trackedOlderMapWhy,
     laterCommand: "codebase-mapper:map",
     converter: "codebase-mapper:map reads it as leads and writes .claude/rules/codebase-map.md",
-    afterConversion: "the v2 map already exists; the old folder only feeds the older map hook",
+    afterConversion: "the new map already exists; nothing loads the old folder since the update",
   },
   {
     kind: "quality-gate-records",
     where: ".claude/quality-gate/receipts/ or crap.json",
     fact: "qualityGateRecords",
     isConverted: () => true,
-    afterConversion: "v2 keeps no receipts",
+    afterConversion: "this version keeps no receipts",
   },
 ];
 
@@ -407,7 +409,7 @@ const TRACKED_WHY =
   "git tracks it, so it is committed work: it stays as it is until the committed change, and no deletion in this run touches it";
 
 const NEVER_ON_WHY = (plugin) =>
-  `${plugin} was never on in this project, older or v2, so nothing reads it and there is nothing to convert; it stays as it is`;
+  `${plugin} was never on in this project, older or this version, so nothing reads it and there is nothing to convert; it stays as it is`;
 
 const leftoverAt = (olderPath, verdict, why, extra = {}) => ({ kind: olderPath.kind, where: olderPath.where, verdict, why, ...extra });
 
@@ -453,7 +455,7 @@ const PROJECT_FILE_RULES = [
     applies: (facts) => facts.paths.boardFolder && !facts.isBoardKeptOutOfGit,
     where: () => ".git/info/exclude",
     verdict: CONVERT,
-    why: () => "add the line .sidequest/ so the v2 board stays personal",
+    why: () => "add the line .sidequest/ so the board stays personal",
   },
   {
     kind: "older-exclude-lines",
@@ -512,7 +514,7 @@ const PROJECT_FILE_RULES = [
     where: (facts) => `personal memory notes that name older tools: ${facts.memoryNotes.join(", ")}`,
     verdict: CONVERT,
     why: () =>
-      `edit the notes that name an older tool with a v2 equivalent (copy each file first, show the edit as a diff), then record what is left as kept with your reason: ${MEMORY_NOTES_KEEP_COMMAND}`,
+      `edit the notes that name an older tool with an equivalent in this version (copy each file first, show the edit as a diff), then record what is left as kept with your reason: ${MEMORY_NOTES_KEEP_COMMAND}`,
   },
 ];
 
@@ -531,7 +533,7 @@ export function projectFileLeftovers(facts) {
 export function instructionLeftovers(instructionFiles) {
   return instructionFiles.map((file) => {
     const isCommittedChange = file.isTracked === true;
-    const why = isCommittedChange ? "tracked by git: the edit goes into the committed change" : "show the edit as a diff: older tool to its v2 tool, drop the rest";
+    const why = isCommittedChange ? "tracked by git: the edit goes into the committed change" : "show the edit as a diff: older tool to its tool in this version, drop the rest";
     return { kind: "instruction-text", where: `${file.path} names ${file.names.join(", ")}`, verdict: isCommittedChange ? ASK : CONVERT, why, isCommittedChange };
   });
 }
@@ -543,7 +545,7 @@ function openTicketLeftover(board) {
   if (openCount === 0) return [];
   const statuses = Object.entries(board.openByStatus).map(([status, count]) => `${count} ${status}`).join(", ");
   const why =
-    "they stay in the old board, a read-only archive until the home cleanup (the recommended answer); the person may name some to redraft as v2 tickets. Doing rows are stale claims, never resume them. upgrade-scan.mjs --open-tickets lists them, one per line";
+    "they stay in the old board, a read-only archive until the home cleanup (the recommended answer); the person may name some to redraft as tickets on this board. Doing rows are stale claims, never resume them. upgrade-scan.mjs --open-tickets lists them, one per line";
   return [{ kind: "open-tickets", where: `${openCount} open tickets on the old board (${statuses})`, verdict: KEEP, why }];
 }
 
@@ -557,11 +559,11 @@ export function routeLine(route) {
 function otherProviderLeftover(routes) {
   const elsewhere = routes.filter((route) => isOtherProvider(route.model) || isOtherProvider(route.fallback?.model));
   if (elsewhere.length === 0) return [];
-  const why = "models from other providers have no place in v2 yet: such a tier falls back to a Claude model with a named reason. The routes are under Old routes";
+  const why = "models from other providers have no place in this version yet: such a tier falls back to a Claude model with a named reason. The routes are under Old routes";
   return [{ kind: "other-provider-routes", where: elsewhere.map((route) => route.category).join(", "), verdict: KEEP, why }];
 }
 
-// The older categories that have a row in references/routing.md: v2's default categories already route them.
+// The older categories that have a row in references/routing.md: this version's default categories already route them.
 export const OLDER_CATEGORIES_WITH_A_V2_DEFAULT = [
   "codebase-exploration",
   "implementation-explanation",
@@ -612,7 +614,7 @@ export function readyCategoryLine(board, name) {
   return `${JSON.stringify(name)}: { ${fields} }`;
 }
 
-// A category counts as written only when the project's v2 board file has one of that name.
+// A category counts as written only when the project's board file has one of that name.
 function routingStillToWrite(board, currentCategories) {
   return categoriesWithNoV2Default(board).filter((category) => !currentCategories.includes(category));
 }
@@ -651,26 +653,17 @@ export function boardLeftovers(board, currentCategories = [], currentWorktrees =
 
 export const needsAction = (leftover) => leftover.verdict !== KEEP;
 
-export function isHalfMoved(local) {
-  return olderPluginKeys(local).some((plugin) => isSwitchedOverLocally(local, plugin.name));
-}
+const isEarlierNameLeftover = (leftover) => leftover.isPartOfTheMove === true;
+
+const isOlderInstallLeftover = (leftover) => leftover.kind === "older-install";
 
 // What the committed change decides and what the gateway answer settles do not hold up a person's own move.
 export const isThisPersonsWork = (leftover) => needsAction(leftover) && leftover.isCommittedChange !== true && leftover.followsHomeAnswer !== true;
 
-export function heldOlderPlugins(facts) {
-  const olderPluginsOn = olderPluginsOnHere(facts);
-  return heldSourcesHere(facts).map((held) => held.plugin).filter((name) => olderPluginsOn.includes(name));
-}
-
-function olderPluginsTheRunCouldSwitchOff(facts) {
-  const held = heldOlderPlugins(facts);
-  return olderPluginsOnHere(facts).filter((name) => name !== GATEWAY_PLUGIN && !held.includes(name));
-}
-
 export function shapeOf(facts, leftovers) {
-  if (!leftovers.some(isThisPersonsWork) && olderPluginsTheRunCouldSwitchOff(facts).length === 0) return "moved";
-  if (isHalfMoved(facts.local)) return "half-moved";
+  if (leftovers.some(isOlderInstallLeftover)) return "update-first";
+  if (!leftovers.some(isThisPersonsWork)) return "moved";
+  if (leftovers.some(isEarlierNameLeftover)) return "half-moved";
   return facts.isTeam ? "team" : "solo";
 }
 
@@ -679,21 +672,26 @@ export const isOnDeletionList = (leftover) => leftover.verdict === REMOVE || (ne
 
 const isOpenTicketsUnanswered = (leftover) => leftover.kind === "open-tickets" && leftover.keptOnAnswer === undefined;
 
+const isTheMoveStillToDo = (leftover) => isEarlierNameLeftover(leftover) && isThisPersonsWork(leftover);
+
 const QUESTION_RULES = [
   { id: "open-tickets", applies: (leftovers) => leftovers.some(isOpenTicketsUnanswered) },
   { id: "deletions", applies: (leftovers) => leftovers.some(isOnDeletionList) },
+  { id: "the-move", applies: (leftovers) => leftovers.some(isTheMoveStillToDo) },
   { id: "committed-change", applies: (leftovers) => leftovers.some((leftover) => leftover.isCommittedChange === true) },
 ];
 
+const SHAPES_WITH_NO_QUESTIONS = ["moved", "update-first"];
+
 export function questionsFor(shape, leftovers) {
-  if (shape === "moved") return [];
+  if (SHAPES_WITH_NO_QUESTIONS.includes(shape)) return [];
   return QUESTION_RULES.filter((rule) => rule.applies(leftovers)).map((rule) => rule.id);
 }
 
 // What the person can settle by keeping it, so a later scan lists it as kept instead of asking again.
 export const KEPT_ON_ANSWER_SUBJECTS = ["gateway", "memory-notes", "open-tickets"];
 
-const answerSubjectOf = (leftover) => (leftover.followsHomeAnswer === true ? "gateway" : leftover.kind);
+const answerSubjectOf = (leftover) => leftover.answerSubject ?? (leftover.followsHomeAnswer === true ? "gateway" : leftover.kind);
 
 // The run keeps these on its own stated reason, since editing personal notes is reversible and needs no person.
 const KEPT_ON_THE_RUNS_REASON_SUBJECTS = ["memory-notes"];
@@ -710,14 +708,29 @@ export function keptOnAnswer(leftover, keptAnswers) {
   return { ...leftover, verdict: KEEP, why: keptWhy(subject, answer), keptOnAnswer: answer };
 }
 
+const THIS_PROJECT = "this project";
+
+export const gatewayWiredPlaces = (facts) => [
+  ...([facts.committed, facts.local].some(isWiredToTheGateway) ? [THIS_PROJECT] : []),
+  ...(facts.gatewayWiredElsewhere ?? []),
+];
+
+const gatewayViewOf = (facts) => ({
+  wiredPlaces: gatewayWiredPlaces(facts),
+  canSeeEveryPlace: facts.gatewayWiringList === "read",
+  wasOnThisMachine: facts.gatewayWasOnThisMachine === true,
+});
+
 export function projectLeftovers(facts) {
-  const heldSources = heldSourcesHere(facts);
+  const gateway = gatewayViewOf(facts);
   const fromSettings = [
-    ...settingsLeftovers(COMMITTED_SETTINGS, facts.committed, facts.local, heldSources),
-    ...settingsLeftovers(LOCAL_SETTINGS, facts.local, facts.local, heldSources),
-    ...userScopeLeftovers(facts, heldSources),
+    ...settingsLeftovers(COMMITTED_SETTINGS, facts.committed, gateway),
+    ...settingsLeftovers(LOCAL_SETTINGS, facts.local, gateway),
+    ...userScopeLeftovers(facts),
+    ...userSettingsGatewayLeftovers(facts),
   ].map((leftover) => handCommittedFileToCommittedChange(leftover, trackedSettingsFiles(facts)));
   const all = [
+    ...installLeftovers(facts),
     ...fromSettings,
     ...trackedLocalSettingsNote(facts),
     ...projectFileLeftovers(facts),
@@ -733,29 +746,26 @@ export function oldRoutingOf(board) {
   return { profile: profile.name, source: profile.source, lines: profile.routes.map(routeLine) };
 }
 
-const isOnlyGatewayOrHeldOn = (olderPluginsOn, olderPluginsHeld) =>
-  olderPluginsOn.every((name) => name === GATEWAY_PLUGIN || olderPluginsHeld.includes(name));
+const waitsForAYes = (leftover) => leftover.isOnDeletionList || isEarlierNameLeftover(leftover);
 
-// What is left to do all sits behind a yes, and no older plugin is on that the run could still switch off.
-export function isEverythingLeftWaitingForThePerson(leftovers, olderPluginsOn, olderPluginsHeld = []) {
+// What is left to do all sits behind a yes: the deletion list or the move.
+export function isEverythingLeftWaitingForThePerson(leftovers) {
   const stillToDo = leftovers.filter((leftover) => leftover.isStillToDo);
-  return stillToDo.length > 0 && stillToDo.every((leftover) => leftover.isOnDeletionList) && isOnlyGatewayOrHeldOn(olderPluginsOn, olderPluginsHeld);
+  return stillToDo.length > 0 && stillToDo.every(waitsForAYes);
 }
 
 export function classifyProject(facts) {
   const leftovers = projectLeftovers(facts);
   const shape = shapeOf(facts, leftovers);
-  const olderPluginsOn = olderPluginsOnHere(facts);
-  const olderPluginsHeld = heldOlderPlugins(facts);
   return {
-    isWaitingForThePerson: isEverythingLeftWaitingForThePerson(leftovers, olderPluginsOn, olderPluginsHeld),
+    isWaitingForThePerson: shape !== "update-first" && isEverythingLeftWaitingForThePerson(leftovers),
     path: facts.path,
     shape,
     isTeam: facts.isTeam,
     authorCount: facts.authorCount,
     isSettingsCommitted: facts.isSettingsCommitted,
-    olderPluginsOn,
-    olderPluginsHeld,
+    olderPluginsOn: olderPluginsOnHere(facts),
+    olderInstalls: (facts.installs ?? []).filter(isOlderVersionOfThisVersionsPlugin).map(installWords),
     leftovers,
     routing: oldRoutingOf(facts.board),
     openTickets: facts.board.openTickets ?? [],
@@ -792,12 +802,12 @@ export const HOME_GROUPS = [
   {
     id: "records",
     name: "the records: dispatch, briefings, sweep reports and hook state",
-    loses: "history only. Nothing in v2 reads it",
+    loses: "history only. Nothing in this version reads it",
   },
   {
     id: "other-plugins",
     name: "the other older plugins' state: map and rules hook state, Quartermaster records, caches, gateway breadcrumbs, generated agents",
-    loses: "nothing v2 reads. Not quartermaster/events or toolshed/ itself, which are v2's",
+    loses: "nothing this version reads. Not quartermaster/events or toolshed/ itself, which are this version's, and never the data folder of a plugin this version has",
   },
 ];
 
@@ -818,20 +828,13 @@ export function olderBoardGroupOf(name) {
   return isBoardDatabaseEntry(name) ? "board-database" : "records";
 }
 
-const heldProjectCount = (home, held) => home.heldProjectCounts?.[held.plugin] ?? 0;
-
-const heldStillLoading = (home) => OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES.filter((held) => heldProjectCount(home, held) > 0);
-
-const isHeldPluginState = (home) => (path) => heldStillLoading(home).some((held) => held.stateEntries.includes(path));
-
-const OTHER_PLUGIN_FOLDERS = [`${MAPPER_PLUGIN}-state`, `${RULES_PLUGIN}-state`, "quartermaster-state", OLDER_MARKETPLACE, "toolshed/registry", "codex-gateway"];
+const OTHER_PLUGIN_FOLDERS = [`${MAPPER_PLUGIN}-state`, `${RULES_PLUGIN}-state`, "quartermaster-state", TOOLSHED_MARKETPLACE, "toolshed/registry", "codex-gateway"];
 
 function entriesByGroup(home) {
   const byGroup = Object.fromEntries(HOME_GROUP_IDS.map((id) => [id, []]));
   for (const name of home.olderBoardEntries) byGroup[olderBoardGroupOf(name)].push(`${OLDER_BOARD_FOLDER}/${name}`);
   const otherFolders = OTHER_PLUGIN_FOLDERS.filter((path) => home.existingPaths.includes(path));
-  const removable = [...otherFolders, ...home.olderAgentFiles, ...home.olderPluginData].filter((path) => !isHeldPluginState(home)(path));
-  byGroup["other-plugins"].push(...removable);
+  byGroup["other-plugins"].push(...otherFolders, ...home.olderAgentFiles, ...home.olderPluginData);
   return byGroup;
 }
 
@@ -844,9 +847,14 @@ export function homeGroups(home) {
   }).filter((group) => group.count > 0);
 }
 
+// This version installs under the same marketplace name, so its cache folder is this version's own.
 const HOME_FOLDER_RULES = [
-  { path: "model-gateway", verdict: ASK, why: "the gateway: kept for non-Claude models in the main session, or stopped with its own stop and removed" },
-  { path: `plugins/cache/${OLDER_MARKETPLACE}`, verdict: KEEP, why: "the host manages its plugin cache" },
+  {
+    path: "model-gateway",
+    verdict: ASK,
+    why: "the gateway: kept for non-Claude models in the main session (it can no longer be updated or installed again from this marketplace), or, once no project is wired to it, stopped with its own stop and removed",
+  },
+  { path: `plugins/cache/${TOOLSHED_MARKETPLACE}`, verdict: KEEP, why: "this version's own plugin cache under the same marketplace name: the host manages it and nothing here removes it" },
 ];
 
 export function homeFolderLeftovers(existingPaths) {
@@ -858,50 +866,21 @@ export function homeFolderLeftovers(existingPaths) {
   }));
 }
 
-function namedListLeftover(kind, names, why) {
-  return names.length === 0 ? [] : [{ kind, where: names.join(", "), verdict: REMOVE, why }];
+export function homeLeftovers(home) {
+  return [...homeFolderLeftovers(home.existingPaths), ...telemetryLeftover("settings.json", recordOf(home.userSettings.env))];
 }
 
-const keptMarketplaceRecordWhy = (count) =>
-  `${count} project(s) still have a plugin of it switched on, or a map or rules git tracks that load only through its plugins: removing the marketplace deletes those plugins. It goes once none does; a kept gateway, or a mapper or rules plugin that holds what git tracks, keeps it here on purpose`;
+const isKeptOnPurpose = (project) => (name) => name === GATEWAY_PLUGIN && project.isGatewayKept === true;
 
-const MARKETPLACE_REMOVAL_WHY = `claude plugin marketplace remove ${OLDER_MARKETPLACE}, last, run from the config folder and never inside a repository (there it rewrites the committed settings). It deletes the older plugins' data, so it needs its own yes`;
+const hasOlderInstalls = (project) => (project.olderInstalls ?? []).length > 0;
 
-function marketplaceRecordLeftover(home, projectsWithAnOlderPluginOn) {
-  if (!home.hasOlderMarketplaceRecord) return [];
-  const where = `plugins/known_marketplaces.json ${OLDER_MARKETPLACE}`;
-  if (projectsWithAnOlderPluginOn > 0) return [{ kind: "older-marketplace-record", where, verdict: KEEP, why: keptMarketplaceRecordWhy(projectsWithAnOlderPluginOn) }];
-  return namedListLeftover("older-marketplace-record", [where], MARKETPLACE_REMOVAL_WHY);
-}
+// The person answered "keep" for the gateway there and nothing else of the older version is on or installed: nothing is left to wait for.
+const isOnlyKeptOnPurpose = (project) => !hasOlderInstalls(project) && project.olderPluginsOn.every(isKeptOnPurpose(project));
 
-function heldPluginStateLeftovers(home) {
-  return heldStillLoading(home).flatMap((held) => {
-    const entries = [...home.existingPaths, ...home.olderPluginData].filter((path) => held.stateEntries.includes(path));
-    if (entries.length === 0) return [];
-    return [{ kind: held.stateKind, where: entries.join(", "), verdict: KEEP, why: held.stateWhy(heldProjectCount(home, held)) }];
-  });
-}
-
-export function homeLeftovers(home, projectsWithAnOlderPluginOn = 0) {
-  return [
-    ...homeFolderLeftovers(home.existingPaths),
-    ...heldPluginStateLeftovers(home),
-    ...telemetryLeftover("settings.json", recordOf(home.userSettings.env)),
-    ...marketplaceRecordLeftover(home, projectsWithAnOlderPluginOn),
-  ];
-}
-
-const isKeptOnPurpose = (project) => (name) =>
-  (name === GATEWAY_PLUGIN && project.isGatewayKept === true) || (project.olderPluginsHeld ?? []).includes(name);
-
-// The person answered "keep" for the gateway there, or git tracks what only that older plugin loads, and nothing else of the older version is on: nothing is left to wait for.
-const isOnlyKeptOnPurpose = (project) => project.olderPluginsOn.every(isKeptOnPurpose(project));
-
+// An older version still installed reads the older state, so it holds the cleanup as much as a plugin switched on does.
 export function projectsStillOnOlderVersion(installedProjects) {
-  return installedProjects.filter((project) => project.olderPluginsOn.length > 0 && !isOnlyKeptOnPurpose(project));
+  return installedProjects.filter((project) => (project.olderPluginsOn.length > 0 || hasOlderInstalls(project)) && !isOnlyKeptOnPurpose(project));
 }
-
-const hasKeptReason = (project) => project.olderPluginsOn.length > 0 || (project.olderPluginsNeededByTrackedSources ?? []).length > 0;
 
 const projectsWithTheGatewayOn = (installedProjects) =>
   installedProjects.filter((project) => project.olderPluginsOn.includes(GATEWAY_PLUGIN) && project.isGatewayKept !== true).map((project) => project.path);
@@ -913,18 +892,18 @@ export const olderPluginsOnAtUserScope = (installedProjects) => installedProject
 // Only the person's own command reaches the user settings file: no project's run and no step of the upgrade writes it.
 export function userScopeWaitLine(names) {
   if (names.length === 0) return "";
-  return `${names.join(", ")} ${verbFor(names)} on for every project at user scope: claude plugin disable <name>@${OLDER_MARKETPLACE} --scope user switches each off everywhere, once no project needs it`;
+  return `${names.join(", ")} ${verbFor(names)} on for every project at user scope: claude plugin uninstall <name>@${TOOLSHED_MARKETPLACE} --scope user takes each out everywhere, the gateway only once no project is wired to it`;
 }
 
 export function classifyHome(home, installedProjects) {
   const stillOn = projectsStillOnOlderVersion(installedProjects);
-  const leftovers = homeLeftovers(home, installedProjects.filter(hasKeptReason).length);
+  const leftovers = homeLeftovers(home);
   const groups = homeGroups(home);
   const hasSomethingToRemove = groups.length > 0 || leftovers.some(needsAction);
   return {
     isReadyForCleanup: stillOn.length === 0,
     projectsStillOn: stillOn.length,
-    projectsKeptOnPurpose: installedProjects.filter((project) => project.olderPluginsOn.length > 0).length - stillOn.length,
+    projectsKeptOnPurpose: installedProjects.filter((project) => project.olderPluginsOn.length > 0 && isOnlyKeptOnPurpose(project)).length,
     userScopeOlderPluginsOn: olderPluginsOnAtUserScope(installedProjects),
     gatewayProjects: projectsWithTheGatewayOn(installedProjects),
     groups,

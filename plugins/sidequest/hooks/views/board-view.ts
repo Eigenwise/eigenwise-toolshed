@@ -300,9 +300,11 @@ const nameOnBranch = (ticket: Ticket): string => {
   return ticket.branch === undefined ? name : `${name} on branch ${ticket.branch}`
 }
 
+const statusFact = (ticket: Ticket): string => (isAnswerWithSession(ticket) ? 'answered, with the session to act on' : statusWords(ticket.status))
+
 // Kind, mode and category are routing words for the model: a person reading the ticket has no use for them.
 const factsLine = (ticket: Ticket): string =>
-  [nameOnBranch(ticket), ...handleDetails(ticket, ticket.branch), statusWords(ticket.status), ...optionalFacts(ticket), `updated ${ticket.updated}`]
+  [nameOnBranch(ticket), ...handleDetails(ticket, ticket.branch), statusFact(ticket), ...optionalFacts(ticket), `updated ${ticket.updated}`]
     .filter(fact => fact !== '')
     .join(', ')
 
@@ -339,6 +341,11 @@ const sayingYesToShown = (parts: SayingYesTo): SayingYesToShown[] =>
     drawnAs: DRAWN_AS[part],
   }))
 
+const sentAnswerOf = (ticket: Ticket): Pick<TicketDetail, 'answerSent' | 'answerSentAt'> => ({
+  answerSent: ticket.answerSent ?? '',
+  answerSentAt: ticket.answerSentAt ?? '',
+})
+
 export const ticketDetail = (ticket: Ticket, story?: Story): TicketDetail => {
   const { diff, withoutDiff } = fencedDiffOf(ticket.forYou)
   const forYou = parseForYou(withoutDiff)
@@ -361,7 +368,7 @@ export const ticketDetail = (ticket: Ticket, story?: Story): TicketDetail => {
     options: takesAnswer ? answerOptions(forYou) : [],
     body: bodyForThePerson(ticket, story),
     takesAnswer,
-    answerSent: ticket.answerSent ?? '',
+    ...sentAnswerOf(ticket),
   }
 }
 

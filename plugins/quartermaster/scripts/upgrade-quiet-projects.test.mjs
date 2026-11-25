@@ -12,7 +12,7 @@ import { applyToProject, listingLines, outcomeLines } from "./upgrade-quiet-proj
 
 const scriptPath = join(dirname(fileURLToPath(import.meta.url)), "upgrade-quiet-projects.mjs");
 const scanPath = join(dirname(fileURLToPath(import.meta.url)), "upgrade-scan.mjs");
-const OLDER = "eigenwise-toolshed";
+const TOOLSHED = "eigenwise-toolshed";
 const DAY = 24 * 60 * 60 * 1000;
 
 const writeFile = (path, text) => {
@@ -20,7 +20,7 @@ const writeFile = (path, text) => {
   writeFileSync(path, text);
 };
 const writeJson = (path, value) => writeFile(path, JSON.stringify(value, null, 2));
-const on = (...names) => Object.fromEntries(names.map((name) => [`${name}@${OLDER}`, true]));
+const on = (...names) => Object.fromEntries(names.map((name) => [`${name}@${TOOLSHED}`, true]));
 
 function writeTranscript(configFolder, project, daysAgo) {
   const path = join(configFolder, "projects", hostProjectSlug(project), "session.jsonl");
@@ -53,20 +53,20 @@ describe("switching off the quiet projects on a made-up machine", () => {
     configFolder = join(home, ".claude");
     projects = Object.fromEntries(["busy", "quiet-with-copy", "never-used", "gateway-only", "unreadable", "gone"].map((name) => [name, join(scratch, name)]));
     for (const name of Object.keys(projects).filter((name) => name !== "gone")) mkdirSync(join(projects[name], ".claude"), { recursive: true });
-    writeJson(join(projects.busy, ".claude", "settings.json"), { enabledPlugins: on("sidequest") });
+    writeJson(join(projects.busy, ".claude", "settings.json"), { enabledPlugins: on("sidequest", "quality-gate") });
     writeTranscript(configFolder, projects.busy, 2);
-    writeJson(join(projects["quiet-with-copy"], ".claude", "settings.json"), { enabledPlugins: on("sidequest", "quartermaster") });
-    writeJson(join(projects["quiet-with-copy"], ".claude", "settings.local.json"), { enabledPlugins: { ...on("live-rules", "model-gateway") }, env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:4000" } });
+    writeJson(join(projects["quiet-with-copy"], ".claude", "settings.json"), { enabledPlugins: on("sidequest", "quartermaster", "quality-gate") });
+    writeJson(join(projects["quiet-with-copy"], ".claude", "settings.local.json"), { enabledPlugins: { ...on("live-rules", "observability", "model-gateway") }, env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:4000" } });
     writeFile(join(projects["quiet-with-copy"], ".claude", "settings.local.json.before-upgrade"), "an earlier day's copy\n");
     writeTranscript(configFolder, projects["quiet-with-copy"], 45);
-    writeJson(join(projects["never-used"], ".claude", "settings.json"), { enabledPlugins: on("codebase-mapper") });
+    writeJson(join(projects["never-used"], ".claude", "settings.json"), { enabledPlugins: on("codebase-mapper", "quality-gate") });
     writeJson(join(projects["gateway-only"], ".claude", "settings.local.json"), { enabledPlugins: on("model-gateway") });
     writeFile(join(projects.unreadable, ".claude", "settings.local.json"), "{ not json");
-    writeJson(join(projects.unreadable, ".claude", "settings.json"), { enabledPlugins: on("sidequest") });
-    const entry = (path) => ({ scope: "project", projectPath: path, installPath: "cache", version: "1.0.0" });
+    writeJson(join(projects.unreadable, ".claude", "settings.json"), { enabledPlugins: on("quality-gate") });
+    const entry = (path) => ({ scope: "project", projectPath: path, installPath: "cache", version: "1.5.1" });
     writeJson(join(configFolder, "plugins", "installed_plugins.json"), {
       version: 2,
-      plugins: { [`sidequest@${OLDER}`]: Object.values(projects).map(entry) },
+      plugins: { [`quality-gate@${TOOLSHED}`]: Object.values(projects).map(entry), [`sidequest@${TOOLSHED}`]: [{ scope: "user", installPath: "cache", version: "7.0.0" }] },
     });
   });
 
@@ -77,7 +77,8 @@ describe("switching off the quiet projects on a made-up machine", () => {
     const listing = run(home);
     assert.deepEqual(snapshot(scratch), before);
     assert.match(listing, /quiet-with-copy/);
-    assert.match(listing, /would switch off: sidequest, quartermaster, live-rules/);
+    assert.match(listing, /would switch off: quality-gate\n/);
+    assert.doesNotMatch(listing, /would switch off:.*(sidequest|quartermaster|live-rules|codebase-mapper|observability)/);
     assert.match(listing, /left on: model-gateway/);
     assert.match(listing, /never-used.*no session or commit on record/);
     assert.doesNotMatch(listing, /would switch off:.*model-gateway/);
@@ -88,11 +89,11 @@ describe("switching off the quiet projects on a made-up machine", () => {
   });
 
   test("--days widens or narrows what counts as quiet", () => {
-    assert.match(run(home, "--days", "1"), /busy.*would switch off: sidequest/s);
+    assert.match(run(home, "--days", "1"), /busy.*would switch off: quality-gate/s);
     assert.doesNotMatch(run(home, "--days", "60"), /quiet-with-copy/);
   });
 
-  test("applying writes only the local settings, keeps a copy under a dated name, and leaves the gateway and committed files alone", () => {
+  test("applying writes only the local settings, keeps a copy under a dated name, and leaves the gateway, this version's keys and committed files alone", () => {
     const committedBefore = readFileSync(join(projects["quiet-with-copy"], ".claude", "settings.json"), "utf8");
     const busyBefore = snapshot(projects.busy);
     const printed = run(home, "--switch-off");
@@ -100,25 +101,27 @@ describe("switching off the quiet projects on a made-up machine", () => {
     assert.equal(readFileSync(join(quiet, ".claude", "settings.json"), "utf8"), committedBefore);
     assert.deepEqual(snapshot(projects.busy), busyBefore);
     const local = JSON.parse(readFileSync(join(quiet, ".claude", "settings.local.json"), "utf8"));
-    assert.equal(local.enabledPlugins[`sidequest@${OLDER}`], false);
-    assert.equal(local.enabledPlugins[`quartermaster@${OLDER}`], false);
-    assert.equal(local.enabledPlugins[`live-rules@${OLDER}`], false);
-    assert.equal(local.enabledPlugins[`model-gateway@${OLDER}`], true);
+    assert.equal(local.enabledPlugins[`quality-gate@${TOOLSHED}`], false);
+    assert.equal(local.enabledPlugins[`observability@${TOOLSHED}`], true, "observability updates in place and stays on");
+    assert.equal(local.enabledPlugins[`live-rules@${TOOLSHED}`], true);
+    assert.equal(`sidequest@${TOOLSHED}` in local.enabledPlugins, false);
+    assert.equal(`quartermaster@${TOOLSHED}` in local.enabledPlugins, false);
+    assert.equal(local.enabledPlugins[`model-gateway@${TOOLSHED}`], true);
     assert.equal(local.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:4000");
     assert.equal(readFileSync(join(quiet, ".claude", "settings.local.json.before-upgrade"), "utf8"), "an earlier day's copy\n");
     const copies = readdirSync(join(quiet, ".claude")).filter((name) => /^settings\.local\.json\.before-upgrade-\d{4}-\d{2}-\d{2}$/.test(name));
     assert.equal(copies.length, 1);
-    assert.equal(JSON.parse(readFileSync(join(quiet, ".claude", copies[0]), "utf8")).enabledPlugins[`live-rules@${OLDER}`], true);
+    assert.equal(`quality-gate@${TOOLSHED}` in JSON.parse(readFileSync(join(quiet, ".claude", copies[0]), "utf8")).enabledPlugins, false);
     assert.match(printed, new RegExp(`copy: .*${copies[0]}`));
     assert.match(printed, /undo: copy .* back over /);
     assert.match(printed, /left on: model-gateway, the gateway plugin/);
   });
 
   test("a project with no local file gets one and no copy, a gateway-only project gets nothing, a folder that is gone is named", () => {
-    assert.deepEqual(JSON.parse(readFileSync(join(projects["never-used"], ".claude", "settings.local.json"), "utf8")), { enabledPlugins: { [`codebase-mapper@${OLDER}`]: false } });
+    assert.deepEqual(JSON.parse(readFileSync(join(projects["never-used"], ".claude", "settings.local.json"), "utf8")), { enabledPlugins: { [`quality-gate@${TOOLSHED}`]: false } });
     assert.deepEqual(readdirSync(join(projects["never-used"], ".claude")).sort(), ["settings.json", "settings.local.json"]);
     assert.equal(existsSync(join(projects["gateway-only"], ".claude", "settings.json")), false);
-    assert.equal(JSON.parse(readFileSync(join(projects["gateway-only"], ".claude", "settings.local.json"), "utf8")).enabledPlugins[`model-gateway@${OLDER}`], true);
+    assert.equal(JSON.parse(readFileSync(join(projects["gateway-only"], ".claude", "settings.local.json"), "utf8")).enabledPlugins[`model-gateway@${TOOLSHED}`], true);
   });
 
   test("a local file that is not JSON is left as it is", () => {
@@ -146,7 +149,7 @@ describe("switching off the quiet projects on a made-up machine", () => {
 
 describe("the rules behind the listing", () => {
   const nowMs = Date.UTC(2026, 10, 20);
-  const project = (overrides) => ({ path: "/work/one", isFolderPresent: true, olderPluginsOn: ["sidequest"], lastUse: undefined, ...overrides });
+  const project = (overrides) => ({ path: "/work/one", isFolderPresent: true, olderPluginsOn: ["quality-gate"], lastUse: undefined, ...overrides });
 
   test("judges a missing folder, a recent session, a gateway-only project and a quiet one", () => {
     const recent = { atMs: nowMs - 2 * DAY, source: "session" };
@@ -162,12 +165,12 @@ describe("the rules behind the listing", () => {
   });
 
   test("names what would go off and keeps the gateway out of it", () => {
-    assert.deepEqual(switchOffNames(["sidequest", "model-gateway", "live-rules"]), ["sidequest", "live-rules"]);
+    assert.deepEqual(switchOffNames(["quality-gate", "model-gateway"]), ["quality-gate"]);
   });
 
   test("writes false under enabledPlugins and keeps every other key", () => {
-    const written = settingsWithOlderPluginsOff({ env: { A: "1" }, enabledPlugins: { "x@other": true } }, ["sidequest"]);
-    assert.deepEqual(written, { env: { A: "1" }, enabledPlugins: { "x@other": true, [`sidequest@${OLDER}`]: false } });
+    const written = settingsWithOlderPluginsOff({ env: { A: "1" }, enabledPlugins: { "x@other": true } }, ["quality-gate"]);
+    assert.deepEqual(written, { env: { A: "1" }, enabledPlugins: { "x@other": true, [`quality-gate@${TOOLSHED}`]: false } });
   });
 
   test("the copy keeps the upgrade's name, then a dated one, then a numbered one", () => {
@@ -178,74 +181,36 @@ describe("the rules behind the listing", () => {
   });
 });
 
-describe("a mapper that holds a map git tracks is never switched off", () => {
+describe("what the quiet step leaves alone", () => {
   const nowMs = Date.UTC(2026, 10, 20);
-  const project = (overrides) => ({ path: "/work/one", isFolderPresent: true, olderPluginsOn: ["codebase-mapper"], olderPluginsHeld: ["codebase-mapper"], lastUse: undefined, ...overrides });
 
-  test("leaves the held mapper out of what goes off, and the plan row says it stays on", () => {
-    assert.deepEqual(switchOffNames(["sidequest", "codebase-mapper"], ["codebase-mapper"]), ["sidequest"]);
-    assert.deepEqual(switchOffNames(["sidequest", "codebase-mapper"], []), ["sidequest", "codebase-mapper"]);
-    const [row] = planQuietProjects([project({ olderPluginsOn: ["sidequest", "codebase-mapper"] })], nowMs, 30);
-    assert.deepEqual(row.switchOff, ["sidequest"]);
-    assert.deepEqual(row.keepsHeld, ["codebase-mapper"]);
-    assert.equal(row.keepsGateway, false);
+  test("a project with only the gateway on has nothing to switch off, and says the gateway stays", () => {
+    const [row] = planQuietProjects([{ path: "/work/one", isFolderPresent: true, olderPluginsOn: ["model-gateway"], lastUse: undefined }], nowMs, 30);
+    assert.equal(row.verdict, "nothing-to-switch-off");
+    assert.equal(row.keepsGateway, true);
+    assert.match(outcomeLines({ path: "/work/one", outcome: "nothing-to-switch-off", keepsGateway: true }).join("\n"), /nothing to switch off, the gateway plugin left on/);
+    assert.ok(listingLines([row], 30, "node quiet.mjs").some((line) => line.includes("left on: model-gateway")));
   });
 
-  test("a project with only the gateway and a held mapper on has nothing to switch off", () => {
-    assert.equal(judgeProject(project(), nowMs, 30), "nothing-to-switch-off");
-    assert.equal(judgeProject(project({ olderPluginsOn: ["model-gateway", "codebase-mapper"] }), nowMs, 30), "nothing-to-switch-off");
-    assert.equal(judgeProject(project({ olderPluginsHeld: [] }), nowMs, 30), "quiet");
-  });
-
-  test("the listing says in the gateway's way that it stays on and why", () => {
-    const plan = planQuietProjects([project({ olderPluginsOn: ["sidequest", "codebase-mapper", "model-gateway"] })], nowMs, 30);
-    const lines = listingLines(plan, 30, "node quiet.mjs");
-    assert.ok(lines.some((line) => line.includes("would switch off: sidequest")));
-    assert.ok(lines.some((line) => line.endsWith("left on: codebase-mapper, the map git tracks loads through it")));
-    assert.ok(lines.some((line) => line.includes("left on: model-gateway")));
-  });
-
-  test("the older rules plugin held by rules git tracks is left on the same way, in its own words", () => {
-    const plan = planQuietProjects([project({ olderPluginsOn: ["sidequest", "live-rules"], olderPluginsHeld: ["live-rules"] })], nowMs, 30);
-    assert.deepEqual(plan[0].switchOff, ["sidequest"]);
-    const lines = listingLines(plan, 30, "node quiet.mjs");
-    assert.ok(lines.some((line) => line.endsWith("left on: live-rules, the rules git tracks load through it")));
-    const outcome = { path: "/work/one", outcome: "nothing-to-switch-off", keepsGateway: false, keepsHeld: ["live-rules"] };
-    assert.match(outcomeLines(outcome).join("\n"), /nothing to switch off, the rules plugin, whose rules git tracks, left on/);
-  });
-
-  test("the listing names what is on at user scope and how to switch it off there", () => {
-    const withUserScope = listingLines([], 30, "node quiet.mjs", ["sidequest", "live-rules"]);
+  test("the listing names what is on at user scope and the command that takes it out there", () => {
+    const withUserScope = listingLines([], 30, "node quiet.mjs", ["quality-gate", "model-gateway"]);
     assert.equal(
       withUserScope.at(-1),
-      "sidequest, live-rules are on for every project at user scope: claude plugin disable <name>@eigenwise-toolshed --scope user switches each off everywhere, once no project needs it.",
+      "quality-gate, model-gateway are on for every project at user scope: claude plugin uninstall <name>@eigenwise-toolshed --scope user takes each out everywhere, the gateway only once no project is wired to it.",
     );
     assert.equal(listingLines([], 30, "node quiet.mjs").some((line) => line.includes("user scope")), false);
   });
 
-  test("applying on a repository that commits its map writes nothing for the mapper and says it stays on", () => {
-    const scratch = mkdtempSync(join(tmpdir(), "quartermaster-quiet-held-"));
+  test("applying on a project whose only keys are this version's writes nothing", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "quartermaster-quiet-this-version-"));
     try {
-      const repository = join(scratch, "repository");
-      mkdirSync(repository, { recursive: true });
-      const git = (...args) => execFileSync("git", ["-c", "user.name=Held", "-c", "user.email=held@example.com", ...args], { cwd: repository, stdio: "ignore" });
-      git("init", "-q", "-b", "main");
-      writeFile(join(repository, ".claude", ".codebase-info", "INDEX.md"), "the map\n");
-      git("add", "--", ".claude/.codebase-info");
-      git("commit", "-q", "-m", "commit the map");
-      const context = { configDirectory: join(scratch, "home", ".claude"), nowMs: Date.now() + 60 * DAY, days: 30, today: "2026-11-20" };
-      writeJson(join(repository, ".claude", "settings.local.json"), { enabledPlugins: on("codebase-mapper", "sidequest") });
-      const outcome = applyToProject({ path: repository }, context);
-      assert.deepEqual(outcome.names, ["sidequest"]);
-      assert.deepEqual(outcome.keepsHeld, ["codebase-mapper"]);
-      const written = JSON.parse(readFileSync(join(repository, ".claude", "settings.local.json"), "utf8"));
-      assert.equal(written.enabledPlugins[`codebase-mapper@${OLDER}`], true);
-      assert.equal(written.enabledPlugins[`sidequest@${OLDER}`], false);
-      assert.match(outcomeLines(outcome).join("\n"), /left on: codebase-mapper, the map git tracks loads through it/);
-      writeJson(join(repository, ".claude", "settings.local.json"), { enabledPlugins: on("codebase-mapper") });
-      const mapperOnly = applyToProject({ path: repository }, context);
-      assert.equal(mapperOnly.outcome, "nothing-to-switch-off");
-      assert.match(outcomeLines(mapperOnly).join("\n"), /nothing to switch off, the mapper, whose map git tracks, left on/);
+      const project = join(scratch, "project");
+      writeJson(join(project, ".claude", "settings.local.json"), { enabledPlugins: on("sidequest", "codebase-mapper") });
+      const before = readFileSync(join(project, ".claude", "settings.local.json"), "utf8");
+      const outcome = applyToProject({ path: project }, { configDirectory: join(scratch, "home", ".claude"), nowMs: Date.now() + 60 * DAY, days: 30, today: "2026-11-20" });
+      assert.equal(outcome.outcome, "nothing-to-switch-off");
+      assert.equal(readFileSync(join(project, ".claude", "settings.local.json"), "utf8"), before);
+      assert.deepEqual(readdirSync(join(project, ".claude")), ["settings.local.json"]);
     } finally {
       rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

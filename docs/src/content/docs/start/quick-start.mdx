@@ -1,0 +1,300 @@
+---
+title: Quick start
+description: Set up once, then take one tracker ticket from "Let's do PAY-41" to a pull request, steering at every stop.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import Terminal from '../../../components/Terminal.astro';
+import Frame from '../../../components/Frame.astro';
+import marketplaceAdd from '../../../mocks/marketplace-add.txt?raw';
+import installBoth from '../../../mocks/install-both.txt?raw';
+import firstReply from '../../../mocks/first-reply.txt?raw';
+import closingView from '../../../mocks/closing-view.txt?raw';
+
+<p class="lead">Set up once. Then type one ticket and steer it to a pull request. This page follows a made-up ticket, PAY-41, in a made-up project called `photo-library`, from the first message to the last. The [walk-through](/start/walk-through/) has the same pictures with more words.</p>
+
+Setup takes about five minutes. The task itself takes as long as the work does.
+
+## Before you start
+
+You need:
+
+- Claude Code **2.1.325** or newer and Node.js **22.5** or newer (the upgrade and the Live Rules audit need 22.5). Check with `claude --version` and `node --version`.
+- A project in git. For a pull request at the end it also needs a git remote, and the GitHub CLI, `gh`, so the board can follow the pull request. Without a remote, finished work is landed on a branch and no pull request is opened.
+- Something in your session that can read your tracker, like its command line tool or an MCP server, if you want to name a ticket by its key. Without one, paste the ticket's text, or describe the work in your own words. It is sized first, and large or vague work is planned the same way.
+
+## Set up
+
+<Steps>
+
+1. **Add the marketplace.** Once per machine.
+
+   A marketplace is a list of plugins. In any terminal:
+
+   ```bash
+   claude plugin marketplace add Eigenwise/eigenwise-toolshed
+   ```
+
+   <Terminal text={marketplaceAdd} />
+
+   The marketplace it adds is called `eigenwise-toolshed`, and that is the name the install commands use.
+
+2. **Install two plugins.** Once per project, in the project folder.
+
+   ```bash
+   claude plugin install sidequest@eigenwise-toolshed --scope local
+   ```
+
+   ```bash
+   claude plugin install quartermaster@eigenwise-toolshed --scope local
+   ```
+
+   <Terminal text={installBoth} />
+
+   Sidequest is the work board and the planning. Quartermaster sets the project up. `--scope local` switches them on for you, in this project, and writes only your own settings file.
+
+   **If you had the older Toolshed:** you do not install anything new. A normal plugin update replaced your plugins with this version, and the first session in a project that still holds something the older one left says so once. [Coming from the older version](/guides/upgrading/) has the one command that moves a project.
+
+3. **Run outfit.** Once per project.
+
+   Start `claude` in the project folder and type:
+
+   ```text
+   /quartermaster:outfit
+   ```
+
+   It reads the project first, then proposes what is missing: rules, permissions, a map of the code, and more Toolshed plugins where they fit. You approve each item. See [Outfit](/why/quartermaster/outfit/).
+
+   Two things to know. In a project with no other git authors and no committed `.claude/settings.json`, outfit installs further plugins at project scope, which writes the committed `.claude/settings.json`. In a team project it installs for you only. And if it installed anything, it stops once and asks you to type `/reload-plugins`.
+
+   Sidequest works without this step, so you can do it later.
+
+</Steps>
+
+## How to press things in the pane
+
+The board lives in a pane, a panel beside the chat. This page says **press** for a row or a button in it. Press a row to open it, and press **Back** to return. In the terminal, give the pane the keys with ctrl+x, then tab. The arrow keys then scroll it.
+
+The first time the pane opens on a machine, two lines at the top say what **Now**, **Waits on you**, **Next** and **Done** mean. They are not shown again, so your next screen will not have them.
+
+## 1. Type the ticket
+
+Open a session in the repository and type only the ticket:
+
+```text
+Let's do PAY-41
+```
+
+Nothing about the tool. A tracker ticket you name is always planned with you first, however small it looks.
+
+The terminal and the desktop app work the same way. The pictures on this page show the terminal. In the desktop app the board is a side panel.
+
+<Frame name="01-first-message.png" />
+
+## 2. Read what comes back
+
+Claude reads before it says anything: the ticket with its comments, linked issues and attachments, then the code. Images are opened. Reading changes nothing, so it does not ask.
+
+Within a few minutes the plan is on the board. The chat says a few lines. The first two sentences are Claude's own wording and will differ. The last two are one line, written by the board:
+
+<Terminal title="claude" text={firstReply} caption="A text drawing of the chat. The last sentence pair, from The analysis on, is the board's own line." />
+
+So there is one place to read and decide. The analysis, the options and the decisions are on the board, and the chat only points at it.
+
+<Frame name="02-board-plan-waits.png" />
+
+Press the row under **The plan**. The plan view reads from the top:
+
+- **A short version**: what is asked, how it works today, what it found, the options by letter.
+- **Decisions for you**, numbered. Each has a recommended answer, what the other answer costs, and a pick.
+- One field for your own words, and **Send**.
+- The long form: the path the change takes through the code, the analysis, the code that matters.
+
+<Frame name="03-plan-open-decisions.png" />
+
+With no board pane, like in a very narrow terminal, the chat carries the short version and the decisions in full, and you answer by number.
+
+## 3. Answer
+
+Pick per decision, add your own words if you have any, then press **Send**. In every field on the board, Enter only keeps what you typed. **Send** is what sends.
+
+<Frame name="04-plan-decisions-filled-in.png" />
+
+After the send, the plan shows what you sent in place of the form, and the board stops saying it waits on you.
+
+<Frame name="05-plan-decisions-answered.png" />
+
+Your picks and your words went into the chat as one message:
+
+<Frame name="06-chat-decisions-sent.png" />
+
+Or type in the chat. "Yes" takes every recommended answer. You can also answer by number, in your own words:
+
+```text
+1 yes. 2 yes. 3 no, build the button. It is why the mockup changed.
+```
+
+An answer can open a new decision. Then the plan is updated, the board shows the next group, and the chat again only points. "You decide" ends the questions at once. An answer settles the questions and nothing more. Nothing is built yet.
+
+## 4. Look at the tickets
+
+Before anything is built you see the plan as tickets. A **ticket** is one piece of the work. They are filed as proposed. The board waits for your yes:
+
+<Frame name="07-board-waits-for-the-yes.png" />
+
+Press the row. From the top of the plan view:
+
+- the goal, in a few lines
+- **Taken by default**: what Claude decided for you, a line each
+- a field for a correction, with **Send the correction**
+- the button **Yes, build it**
+- **Proposed tickets**: each ticket's own text, with its approach and a check you can judge
+
+<Frame name="08-plan-before-the-yes.png" />
+
+You can retitle, drop, add or reword any of it in a few words. A check you word yourself is kept exactly as you said it. Work you add in passing, like "and clean up the old counter while you are there", comes back as a ticket of its own, for you to cut or widen.
+
+One yes starts it, pressed or typed. No ticket starts before it. A correction is not that yes: Claude folds it in, marks the ticket that changed and asks again.
+
+## 5. Steer while it builds
+
+Each ticket runs on its own agent, a helper session, on a model that fits the work.
+
+<Frame name="09-build-started.png" />
+
+The board shows what runs:
+
+<Frame name="12-board-agents-running.png" />
+
+From the top:
+
+- **Waits on you** comes first, whenever something does: open decisions, your yes on the proposed tickets, a question on a ticket.
+- **Now** is what runs: each agent with its model and how long it has run, or what the session itself is doing.
+- **The plan** opens the plan view. With nothing left to decide it shows the short version, the path, the analysis, the code, then what was decided.
+- **Waiting on you from earlier sessions** is a question left over from a session that ended.
+- **You could** is what you can look at while something runs.
+- **Being checked** is work that is built and in review.
+- **Next** is what waits its turn.
+- **Done** is what finished.
+- **Finished agents** lists the newest three agents that came back. The rest are behind one `N more finished` row. Open one that worked on a ticket and you get that ticket. One that only looked something up opens a view of its own, with what it reported.
+
+<Frame name="13-board-agents-finished.png" />
+
+You don't have to watch. You can step in at any point:
+
+- **Open a ticket** from its row to read its text.
+- **Say something about it.** A ticket view and the plan view have one field for that, with its own **Send**. What you send reaches the session as your message and is logged.
+- **Type a correction in the chat**, like "leave the share sheet alone". It is noted on the ticket and passed to the agent, or applied when the agent returns. You are told in one line which.
+- **Type "stop".** Running agents finish and report. Nothing new starts.
+
+<Frame name="11-ticket-opened.png" />
+
+## 6. Read the change while it is checked
+
+When a build comes back you get one line, like:
+
+```text
+Build is back: 16 tests pass. Review and proof running.
+```
+
+Two checks follow.
+
+- **Proof on the real thing**, the way the plan said: Claude opens the page, calls the endpoint or runs the command. A passing test alone does not count. When nothing can check it for real, it says "tested, not seen working".
+- **An independent review**, read-only. It fails on behaviour: the change misses what the ticket says, breaks something, or claims a check that never ran. It also fails on a clear break of a guideline your repository wrote down. A ticket filed as a quick fix skips it. See [how quality is checked](/guides/quality/).
+
+<Frame name="15-board-being-checked.png" />
+
+You don't wait for the review to see the change. Once the proof has run, it is on the ticket, and the chat says one line:
+
+```text
+What changed, how it was checked and the hunks that carry the design
+are on the board (/board opens it). The review still runs.
+```
+
+Open the ticket from its row:
+
+<Frame name="16-ticket-being-checked.png" />
+
+**What changed** has a line per area and the one command that shows the whole diff. The hunks are the one or two that carry the design.
+
+## 7. Landing: your yes, or none
+
+When the review has passed, the change comes to your checkout: on the ticket's branch, uncommitted, so your editor shows it. If your checkout holds other work, it is left alone and you get the folder.
+
+Whether you are asked depends on your project:
+
+- Where your project's instructions ask for your yes before a commit, a push or a pull request, or words go out under your name, that step is kept. That is the question below.
+- With a git remote and no such rule, landing pushes the branch and opens the pull request without a question.
+- Where only you commit to the repository, landing also **merges** the pull request once CI is green and it is not a draft, unless a merge deploys, and it does not ask. Where other people commit too, it stops at the open pull request and the merge is yours.
+
+See [Working in a team](/guides/teams/).
+
+When there is a question, the chat says one line:
+
+```text
+The review passed: what it found, the words that go out and the
+question wait on the board (/board opens it). A letter typed here
+works too.
+```
+
+<Frame name="17-board-waits-on-you.png" />
+
+The ticket's view starts with the question, the answers, the extras, a field for your own words and **Send**. Below is what you are saying yes to: what changed, how it was checked, the hunks, what the review found, and the commit message and the pull request title and description, word for word. Those words are stored on the ticket and sent as stored.
+
+<Frame name="18-ticket-waits-on-you.png" />
+
+Pick an answer, tick the extras you want, and press **Send**. Or type a letter in the chat: `A, plus 1` takes the first answer and the extra.
+
+<Frame name="20-ticket-answer-sent.png" />
+
+The same holds for any words under your name. A tracker comment or a review reply is shown word for word in the question that asks to send it.
+
+Nothing a colleague reads names the board or this tool. Branch names, commits and pull request text speak of the work in your project's terms, with `PAY-41` in them.
+
+## 8. The finished task
+
+The session commits, pushes and opens the pull request, then records it on the board:
+
+<Frame name="21-pull-request-recorded.png" />
+
+<Frame name="22-board-done.png" />
+
+At the end Claude pastes what the session changed:
+
+<Terminal title="Closing report" text={closingView} caption="A text drawing of the closing report, which Claude pastes into the chat." />
+
+Open a ticket to see where the work ended:
+
+<Frame name="23-ticket-pull-request.png" />
+
+<Aside type="note" title="Ticket ids">
+The board takes the letters in `PL-1` from the folder name, `photo-library`. In a folder called `my-app` the first ticket is `MA-1`. The board says which letters it picked, and you can change them in `.sidequest/board.json` while the board is young.
+</Aside>
+
+## 9. Small things stay small
+
+A change in one place that you spelled out gets no ticket, no questions and no plan. Claude does it and says how it checked.
+
+Inline work in more than one place, or with a choice left, gets one line before the first edit:
+
+```text
+Plan: rename the link in both layouts, checked by opening them.
+```
+
+## The idea behind it
+
+You steer. Working with it should feel like working with a colleague when you are the senior developer in the room: you have opinions, and each one lands.
+
+- Every stop is worth your opinion and cheap to wave through. One "yes" takes the recommended answers.
+- An answer settles what was asked and nothing more. Nothing is a go-ahead you did not give.
+- Autonomy is yours to hand over. Say "you decide" and it takes its recommendations. You can take it back at any point.
+
+How much it does alone is up to you, stop by stop.
+
+## What next
+
+- The same task with more words: [Walk-through](/start/walk-through/).
+- The three ways a request can go: [A task, start to pull request](/guides/task-to-pull-request/).
+- Working with others: [Working in a team](/guides/teams/).
+- Different models per kind of work: [How routing picks a model](/guides/routing/).
+- Something broken or unclear: open an issue on [Eigenwise/eigenwise-toolshed](https://github.com/Eigenwise/eigenwise-toolshed/issues).

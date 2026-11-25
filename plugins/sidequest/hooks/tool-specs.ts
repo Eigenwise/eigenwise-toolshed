@@ -20,7 +20,7 @@ export const BOARD_TOOL: ToolSpec = {
         type: 'string',
         enum: [...BOARD_VIEWS],
         description:
-          'Which view to return. summary: counts and what is ready. waiting: what waits on the person, written for them to answer cold; paste it to them in your closing report. now: what runs, what waits for a shared thing, what could start, and what the person could do meanwhile; paste it when they ask what they can do now, leaving out what follows "For the session, not to paste:" (call finish for an agent that is back; while one runs, end your turn, its return comes as a new one). closing: what this session changed and one count line for the rest; paste it as your closing report. frontier: tickets an agent can start now. list: one line per ticket as "id status category title", the tracker key before the id and branch and who started it after, when the ticket has them. ticket: the whole file of the ticket or story named by id. routing: categories, tiers and settings in force. planning: what the start of planning reads, in one call: the routing view, the stories and every ticket that is not done or dropped. Summary, now, frontier and planning leave out the proposed tickets of a plan (filed under a story whose awaitsYes is true, waiting for the person\'s yes) and name them apart; list marks them proposed. diagram: the path of the story named by id as a fenced Mermaid flowchart for a pull request description, changed stops marked; use it as it is, never type one.',
+          'Which view to return. summary: counts and what is ready. waiting: what waits on the person, written for them to answer cold; it names the project at the top and ends each item with where to answer it, so paste it to them in your closing report with both kept. now: what runs, what waits for a shared thing, what could start, and what the person could do meanwhile; paste it when they ask what they can do now, leaving out what follows "For the session, not to paste:" (call finish for an agent that is back; while one runs, end your turn, its return comes as a new one). closing: what this session changed and one count line for the rest; paste it as your closing report. frontier: tickets an agent can start now. list: one line per ticket as "id status category title", the tracker key before the id and branch and who started it after, when the ticket has them. ticket: the whole file of the ticket or story named by id. routing: categories, tiers and settings in force. planning: what the start of planning reads, in one call: the routing view, the stories and every ticket that is not done or dropped. Summary, now, frontier and planning leave out the proposed tickets of a plan (filed under a story whose awaitsYes is true, waiting for the person\'s yes) and name them apart; list marks them proposed. diagram: the path of the story named by id as a fenced Mermaid flowchart for a pull request description, changed stops marked; use it as it is, never type one.',
       },
       status: {
         type: 'string',
@@ -51,6 +51,10 @@ const DECISION_ITEM = {
       type: 'string',
       enum: ['human', 'default'],
       description: 'human when the person answered it, default when the recommended answer stood. Defaults to human.',
+    },
+    words: {
+      type: 'string',
+      description: 'Only when the person decided it: their own words, as they said them, kept up to 200 characters (the length of two short sentences, enough for an answer and its reason, and short enough to sit on one line of a page). The board adds the day, the UTC day. A decision taken by default keeps the day and no words. A question decided again is a new line with its own number and day, and the earlier line stays.',
     },
   },
   required: ['question', 'answer'],
@@ -240,7 +244,7 @@ export const TICKET_TOOL: ToolSpec = {
             decisions: {
               type: 'array',
               description:
-                'On a ticket (create, patch): the story decision ids it rests on, like ["D-2"], replacing the list on patch. The brief carries those decisions and no others; a ticket that names none gets every decision of the story. On a story (story, or patch on a story): decisions to append, each { question, answer, decidedBy }, numbered D-1, D-2 and on.',
+                'On a ticket (create, patch): the story decision ids it rests on, like ["D-2"], replacing the list on patch. The brief carries those decisions and no others; a ticket that names none gets every decision of the story. On a story (story, or patch on a story): decisions to append, each { question, answer, decidedBy, words }, numbered D-1, D-2 and on.',
               items: { anyOf: [{ type: 'string' }, DECISION_ITEM] },
             },
             destination: {

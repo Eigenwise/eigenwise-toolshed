@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { configDirectoryOf } from "./config-directory.mjs";
+import { EARLIER_NAME, OLDER, OLDER_ONLY_PLUGINS, THIS_VERSION, installStateOf, splitPluginId } from "./toolshed-installs.mjs";
 import { hostProjectSlug, isSamePath } from "./upgrade-scan.mjs";
 
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -24,10 +25,31 @@ export function appliesToProject(row, project) {
   return row.scope === "user" || projectPath === "" || isSamePath(projectPath, project);
 }
 
+const OLDER_ONLY = "older-only";
+
+// One marketplace name carries both versions, so only the version says which one a row is. The plugins this version
+// does not have are never updated, only taken out.
+const TOOLSHED_STATE_WORDS = {
+  [OLDER]: " (the older Toolshed: /quartermaster:upgrade says how to update it)",
+  [OLDER_ONLY]: " (the older Toolshed, not in this version: /quartermaster:upgrade offers to uninstall it, the gateway only once nothing is wired to it)",
+  [THIS_VERSION]: " (this version)",
+  [EARLIER_NAME]: " (this version under its earlier name: /quartermaster:upgrade moves it)",
+};
+
+const isOlderOnly = (id) => OLDER_ONLY_PLUGINS.includes(splitPluginId(id).name);
+
+function toolshedStateOf(id, version) {
+  const state = installStateOf(id, version);
+  return state === OLDER && isOlderOnly(id) ? OLDER_ONLY : state;
+}
+
+const toolshedStateWords = (id, version) => TOOLSHED_STATE_WORDS[toolshedStateOf(id, version)] ?? "";
+
 function describeRow(row) {
   const id = textOrEmpty(row.id) || `${textOrEmpty(row.name)}@${textOrEmpty(row.marketplace)}`;
   const state = row.enabled === false ? "disabled" : "enabled";
-  return `${id} ${textOrEmpty(row.version) || "no version"} ${textOrEmpty(row.scope) || "no scope"} ${state}`;
+  const version = textOrEmpty(row.version);
+  return `${id} ${version || "no version"} ${textOrEmpty(row.scope) || "no scope"} ${state}${toolshedStateWords(id, version)}`;
 }
 
 export function pluginLines(parsed, project) {

@@ -83,6 +83,8 @@ const ENTER_KEEPS = 'keep'
 
 const sentWords = (sent: string): string => `You sent: ${sent}`
 
+const sentAtWords = (sent: string, sentAt: string): string => (sentAt === '' ? sentWords(sent) : `${sentWords(sent)} (${sentAt.replace('T', ' ').replace('Z', ' UTC')})`)
+
 const yourWords = (words: string): string => (words === '' ? '' : `Your words: ${words}`)
 
 // The plan view's decisions, which a press on what waits on the person scrolls to.
@@ -559,7 +561,7 @@ const ticketView = (drawing: Drawing, detail: TicketDetail, form: TicketForm): R
     <Box flexDirection="column" gap={1}>
       {titleAndFacts(drawing, detail)}
       {questionOf(drawing, detail)}
-      {detail.answerSent !== '' && sentLines(drawing, 'answer-sent', sentWords(detail.answerSent))}
+      {detail.answerSent !== '' && sentLines(drawing, 'answer-sent', sentAtWords(detail.answerSent, detail.answerSentAt))}
       {sayingYesToOf(drawing, detail)}
       {noQuestionLine(drawing, detail)}
       {diffOf(drawing, detail)}

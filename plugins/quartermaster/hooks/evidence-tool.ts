@@ -1,4 +1,4 @@
-import { UNUSED_SKILL_DAYS, detectCandidates, withoutRejected } from './detectors'
+import { EVIDENCE_WINDOW_DAYS, detectCandidates, withoutRejected } from './detectors'
 import type { Candidate, SensedHistory } from './detectors'
 import type { SensedEvent } from './events'
 import { evidenceText, summarizeEvidence } from './evidence'
@@ -6,7 +6,7 @@ import { rejectedFingerprints } from './rejections'
 import { projectEventsDirectory, readEventsSince, readRejections } from './store'
 import type { FileSystem } from './store'
 
-export const EVIDENCE_WINDOW_DAYS = UNUSED_SKILL_DAYS
+export { EVIDENCE_WINDOW_DAYS }
 
 const DAY_MS = 24 * 60 * 60 * 1000
 

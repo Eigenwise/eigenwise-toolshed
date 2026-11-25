@@ -7,25 +7,34 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { configDirectoryOf } from "./config-directory.mjs";
 import { loadWithoutDatabaseModuleWarning } from "./database-module-warning.mjs";
+import { isWiredToTheGateway, showsTheGateway } from "./gateway-wiring.mjs";
 import {
   COMMITTED_SETTINGS,
-  CURRENT_MARKETPLACE,
+  GATEWAY_PLUGIN,
   LOCAL_SETTINGS,
   OLDER_BOARD_FOLDER,
-  OLDER_MARKETPLACE,
-  OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES,
   OLDER_REVIEW_REF_NAMESPACES,
   USER_SCOPE,
   classifyHome,
   classifyProject,
-  heldSourceOf,
-  isTrackedSourceTheOnlySource,
   olderNamesIn,
   olderPluginsStillOn,
   pluginNamesInSettings,
   projectsStillOnOlderVersion,
   userScopeWaitLine,
 } from "./upgrade-findings.mjs";
+import {
+  EARLIER_NAME,
+  EARLIER_NAME_OF_THIS_VERSION,
+  OLDER,
+  OLDER_ONLY_PLUGINS,
+  TOOLSHED_MARKETPLACE,
+  installWords,
+  isOlderVersionOfThisVersionsPlugin,
+  moveCommands,
+  toolshedInstallsOf,
+  updateCommands,
+} from "./toolshed-installs.mjs";
 import { QUIET_DAYS, lastUseOf, lastUseWords, olderProjectCountLine, orderedByLastUse, recentUseCount } from "./upgrade-last-use.mjs";
 import { readKeptAnswers } from "./upgrade-kept.mjs";
 import { canonicalPath, comparablePath, gitLines, judgeOlderWorktreeFolders, readAgentBranches, readLinkedWorktrees, runGit } from "./upgrade-worktrees.mjs";
@@ -271,8 +280,63 @@ export function readOlderBoard(databasePath, slug) {
   }
 }
 
+const readToolshedInstalls = (configDirectory) => toolshedInstallsOf(readJsonOrEmpty(join(configDirectory, "plugins", "installed_plugins.json")));
+
+const appliesToProject = (project) => (entry) => entry.scope === "user" || (typeof entry.projectPath === "string" && isSamePath(entry.projectPath, project));
+
+const projectSettingsOf = (projectPath) => [COMMITTED_SETTINGS, LOCAL_SETTINGS].map((file) => readJsonOrEmpty(join(projectPath, file)));
+
+export const GATEWAY_WIRING_LIST = "wired-projects.json";
+
+function parsedOrUndefined(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+const isListOfPaths = (projects) => Array.isArray(projects) && projects.every((path) => typeof path === "string");
+
+// The older gateway records each project it wires here. Only a list that was read whole lets the scan say nothing else is wired.
+export function readGatewayWiringList(configDirectory) {
+  const path = join(configDirectory, GATEWAY_PLUGIN, GATEWAY_WIRING_LIST);
+  if (!existsSync(path)) return { state: "missing", projects: [] };
+  const projects = parsedOrUndefined(readTextOrEmpty(path))?.projects;
+  return isListOfPaths(projects) ? { state: "read", projects } : { state: "unreadable", projects: [] };
+}
+
+const projectFoldersInTheRecord = (record) =>
+  Object.values(recordOrEmpty(record.plugins))
+    .flatMap((entries) => (Array.isArray(entries) ? entries : []))
+    .map((entry) => entry?.projectPath)
+    .filter((path) => typeof path === "string" && path !== "");
+
+// A project can be wired with no gateway install of its own and off the gateway's list, so every project folder the install record names is looked at too.
+function gatewayCandidateProjects(configDirectory, wiringList) {
+  const record = readJsonOrEmpty(join(configDirectory, "plugins", "installed_plugins.json"));
+  return [...wiringList.projects, ...projectFoldersInTheRecord(record)];
+}
+
+const withoutRepeatedPaths = (paths) => paths.filter((path, index) => paths.findIndex((other) => isSamePath(other, path)) === index);
+
+export function readGatewayWiredElsewhere(configDirectory, project, wiringList = readGatewayWiringList(configDirectory)) {
+  const userSettingsFile = join(configDirectory, "settings.json");
+  const projects = gatewayCandidateProjects(configDirectory, wiringList).filter((path) => existsSync(path) && !isSamePath(path, project));
+  const wiredProjects = withoutRepeatedPaths(projects.filter((path) => projectSettingsOf(path).some(isWiredToTheGateway)));
+  return [...wiredProjects, ...(isWiredToTheGateway(readJsonOrEmpty(userSettingsFile)) ? [userSettingsFile] : [])];
+}
+
+// The install record, the gateway's own folder in the config folder, or a settings file that is wired or names the plugin.
+function readGatewayWasOnThisMachine(configDirectory, installs, settingsFiles) {
+  const isInstalled = installs.some((install) => install.name === GATEWAY_PLUGIN);
+  return isInstalled || existsSync(join(configDirectory, GATEWAY_PLUGIN)) || settingsFiles.some(showsTheGateway);
+}
+
 export function readProjectFacts(project, configDirectory) {
   const git = readGitFacts(project);
+  const installs = readToolshedInstalls(configDirectory);
+  const wiringList = readGatewayWiringList(configDirectory);
   const committed = readJsonOrEmpty(join(project, ".claude", "settings.json"));
   const local = readJsonOrEmpty(join(project, ".claude", "settings.local.json"));
   const userSettingsFile = join(configDirectory, "settings.json");
@@ -284,6 +348,10 @@ export function readProjectFacts(project, configDirectory) {
     user,
     userSettingsFile,
     pluginsNamedInSettings: pluginNamesInSettings(committed, local, user),
+    installs: installs.filter(appliesToProject(project)),
+    gatewayWiredElsewhere: readGatewayWiredElsewhere(configDirectory, project, wiringList),
+    gatewayWiringList: wiringList.state,
+    gatewayWasOnThisMachine: readGatewayWasOnThisMachine(configDirectory, installs, [committed, local, user]),
     keptAnswers: readKeptAnswers(project),
     ...git,
     isTeam: git.authorCount > 1,
@@ -326,12 +394,6 @@ export function readLastUse(configDirectory, projectPath, isFolderPresent) {
   return lastUseOf(session, isFolderPresent ? lastCommitMs(projectPath) : undefined);
 }
 
-function olderInstallEntries(record) {
-  return Object.entries(record.plugins ?? {})
-    .filter(([id, entries]) => id.endsWith(`@${OLDER_MARKETPLACE}`) && Array.isArray(entries))
-    .flatMap(([id, entries]) => entries.map((entry) => ({ name: id.slice(0, id.lastIndexOf("@")), scope: entry.scope, projectPath: entry.projectPath })));
-}
-
 const installedPathOf = (entry) => (entry.scope === "user" || !entry.projectPath ? USER_SCOPE : entry.projectPath);
 
 const projectKeyOf = (path) => (path === USER_SCOPE ? path : comparablePath(path));
@@ -341,9 +403,10 @@ function groupByProject(entries) {
   for (const entry of entries) {
     const path = installedPathOf(entry);
     const key = projectKeyOf(path);
-    const project = projects.get(key) ?? { path, scopes: new Set(), plugins: new Set() };
+    const project = projects.get(key) ?? { path, scopes: new Set(), plugins: new Set(), olderInstalls: [] };
     project.scopes.add(entry.scope);
     project.plugins.add(entry.name);
+    if (isOlderVersionOfThisVersionsPlugin(entry)) project.olderInstalls.push(installWords(entry));
     projects.set(key, project);
   }
   return [...projects.values()];
@@ -357,38 +420,19 @@ function settingsFor(projectPath, configDirectory) {
   };
 }
 
-function trackedFactsOf(projectPath, held, paths) {
-  const presentSources = held.sources.filter((source) => paths[source.fact] === true);
-  return Object.fromEntries(presentSources.map((source) => [source.fact, isTracked(projectPath, source.path)]));
-}
-
-// The file checks come first: git runs only for a project that has an older source and nothing converted, and there can be forty projects.
-export function olderPluginsNeededByTrackedSources(projectPath) {
-  if (projectPath === USER_SCOPE) return [];
-  const paths = readSourcePaths(projectPath);
-  return OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES.filter((held) => !held.isConverted(paths))
-    .filter((held) => isTrackedSourceTheOnlySource(held, paths, trackedFactsOf(projectPath, held, paths)))
-    .map((held) => held.plugin);
-}
-
-export const olderPluginsHeldByTrackedSources = (projectPath, olderPluginsOn) =>
-  olderPluginsOn.length === 0 ? [] : olderPluginsNeededByTrackedSources(projectPath).filter((name) => olderPluginsOn.includes(name));
-
+// Only what is the older version by its install: this version under the same name is not listed here.
 export function readInstalledProjects(configDirectory) {
-  const record = readJsonOrEmpty(join(configDirectory, "plugins", "installed_plugins.json"));
-  return groupByProject(olderInstallEntries(record)).map((project) => {
+  const olderEntries = readToolshedInstalls(configDirectory).filter((entry) => entry.state === OLDER);
+  return groupByProject(olderEntries).map((project) => {
     const settings = settingsFor(project.path, configDirectory);
     const isFolderPresent = project.path === USER_SCOPE || existsSync(project.path);
-    const olderPluginsOn = olderPluginsStillOn(settings.committed, settings.local);
-    const neededByTrackedSources = olderPluginsNeededByTrackedSources(project.path);
     return {
       path: project.path,
       scopes: [...project.scopes],
       installed: [...project.plugins],
-      olderPluginsOn,
+      olderPluginsOn: olderPluginsStillOn(settings.committed, settings.local),
+      olderInstalls: project.olderInstalls,
       isGatewayKept: project.path !== USER_SCOPE && readKeptAnswers(project.path).gateway !== undefined,
-      olderPluginsNeededByTrackedSources: neededByTrackedSources,
-      olderPluginsHeld: neededByTrackedSources.filter((name) => olderPluginsOn.includes(name)),
       isFolderPresent,
       lastUse: project.path === USER_SCOPE ? undefined : readLastUse(configDirectory, project.path, isFolderPresent),
     };
@@ -400,11 +444,11 @@ const HOME_FOLDERS = [
   "codebase-mapper-state",
   "live-rules-state",
   "quartermaster-state",
-  OLDER_MARKETPLACE,
+  TOOLSHED_MARKETPLACE,
   "toolshed/registry",
   "codex-gateway",
   "model-gateway",
-  `plugins/cache/${OLDER_MARKETPLACE}`,
+  `plugins/cache/${TOOLSHED_MARKETPLACE}`,
 ];
 
 function olderAgentFiles(configDirectory) {
@@ -422,24 +466,33 @@ export const olderWorktreeRootOf = (configDirectory) => join(configDirectory, OL
 // The older board kept one folder per project under its worktree root, each holding that project's worktrees.
 export const olderWorktreeFolders = (configDirectory) => subfoldersOf(olderWorktreeRootOf(configDirectory)).flatMap(subfoldersOf);
 
-const heldProjectCounts = (installedProjects) =>
-  Object.fromEntries(
-    OLDER_PLUGINS_HELD_BY_TRACKED_SOURCES.map((held) => [held.plugin, installedProjects.filter((project) => project.olderPluginsNeededByTrackedSources.includes(held.plugin)).length]),
-  );
+// A plugin of a shared name keeps its data folder through the update, so that folder is this version's now. Only the
+// plugins this version does not have leave data nothing reads.
+const OLDER_ONLY_DATA_FOLDERS = OLDER_ONLY_PLUGINS.map((name) => `${name}-${TOOLSHED_MARKETPLACE}`);
 
-export function readHomeFacts(configDirectory, installedProjects = readInstalledProjects(configDirectory)) {
-  const knownMarketplaces = readJsonOrEmpty(join(configDirectory, "plugins", "known_marketplaces.json"));
+export function readHomeFacts(configDirectory) {
   return {
     olderBoardEntries: entriesOf(join(configDirectory, OLDER_BOARD_FOLDER)).map((entry) => entry.name),
     olderWorktreeFolderCount: olderWorktreeFolders(configDirectory).length,
     existingPaths: HOME_FOLDERS.filter((path) => existsSync(join(configDirectory, path))),
     olderAgentFiles: olderAgentFiles(configDirectory),
     olderPluginData: entriesOf(join(configDirectory, "plugins", "data"))
-      .filter((entry) => entry.name.endsWith(`-${OLDER_MARKETPLACE}`))
+      .filter((entry) => OLDER_ONLY_DATA_FOLDERS.includes(entry.name))
       .map((entry) => `plugins/data/${entry.name}`),
     userSettings: readJsonOrEmpty(join(configDirectory, "settings.json")),
-    hasOlderMarketplaceRecord: OLDER_MARKETPLACE in knownMarketplaces,
-    heldProjectCounts: heldProjectCounts(installedProjects),
+  };
+}
+
+export function readMachineInstalls(configDirectory) {
+  const installs = readToolshedInstalls(configDirectory);
+  const olderOfThisVersionsPlugins = installs.filter(isOlderVersionOfThisVersionsPlugin);
+  const earlierName = installs.filter((entry) => entry.state === EARLIER_NAME);
+  const isToolshedMarketplaceKnown = TOOLSHED_MARKETPLACE in readJsonOrEmpty(join(configDirectory, "plugins", "known_marketplaces.json"));
+  return {
+    olderOfThisVersionsPlugins: olderOfThisVersionsPlugins.map(installWords),
+    updateCommands: olderOfThisVersionsPlugins.length === 0 ? [] : updateCommands(olderOfThisVersionsPlugins),
+    earlierName: earlierName.map(installWords),
+    moveCommands: earlierName.length === 0 ? [] : moveCommands(earlierName, isToolshedMarketplaceKnown),
   };
 }
 
@@ -448,17 +501,19 @@ const isThisProject = (installed, project) => installed.path !== USER_SCOPE && i
 export function scan(options) {
   const installedProjects = readInstalledProjects(options.configDirectory);
   return {
-    marketplaces: { older: OLDER_MARKETPLACE, current: CURRENT_MARKETPLACE },
+    marketplaces: { name: TOOLSHED_MARKETPLACE, earlierName: EARLIER_NAME_OF_THIS_VERSION },
+    machine: readMachineInstalls(options.configDirectory),
     installedProjects: installedProjects.map((installed) => ({ ...installed, isThisProject: isThisProject(installed, options.project) })),
     project: classifyProject(readProjectFacts(options.project, options.configDirectory)),
-    home: { folder: options.configDirectory, ...classifyHome(readHomeFacts(options.configDirectory, installedProjects), installedProjects) },
+    home: { folder: options.configDirectory, ...classifyHome(readHomeFacts(options.configDirectory), installedProjects) },
   };
 }
 
 const SHAPE_WORDS = {
   team: (project) => `team repository (${project.isSettingsCommitted ? "settings committed, " : ""}${project.authorCount} people committed)`,
   solo: () => "solo project",
-  "half-moved": () => "half-moved: v2 on beside an older plugin switched off locally, with traces left",
+  "half-moved": () => `half-moved: this version runs here under its earlier name ${EARLIER_NAME_OF_THIS_VERSION}, with traces left`,
+  "update-first": () => "update first: the older version of a plugin is still installed for this project. Run the commands under Update first, reload plugins, and scan again",
   moved: () => "moved: nothing left to do here. What is listed under Kept stays on purpose, for the reason under it",
 };
 
@@ -470,6 +525,7 @@ const COMMITTED_CHANGE_WORDS = {
 const QUESTION_WORDS = {
   "open-tickets": "what to do with the open tickets on the old board",
   deletions: "one yes for the list of what gets deleted",
+  "the-move": `one yes for the move from the earlier name ${EARLIER_NAME_OF_THIS_VERSION}, its commands and the files it rewrites shown in the same message`,
   "committed-change": (project) => COMMITTED_CHANGE_WORDS[project.isTeam ? "team" : "solo"],
   "home-deletions": "one yes or no per home group, in the home cleanup's own run (never on a project's yes), the board database offered as an archive to keep",
 };
@@ -483,10 +539,13 @@ const leftoverLines = (leftovers) =>
     ...(leftover.readyLines ?? []).map((line) => `            ${line}`),
   ]);
 
+const olderInstallWords = (installed) => ((installed.olderInstalls ?? []).length === 0 ? "" : `  older version installed: ${installed.olderInstalls.join(", ")}`);
+
 const installedRow = (installed) => {
   const state = installed.olderPluginsOn.length > 0 ? `on   ${installed.olderPluginsOn.join(", ")}` : "off";
+  const versions = olderInstallWords(installed);
   const lastUse = installed.path === USER_SCOPE ? "" : `  ${lastUseWords(installed.lastUse)}`;
-  return `  ${installed.isThisProject ? "*" : " "} ${installed.path}  ${state}${lastUse}${installed.isFolderPresent ? "" : "  (folder gone)"}`;
+  return `  ${installed.isThisProject ? "*" : " "} ${installed.path}  ${state}${versions}${lastUse}${installed.isFolderPresent ? "" : "  (folder gone)"}`;
 };
 
 const isOlderStillOn = (installed) => installed.olderPluginsOn.length > 0;
@@ -495,7 +554,7 @@ function installedLines(installedProjects, isAllListed, nowMs) {
   if (isAllListed) {
     const stillOn = installedProjects.filter(isOlderStillOn).length;
     return [
-      `${OLDER_MARKETPLACE} is installed for ${installedProjects.length} project(s), a plugin of it switched on in ${stillOn}, most recently used first:`,
+      `The older version is installed for ${installedProjects.length} project(s), a plugin of it switched on in ${stillOn}, most recently used first:`,
       ...orderedByLastUse(installedProjects).map(installedRow),
     ];
   }
@@ -518,20 +577,14 @@ function deletionListLines(leftovers) {
 
 export const EVERYTHING_WAITS_LINE = "Everything left here waits for the person: this run is done until they answer.";
 
-const olderPluginOnWords = (name, held) => (held.includes(name) ? `${name} ${heldSourceOf(name).onNote}` : name);
-
-function olderPluginsOnWords(project) {
-  const held = project.olderPluginsHeld ?? [];
-  return project.olderPluginsOn.length === 0 ? "none" : project.olderPluginsOn.map((name) => olderPluginOnWords(name, held)).join(", ");
-}
+const olderPluginsOnWords = (project) => (project.olderPluginsOn.length === 0 ? "none" : project.olderPluginsOn.join(", "));
 
 function projectLines(project) {
-  const olderOn = olderPluginsOnWords(project);
   const routing = project.routing.lines.length === 0 ? [] : [`Old routes (${project.routing.profile}):`, ...project.routing.lines.map((line) => `  ${line}`)];
   return [
     `This project: ${project.path}`,
     `Shape: ${SHAPE_WORDS[project.shape](project)}`,
-    `Older plugins on: ${olderOn}`,
+    `Older plugins on: ${olderPluginsOnWords(project)}`,
     ...titledLeftoverLines("Still to do:", project.leftovers.filter((leftover) => leftover.isStillToDo)),
     ...titledLeftoverLines("Kept, each for the reason under it:", project.leftovers.filter((leftover) => !leftover.isStillToDo)),
     ...deletionListLines(project.leftovers),
@@ -540,6 +593,24 @@ function projectLines(project) {
     questionLine(project.questions, project),
     ...(project.isWaitingForThePerson ? [EVERYTHING_WAITS_LINE] : []),
   ];
+}
+
+const commandLines = (commands) => commands.map((command) => `  ${command}`);
+
+// The update and the move are for the whole machine, so they print once, before any project.
+export function machineLines(machine) {
+  const update =
+    machine.updateCommands.length === 0
+      ? []
+      : [`Update first: the older version is still installed (${machine.olderOfThisVersionsPlugins.join("; ")}). Run these, reload plugins, and scan again:`, ...commandLines(machine.updateCommands)];
+  const move =
+    machine.moveCommands.length === 0
+      ? []
+      : [
+          `The earlier name: this version is installed as ${EARLIER_NAME_OF_THIS_VERSION} (${machine.earlierName.join("; ")}). The move, on one yes, in this order (adding the marketplace before the removal fails with "already on disk"):`,
+          ...commandLines(machine.moveCommands),
+        ];
+  return [...update, ...move];
 }
 
 const MOST_GATEWAY_PROJECTS_NAMED = 3;
@@ -563,8 +634,8 @@ const HOME_CLEANUP_LINE =
 const QUIET_STEP_LINE = `Projects not used in the last ${QUIET_DAYS} days can be switched off together in one step with one yes: upgrade-quiet-projects.mjs lists them first and writes nothing.`;
 
 export function readyHomeHeadline(home) {
-  const except = home.projectsKeptOnPurpose > 0 ? `, except ${home.projectsKeptOnPurpose} kept on purpose (a kept gateway, or a mapper or rules plugin that holds what git tracks)` : "";
-  return `Home folder ${home.folder}: no project has a plugin of the older version switched on in its settings${except}, so the one home cleanup can run.`;
+  const except = home.projectsKeptOnPurpose > 0 ? `, except ${home.projectsKeptOnPurpose} kept on purpose (a kept gateway)` : "";
+  return `Home folder ${home.folder}: no project has a plugin of the older version switched on or installed${except}, so the one home cleanup can run.`;
 }
 
 const userScopeSentence = (home) => {
@@ -576,7 +647,7 @@ function homeLines(home, recentUses) {
   const headline = home.isReadyForCleanup
     ? readyHomeHeadline(home)
     : [
-        `Home folder ${home.folder}: the cleanup waits until no project has a plugin of the older version switched on in its settings (${home.projectsStillOn} do, ${recentUses} of those were used in the last ${QUIET_DAYS} days).`,
+        `Home folder ${home.folder}: the cleanup waits until no project has a plugin of the older version switched on or installed (${home.projectsStillOn} do, ${recentUses} of those were used in the last ${QUIET_DAYS} days).`,
         QUIET_STEP_LINE,
         ...userScopeSentence(home),
       ].join(" ");
@@ -590,26 +661,41 @@ const markScannedProjects = (reports) => {
   return reports[0].installedProjects.map((installed) => ({ ...installed, isThisProject: scannedPaths.has(installed.path) }));
 };
 
-// The install list and the home part are the same for every project, so they print once.
+const NO_MACHINE_STEPS = { updateCommands: [], moveCommands: [] };
+
+// The install list, the machine steps and the home part are the same for every project, so they print once.
 export function renderPlans(reports, isAllListed = false, nowMs = Date.now()) {
   const installedProjects = markScannedProjects(reports);
   return [
     ...installedLines(installedProjects, isAllListed, nowMs),
+    ...machineLines(reports[0].machine ?? NO_MACHINE_STEPS),
     ...reports.flatMap((report) => ["", ...projectLines(report.project)]),
     "",
     ...homeLines(reports[0].home, recentUseCount(projectsStillOnOlderVersion(installedProjects), nowMs)),
     "",
-    "Nothing changes until /reload-plugins or a new session: a running session keeps the older hooks until then.",
+    "Nothing changes until /reload-plugins or a new session: a running session keeps the hooks it started with until then.",
   ].join("\n");
 }
 
 export const renderPlan = (report, isAllListed = false) => renderPlans([report], isAllListed);
 
+const ONE_LINE_WORDS = {
+  "update-first": (project) =>
+    `The older Toolshed is still installed for this project (${project.olderInstalls.join("; ")}): update it first with claude plugin marketplace update ${TOOLSHED_MARKETPLACE} and claude plugin update for each plugin, then the \`upgrade\` skill moves what it left. Nothing changes until you ask.`,
+  "half-moved": () =>
+    `This project runs this version under its earlier name ${EARLIER_NAME_OF_THIS_VERSION}. The \`upgrade\` skill moves it to ${TOOLSHED_MARKETPLACE}; nothing changes until you ask.`,
+};
+
+function leftoversLine(project) {
+  const plugins = project.olderPluginsOn;
+  const named = plugins.length === 0 ? "" : `, with ${plugins.join(", ")} still on`;
+  return `This project has leftovers of the older Toolshed${named}. The \`upgrade\` skill moves them; nothing changes until you ask.`;
+}
+
 export function olderVersionLine(report) {
-  if (report.project.shape === "moved") return "";
-  const plugins = report.project.olderPluginsOn;
-  const named = plugins.length === 0 ? "with traces of it left" : `with ${plugins.join(", ")} still on`;
-  return `This project is on the older Toolshed (${OLDER_MARKETPLACE}), ${named}. The \`upgrade\` skill moves it; nothing changes until you ask.`;
+  const project = report.project;
+  if (project.shape === "moved") return "";
+  return (ONE_LINE_WORDS[project.shape] ?? leftoversLine)(project);
 }
 
 const openTicketLine = (ticket) => `${ticket.ref}  ${ticket.status}  ${ticket.title}`;

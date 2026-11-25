@@ -34,7 +34,7 @@ const view = (name: string): string => textOf(answerBoardView({ view: name }, FI
 
 test('a board with nothing dropped, nothing old and nothing of this session gives the same summary, list and frontier', () => {
   expect(view('summary')).toBe(
-    '1 waiting on you, 2 ready to start, 0 in progress, 1 being checked. Ready to start: SQ-1. The waiting view writes what waits on the person, ready to pass on.\nAlso on the board: 1 done earlier, 1 parked. To see them: ask for the done, parked or inbox list, or type /board.',
+    '1 waiting on you, 2 ready to start, 0 in progress, 1 being checked. Ready to start: SQ-1. The waiting view writes what waits on the person, ready to pass on, to answer in this chat.\nAlso on the board: 1 done earlier, 1 parked. To see them: ask for the done, parked or inbox list, or type /board.',
   )
   expect(view('list')).toBe(
     [
