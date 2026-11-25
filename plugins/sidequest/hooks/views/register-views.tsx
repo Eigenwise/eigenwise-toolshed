@@ -51,6 +51,7 @@ import { askForTidy } from '../register-worktrees'
 import type { JsonRecord } from '../tool-input'
 import { drawBand } from './band'
 import {
+  OPEN_BOARD_LABEL,
   boardCards,
   boardNotices,
   doingTicketsIn,
@@ -560,9 +561,23 @@ function paneActions($: EngineInterface): BoardPaneActions {
   }
 }
 
+const BOARD_COMMAND_TAKEN = `Sidequest: /board already belongs to another plugin in this session. The board still opens with "${OPEN_BOARD_LABEL}" above the message box.`
+
+// A command is one bare name for the whole session, and the host refuses a second plugin that registers it (seen with
+// an older usage plugin that also named a command board). The board has to draw all the same.
+let isBoardCommandOurs = true
+
+async function registerBoardCommand($: EngineInterface): Promise<void> {
+  isBoardCommandOurs = await $.command.register({ name: 'board', description: 'Open the Sidequest board', immediate: true }).then(
+    () => true,
+    () => false,
+  )
+  if (!isBoardCommandOurs) $.ui.toast(BOARD_COMMAND_TAKEN)
+}
+
 export async function startBoardViews($: EngineInterface, tickets: readonly Ticket[]): Promise<void> {
   boardReads = NO_BOARD_READS
-  await $.command.register({ name: 'board', description: 'Open the Sidequest board', immediate: true })
+  await registerBoardCommand($)
   await showTickets($, tickets)
 }
 
@@ -616,7 +631,7 @@ export const registerViews = (on: On): void => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const [summary, activity] = await Promise.all([read($, boardSummary), boardActivity($)])
-    const band = drawBand($.ui.resolve(e), summary, activity, e.props.bodyColumns, () => openBoardPane($))
+    const band = drawBand($.ui.resolve(e), summary, activity, e.props.bodyColumns, () => openBoardPane($), !isBoardCommandOurs)
 
     return band ?? next(e)
   })

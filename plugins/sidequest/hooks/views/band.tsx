@@ -6,14 +6,20 @@ import type { BoardActivity } from './running-agents'
 
 type BandElements = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 
+const hasNothingToSay = (summary: PublishedSummary, activity: BoardActivity): boolean =>
+  bandWarnings(summary, activity) === '' && bandCounts(summary, activity) === ''
+
+// The band stays away from a quiet board, except while another plugin holds /board: then its button is the only way
+// to the board, and the person was told it is there.
 export const drawBand = (
   elements: BandElements,
   summary: PublishedSummary,
   activity: BoardActivity,
   columns: number,
   openBoard: () => Promise<unknown>,
+  isButtonTheOnlyWayIn = false,
 ): RenderElement | undefined => {
-  if (bandWarnings(summary, activity) === '' && bandCounts(summary, activity) === '') return undefined
+  if (hasNothingToSay(summary, activity) && !isButtonTheOnlyWayIn) return undefined
   const line = bandLine(summary, activity, columns)
   const { Box, Button, Text } = elements
 

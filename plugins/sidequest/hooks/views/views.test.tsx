@@ -106,10 +106,11 @@ type EngineStandIn = {
   submitted: string[]
   viewedAgents: (string | undefined)[]
   placedRows: string[]
+  commandsAnotherPluginHolds: string[]
 }
 
 const standInForEngine = (on: On, files: Map<string, string>, isPlaced = true): EngineStandIn => {
-  const standIn: EngineStandIn = { store: new Map(), toasts: [], openedPanes: [], rowsAskedFor: [], focusAskedFor: [], clockReads: 0, notifications: [], submitted: [], viewedAgents: [], placedRows: [] }
+  const standIn: EngineStandIn = { store: new Map(), toasts: [], openedPanes: [], rowsAskedFor: [], focusAskedFor: [], clockReads: 0, notifications: [], submitted: [], viewedAgents: [], placedRows: [], commandsAnotherPluginHolds: [] }
   on('store.get', (_, e) => ({ value: standIn.store.get(e.key) }))
   on('store.set', (_, e) => {
     standIn.store.set(e.key, e.value)
@@ -141,7 +142,11 @@ const standInForEngine = (on: On, files: Map<string, string>, isPlaced = true): 
     return { value: NOW }
   })
   on('tool.register', (_, e) => ({ value: { tool: `mcp__sidequest__${e.name}` } }))
-  on('command.register', (_, e) => ({ value: { command: e.name } }))
+  on('command.register', (_, e) => {
+    if (standIn.commandsAnotherPluginHolds.includes(e.name)) throw new Error(`"/${e.name}" refused: another plugin registered it already`)
+
+    return { value: { command: e.name } }
+  })
   on('ui.open', (_, e) => {
     standIn.openedPanes.push(e.id)
     standIn.rowsAskedFor.push(e.rows)
@@ -310,6 +315,21 @@ test('the band stays away from an empty board', EVERY_SURFACE, async ($, on) => 
     expect(await band.find({ type: 'Text', text: 'engine' })).toBeDefined()
     await band.unmount()
   }
+})
+
+test('with the board command held by another plugin the band offers the board on an empty board too', EVERY_SURFACE, async ($, on) => {
+  const standIn = standInForEngine(on, new Map())
+  standIn.commandsAnotherPluginHolds.push('board')
+  standInForEngineDrawing(on)
+  await startSession($)
+
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({ ...BAND, surface })
+    expect((await band.find({ type: 'Button', key: 'open' }))?.props.label).toBe('open board')
+    await band.press({ key: 'open' })
+    await band.unmount()
+  }
+  expect(standIn.openedPanes).toEqual(['board', 'board', 'board', 'board'])
 })
 
 test('the band shows the live counts and opens the board', EVERY_SURFACE, async ($, on) => {
@@ -511,6 +531,18 @@ test('a story analysis taller than the pane says the arrow keys scroll', async (
 
   await ui.press({ key: 'story-ST-1' })
   expect((await ui.find({ type: 'Text', text: /^More below/ }))?.text).toBe('More below: the arrow keys scroll')
+  await ui.unmount()
+})
+
+test('the board is drawn although another plugin holds the board command, and the person is told once', async ($, on) => {
+  const standIn = standInForEngine(on, seededBoard())
+  standIn.commandsAnotherPluginHolds.push('board')
+
+  await startSession($)
+
+  expect(standIn.toasts).toEqual(['Sidequest: /board already belongs to another plugin in this session. The board still opens with "open board" above the message box.'])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Retry failed uploads/ }))?.text).toContain('Retry failed uploads')
   await ui.unmount()
 })
 
