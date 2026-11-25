@@ -67,7 +67,7 @@ import type { BoardNotice, FinishedRun } from './board-view'
 import { finishedAgentDetail, transcriptOf } from './finished-agents'
 import { DECISIONS_KEY, drawBoardPane } from './pane'
 import type { BoardPaneActions } from './pane'
-import { boardPaneLines, moreFinishedLines, MOST_ROWS_ASKED, olderTicketLines, paneLinesAsText, rowsToAskFor, setAsideLines } from './pane-sections'
+import { boardPaneLines, cardsBeingChecked, moreFinishedLines, MOST_ROWS_ASKED, olderTicketLines, paneLinesAsText, rowsToAskFor, setAsideLines } from './pane-sections'
 import type { PaneContent } from './pane-sections'
 import { agentRunningOn, runningAgentRows } from './running-agents'
 import type { BoardActivity, ListedAgent, RunningAgentRow } from './running-agents'
@@ -380,17 +380,20 @@ async function openFinishedAgentDetail($: EngineInterface, hasMainView: boolean)
 }
 
 async function boardActivity($: EngineInterface): Promise<BoardActivity> {
-  const [agents, runs, cards, waits, now] = await Promise.all([
+  const [agents, runs, cards, waits, now, running] = await Promise.all([
     read($, liveAgents),
     read($, agentRuns),
     read($, cardsOnBoard),
     read($, permissionWaits),
     $.clock.now(),
+    runningRows($),
   ])
   const touchedHere = ticketsTouchedThisSession()
   const waiting = { oldestWaitingMs: oldestWaitingOf(cards ?? [], now, touchedHere), piecesWaitingOnYou: piecesWaitingOnYou(cards ?? [], now, touchedHere) }
 
-  return { agents, runs, waits, doingTickets: doingTicketsIn(cards), returnedTickets: returnedTicketsIn(cards), ...waiting }
+  const beingCheckedTickets = cardsBeingChecked({ cards: cards ?? [], running, now }).map(card => card.id)
+
+  return { agents, runs, waits, doingTickets: doingTicketsIn(cards), returnedTickets: returnedTicketsIn(cards), beingCheckedTickets, ...waiting }
 }
 
 // The desktop app answers a View press with "no main view here": the row has nowhere to put an agent's transcript.

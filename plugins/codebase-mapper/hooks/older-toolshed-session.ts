@@ -2,11 +2,14 @@ import type { EngineInterface } from 'claude-code'
 
 import { configDirectoryOf } from './config-directory.mjs'
 import {
+  copyNoticeFor,
   displayedPath,
   foldersLookedAt,
   hintForStanding,
   hasHooksModule,
   installedEntriesOf,
+  installedTwiceLine,
+  installedUnderBothNames,
   isQuartermasterSwitchedOff,
   isRunningFromThePrivateMarketplace,
   moveMarketplaceLine,
@@ -15,7 +18,7 @@ import {
   quartermasterInstallsFor,
   spelledWithSlashes,
 } from './older-toolshed'
-import type { LeftoverFound, LeftoverKind, QuartermasterStanding } from './older-toolshed'
+import type { CopyNotice, InstalledEntry, InstalledUnderBothNames, LeftoverFound, LeftoverKind, QuartermasterStanding } from './older-toolshed'
 import { gatewayWiringIn } from './older-gateway'
 import type { GatewayWiring, SettingsFile } from './older-gateway'
 
@@ -23,6 +26,7 @@ type Engine = EngineInterface
 
 const LOOKED_FOLDERS_KEY = 'olderToolshedLookedInFolders'
 const MOVE_TOLD_KEY = 'olderMarketplaceMoveTold'
+const INSTALLED_TWICE_TOLD_KEY = 'installedFromBothMarketplacesTold'
 
 export function readTextOrUndefined($: Engine, path: string): Promise<string | undefined> {
   return $.fs.read(path).then(
@@ -149,29 +153,79 @@ export async function lookAtProject($: Engine, projectFolder: string, configDire
   return { leftovers, gateway: gatewayWiringIn(settings), settings }
 }
 
-async function projectLinesOf($: Engine, projectFolder: string, configDirectory: string | undefined, concern: LeftoverKind): Promise<string[]> {
-  const looked = await lookAtProject($, projectFolder, configDirectory, [concern])
+async function linesOfLook($: Engine, looked: Looked | undefined, projectFolder: string, configDirectory: string | undefined): Promise<string[]> {
   if (looked === undefined || (looked.leftovers.length === 0 && looked.gateway === undefined)) return []
   const standing = await quartermasterStandingFor($, projectFolder, configDirectory)
 
   return standing === 'speaks' ? [] : plainLines(looked.leftovers, looked.gateway, hintForStanding(standing))
 }
 
-async function moveLinesOf($: Engine, projectFolder: string, configDirectory: string | undefined): Promise<string[]> {
-  if (!isRunningFromThePrivateMarketplace($.plugin.root) || (await wasMoveToldOnThisMachine($))) return []
-  if ((await quartermasterStandingFor($, projectFolder, configDirectory)) === 'speaks') return []
-  await rememberMoveTold($)
+export async function wasInstalledTwiceToldOnThisMachine($: Engine): Promise<boolean> {
+  return (await $.store.get(INSTALLED_TWICE_TOLD_KEY)) === true
+}
 
-  return [moveMarketplaceLine([$.plugin.name])]
+export function rememberInstalledTwiceTold($: Engine): Promise<void> {
+  return $.store.set(INSTALLED_TWICE_TOLD_KEY, true)
+}
+
+/** Settings are read only for a plugin that is installed from both names: the host's rule for which copy runs skips a copy switched off. */
+export async function installedTwiceIn($: Engine, entries: readonly InstalledEntry[], projectFolder: string, configDirectory: string | undefined): Promise<InstalledUnderBothNames[]> {
+  if (installedUnderBothNames(entries, projectFolder, []).length === 0) return []
+  const settings = await readLabeledSettings($, projectFolder, configDirectory)
+
+  return installedUnderBothNames(
+    entries,
+    projectFolder,
+    settings.map(file => file.text),
+    settings.find(file => file.isUserWide)?.text,
+  )
+}
+
+async function installedTwiceOwnPluginOf($: Engine, projectFolder: string, configDirectory: string | undefined): Promise<InstalledUnderBothNames[]> {
+  const recordText = await readInstalledPluginsText($, configDirectory)
+  const both = recordText === undefined ? [] : await installedTwiceIn($, installedEntriesOf(recordText), projectFolder, configDirectory)
+
+  return both.filter(doubled => doubled.plugin === $.plugin.name)
+}
+
+async function sayNotice($: Engine, notice: CopyNotice, doubled: readonly InstalledUnderBothNames[]): Promise<string[]> {
+  if (notice === 'move') {
+    await rememberMoveTold($)
+
+    return [moveMarketplaceLine([$.plugin.name])]
+  }
+  await rememberInstalledTwiceTold($)
+
+  return [installedTwiceLine(doubled)]
+}
+
+async function copyLinesOf($: Engine, projectFolder: string, configDirectory: string | undefined, isFirstLook: boolean): Promise<string[]> {
+  const isRunningFromThePrivateName = isRunningFromThePrivateMarketplace($.plugin.root)
+  if (!isFirstLook && !isRunningFromThePrivateName) return []
+  const doubled = await installedTwiceOwnPluginOf($, projectFolder, configDirectory)
+  const notice = copyNoticeFor({
+    isInstalledTwice: doubled.length > 0,
+    isRunningFromThePrivateMarketplace: isRunningFromThePrivateName,
+    wasInstalledTwiceTold: await wasInstalledTwiceToldOnThisMachine($),
+    wasMoveTold: await wasMoveToldOnThisMachine($),
+  })
+  if (notice === 'none') return []
+
+  return (await quartermasterStandingFor($, projectFolder, configDirectory)) === 'speaks' ? [] : sayNotice($, notice, doubled)
 }
 
 /**
- * One plugin's own leftover and the gateway wiring are looked for once per project, and the move off the private
- * marketplace is said once per machine. Quartermaster says all of it for the others when it is installed.
+ * One plugin's own leftover and the gateway wiring are looked for once per project, and what to do about the private
+ * marketplace is said once per machine: the move, or when the plugin is installed from both names, that one copy runs.
+ * The install record is read at the first look at a project, and at every start by the copy from the private marketplace.
+ * So a copy from the private marketplace installed later into a project already looked at is not mentioned by the copy
+ * from `eigenwise-toolshed` (the first look is remembered), and only the upgrade's scan names it.
+ * Quartermaster says all of it for the others when it is installed.
  */
 export async function tellAboutOlderToolshed($: Engine, projectFolder: string, concern: LeftoverKind): Promise<void> {
   const configDirectory = await configDirectoryOfSession($)
-  const lines = await projectLinesOf($, projectFolder, configDirectory, concern)
-  const moveLines = await moveLinesOf($, projectFolder, configDirectory)
-  await showNotice($, [...lines, ...moveLines])
+  const looked = await lookAtProject($, projectFolder, configDirectory, [concern])
+  const lines = await linesOfLook($, looked, projectFolder, configDirectory)
+  const copyLines = await copyLinesOf($, projectFolder, configDirectory, looked !== undefined)
+  await showNotice($, [...lines, ...copyLines])
 }

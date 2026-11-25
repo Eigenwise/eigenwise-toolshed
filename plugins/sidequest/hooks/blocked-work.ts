@@ -38,7 +38,7 @@ const waitOf = (pair: Blocked): Wait => ({ ticketId: pair.ticketId, words: `wait
 export const blockerWaits = (ticket: Ticket, tickets: readonly Ticket[], worktrees = true): Wait[] =>
   blockedPairsOf(ticket, ticketsById(tickets), worktrees).map(waitOf)
 
-const handWorkWait = (ticket: Ticket): Wait[] => (ticket.mode === 'hitl' ? [{ ticketId: ticket.id, words: 'is marked hitl, so it waits for the person' }] : [])
+const handWorkWait = (ticket: Ticket): Wait[] => (ticket.mode === 'hitl' ? [{ ticketId: ticket.id, words: 'is marked hitl, so no agent starts it' }] : [])
 
 // With nothing able to start, every reason is news. With something to start, only a blocker that never clears is.
 export const readyWaits = (tickets: readonly Ticket[], isAnythingStartable: boolean, worktrees = true): Wait[] => {

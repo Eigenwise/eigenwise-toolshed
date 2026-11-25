@@ -1,6 +1,6 @@
 {
   "name": "codebase-mapper",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "A map of your codebase that Claude reads, kept up to date with your OK.",
   "license": "MIT",
   "repository": "https://github.com/Eigenwise/eigenwise-toolshed",

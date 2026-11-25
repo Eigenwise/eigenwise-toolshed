@@ -3,7 +3,6 @@ import type { EngineInterface } from 'claude-code'
 import type { ChatEnding } from './chat-ending'
 import { mayBeBareRepository, withBareRepositoryRoot } from './board-root'
 import { ticketsTouchedThisSession } from './register-closing-report'
-import { withoutProposedTickets } from './proposed-tickets'
 import { locateBoard, readOptionalText, readStoriesAndCheckout } from './store'
 import type { BoardLocation } from './store'
 import { summarize } from './summary'
@@ -17,10 +16,9 @@ async function storiesNow($: EngineInterface): Promise<readonly Story[]> {
   return read?.stories ?? []
 }
 
-// The band counts open work, and a plan's proposed tickets are none until its yes.
 export async function publishSummary($: EngineInterface, tickets: readonly Ticket[], stories?: readonly Story[]): Promise<void> {
-  const openWork = withoutProposedTickets(tickets, stories ?? (await storiesNow($)))
-  await $.state.set(SUMMARY, summarize(openWork, ticketsTouchedThisSession(), await $.clock.now()))
+  const knownStories = stories ?? (await storiesNow($))
+  await $.state.set(SUMMARY, summarize(tickets, ticketsTouchedThisSession(), await $.clock.now(), knownStories))
 }
 
 // Every board write is a read-modify-write, and the model batches tool calls, so writes run one at a time or two creates both take the same id.

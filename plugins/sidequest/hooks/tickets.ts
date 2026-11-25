@@ -595,14 +595,19 @@ const textInsideSection = (heading: string, text: string): string => text.replac
 const sectionWhenWritten = (heading: string, text: string): Section[] =>
   text === '' ? [] : [{ heading, text: textInsideSection(heading, text) }]
 
-// Writing the questions again records what the person sent or asks anew, and so does writing the mark for the yes.
-const decisionsSentKept = (sent: DecisionsSent, patch: StoryPatch): DecisionsSent => (patch.questions === undefined ? presentDecisionsSent(sent) : {})
-
 const presentDecisionsSent = (sent: DecisionsSent): DecisionsSent => ({
   ...(sent.decisionPicksSent === undefined ? {} : { decisionPicksSent: sent.decisionPicksSent }),
   ...(sent.decisionWordsSent === undefined ? {} : { decisionWordsSent: sent.decisionWordsSent }),
   ...(sent.decisionDaySent === undefined ? {} : { decisionDaySent: sent.decisionDaySent }),
 })
+
+// A decision that takes a question off leaves the picks for the questions still open as the person sent them. With no
+// question left there is nothing to keep, and the words and the day go with the picks.
+const decisionsSentAfterClosing = (sent: DecisionsSent, closed: ReadonlySet<number>): DecisionsSent => {
+  const picks = sent.decisionPicksSent?.filter((_, index) => !closed.has(index))
+
+  return picks?.length === 0 ? {} : presentDecisionsSent({ ...sent, ...(picks === undefined ? {} : { decisionPicksSent: picks }) })
+}
 
 const playbackAnswerKept = (sent: string | undefined, patch: StoryPatch): SentFromTheBoard =>
   sent === undefined || patch.awaitsYes !== undefined ? {} : { playbackAnswerSent: sent }
@@ -614,17 +619,48 @@ export const withoutPlaybackAnswer = (story: Story): Story => {
   return kept
 }
 
+const questionWords = (question: string): string => oneLine(question).toLowerCase().replace(/\s+/g, ' ').replace(/[?.!\s]+$/, '')
+
+// Seen in a real run: three decisions were written as answered and the plan still asked all three, because only a
+// second write of the questions takes one off. A decision closes the first open question that reads the same as its
+// own, ignoring case, spacing and a closing question mark, full stop or exclamation mark; one decision closes one question.
+const closedQuestionIndexes = (questions: readonly OpenQuestion[], decisions: readonly Decision[]): ReadonlySet<number> => {
+  const closed = new Set<number>()
+  for (const decision of decisions) {
+    const index = questions.findIndex((open, position) => !closed.has(position) && questionWords(open.question) === questionWords(decision.question))
+    if (index !== -1) closed.add(index)
+  }
+
+  return closed
+}
+
+type QuestionsAndPicks = { questions: OpenQuestion[]; sent: DecisionsSent }
+
+// Writing the questions again records what the person sent or asks anew, so it clears what they sent.
+const questionsAndPicksAfter = (story: Story, patch: StoryPatch): QuestionsAndPicks => {
+  if (patch.questions !== undefined) return { questions: patch.questions, sent: {} }
+  const closed = closedQuestionIndexes(story.questions, patch.decisions ?? [])
+
+  return {
+    questions: story.questions.filter((_, index) => !closed.has(index)),
+    sent: decisionsSentAfterClosing(story, closed),
+  }
+}
+
 export const applyStoryPatch = (story: Story, patch: StoryPatch, stamp: string): Story => {
   const { decisions, awaitsYes, ...replacements } = patch
+  const { questions, sent } = questionsAndPicksAfter(story, patch)
   const { awaitsYes: awaitedBefore, decisionPicksSent, decisionWordsSent, decisionDaySent, playbackAnswerSent, ...rest } = story
 
   return {
     ...rest,
     ...awaitsYesOf(awaitsYes ?? awaitedBefore),
-    ...decisionsSentKept({ decisionPicksSent, decisionWordsSent, decisionDaySent }, patch),
+    ...sent,
     ...playbackAnswerKept(playbackAnswerSent, patch),
     ...replacements,
+    questions,
     decisions: withDecisions(story.decisions, decisions ?? [], dayOf(stamp)),
     updated: dayOf(stamp),
   }
 }
+

@@ -1,6 +1,6 @@
 // `needsYou` counts every needs-you ticket; `needsYouFromEarlierWork` is how many of those this session never touched
-// and that sat a day or more.
-export type SidequestSummary = { needsYou: number; ready: number; doing: number; review: number; needsYouFromEarlierWork?: number }
+// and that sat a day or more. `plansWaiting` is how many plans have decisions, or a yes, that wait on the person.
+export type SidequestSummary = { needsYou: number; ready: number; doing: number; review: number; needsYouFromEarlierWork?: number; plansWaiting?: number }
 
 // `model` is what the agent actually runs on; `requestedModel` is what the route or the caller asked for.
 export type SidequestRun = {
@@ -31,6 +31,8 @@ export type BoardCard = {
   isReturnedNotRecorded?: true
   // A waiting ticket whose answer the person sent from the board: it is with the session, and waits on them no more.
   answerIsWithSession?: true
+  // A ticket the person works with themselves whose turn has come: it is no plan's proposal, and what it waits for is built.
+  isTheirsToDoNow?: true
   // The question from the ticket's For you section, shown in place of the title while it needs the person.
   question?: string
   // The answer the For you section recommends, in its own words, shown beside the question.

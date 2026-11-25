@@ -4,13 +4,15 @@ import { pullRequestWords, ticketHandle } from './branch-and-issue'
 import { alsoYoursText, forYouGapLines, optionLetter, optionText, parseForYou, WHAT_REACHES_THE_PERSON } from './for-you'
 import type { AlsoYours } from './for-you'
 import type { ForYou } from './for-you'
-import { awaitsHumanAnswer, isAnswerWithSession, waitsOnHuman } from './human-answers'
+import { isAnswerWithSession, ticketsWaitingOnThePerson, waitsOnHuman } from './human-answers'
 import { headedTickets, NO_STORIES, piecesOfWork, spansSeveralPieces, ticketNameUnder } from './pieces-of-work'
 import type { BoardWork, HeadedTickets, StoriesAndCheckout } from './pieces-of-work'
 import { hasComeBack, NO_PULL_REQUEST_STATES, pullRequestStateWords } from './team-work'
 import type { PullRequestState, PullRequestStates } from './team-work'
 import { idNumber, inIdOrder, oneLine } from './tickets'
 import type { Story, Ticket } from './tickets'
+import type { StoryToRead } from '../types'
+import { isStoryWaitingOnThePerson, storiesToRead } from './views/board-view'
 
 const SETTLED_STATUSES = ['done', 'parked']
 
@@ -140,8 +142,8 @@ const questionBlockText = (ticket: Ticket, place: QuestionPlace, now?: number, n
 
 const hasQuestion = (ticket: Ticket): boolean => parseForYou(ticket.forYou).question.trim() !== ''
 
-const writtenWaiting = (tickets: readonly Ticket[]): Ticket[] =>
-  mostBlockingFirst(tickets.filter(awaitsHumanAnswer), tickets).filter(hasQuestion)
+const writtenWaiting = (tickets: readonly Ticket[], stories: readonly Story[]): Ticket[] =>
+  mostBlockingFirst(ticketsWaitingOnThePerson(tickets, stories), tickets).filter(hasQuestion)
 
 // The view is pasted to the person as it is, so the model's own hint is marked to stay out of it.
 export const NOT_TO_PASTE ='For the session, not to paste:'
@@ -215,6 +217,18 @@ const standingPart = (standing: readonly PullRequestOfTicket[]): string => {
 
   return lines.length === 0 ? '' : ['Where the pull requests stand:', ...lines].join('\n')
 }
+
+const plansWaitingOn = (stories: readonly Story[], tickets: readonly Ticket[], now: number | undefined): StoryToRead[] =>
+  storiesToRead(stories, tickets, now ?? Number.NaN).filter(isStoryWaitingOnThePerson)
+
+const planWaitText = (plan: StoryToRead): string => {
+  const what = plan.openQuestions > 0 ? `${plan.openQuestions} ${plan.openQuestions === 1 ? 'decision' : 'decisions'}` : 'its yes on the proposed tickets'
+
+  return `- ${plan.id} ${oneLine(plan.title)}: ${what}.`
+}
+
+const plansPart = (plans: StoryToRead[]): string =>
+  plans.length === 0 ? '' : ['Plans waiting on you:', ...plans.map(planWaitText), 'To answer in this chat: say the plan and your answers, or answer on the board pane.'].join('\n')
 
 const nothingWaits = (projectName: string | undefined): string =>
   projectName === undefined ? 'Nothing waits on you.' : `Nothing waits on you in ${projectName}.`
@@ -300,7 +314,7 @@ const withHeadings = (numbered: readonly NumberedBlock[]): string[] =>
 type WaitingMoment = BoardWork & { now?: number }
 
 const questionsAndReturns = (moment: WaitingMoment, cameBack: readonly PullRequestOfTicket[]): { blocks: WaitingBlock[]; earlier: Ticket[] } => {
-  const { current, earlier } = earlierWorkSplit(writtenWaiting(moment.tickets), moment.touched, moment.now)
+  const { current, earlier } = earlierWorkSplit(writtenWaiting(moment.tickets, moment.stories), moment.touched, moment.now)
 
   return { blocks: [...current.map(ticket => questionBlock(ticket, moment.now)), ...cameBack.map(pullRequestBlock)], earlier }
 }
@@ -319,7 +333,7 @@ export const waitingText = (
   storiesAndCheckout: StoriesAndCheckout = NO_STORIES,
 ): string => {
   const board = { ...storiesAndCheckout, tickets, touched }
-  const waiting = mostBlockingFirst(tickets.filter(awaitsHumanAnswer), tickets)
+  const waiting = mostBlockingFirst(ticketsWaitingOnThePerson(tickets, storiesAndCheckout.stories), tickets)
   const withStates = withPullRequests(tickets, pullRequests)
   const cameBack = withStates.filter(hasComeBackToThePerson)
   const { blocks: waitingBlocks, earlier } = questionsAndReturns({ ...board, now }, cameBack)
@@ -327,12 +341,13 @@ export const waitingText = (
   const blocks = withHeadings(numbered)
   const blocksLead = waitingLead(storiesAndCheckout.projectName, isByPiece ? BY_PIECE_ORDER : MOST_BLOCKING_ORDER)
   const lead = blocks.length > 0 || earlier.length > 0 ? blocksLead : ''
-  const nothing = waiting.length + cameBack.length === 0 ? nothingWaits(storiesAndCheckout.projectName) : ''
+  const plans = plansWaitingOn(storiesAndCheckout.stories, tickets, now)
+  const nothing = waiting.length + cameBack.length + plans.length === 0 ? nothingWaits(storiesAndCheckout.projectName) : ''
   const unwritten = unwrittenLine(waiting.filter(ticket => !hasQuestion(ticket)))
   const standing = standingPart(withStates.filter(pullRequest => !cameBack.includes(pullRequest)))
   const answered = answeredOnTheBoardLine(tickets, storiesAndCheckout.stories)
 
-  return [nothing, lead, ...blocks, earlierWorkPart(earlier, now), standing, unwritten, answered].filter(part => part !== '').join('\n\n')
+  return [nothing, lead, ...blocks, earlierWorkPart(earlier, now), plansPart(plans), standing, unwritten, answered].filter(part => part !== '').join('\n\n')
 }
 
 // What the waiting view would be read with at the moment of a write. The tickets this session touched include the

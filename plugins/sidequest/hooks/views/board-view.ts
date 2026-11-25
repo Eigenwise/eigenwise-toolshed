@@ -13,7 +13,7 @@ import { commitSummaryLines, decisionsAsDrawn, destinationLead, destinationRest,
 import type { ForYou } from '../for-you'
 import { NO_STORIES, OTHER_TICKETS_HEADING, pieceOfEachTicket, shortPieceName } from '../pieces-of-work'
 import type { BoardWork, PieceOfATicket } from '../pieces-of-work'
-import { awaitsHumanAnswer, canBeApproved, isAnswerWithSession } from '../human-answers'
+import { awaitsHumanAnswer, canBeApproved, isAnswerWithSession, ticketsWithThePerson } from '../human-answers'
 import { NO_INTERRUPTED_WORK } from '../interrupted-work'
 import { proposedTicketsOf } from '../proposed-tickets'
 import { diffOfHunks, hasAfterTheReview, hasSayingYesTo, PART_NAMES, SAYING_YES_TO_PARTS } from '../saying-yes-to'
@@ -81,7 +81,13 @@ const ageFacts = (ticket: Ticket, tickets: readonly Ticket[]): Pick<BoardCard, '
 
 const answerFact = (ticket: Ticket): Pick<BoardCard, 'answerIsWithSession'> => (isAnswerWithSession(ticket) ? { answerIsWithSession: true } : {})
 
-type CardFacts = { tickets: readonly Ticket[]; config: BoardConfig; interrupted: InterruptedWork; pieces: ReadonlyMap<string, PieceOfATicket> }
+type CardFacts = {
+  tickets: readonly Ticket[]
+  config: BoardConfig
+  interrupted: InterruptedWork
+  pieces: ReadonlyMap<string, PieceOfATicket>
+  theirsToDoNow: ReadonlySet<string>
+}
 
 const pieceFact = (ticket: Ticket, pieces: ReadonlyMap<string, PieceOfATicket>): Pick<BoardCard, 'piece'> => {
   const piece = pieces.get(ticket.id)
@@ -89,7 +95,7 @@ const pieceFact = (ticket: Ticket, pieces: ReadonlyMap<string, PieceOfATicket>):
   return piece === undefined ? {} : { piece }
 }
 
-const cardOf = (ticket: Ticket, { tickets, config, interrupted, pieces }: CardFacts): BoardCard => {
+const cardOf = (ticket: Ticket, { tickets, config, interrupted, pieces, theirsToDoNow }: CardFacts): BoardCard => {
   const forYou = parseForYou(ticket.forYou)
   const question = oneLine(forYou.question)
   const recommended = recommendedAnswer(forYou)
@@ -102,6 +108,7 @@ const cardOf = (ticket: Ticket, { tickets, config, interrupted, pieces }: CardFa
     updated: ticket.updated,
     ...(isReturnedNotRecorded(ticket) ? { isReturnedNotRecorded: true } : {}),
     ...answerFact(ticket),
+    ...(theirsToDoNow.has(ticket.id) ? { isTheirsToDoNow: true } : {}),
     ...(question ? { question } : {}),
     ...(recommended ? { recommended } : {}),
     ...placeOf(ticket),
@@ -122,16 +129,25 @@ export const boardCards = (
   interrupted: InterruptedWork = NO_INTERRUPTED_WORK,
   workAround: WorkAroundTheTickets = NO_WORK_AROUND,
 ): BoardCard[] => {
-  const facts: CardFacts = { tickets, config, interrupted, pieces: pieceOfEachTicket({ ...workAround, tickets }) }
+  const theirs = ticketsWithThePerson(tickets, workAround.stories).filter(ticket => ticket.mode === 'hitl')
+  const facts: CardFacts = {
+    tickets,
+    config,
+    interrupted,
+    pieces: pieceOfEachTicket({ ...workAround, tickets }),
+    theirsToDoNow: new Set(theirs.map(ticket => ticket.id)),
+  }
 
   return tickets.map(ticket => cardOf(ticket, facts))
 }
 
+// Seen in a review: a ticket with the person was left out of the count of work in progress and still counted here,
+// so its agent made a stopped ticket read as running. The two lists hold the same tickets the count does.
 export const doingTicketsIn = (cards: readonly BoardCard[] | null): string[] =>
-  (cards ?? []).filter(card => card.status === 'doing').map(card => card.id)
+  (cards ?? []).filter(card => card.status === 'doing' && !isWaitingCard(card)).map(card => card.id)
 
 export const returnedTicketsIn = (cards: readonly BoardCard[] | null): string[] =>
-  (cards ?? []).filter(card => card.isReturnedNotRecorded).map(card => card.id)
+  (cards ?? []).filter(card => card.isReturnedNotRecorded && !isWaitingCard(card)).map(card => card.id)
 
 const agentsRunning = (count: number): string => (count === 1 ? '1 agent running' : `${count} agents running`)
 
@@ -177,10 +193,14 @@ const fromEarlierWork = (summary: PublishedSummary): number => summary.needsYouF
 
 const warnedAbout = (summary: PublishedSummary): number => summary.needsYou - fromEarlierWork(summary)
 
+const plansWaiting = (summary: PublishedSummary): number => summary.plansWaiting ?? 0
+
+// The pane's Being checked section lists the tickets the board read named; a summary with no such list counts every built ticket.
+const beingChecked = (summary: PublishedSummary, activity: BoardActivity): number => activity.beingCheckedTickets?.length ?? summary.review
+
 export const bandCounts = (summary: PublishedSummary, activity: BoardActivity): string =>
   [
-    ticketPhrase([{ count: summary.ready, words: statusWords('ready') }, ...doingCounts(summary, activity), { count: summary.review, words: REVIEW_WORDS_IN_A_COUNT }]),
-    countWords(fromEarlierWork(summary), 'waiting on you from earlier sessions'),
+    ticketPhrase([{ count: summary.ready, words: statusWords('ready') }, ...doingCounts(summary, activity), { count: beingChecked(summary, activity), words: REVIEW_WORDS_IN_A_COUNT }]),
     agentModelCounts(activity.agents),
   ]
     .filter(part => part !== '')
@@ -196,9 +216,12 @@ const oldestWaitingWords = (count: number, activity: BoardActivity): string => {
 
 const needsYouWords = (count: number): string => (count === 1 ? '1 ticket needs you' : `${count} tickets need you`)
 
+const plansNeedYouWords = (count: number): string => (count === 1 ? '1 plan needs you' : `${count} plans need you`)
+
 const touchedStamp = (card: BoardCard): string => card.lastTouched ?? card.updated
 
-export const isWaitingCard = (card: BoardCard): boolean => card.status === 'needs-you' && card.answerIsWithSession !== true
+export const isWaitingCard = (card: BoardCard): boolean =>
+  (card.status === 'needs-you' || card.isTheirsToDoNow === true) && card.answerIsWithSession !== true
 
 export const isCardFromEarlierWork = (card: BoardCard, touchedHere: ReadonlySet<string>, now: number): boolean =>
   isWaitingCard(card) && isFromEarlierWork(card.id, touchedStamp(card), touchedHere, now)
@@ -245,11 +268,19 @@ const piecesNamed = (activity: BoardActivity): string => {
   return pieces.length > MOST_PIECES_NAMED ? `: ${named} and ${pieces.length - MOST_PIECES_NAMED} more` : `: ${named}`
 }
 
-const needsYouWarning = (summary: PublishedSummary, activity: BoardActivity): string => {
+const ticketsNeedYouWarning = (summary: PublishedSummary, activity: BoardActivity): string => {
   const count = warnedAbout(summary)
 
   return count > 0 ? `${needsYouWords(count)}${oldestWaitingWords(count, activity)}${piecesNamed(activity)}` : ''
 }
+
+const plansNeedYouWarning = (summary: PublishedSummary): string => (plansWaiting(summary) > 0 ? plansNeedYouWords(plansWaiting(summary)) : '')
+
+// Said with what warns, not with the counts the narrow band drops: a person who asks what waits on them reads all of it first.
+const fromEarlierSessionsWarning = (summary: PublishedSummary): string => countWords(fromEarlierWork(summary), 'waiting on you from earlier sessions')
+
+const needsYouWarning = (summary: PublishedSummary, activity: BoardActivity): string =>
+  [ticketsNeedYouWarning(summary, activity), plansNeedYouWarning(summary), fromEarlierSessionsWarning(summary)].filter(part => part !== '').join(', ')
 
 export const bandWarnings = (summary: PublishedSummary, activity: BoardActivity): string =>
   [needsYouWarning(summary, activity), permissionWaitText(activity.waits, activity.runs)]
@@ -272,7 +303,7 @@ const narrowBand = (summary: PublishedSummary, activity: BoardActivity): BandLin
   const agentCount = Object.keys(activity.agents).length
 
   return {
-    warnings: waitingOnYou(warnedAbout(summary) + Object.keys(activity.waits).length),
+    warnings: waitingOnYou(warnedAbout(summary) + plansWaiting(summary) + fromEarlierWork(summary) + Object.keys(activity.waits).length),
     counts: agentCount > 0 ? agentsRunning(agentCount) : '',
   }
 }
@@ -287,7 +318,7 @@ export const bandLine = (summary: PublishedSummary, activity: BoardActivity, col
 }
 
 export const widgetCounts = (summary: PublishedSummary): string =>
-  `${summary.needsYou} need you, ${summary.ready} ${statusWords('ready')}, ${summary.doing} ${statusWords('doing')}, ${summary.review} ${REVIEW_WORDS_IN_A_COUNT}`
+  `${summary.needsYou + plansWaiting(summary)} need you, ${summary.ready} ${statusWords('ready')}, ${summary.doing} ${statusWords('doing')}, ${summary.review} ${REVIEW_WORDS_IN_A_COUNT}`
 
 const optionalFacts = (ticket: Ticket): string[] => [
   ticket.story ? `story ${ticket.story}` : '',
@@ -427,6 +458,9 @@ const storyToRead = (story: Story): StoryToRead => ({
   ...(yesWaits(story) ? { awaitsYes: true } : {}),
   ...(hasAnswersWithSession(story) ? { answersWithSession: true } : {}),
 })
+
+// Open decisions, or the yes on the proposed tickets, that the person has not sent.
+export const isStoryWaitingOnThePerson = (story: StoryToRead): boolean => story.openQuestions > 0 || story.awaitsYes === true
 
 export const storiesToRead = (stories: readonly Story[], tickets: readonly Ticket[], now: number): StoryToRead[] =>
   stories.filter(story => hasSomethingToRead(story) && isBeingWorkedOn(story, tickets, now)).map(storyToRead)

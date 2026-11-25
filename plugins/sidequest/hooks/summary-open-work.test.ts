@@ -67,7 +67,7 @@ test('a done ticket this session touched is not counted as done earlier, and dro
 })
 
 test('only open tickets add no line and no how-to-see sentence', () => {
-  const summary = summaryOf(filesOf([ticketOf('SQ-1', 'Build it', 'ready'), ticketOf('SQ-2', 'Check it', 'review')]))
+  const summary = summaryOf(filesOf([ticketOf('SQ-1', 'Build it', 'ready'), ticketOf('SQ-2', 'Check it', 'review', SIX_DAYS_AGO)]))
 
   expect(summary).toBe('0 waiting on you, 1 ready to start, 0 in progress, 1 being checked. Ready to start: SQ-1.')
 })

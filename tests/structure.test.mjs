@@ -87,6 +87,12 @@ function isShippedFile(path) {
   return /^(plugins|shared)\//.test(relativePath) || (/^docs\/(src|scripts)\//.test(relativePath) && !isGeneratedReference(relativePath)) || /^[^/]+\.(md|json)$/.test(relativePath);
 }
 
+const agreedBulletAboutTheEarlierName =
+  "- Installed a plugin from `toolshed-next` as well? Claude Code runs only one copy of a plugin name, with no warning, and lists the skills of both. Uninstall the `toolshed-next` one: `claude plugin uninstall <name>@toolshed-next`.";
+
+// The root README is the one shipped page outside the places below that may name the earlier name, and only in that one bullet.
+const withoutTheAgreedBullet = (path, text) => (relativeToRepository(path) === "README.md" ? text.replace(agreedBulletAboutTheEarlierName, "") : text);
+
 // The earlier name is only named where it is handled: the notice, the upgrade, the pages about moving, and tests that use it as sample data.
 function isPlaceThatHandlesTheEarlierName(path) {
   const relativePath = relativeToRepository(path);
@@ -118,9 +124,18 @@ describe("the marketplace name", () => {
     const rootFiles = readdirSync(repositoryRoot).map((name) => join(repositoryRoot, name)).filter((path) => /\.(md|json)$/.test(path));
     const offenders = [...shippedFolders, ...rootFiles]
       .filter((path) => isShippedFile(path) && !isHostWrittenTypes(path) && !isPlaceThatHandlesTheEarlierName(path))
-      .filter((path) => readFileSync(path, "utf8").includes(earlierMarketplaceName))
+      .filter((path) => withoutTheAgreedBullet(path, readFileSync(path, "utf8")).includes(earlierMarketplaceName))
       .map(relativeToRepository);
     assert.deepEqual(offenders, []);
+  });
+
+  it("names toolshed-next in the root README only in the agreed last bullet of the section on coming from v1", () => {
+    const lines = readFileSync(join(repositoryRoot, "README.md"), "utf8").split(/\r?\n/);
+    const sectionStart = lines.indexOf("## Coming from v1");
+    const sectionEnd = lines.findIndex((line, index) => index > sectionStart && line.startsWith("## "));
+    const bullets = lines.slice(sectionStart, sectionEnd).filter((line) => line.startsWith("- "));
+    assert.equal(bullets.at(-1), agreedBulletAboutTheEarlierName);
+    assert.deepEqual(lines.filter((line) => line.includes(earlierMarketplaceName)), [agreedBulletAboutTheEarlierName]);
   });
 });
 

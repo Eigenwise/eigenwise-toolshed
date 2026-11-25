@@ -13,14 +13,15 @@ import { proposedTicketsAmong, withoutProposedTickets } from './proposed-tickets
 import { pathAsMermaid } from './pull-request-diagram'
 import { withoutSettledWork } from './settled-work'
 import { frontierOf } from './frontier'
-import { waitsOnHuman } from './human-answers'
+import { ticketsWaitingOnThePerson } from './human-answers'
 import { interruptedLabel, interruptedSummaryLines, NO_INTERRUPTED_WORK } from './interrupted-work'
 import type { InterruptedWork } from './interrupted-work'
 import type { StoriesAndCheckout } from './pieces-of-work'
 import { heldThingsFor, waitsForWords } from './shared-things'
 import type { BoardFiles } from './store'
 import { statusCountsInWords } from './status-words'
-import { summarize } from './summary'
+import { countBeingChecked, summarize } from './summary'
+import type { PublishedSummary } from './summary'
 import { NO_TEAM_FACTS, theirsSummaryLines, withoutTheirs } from './team-work'
 import type { TeamFacts } from './team-work'
 import { idNumber, inIdOrder, oneLine, serializeStory, serializeTicket, TICKET_STATUSES } from './tickets'
@@ -89,8 +90,8 @@ const emptyBoardLines = (files: BoardFiles): string[] =>
 const withProblems = (files: BoardFiles, text: string): string =>
   [...boardProblemsOf(files).map(problem => `board.json problem: ${problem}`), text].join('\n')
 
-const waitingViewLine = (tickets: readonly Ticket[], projectName: string | undefined): string => {
-  if (!tickets.some(waitsOnHuman)) return ''
+const waitingViewLine = (files: BoardFiles, plansWaiting: number, projectName: string | undefined): string => {
+  if (plansWaiting === 0 && ticketsWaitingOnThePerson(files.tickets, files.stories).length === 0) return ''
   const inProject = projectName === undefined ? '' : ` in ${projectName}`
 
   return ` The waiting view writes what waits on the person${inProject}, ready to pass on, to answer in this chat.`
@@ -119,11 +120,12 @@ const readyToStartLine = (next: readonly string[], readyCount: number): string =
 const blockedLines = (files: BoardFiles, startable: readonly Ticket[]): string[] =>
   waitLines(readyWaits(files.tickets, startable.length > 0, files.config.settings.worktrees))
 
-const summaryText = (files: BoardFiles, interrupted: InterruptedWork, team: TeamFacts, changes: SessionChanges, now: number): string => {
-  const counts = summarize(files.tickets)
+const plansWaitingWords = (count = 0): string => (count === 0 ? '' : ` ${count === 1 ? '1 plan has' : `${count} plans have`} decisions or a yes waiting on the person, besides the tickets counted above.`)
+
+const summaryText = (files: BoardFiles, counts: PublishedSummary, interrupted: InterruptedWork, team: TeamFacts, changes: SessionChanges, now: number): string => {
   const startable = frontierOf(inIdOrder(files.tickets), files.config.settings.worktrees)
   const nextLine = readyToStartLine(startable.map(ticket => ticket.id), counts.ready)
-  const counted = `${statusCountsInWords(counts)}. ${nextLine}${waitingViewLine(files.tickets, files.projectName)}`
+  const counted = `${statusCountsInWords(counts)}. ${nextLine}${plansWaitingWords(counts.plansWaiting)}${waitingViewLine(files, counts.plansWaiting ?? 0, files.projectName)}`
   const inboxCount = files.tickets.filter(ticket => ticket.status === 'inbox').length
   const unnamedWorkLines = withHowToSee(
     inboxLines(files.tickets, startable.length === 0, now),
@@ -146,8 +148,14 @@ const summaryText = (files: BoardFiles, interrupted: InterruptedWork, team: Team
   return withProblems(files, withFileLines(lines.join('\n'), files))
 }
 
+// Counted as the band counts: from every ticket of the board, with the built ones the pane lists as being checked.
+const summaryCounts = (files: BoardFiles, interrupted: InterruptedWork, now: number): PublishedSummary => ({
+  ...summarize(files.tickets, undefined, now, files.stories),
+  review: countBeingChecked(openWorkOf(files).tickets, interrupted, now, files.stories),
+})
+
 const summaryWithProposed = (files: BoardFiles, interrupted: InterruptedWork, team: TeamFacts, changes: SessionChanges, now: number): string =>
-  [summaryText(openWorkOf(files), interrupted, team, changes, now), ...proposedLines(files)].join('\n')
+  [summaryText(openWorkOf(files), summaryCounts(files, interrupted, now), interrupted, team, changes, now), ...proposedLines(files)].join('\n')
 
 const heldNote = (ticket: Ticket, files: BoardFiles): string => {
   const held = heldThingsFor(ticket, files.tickets, files.config)

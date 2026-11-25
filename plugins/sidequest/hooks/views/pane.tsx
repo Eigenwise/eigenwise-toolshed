@@ -554,27 +554,60 @@ const questionOf = (drawing: Drawing, detail: TicketDetail): RenderElement | fal
   return detail.question !== '' && <Text bold>{detail.question}</Text>
 }
 
-const ticketView = (drawing: Drawing, detail: TicketDetail, form: TicketForm): RenderElement => {
-  const { Box, Markdown } = drawing.elements
+const STATUSES_THAT_ARE_OVER = ['done', 'dropped']
+
+// Seen in the desktop app on a released board: a ticket the board called done still showed a field and Send, and one
+// that had asked a question showed it again as open. A ticket that is over is a record of what happened.
+const isOver = (detail: TicketDetail): boolean => STATUSES_THAT_ARE_OVER.includes(detail.status)
+
+const ticketHead = (drawing: Drawing, detail: TicketDetail): RenderElement => {
+  const { Box } = drawing.elements
 
   return (
-    <Box flexDirection="column" gap={1}>
+    <Box key="ticket-head" flexDirection="column" gap={1}>
       {titleAndFacts(drawing, detail)}
-      {questionOf(drawing, detail)}
+      {!isOver(detail) && questionOf(drawing, detail)}
       {detail.answerSent !== '' && sentLines(drawing, 'answer-sent', sentAtWords(detail.answerSent, detail.answerSentAt))}
       {sayingYesToOf(drawing, detail)}
       {noQuestionLine(drawing, detail)}
       {diffOf(drawing, detail)}
-      {answerField(drawing, detail, form)}
-      {detail.takesAnswer && sendButton(drawing, detail)}
-      {ticketButtons(drawing, detail)}
-      <Markdown text={detail.body} />
     </Box>
   )
 }
 
+const fieldAndSend = (drawing: Drawing, detail: TicketDetail, form: TicketForm): RenderElement | false => {
+  const { Box } = drawing.elements
+
+  return (
+    !isOver(detail) && (
+      <Box key="ticket-field" flexDirection="column" gap={1}>
+        {answerField(drawing, detail, form)}
+        {detail.takesAnswer && sendButton(drawing, detail)}
+      </Box>
+    )
+  )
+}
+
+// Seen in the desktop app on a released board: a ticket with a question drew its field and its buttons above the What
+// that explains the question. Where there is a question, what explains it comes before anything to press.
+const ticketView = (drawing: Drawing, detail: TicketDetail, form: TicketForm): RenderElement => {
+  const { Box, Markdown } = drawing.elements
+  const explanationLeads = detail.question !== '' && !isOver(detail)
+  const body = <Markdown key="ticket-body" text={detail.body} />
+  const fieldAndButtons = [fieldAndSend(drawing, detail, form), <Box key="ticket-buttons">{ticketButtons(drawing, detail)}</Box>]
+
+  return (
+    <Box flexDirection="column" gap={1}>
+      {ticketHead(drawing, detail)}
+      {explanationLeads ? [body, ...fieldAndButtons] : [...fieldAndButtons, body]}
+    </Box>
+  )
+}
+
+// The question view is the form a person answers in. A ticket that carries a question it no longer waits on (answered
+// and taken up, set aside, finished) is read, not answered: seen in a review, such a ticket still opened as the form.
 const detailView = (drawing: Drawing, detail: TicketDetail, form: TicketForm): RenderElement =>
-  detail.question === '' || detail.answerSent !== '' ? ticketView(drawing, detail, form) : questionView(drawing, detail, form)
+  detail.takesAnswer && detail.question !== '' ? questionView(drawing, detail, form) : ticketView(drawing, detail, form)
 
 const analysisOf = (drawing: Drawing, story: StoryDetail): RenderElement => {
   const { Markdown, Text } = drawing.elements

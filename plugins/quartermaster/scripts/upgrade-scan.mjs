@@ -492,7 +492,7 @@ export function readMachineInstalls(configDirectory) {
     olderOfThisVersionsPlugins: olderOfThisVersionsPlugins.map(installWords),
     updateCommands: olderOfThisVersionsPlugins.length === 0 ? [] : updateCommands(olderOfThisVersionsPlugins),
     earlierName: earlierName.map(installWords),
-    moveCommands: earlierName.length === 0 ? [] : moveCommands(earlierName, isToolshedMarketplaceKnown),
+    moveCommands: earlierName.length === 0 ? [] : moveCommands(earlierName, isToolshedMarketplaceKnown, installs.filter((entry) => entry.state !== EARLIER_NAME)),
   };
 }
 
@@ -509,10 +509,17 @@ export function scan(options) {
   };
 }
 
+const halfMovedWords = (project) => {
+  if (project.isNoCopyRunning) return `half-moved: this version is installed under both names and no copy is switched on here, with the ${EARLIER_NAME_OF_THIS_VERSION} copy and traces left`;
+  return project.runsUnderEarlierName === false
+    ? `half-moved: this version is installed under both names and the host runs the ${TOOLSHED_MARKETPLACE} copy, with the ${EARLIER_NAME_OF_THIS_VERSION} copy and traces left`
+    : `half-moved: this version runs here under its earlier name ${EARLIER_NAME_OF_THIS_VERSION}, with traces left`;
+};
+
 const SHAPE_WORDS = {
   team: (project) => `team repository (${project.isSettingsCommitted ? "settings committed, " : ""}${project.authorCount} people committed)`,
   solo: () => "solo project",
-  "half-moved": () => `half-moved: this version runs here under its earlier name ${EARLIER_NAME_OF_THIS_VERSION}, with traces left`,
+  "half-moved": halfMovedWords,
   "update-first": () => "update first: the older version of a plugin is still installed for this project. Run the commands under Update first, reload plugins, and scan again",
   moved: () => "moved: nothing left to do here. What is listed under Kept stays on purpose, for the reason under it",
 };
@@ -584,6 +591,7 @@ function projectLines(project) {
   return [
     `This project: ${project.path}`,
     `Shape: ${SHAPE_WORDS[project.shape](project)}`,
+    ...(project.installedUnderBothNames ?? []).map((words) => `Installed under both names: ${words}`),
     `Older plugins on: ${olderPluginsOnWords(project)}`,
     ...titledLeftoverLines("Still to do:", project.leftovers.filter((leftover) => leftover.isStillToDo)),
     ...titledLeftoverLines("Kept, each for the reason under it:", project.leftovers.filter((leftover) => !leftover.isStillToDo)),
@@ -682,8 +690,12 @@ export const renderPlan = (report, isAllListed = false) => renderPlans([report],
 const ONE_LINE_WORDS = {
   "update-first": (project) =>
     `The older Toolshed is still installed for this project (${project.olderInstalls.join("; ")}): update it first with claude plugin marketplace update ${TOOLSHED_MARKETPLACE} and claude plugin update for each plugin, then the \`upgrade\` skill moves what it left. Nothing changes until you ask.`,
-  "half-moved": () =>
-    `This project runs this version under its earlier name ${EARLIER_NAME_OF_THIS_VERSION}. The \`upgrade\` skill moves it to ${TOOLSHED_MARKETPLACE}; nothing changes until you ask.`,
+  "half-moved": (project) =>
+    project.isNoCopyRunning
+      ? `This project has this version installed under both ${TOOLSHED_MARKETPLACE} and ${EARLIER_NAME_OF_THIS_VERSION}, and no copy is switched on here. The \`upgrade\` skill removes the ${EARLIER_NAME_OF_THIS_VERSION} one; nothing changes until you ask.`
+      : project.runsUnderEarlierName === false
+      ? `This project has this version installed under both ${TOOLSHED_MARKETPLACE} and ${EARLIER_NAME_OF_THIS_VERSION}, and the host runs the ${TOOLSHED_MARKETPLACE} copy. The \`upgrade\` skill removes the ${EARLIER_NAME_OF_THIS_VERSION} one; nothing changes until you ask.`
+      : `This project runs this version under its earlier name ${EARLIER_NAME_OF_THIS_VERSION}. The \`upgrade\` skill moves it to ${TOOLSHED_MARKETPLACE}; nothing changes until you ask.`,
 };
 
 function leftoversLine(project) {

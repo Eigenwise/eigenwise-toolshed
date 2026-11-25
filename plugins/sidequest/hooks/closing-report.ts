@@ -1,5 +1,5 @@
 import { handleDetails } from './branch-and-issue'
-import { awaitsHumanAnswer, isAnswerWithSession, waitsOnHuman } from './human-answers'
+import { isAnswerWithSession, ticketsWithThePerson } from './human-answers'
 import type { InterruptedWork } from './interrupted-work'
 import { NOTHING_WAS_CHECKED, wasFinishedUnchecked } from './nothing-checked'
 import { headedTickets, NO_STORIES, OTHER_TICKETS_HEADING, piecesOfWork, spansSeveralPieces, ticketNameUnder, titleWithoutKey } from './pieces-of-work'
@@ -50,43 +50,48 @@ const sessionPart = (changes: SessionChanges, board: BoardWork): string[] => {
   return lines.length === 0 ? ['This session changed nothing on the board.'] : ['What this session changed on the board:', ...lines]
 }
 
-type EarlierCount = { words: string; counts: (ticket: Ticket, interrupted: InterruptedWork) => boolean }
+// The report says waiting on you for the same tickets the band, the pane, the summary and the waiting view do.
+type EarlierFacts = { interrupted: InterruptedWork; withThePerson: ReadonlySet<string> }
 
-const isWaiting = (ticket: Ticket, interrupted: InterruptedWork): boolean => awaitsHumanAnswer(ticket) && !interrupted.has(ticket.id)
+type EarlierCount = { words: string; counts: (ticket: Ticket, facts: EarlierFacts) => boolean }
 
-const isAnswered = (ticket: Ticket, interrupted: InterruptedWork): boolean =>
-  waitsOnHuman(ticket) && isAnswerWithSession(ticket) && !interrupted.has(ticket.id)
+const isWaiting = (ticket: Ticket, { interrupted, withThePerson }: EarlierFacts): boolean =>
+  withThePerson.has(ticket.id) && !isAnswerWithSession(ticket) && !interrupted.has(ticket.id)
 
-const isPlainOpen = (ticket: Ticket, interrupted: InterruptedWork): boolean =>
-  !NOT_OPEN.includes(ticket.status) && !interrupted.has(ticket.id) && !waitsOnHuman(ticket)
+const isAnswered = (ticket: Ticket, { interrupted, withThePerson }: EarlierFacts): boolean =>
+  withThePerson.has(ticket.id) && isAnswerWithSession(ticket) && !interrupted.has(ticket.id)
+
+const isPlainOpen = (ticket: Ticket, { interrupted, withThePerson }: EarlierFacts): boolean =>
+  !NOT_OPEN.includes(ticket.status) && !interrupted.has(ticket.id) && !withThePerson.has(ticket.id)
 
 const EARLIER_COUNTS: EarlierCount[] = [
   { words: 'open', counts: isPlainOpen },
-  { words: 'stopped', counts: (ticket, interrupted) => interrupted.has(ticket.id) },
+  { words: 'stopped', counts: (ticket, { interrupted }) => interrupted.has(ticket.id) },
   { words: 'waiting on you', counts: isWaiting },
   { words: 'answered, with the session to act on', counts: isAnswered },
   { words: 'set aside', counts: ticket => ticket.status === 'parked' },
 ]
 
-const countWords = (tickets: readonly Ticket[], interrupted: InterruptedWork): string[] =>
+const countWords = (tickets: readonly Ticket[], facts: EarlierFacts): string[] =>
   EARLIER_COUNTS.flatMap(({ words, counts }) => {
-    const count = tickets.filter(ticket => counts(ticket, interrupted)).length
+    const count = tickets.filter(ticket => counts(ticket, facts)).length
 
     return count === 0 ? [] : [`${count} ${words}`]
   })
 
-const isCounted = (ticket: Ticket, interrupted: InterruptedWork): boolean => EARLIER_COUNTS.some(({ counts }) => counts(ticket, interrupted))
+const isCounted = (ticket: Ticket, facts: EarlierFacts): boolean => EARLIER_COUNTS.some(({ counts }) => counts(ticket, facts))
 
-const pieceCount = (group: HeadedTickets, interrupted: InterruptedWork): string =>
-  `${group.piece?.handle ?? OTHER_TICKETS_HEADING.toLowerCase()} (${countWords(group.tickets, interrupted).join(', ')})`
+const pieceCount = (group: HeadedTickets, facts: EarlierFacts): string =>
+  `${group.piece?.handle ?? OTHER_TICKETS_HEADING.toLowerCase()} (${countWords(group.tickets, facts).join(', ')})`
 
 // One count line for the rest, never their titles: a list of old work read as a list of things to do. Several pieces
 // of work are each named by their own handle, so the count says which work the rest belongs to.
 const earlierPart = (changes: SessionChanges, interrupted: InterruptedWork, board: BoardWork): string[] => {
-  const earlier = board.tickets.filter(ticket => !changes.has(ticket.id) && isCounted(ticket, interrupted))
+  const facts = { interrupted, withThePerson: new Set(ticketsWithThePerson(board.tickets, board.stories).map(ticket => ticket.id)) }
+  const earlier = board.tickets.filter(ticket => !changes.has(ticket.id) && isCounted(ticket, facts))
   const grouped = piecesOfWork(earlier, board)
-  if (spansSeveralPieces(grouped)) return [`Also on the board: ${headedTickets(grouped).map(group => pieceCount(group, interrupted)).join(', ')}.`]
-  const parts = countWords(earlier, interrupted)
+  if (spansSeveralPieces(grouped)) return [`Also on the board: ${headedTickets(grouped).map(group => pieceCount(group, facts)).join(', ')}.`]
+  const parts = countWords(earlier, facts)
 
   return parts.length === 0 ? [] : [`Also on the board from before: ${parts.join(', ')}.`]
 }
