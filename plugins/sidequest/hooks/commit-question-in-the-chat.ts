@@ -1,9 +1,9 @@
 import { SHOW_THE_WHOLE_TEXT, sayOnly } from './chat-ending'
 import type { ChatEnding } from './chat-ending'
 import { forYouGapLines, parseForYou } from './for-you'
-import { lastReviewOutcome } from './frontier'
 import { awaitsHumanAnswer, waitsOnHuman } from './human-answers'
 import { afterTheProofText, afterTheReviewText, changedParts, hasSayingYesTo, NOTHING_TO_SAY_YES_TO } from './saying-yes-to'
+import { reviewReadsAsPassed } from './review-standing'
 import type { SayingYesTo } from './saying-yes-to'
 import type { Ticket } from './tickets'
 import { nowWaitingBlocksText } from './waiting-view'
@@ -61,6 +61,6 @@ export const commitQuestionAmong = (written: readonly Ticket[], before: Readonly
 export const commitQuestionOf = (ticket: Ticket, tickets: readonly Ticket[], around: WaitingAround): CommitQuestion => ({
   parts: sayingYesToOf(ticket),
   waitingBlock: waitsOnHuman(ticket) ? nowWaitingBlocksText([ticket], tickets, around) : '',
-  reviewPassed: lastReviewOutcome(ticket) === 'pass',
+  reviewPassed: reviewReadsAsPassed(ticket),
   notes: waitsOnHuman(ticket) ? forYouGapLines([ticket]) : [],
 })

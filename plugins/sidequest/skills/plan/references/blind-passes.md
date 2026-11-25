@@ -10,7 +10,7 @@ Except the one before the questions, nobody waits for one. Say your piece and st
 | The playback, one ticket too | each ticket's text and the lines it cites | can a fresh agent build this from the ticket alone; what is missing or ambiguous | the person reading the playback |
 | Each build | the diff and its ticket | as the `run` skill says | the next build |
 | Landing several tickets | the whole diff, the story's destination and decisions | does the change do what was decided, and nothing else | the proof (`land`) |
-| Words that go out (a pull request, a tracker comment) | the text, the diff and what was checked | every claim against the diff and the checks; no tool words | the proof (`land`) |
+| Words that go out (a pull request, a tracker comment) | the text, what is written by then of what they say yes to and the extras left for them, the diff and what was checked | every claim against the diff and the checks; any claim that contradicts another; no tool words | the proof (`land`) |
 
 The last one has a real incident behind it: an outgoing text once stated an inference as fact.
 

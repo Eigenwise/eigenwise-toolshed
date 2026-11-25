@@ -1,4 +1,4 @@
-import { lastReviewOutcome } from '../frontier'
+import { reviewStandingLine } from '../review-standing'
 import { SAYING_YES_TO_PARTS } from '../saying-yes-to'
 import type { SayingYesTo } from '../saying-yes-to'
 import type { Ticket } from '../tickets'
@@ -73,18 +73,6 @@ const takenByDefaultRow = (entry: string): string => {
 // rest drawn after the yes. Seen on a real plan: the answer alone read "No." with nothing to say what it overruled.
 export const takenByDefaultRows = (decisionsText: string): string[] => decisionEntries(decisionsText).filter(isTakenByDefault).map(takenByDefaultRow)
 
-const REVIEW_LINES: Record<string, string> = {
-  pass: 'The review passed.',
-  skipped: 'The review was skipped.',
-}
-
-const reviewLine = (ticket: Ticket): string => {
-  const outcome = lastReviewOutcome(ticket)
-  if (outcome === undefined) return ''
-
-  return REVIEW_LINES[outcome] ?? 'The review did not pass.'
-}
-
 // No size from the hunks: they are a chosen part of the diff, and on a real board their count contradicted the
 // session's own figures right below it.
 const branchLine = (ticket: Ticket): string => (ticket.branch === undefined ? '' : `On branch ${ticket.branch}.`)
@@ -99,7 +87,7 @@ const firstLinesOfWhatIsSaidYesTo = (parts: SayingYesTo): string[] => {
 
 // Two or three lines from what the ticket carries; where it carries too little, the start of what is said yes to.
 export const commitSummaryLines = (ticket: Ticket, parts: SayingYesTo): string[] => {
-  const carried = [reviewLine(ticket), branchLine(ticket)].filter(line => line !== '')
+  const carried = [reviewStandingLine(ticket), branchLine(ticket)].filter(line => line !== '')
   const filled = carried.length >= 2 ? carried : [...carried, ...firstLinesOfWhatIsSaidYesTo(parts)]
 
   return filled.slice(0, LONGEST_SUMMARY)

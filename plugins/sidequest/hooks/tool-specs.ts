@@ -142,7 +142,7 @@ const FOR_YOU_FIELD = {
         'Before a commit, a push or a pull request that waits on the person: what they say yes to, kept as written and drawn above the question in the ticket view. Fill it in two steps. Once the proof has run, while the review still runs: changed, checked and hunks. When the review is back: reviewFound and the words that go out, with the question. Each step\'s reply ends with what to say in the chat: one line when the board pane is placed, else the whole text. Send the stored words as they are: words changed after the yes are logged and named in the closing view.',
       properties: {
         changed: { type: 'string', description: 'What changed, a line per area, as markdown, and the one command that shows the whole diff.' },
-        checked: { type: 'string', description: 'How it was checked so far.' },
+        checked: { type: 'string', description: 'How it was checked so far: only what has finished, rewritten when it changes.' },
         hunks: { type: 'string', description: 'The hunks that carry the design, as a diff, fenced or bare.' },
         reviewFound: { type: 'string', description: 'What the review found; a fail says what changes in what they read.' },
         commitMessage: { type: 'string', description: 'The commit message as it goes out.' },

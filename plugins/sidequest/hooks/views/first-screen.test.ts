@@ -20,6 +20,29 @@ test('the commit summary says whether the review passed and the branch, and neve
   expect(commitSummaryLines({ ...reviewed, branch: undefined }, PARTS)).toEqual(['The review passed.', '- uploads: a failed send is retried twice'])
 })
 
+const firstLineAfter = (...notes: string[]): string | undefined => {
+  const ticket = { ...newTicket('SQ-1', { title: 'Retry uploads' }, STAMP), log: notes.map(note => `${STAMP} ${note}`) }
+
+  return commitSummaryLines(ticket, PARTS)[0]
+}
+
+const FAILED_ON_FIELD = 'note review fail: a required field is missing from the test payload'
+const REVIEWER_RETURN = 'returned review run after 2m, agent a1b2'
+
+test('the first line of the commit question tells where the review stands from the log', () => {
+  expect(firstLineAfter('note review pass: as asked')).toBe('The review passed.')
+  expect(firstLineAfter(FAILED_ON_FIELD, REVIEWER_RETURN, 'note review pass: gone')).toBe('The review passed on a second read, after a fix.')
+  expect(firstLineAfter(FAILED_ON_FIELD)).toBe('The review failed: a required field is missing from the test payload.')
+  expect(firstLineAfter('note review skipped: quick')).toBe('The review was skipped.')
+})
+
+test('a fix nobody read again never reads as a pass, whether the session wrote a pass or a fixed note', () => {
+  const expected = 'The review failed: a required field is missing from the test payload. Fixed after, not reviewed again.'
+
+  expect(firstLineAfter(FAILED_ON_FIELD, 'note review pass: after these fixes nothing of the finding is left')).toBe(expected)
+  expect(firstLineAfter(FAILED_ON_FIELD, 'note review fixed: added the field')).toBe(expected)
+})
+
 test('the destination leads with its first paragraph and keeps the rest', () => {
   const destination = 'Uploads retry.\n\n**Proof on the real thing:** cut the line.\n\n**Where it ends:** a pull request.'
 

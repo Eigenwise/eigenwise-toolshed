@@ -5,7 +5,7 @@ description: Use to execute the board's frontier. Starts each ready ticket on it
 
 # Run
 
-Execute every frontier ticket in parallel and write each result back. Never ask whether to start: the plan already got a yes.
+Execute every frontier ticket in parallel and write each result back. The plan already got a yes: never ask whether to start.
 
 ## 1. Read the frontier
 
@@ -24,31 +24,31 @@ For each frontier ticket, call `mcp__sidequest__start` with its id. It marks the
 
 A rule you were handed on where commits go (no branch, no pull request), and an approval the project's rules ask for before a commit, go into `start` as `delivery`; the brief then carries it.
 
-Make that call exactly as returned, changing no field. A ticket's work happens in the worktree its `isolation` gives it, never one added by hand. When the board's folder is not a git repository the call comes back with no `isolation`, and the answer says why: the worker makes its own worktree in the repository the ticket names. If the answer says the ticket names no repository folder, add it and call `start` again. Start independent tickets together, in the background.
+Make that call exactly as returned, changing no field. Work happens in the worktree its `isolation` gives, never one added by hand. When the board's folder is not a git repository the call comes back with no `isolation`, and the answer says why: the worker makes its own worktree in the repository the ticket names. If the answer says the ticket names no repository folder, add it and call `start` again. Start independent tickets together, in the background.
 
 With five or more frontier tickets and workflows available, start each with `forWave: true` and pass the entries it returns to the saved wave workflow, per `references/wave.md`. If the name fails, use `scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/wave.js"` and the same `args`.
 
 ## 3. Say what else can move
 
-When a ticket that holds a shared thing starts, or anything likely to run for minutes, say one line from the `start` answer or the `now` view: what holds what and roughly how long, what runs beside it, what waits and behind whom, and what the person could do now, ending with "say which". Work they did not ask for is offered there, never started. When they ask what they can do or what is going on, paste the `now` view.
+When a ticket that holds a shared thing starts, or anything likely to run for minutes, say one line from the `start` answer or the `now` view: what holds what and roughly how long, what runs beside it, what waits, and what the person could do now, ending with "say which". Unasked work is offered, never started. When they ask what is going on, paste the `now` view.
 
-When the person says the shared thing is busy (their own job, or in use), create one ticket that waits on them, is `doing` and uses it, titled in their words, and close it when they say it is free.
+When the person says the shared thing is busy, create one `doing` ticket that waits on them and uses it, titled in their words, and close it when they say it is free.
 
-**After starting agents, end your turn.** The host hands you each agent's return as a new turn, and it cannot reach you while you sleep, loop or poll: a session that waited in a loop sat seven minutes on a return that had already come. Never sleep, or read the board, the tree or a branch to see whether an agent is done. If other work can move, do that first, then end the turn with one line on what runs. In a turn nobody typed, record what finished and continue only what it unblocks inside the plan the person started. Parked tickets, the inbox and a stopped plan wait for the person. After a typed stop, a returning agent's result is recorded and nothing new starts from it.
+**After starting agents, end your turn.** The host hands you each agent's return as a new turn, and it cannot reach you while you sleep, loop or poll: one loop waited seven minutes after the return came. Never sleep, or read the board, the tree or a branch to see whether an agent is done. If other work can move, do that first, then end the turn with one line on what runs. In a turn nobody typed, record what finished and continue only what it unblocks inside the person's plan. Parked tickets, the inbox and a stopped plan wait for the person. After a typed stop, a returning agent's result is recorded and nothing new starts from it.
 
 ## 4. Finish each ticket
 
 Say when a build is back (`Build is back: 16 tests pass. Review and proof running.`). When a commit waits on their yes, the review's wait is their reading time: fill the ticket's `forYou.sayingYesTo` in the two steps the `land` page gives, and say in the chat what each reply hands you.
 
-When an agent returns, call `mcp__sidequest__finish` with the ticket id and its result as returned, in the shape of `references/result-contract.md`, to add what you checked and move the ticket. Pass `checked` and `uncertain` through unchanged; a check that did not run stays `not checked`. When a worker's result says what it had to find out to run the checks, write it into `settings.checks` before the next start, so the next brief carries it. When workers keep reporting `not checked`, make one offer and write it on their yes: `worktree.baseRef: "head"` in `.claude/settings.local.json` when the worktree lacks local commits, else `settings.worktrees` false for missing ignored files. A running service is named in `settings.shared` instead.
+When an agent returns, call `mcp__sidequest__finish` with the ticket id and its result as returned, in the shape of `references/result-contract.md`, to add what you checked and move the ticket. Pass `checked` and `uncertain` through unchanged; a check that did not run stays `not checked`. When a worker's result says what it had to find out to run the checks, write it into `settings.checks` before the next start. When workers keep reporting `not checked`, make one offer and write it on their yes: `worktree.baseRef: "head"` in `.claude/settings.local.json` when the worktree lacks local commits, else `settings.worktrees` false for missing ignored files. A running service is named in `settings.shared`.
 
-Before a returned `needs` leaves a ticket at `needs-you`, apply this rule: A decision reaches the person only when it cannot be undone, spends money or reaches outside the project, or is taste or product direction only they have. Any other choice with a recommended answer is taken: say in one line what you chose and how to undo it, and move on. When it stays, write the ticket with `forYou`, in the shape the `sidequest:plan` skill gives. A failed run lands in `needs-you` with its result, so it never loops. For a wave, call `finish` once per ticket from the workflow's results, then record each review as step 5 says. A ticket that came back with no review gets `review skipped: quick`.
+Before a returned `needs` leaves a ticket at `needs-you`, apply this rule: A decision reaches the person only when it cannot be undone, spends money or reaches outside the project, or is taste or product direction only they have. Any other choice with a recommended answer is taken: say in one line what you chose and how to undo it, and move on. When it stays, write the ticket with `forYou`, in the shape the `sidequest:plan` skill gives. A failed run lands in `needs-you` with its result. For a wave, call `finish` once per ticket from the workflow's results, then record each review as step 5 says. A ticket that came back with no review gets `review skipped: quick`.
 
 ## 5. Review
 
 A `quick` ticket skips the review: record `review skipped: quick`; the verify in `land` is its check. An `outside-code` ticket is its own review: on `pass`, read `${CLAUDE_PLUGIN_ROOT}/skills/sidequest/references/outside-code.md` before anything of it runs. When you run its reviewer directly, record the verdict as below. `land` looks for the pass note, and without it the ticket stays in `review`.
 
-Every other ticket that lands in `review` from a direct run gets one independent review, in parallel. With `settings.worktrees` false the next run holds the checkout, so the review reads and runs nothing: the worker's check and the one verify in `land` are the tests.
+Every other ticket that lands in `review` from a direct run gets one independent review, in parallel. With `settings.worktrees` false the next run holds the checkout, so the review reads and runs nothing: the worker's check and the verify in `land` are the tests.
 
 ```
 Agent({ subagent_type: "sidequest:scout", description: "Review PL-12",
@@ -59,11 +59,13 @@ That file holds the decisions, the `Done when` and how checks run here, so add o
 
 Record the verdict with `mcp__sidequest__ticket` as a note starting `review pass:` or `review fail:`. A pass stays in `review`; a first fail goes back to `ready` with the findings; the next `start` puts that note and the last branch in the brief.
 
-Only a behaviour finding or a clear break of a guideline written in the repository (rules files by their `paths`, a contributing or style page, linter or formatter config) is a fail: the change misses what the ticket says, breaks something, claims a check that never ran, or breaks a written guideline, with the file that states it and the file and line that break it. Anything else, including a rule that is not written in the repository, fix yourself or leave on the log. What you change in a ticket's work after its pass goes on that ticket as a note with the commit; a change in behaviour beyond what the review found gets a second review.
+Only a behaviour finding or a clear break of a guideline written in the repository (rules files by their `paths`, a contributing or style page, linter or formatter config) is a fail: the change misses what the ticket says, breaks something, claims a check that never ran, or breaks a written guideline, with the file that states it and the file and line that break it. Anything else, including a rule that is not written in the repository, fix yourself or leave on the log. What you change in a ticket's work after its pass goes on that ticket as a note with the commit.
 
-**Two failures stop a ticket.** Each failure is a log note starting `review fail:`, `verify fail:` or `ci fail:`. On a ticket's second, of any kind, stop running it: when what is left is small and clear, fix it yourself, prove it for real, log what you ran and land it; otherwise move it to `needs-you` once, with both findings and your read of why, written to be read cold. No third run. Before blaming a ticket for a red verify or CI, run the same check on the base, or read the base's CI: a red base is said in one line and sends no ticket back.
+A fix after a failed review, whoever made it, and a change in behaviour beyond what a review found, is read again before the commit question: one fresh routed reviewer gets just the finding and the edits that answer it. Only that reviewer's return writes `review pass:`. A fix nobody read again is noted `review fixed: <what was changed>`, never as a pass.
 
-When the human answers a question about a ticket mid-run, write the answer on that ticket as a note before acting on it. When they correct work that is running (a name, a scope, leave that file alone), it never waits silently: note it on the ticket, pass it to the running agent when you can message it, else apply it yourself when the agent returns or send the ticket back with the note, and tell them in one line which of those happened.
+**Two failures stop a ticket.** Each failure is a log note starting `review fail:`, `verify fail:` or `ci fail:`. On a ticket's second, of any kind, stop running it: when what is left is small and clear, fix it yourself, prove it for real, log what you ran and land it; otherwise move it to `needs-you` once, with both findings and your read of why, written to be read cold. No third build run. Before blaming a ticket for a red verify or CI, run the same check on the base, or read the base's CI: a red base is said in one line and sends no ticket back.
+
+When the human answers a question about a ticket mid-run, write the answer on that ticket as a note before acting on it. When they correct work that is running (a name, a scope, leave that file alone), note it on the ticket, pass it to the running agent when you can message it, else apply it yourself when the agent returns or send the ticket back with the note, and tell them in one line which happened.
 
 ## 6. Keep going
 
