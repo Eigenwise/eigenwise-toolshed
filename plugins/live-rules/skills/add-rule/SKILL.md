@@ -1,142 +1,76 @@
 ---
 name: add-rule
-description: >-
-  Create or edit a live-rules instruction in the project's atomic rule set. Use to add a rule,
-  coding guideline, guardrail, convention, or automatic reminder.
+description: Turn "from now on, when X, do Y" into a rule file or project skill. Use when the user states a standing instruction, convention or guardrail.
 ---
 
-# Add Rule
+# Add a rule
 
-Turn a request like *"always run the linter before committing"* or *"when editing `*.tsx`, prefer
-function components"* into a **rule**. New workspaces keep one rule per Markdown file under
-`.claude/live-rules/rules/`, with a generated manifest beside them. The hooks inject a rule at
-SessionStart when it applies, then only when it newly matches or its content/hash changes during the
-session.
+Claude Code loads `.claude/rules/*.md` by itself. You write the file and check it. No hook runs.
 
-Read `references/rule-format.md` for the full frontmatter spec and `references/example-rules.md` for
-ready-to-adapt examples before writing a rule.
+## 1. Pick the shape
 
-**Do not edit `CLAUDE.md`.** Live Rules owns its rule files and generated manifest; the hooks are the
-delivery mechanism.
+Infer as much as you can from the request. Ask only for what you cannot tell, and only one question: where should it apply?
 
-## Atomic storage
+| Applies | You write | How it loads |
+| --- | --- | --- |
+| Always | `.claude/rules/<name>.md`, no `paths` | At session start, and again after compaction |
+| Files matching a glob | `.claude/rules/<name>.md` with `paths` | When Claude touches a matching file |
+| A directory | `.claude/rules/<name>.md` with `paths: ["<dir>/**"]` | Same |
+| A prompt keyword or a procedure to run on request | `.claude/skills/<name>/SKILL.md` | The description is the trigger. The body loads when it is used |
 
-For new workspaces, create or edit one rule file under `.claude/live-rules/rules/`. Use a stable,
-descriptive filename such as `commit-checks.md`. After adding or editing a rule, run the plugin-owned
-sync command from the project root:
+Rules cannot match words in a prompt. A "when I say X" request is always a skill.
 
-```text
-node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
-```
+A rule that has to hold through a long session gets no `paths`. A path rule sits in the conversation, so compaction summarises it away and it only comes back when a matching file is touched again. Keep always-loaded rules few and short: they cost context on every turn, and a `CLAUDE.md` past about 200 lines is followed less well.
 
-Sync derives every manifest hash and metadata field from the rule files, validates a stable read, and
-atomically replaces only the generated manifest under a writer lock. Rule files remain authoritative
-and are never rewritten by sync. Never author or repair `.claude/live-rules/manifest.json` by hand. If
-sync fails, fix the exact file it names, then run the same command again.
+Project scope is the default. Use `~/.claude/rules/` or `~/.claude/skills/` only when the user says user scope or "everywhere". Say which one you used.
 
-Existing projects may still have a legacy `.claude/live-rules.md` file. The default SessionStart
-migration converts it to atomic files, verifies that the rules match, and removes the old file. An
-explicit `LIVE_RULES_PATH` is preserved, and a failed verification keeps the legacy file. Treat the
-single-file format as migration or explicit-override storage only. Do not choose it for new work.
+If the instruction is a hard check (it must never be skipped), tell the user a rule only advises and a hook or CI check enforces. Write the rule anyway, and say so in one line.
 
-## Step 1: Understand the rule
+## 2. Write the file
 
-Pin down two things from the user's request:
+One concern per file. A name that says the rule: `commit-message-style.md`, not `rules1.md`. The first line of the body is an H1 that states the rule. Then a few short imperative lines. Aim well under 1.5 KB for an always-loaded rule and 2 KB for a path-scoped one.
 
-1. **The instruction** itself: what should Claude do, prefer, or avoid? Keep it concrete and testable
-   (*"use `httpx`, not `requests`*) rather than vague (*"write good code"*).
-2. **When it applies** (the scope). Listen for the trigger in how they phrase it:
-
-| The user says... | Scope | Frontmatter |
-|------------------|-------|-------------|
-| "always", "in general", "house style", no condition | **global** | no scope fields |
-| "when editing / for / in *.tsx", a file type or path | **path/glob** | `globs:` |
-| "when working in packages/api", a directory/area | **directory** | `dirs:` |
-| "when I ask about / mention deploy/migration/auth" | **prompt-keyword** | `prompt:` |
-
-A rule can combine scopes, such as `globs` plus `prompt`; it is injected when any condition matches.
-If you are unsure whether something is global or scoped, ask one short question rather than guessing,
-because an over-broad rule adds noise.
-
-**Including a live file.** If the request is "load my codebase map", "keep `<file>` in front of
-you", or "inject the contents of `<file>`", use the `include:` field, not a scope. Add
-`include: <path>` and write the body as the protocol for using that file. The file is read fresh each
-time the rule is injected, and a missing include makes the rule silent. A pure-include rule is global.
-See the "Including a live file" section of `references/rule-format.md`.
-
-## Step 2: Write the rule and sync it
-
-Create or edit one file under `.claude/live-rules/rules/`, then run the sync command from **Atomic
-storage**. Do not edit the manifest. A rule file contains one frontmatter block and one body:
+Path-scoped rule:
 
 ```markdown
 ---
-description: Short human title (also shown as the rule's heading when injected)
-globs: ["**/*.tsx"]     # include only the scope fields that apply; omit the rest
-priority: 0              # optional; higher injects first (default 0)
-enabled: true            # optional; default true
+paths:
+  - "src/**/*.tsx"
 ---
-- Write the rule body as tight, imperative bullet points.
-- One concern per file; add another rule file rather than overloading this one.
+# Components are function components
+
+- Use hooks. No class components.
+- Keep the test next to the component.
 ```
 
-For a project that deliberately sets `LIVE_RULES_PATH`, maintain the explicitly requested legacy file
-only when the user wants that override. Keep the same frontmatter and body rules, and do not claim it
-is the default storage path.
+Always-loaded rule: same, with no frontmatter at all.
 
-Guidelines for a good rule:
+Skill: frontmatter `name` and a `description` under 200 characters that starts with when to use it ("Use when the user asks to cut a release"). The body is the procedure.
 
-- **Imperative and concrete.** "Do X", "Never Y", with a real symbol, path, or command where possible.
-- **Short.** Injected context is capped at about 10k characters across all matching rules, so keep each
-  body to a handful of lines. Long rationale belongs in a linked doc.
-- **Atomic.** One concern per file. It keeps scoping precise and lets the user disable just that one.
-- **No bare `---` in the body.** A line that is exactly `---` would be read as another rule's fence.
-  Use `***` or `___` for a horizontal rule inside a body.
-- **Globs are gitignore-style:** a pattern with no `/` (like `*.sql`) matches that name at any depth;
-  a pattern with a `/` (like `src/**/*.ts`) is anchored to the repo-relative path.
+Rules for the `paths` list:
 
-## Step 3: Validate
+- Quote each glob.
+- A pattern with no slash matches at any depth (`*.sql`). A pattern with a slash is anchored to the folder that holds the rule's `.claude` folder (`src/*.ts`). A leading `/` is how to mean "this folder only": `/README.md` is the one next to `.claude`, while `README.md` also loads for `docs/README.md`.
+- Brace lists work: `src/**/*.{ts,tsx}`.
+- A trailing `/**` is dropped and `src/**` means the directory `src`. A list of only `**` means always loaded, so leave `paths` out instead.
+- To pull in another file, put `@relative/path.md` on its own line in the body. The path is relative to the rule file.
 
-Before finishing:
+Do not edit `CLAUDE.md` for this. Do not write a rule that restates what the code or a linter already shows.
 
-- Confirm any `globs` correspond to files that exist, or clearly will, in this repo. If a glob matches
-  nothing, say so.
-- If a `prompt` entry is a `/regex/flags`, make sure it is valid.
-- Re-read the body: is it short, concrete, and free of contradictions with the other rules? Skim them
-  for overlap or conflicts.
-- Make sure the frontmatter fences are intact and the file contains exactly one rule.
-- Run the sync command and confirm it succeeds. If the manifest is missing or malformed, sync rebuilds
-  it from the rule files; do not patch the JSON by hand.
+## 3. Audit it
 
-## Step 4: Confirm
+Run the audit on the file you wrote and show the output:
 
-Tell the user what you added: the rule's title, the scope, and a one-line summary. Explain that
-SessionStart injects applicable rules first, then the hooks inject only newly matching or changed
-unseen hashes during the session. A content change takes effect on the next prompt or relevant edit;
-unchanged rules do not repeat on every prompt. Remind them to review and commit the atomic rule files
-and generated manifest so the team shares the rules. They can disable a rule any time by setting
-`enabled: false` or using `manage-rules`.
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/audit-rules.mjs" --rules .claude/rules --file .claude/rules/<name>.md --table
+```
 
-## Guidelines
+The audit needs Node 22.5 or later. Without it, skip this step and say so. For a user-scope rule use `--rules ~/.claude/rules`. Glob matching is skipped there because no project applies.
 
-- **Never touch `CLAUDE.md`** or `CLAUDE.local.md`.
-- **One concern per file.** Prefer several small rules over one large one.
-- **Scope tightly.** Global rules hit every prompt that has not already seen that rule in the session;
-  reserve them for instructions that truly apply everywhere.
-- **Don't leak secrets.** A rule can say where config lives, never actual credential values.
+A warning about a glob that matches nothing usually means the path is wrong. Fix it and run again. If the user wants a rule for files that do not exist yet, say so and leave it.
 
-## Success criteria
+For a skill there is nothing to audit. Check that the description reads as a trigger.
 
-- [ ] A new or edited rule file exists under `.claude/live-rules/rules/`, unless the user explicitly
-      requested a `LIVE_RULES_PATH` override
-- [ ] The rule has a `description`, the correct scope fields, and a concise body
-- [ ] Scope is verified (globs match real paths; any regex compiles)
-- [ ] The rule file parses as exactly one rule with intact fences and no stray `---` in its body
-- [ ] The plugin-owned sync command succeeds and the generated manifest matches the rule files
-- [ ] User told the rule's title, when it fires, and the SessionStart/changed-hash cadence
-- [ ] `CLAUDE.md` is untouched
+## 4. Report
 
-## References
-
-- `references/rule-format.md` - full frontmatter spec, atomic storage, migration, cadence, scope semantics, and glob syntax
-- `references/example-rules.md` - copy-and-adapt examples for each scope type
+Say in two lines: the file path, and when it loads. A new rule file takes effect in the next session, or when Claude next touches a matching file. Tell the user to commit it if they want the team to have it.

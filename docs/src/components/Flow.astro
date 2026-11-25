@@ -1,0 +1,80 @@
+---
+/**
+ * A row of named steps with arrows between them. It wraps on a narrow screen,
+ * which a wide diagram cannot do.
+ *
+ *   <Flow steps={[{ label: 'Evidence' }, { label: 'Your decision', accent: true }]} caption="..." />
+ */
+interface Step {
+  label: string;
+  accent?: boolean;
+}
+
+interface Props {
+  steps: Step[];
+  caption?: string;
+}
+
+const { steps, caption } = Astro.props;
+---
+
+<figure class="flow-figure not-content">
+  <ol class="flow-steps">
+    {steps.map((step) => <li class={step.accent ? 'flow-step flow-accent' : 'flow-step'}>{step.label}</li>)}
+  </ol>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+  .flow-figure {
+    margin: 1.5rem 0;
+    padding: 1.1rem 1rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 12px;
+    background: var(--sl-color-bg-sidebar);
+  }
+  .flow-steps {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .flow-step {
+    display: flex;
+    align-items: center;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 8px;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+    background: var(--sl-color-bg);
+    white-space: nowrap;
+  }
+  .flow-step:not(:last-child) {
+    margin-inline-end: 1.45rem;
+    position: relative;
+  }
+  .flow-step:not(:last-child)::after {
+    content: '→';
+    position: absolute;
+    inset-inline-end: -1.15rem;
+    color: var(--sl-color-gray-3);
+    font-weight: 400;
+  }
+  .flow-accent {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-accent-high);
+  }
+  figcaption {
+    margin-top: 0.8rem;
+    text-align: center;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+</style>

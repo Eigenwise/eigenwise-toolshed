@@ -1,0 +1,1 @@
+{"extends":"../../tsconfig.base.json","files":["../../.types/claude-code.d.ts"],"include":["hooks","types","scripts/*.d.mts"]}

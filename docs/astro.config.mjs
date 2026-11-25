@@ -1,86 +1,101 @@
-import { defineConfig } from 'astro/config';
+// @ts-check
 import starlight from '@astrojs/starlight';
+import { defineConfig } from 'astro/config';
+import starlightLlmsTxt from 'starlight-llms-txt';
+import remarkPrefixBase from './src/remark/prefix-base.mjs';
+
+// The address the repository's Pages site has. It does not change when the Toolshed's version does.
+const site = 'https://eigenwise.github.io';
+const base = '/eigenwise-toolshed';
 
 export default defineConfig({
-  site: 'https://eigenwise.github.io',
-  base: '/eigenwise-toolshed',
-  redirects: {
-    '/getting-started/codex-gateway': '/eigenwise-toolshed/getting-started/model-gateway',
-    '/reference/codex-gateway': '/eigenwise-toolshed/reference/model-gateway',
+  site,
+  base,
+  trailingSlash: 'ignore',
+  devToolbar: { enabled: false },
+  markdown: {
+    // Commands and file names must stay exactly as typed, so no curly quotes.
+    smartypants: false,
+    remarkPlugins: [[remarkPrefixBase, { base }]],
   },
   integrations: [
     starlight({
-      title: 'Eigenwise Toolshed',
-      description: 'Sharp little tools for Claude Code, kept in one shed.',
-      customCss: ['./src/styles/custom.css'],
-      head: [
-        { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
-        { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true } },
-        {
-          tag: 'link',
-          attrs: {
-            rel: 'stylesheet',
-            href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap',
-          },
-        },
-      ],
-      social: [
-        {
-          icon: 'github',
-          label: 'GitHub',
-          href: 'https://github.com/Eigenwise/eigenwise-toolshed',
-        },
+      title: 'Toolshed',
+      description: 'Five Claude Code plugins that make a project easier to work in, with you deciding every change.',
+      logo: { src: './src/assets/toolshed-mark.svg', alt: '' },
+      favicon: '/favicon.svg',
+      tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
+      customCss: ['./src/styles/theme.css', './src/styles/mocks.css'],
+      pagination: true,
+      plugins: [
+        starlightLlmsTxt({
+          projectName: 'Toolshed',
+          description:
+            'Toolshed is a marketplace of five Claude Code plugins: Sidequest (a work board in plain files, with model routing), Quartermaster (workspace setup and a one-change-at-a-time improvement loop), Codebase Mapper, Live Rules and Observability (a local record of what each turn cost). Every plugin works alone. State lives in plain files in the project.',
+          details: [
+            '## For agents reading this file',
+            '',
+            'The reference pages are generated from the plugin manifests, skill frontmatter and tool specs in the repository, so they match the plugins in the checkout the site was built from.',
+            '',
+            'Start with the reference pages for exact names. Read the guides for how the pieces fit: a task from start to pull request, working in a team, upgrading, and how routing picks a model.',
+          ].join('\n'),
+          promote: ['index*', 'start/**', 'reference/**'],
+        }),
       ],
       sidebar: [
         {
           label: 'Start here',
           items: [
-            { label: 'Overview', slug: 'index' },
-            { label: 'Getting started', slug: 'getting-started' },
+            { label: 'What is the Toolshed?', link: '/' },
+            { label: 'Quick start', link: '/start/quick-start/' },
+            { label: 'Walk-through: one task', link: '/start/walk-through/' },
+            { label: 'Words used here', link: '/start/words/' },
           ],
         },
         {
-          label: 'Use the plugins',
+          label: 'Why',
           items: [
-            { label: 'Quartermaster', slug: 'getting-started/quartermaster' },
-            { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
-            { label: 'Sidequest', slug: 'getting-started/sidequest' },
-            { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },
-            { label: 'Live Rules', slug: 'getting-started/live-rules' },
-            { label: 'Experiment loops', slug: 'getting-started/experiments' },
+            { label: 'Why the Toolshed', link: '/why/' },
+            { label: 'Sidequest', link: '/why/sidequest/' },
+            {
+              label: 'Quartermaster',
+              collapsed: false,
+              items: [
+                { label: 'Why Quartermaster', link: '/why/quartermaster/' },
+                { label: 'Outfit: set up a project', link: '/why/quartermaster/outfit/' },
+                { label: 'Resupply: one change at a time', link: '/why/quartermaster/resupply/' },
+                { label: 'Review: did it help?', link: '/why/quartermaster/review/' },
+                { label: 'Inspect: is it working?', link: '/why/quartermaster/inspect/' },
+                { label: 'Where it stops', link: '/why/quartermaster/boundaries/' },
+              ],
+            },
+            { label: 'Codebase Mapper', link: '/why/codebase-mapper/' },
+            { label: 'Live Rules', link: '/why/live-rules/' },
+            { label: 'Observability', link: '/why/observability/' },
           ],
         },
         {
-          label: 'Observability',
+          label: 'Guides',
           items: [
-            { label: 'Overview', slug: 'observability' },
+            { label: 'A task, start to pull request', link: '/guides/task-to-pull-request/' },
+            { label: 'Working in a team', link: '/guides/teams/' },
+            { label: 'Coming from the older version', link: '/guides/upgrading/' },
+            { label: 'How routing picks a model', link: '/guides/routing/' },
+            { label: 'How quality is checked', link: '/guides/quality/' },
           ],
         },
         {
-          label: 'Maintainer docs',
+          label: 'Reference',
           items: [
-            { label: 'Architecture', slug: 'architecture' },
-            { label: 'Modular Toolshed', slug: 'architecture/modular-architecture' },
-            { label: 'Contributing to the docs', slug: 'contributing' },
-            { label: 'Release process', slug: 'release-process' },
+            { label: 'Overview', link: '/reference/' },
+            { label: 'Plugins', link: '/reference/plugins/' },
+            { label: 'Skills', link: '/reference/skills/' },
+            { label: 'Tools', link: '/reference/tools/' },
+            { label: 'Agents', link: '/reference/agents/' },
+            { label: 'Commands and scripts', link: '/reference/commands/' },
+            { label: 'Files each plugin writes', link: '/reference/files/' },
+            { label: 'Routing defaults', link: '/reference/routing-defaults/' },
           ],
-        },
-        {
-          label: 'Plugin reference',
-          items: [
-            { label: 'Overview', slug: 'reference' },
-            { label: 'Observability', slug: 'reference/observability' },
-            { label: 'Model Gateway', slug: 'reference/model-gateway' },
-            { label: 'Codebase Mapper', slug: 'reference/codebase-mapper' },
-            { label: 'Live Rules', slug: 'reference/live-rules' },
-            { label: 'Sidequest', slug: 'reference/sidequest' },
-            { label: 'Quartermaster', slug: 'reference/quartermaster' },
-            { label: 'Marketplace versions', slug: 'reference/marketplace' },
-          ],
-        },
-        {
-          label: 'Support',
-          items: [{ label: 'Support the Toolshed', slug: 'support' }],
         },
       ],
     }),

@@ -1,22 +1,9 @@
 {
   "name": "live-rules",
-  "version": "2.11.2",
-  "description": "Atomic project rules in .claude/live-rules/rules/ with a generated manifest. Claude injects applicable rules at SessionStart, then only new or changed unseen rules as prompts and edits match; legacy single-file storage is for migration or explicit overrides.",
-  "author": {
-    "name": "Eigenwise",
-    "email": "kenny@eigenwise.io"
-  },
-  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/live-rules",
-  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "version": "3.0.0",
+  "description": "Write and audit native .claude/rules/ files. Says once if the older rules are still in a project. Runs no process.",
   "license": "MIT",
-  "keywords": [
-    "rules",
-    "context",
-    "hooks",
-    "guardrails",
-    "conventions",
-    "standards",
-    "runtime",
-    "developer-experience"
-  ]
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "engines": { "claude-code": ">=2.1.325" },
+  "author": { "name": "Eigenwise" }
 }

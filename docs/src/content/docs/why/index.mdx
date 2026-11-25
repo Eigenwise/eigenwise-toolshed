@@ -1,0 +1,76 @@
+---
+title: Why the Toolshed
+description: The problem the Toolshed solves, the five ideas it is built on, and what it refuses to do.
+---
+
+import Diagram from '../../../components/Diagram.astro';
+
+<p class="lead">Claude Code is good at one task in one sitting. The Toolshed is for the weeks after that.</p>
+
+## The problem
+
+Three things wear a project down over time.
+
+1. **The plan lives in a chat.** A task with five parts is held in one conversation. When that conversation ends or gets summarized, the plan goes with it.
+2. **One model does everything.** Finding a file and redesigning a module run on the same model at the same price.
+3. **Nothing learns.** You approve the same command by hand every day. You explain the same convention every week.
+
+## The five ideas
+
+Every plugin follows the same five rules.
+
+1. **Files are the truth.** Tickets (pieces of work), proposals (suggested changes), routing tables and rules are plain files. You can read them, diff them and edit them by hand. A pane, a panel beside the chat, only shows them.
+2. **Only the main session writes.** A helper agent gets a brief and returns one result. It never writes the board, the list of work. So there is one place where state changes, and you can follow it.
+3. **Git proves it.** The board records what was agreed and what happened. Branches, commits and pull requests are the proof.
+4. **You decide what gets built.** Once, after the agent has done its homework. How it gets built and shipped is never a question to you. A change to your setup is always offered first, one item at a time, and can be undone.
+5. **Faster, never heavier.** No process starts per tool call. Almost nothing is added to the conversation. Sidequest puts one line in the first prompt of a session, and again after a compaction, saying to load its skill. Nothing else is added while nothing is wrong. A signal comes before a gate.
+
+<Diagram
+  direction="RIGHT"
+  nodeWidth={128}
+  nodeHeight={112}
+  spacing={68}
+  pad={26}
+  nodes={[
+    { id: 'you', label: 'YOU', sub: ['decides what', 'gets built'], icon: 'user' },
+    { id: 'main', label: 'MAIN SESSION', sub: ['plans, routes,', 'writes the board'], icon: 'window', variant: 'accent' },
+    { id: 'agents', label: 'AGENTS', sub: ['one piece each,', 'on a fitting model'], icon: 'agent' },
+    { id: 'files', label: 'PLAIN FILES', sub: ['tickets, proposals,', 'rules, the map'], icon: 'database' },
+  ]}
+  edges={[
+    { from: 'you', to: 'main', label: 'asks' },
+    { from: 'main', to: 'agents', label: 'brief / result', bidirectional: true, accent: true },
+    { from: 'main', to: 'files', label: 'writes' },
+  ]}
+  caption="Agents return a result. Only the main session writes it down."
+/>
+
+## Why five plugins and not one
+
+Each plugin does one job and works alone. Install only Sidequest and you get the board and the routing with no setup. Two plugins that cooperate do it through files, and each still works when the other is missing.
+
+| You want | Plugin |
+| --- | --- |
+| Work that survives the chat, on the right model | [Sidequest](/why/sidequest/) |
+| A setup that improves, with your yes | [Quartermaster](/why/quartermaster/) |
+| Claude to know your code's layout | [Codebase Mapper](/why/codebase-mapper/) |
+| Conventions written down once | [Live Rules](/why/live-rules/) |
+| To see what your sessions cost, on your machine | [Observability](/why/observability/) |
+
+## What it refuses to do
+
+These were tried in the older version, or considered, and left out on purpose.
+
+<div class="never">
+
+- No state machine that decides when your work is delivered. Git does that.
+- No agent writing the board on its own.
+- No process started on every tool call.
+- No hook that blocks you from stopping.
+- No proxy between you and the model by default.
+- No behaviour that depends on a rule, memory or setting in your home folder.
+- No modes or intensity levels to pick from.
+
+</div>
+
+A new guard or setting only gets in when a real failure happened without it, and when it makes you faster. Otherwise the idea is written down as declined, with the reason.

@@ -1,0 +1,4 @@
+$ claude plugin install sidequest@eigenwise-toolshed --scope local
+✔ Successfully installed plugin: sidequest@eigenwise-toolshed (scope: local)
+$ claude plugin install quartermaster@eigenwise-toolshed --scope local
+✔ Successfully installed plugin: quartermaster@eigenwise-toolshed (scope: local)

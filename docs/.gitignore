@@ -1,4 +1,4 @@
-node_modules/
 dist/
 .astro/
-src/content/docs/reference/*.md
+node_modules/
+src/content/docs/reference/

@@ -1,0 +1,92 @@
+name: check
+
+on:
+  push:
+  pull_request:
+  # A push runs Linux only. Windows runs when asked for, once per batch, and before a release:
+  # gh workflow run check.yml
+  # scripts/check-as-the-runner.mjs repeats the Windows runner's conditions on a local Windows machine.
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: Also run on Windows
+        type: boolean
+        default: true
+
+# A newer push makes the run of an older one worthless.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a new Claude Code release cannot turn every pull request red. host-canary.yml runs
+  # the same check on the newest release as a signal that blocks nobody.
+  CLAUDE_CODE_VERSION: '2.1.326'
+  # The type check of the hooks modules needs a TypeScript compiler, pinned like the host.
+  TYPESCRIPT_VERSION: '5.9.3'
+
+jobs:
+  node-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the pinned TypeScript
+        run: npm install -g "typescript@${{ env.TYPESCRIPT_VERSION }}"
+      - name: Repository tests
+        run: node --test "tests/*.test.mjs"
+      - name: Plugin script tests
+        run: node --test "plugins/*/scripts/**/*.test.mjs"
+      - name: Shared files in sync
+        run: node scripts/sync-shared.mjs --check
+
+  mods:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the pinned Claude Code and TypeScript
+        run: npm install -g "@anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}" "typescript@${{ env.TYPESCRIPT_VERSION }}"
+      # Types are not measured here: the host type file exists only where Claude Code extracted it.
+      - name: Validate and test every plugin
+        run: node scripts/check.mjs
+
+  clean-room:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the pinned Claude Code
+        run: npm install -g "@anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}"
+      # The checkout is the marketplace source on every event: it is the code under test, and the
+      # published main only holds the last release.
+      - name: Install every plugin into an empty config and test the installed copies
+        run: node scripts/clean-room.mjs
+
+  check-complete:
+    needs: [node-tests, mods, clean-room]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every job passed
+        run: test "${{ needs.node-tests.result }}" = "success" && test "${{ needs.mods.result }}" = "success" && test "${{ needs.clean-room.result }}" = "success"

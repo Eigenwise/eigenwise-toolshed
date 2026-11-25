@@ -1,0 +1,64 @@
+---
+title: Live Rules
+description: Write and check the rules files Claude Code loads by itself, without guessing the format.
+---
+
+import Terminal from '../../../components/Terminal.astro';
+import auditTable from '../../../mocks/audit-table.txt?raw';
+
+<p class="lead">You say "from now on, when X, do Y". Live Rules turns that into the right file, in the right place, and checks that it will really load.</p>
+
+## The problem
+
+Claude Code loads markdown files from `.claude/rules/` by itself. That is a simple idea with sharp edges.
+
+- A rule with a wrong file pattern loads for nothing, and nothing tells you.
+- A rule with no pattern loads in every session, and every session pays for it.
+- A rule cannot react to a word in your request. That needs a skill, which is a different file in a different place.
+
+So people write a rule, see no effect, and stop trusting rules.
+
+## What you get
+
+Two skills. The plugin's one hook runs at session start to say, once, what the older version left behind. It starts no process, because Claude Code does the loading.
+
+| Skill | What it does |
+| --- | --- |
+| `/live-rules:add-rule` | Turns a standing instruction into the right file, then checks it. |
+| `/live-rules:audit-rules` | Checks every rule and explains each finding with its one fix. |
+
+`add-rule` asks one thing it cannot work out: where the rule applies.
+
+| You answer | It writes |
+| --- | --- |
+| Always | `.claude/rules/<name>.md` |
+| These files, or this folder | The same file, with a `paths` list so it loads only there |
+| When I mention a word | `.claude/skills/<name>/SKILL.md`, because only a skill can react to words |
+
+## What it never does
+
+<div class="never">
+
+- It never loads or enforces a rule itself. Claude Code does that.
+- It never writes into your home folder unless you ask for a rule for all your projects.
+
+</div>
+
+## One real example
+
+A project has three rules and a codebase map. Something feels off, so you type `/live-rules:audit-rules`. The skill runs the audit script and explains what it prints:
+
+<Terminal text={auditTable} caption="A text drawing of what the audit script prints, for a made-up project." />
+
+Three warnings, in two files, each with its fix:
+
+- `money.md` points at a folder that does not exist, so it never loads.
+- `old.md` still uses two keys from the older version. Claude Code ignores them, so the rule loads in every session when it was meant for a few files.
+
+The map's own files are skipped. The map has its own check.
+
+The last line is the one to watch. It is what every session in this project pays before any work starts.
+
+## Why rules belong in the project
+
+A rule is a file in your repository. Commit it, and it works for a teammate who never installed this plugin. Plugins cannot ship rules, so nothing here depends on the plugin being present later.

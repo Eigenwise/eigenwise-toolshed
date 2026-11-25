@@ -1,115 +1,94 @@
-# ⚠️ Toolshed v1 is deprecated
+# Toolshed
 
-> [!WARNING]
-> **This is Toolshed v1. As of 25 November 2026 it gets no more fixes and no new releases.**
->
-> It stays here on `main` and your install keeps working. Issues and pull requests about v1 are closed as not planned.
->
-> **Toolshed v2 is a rewrite.** It lives on the [`v2` branch](https://github.com/Eigenwise/eigenwise-toolshed/tree/v2) of this repository, under its own marketplace name, `toolshed-next`. Both can be installed side by side, and updating v1 does not get you v2.
->
-> To move a project, run these from it, reload plugins, then run `/quartermaster:upgrade`:
->
-> ```text
-> claude plugin marketplace add Eigenwise/eigenwise-toolshed#v2
-> claude plugin install quartermaster@toolshed-next --scope local
-> ```
->
-> [UPGRADING.md](https://github.com/Eigenwise/eigenwise-toolshed/blob/v2/UPGRADING.md) on the `v2` branch has the rest. Found something wrong in v2? Open an issue with the label `v2`.
+A set of Claude Code plugins that set up your workspace, plan the work with you, and route each kind of work to the right model. Files in your project are the source of truth: tickets, proposals and routing tables are markdown and JSON you can open and edit. You decide what gets built, once, after the agent has read the code and come back with what it found. Changes to your setup only happen with your yes, one at a time, and each one can be rolled back.
 
-Everything below describes v1.
+The docs are at [eigenwise.github.io/eigenwise-toolshed](https://eigenwise.github.io/eigenwise-toolshed/).
 
-# Eigenwise Toolshed
+## What's in it
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin_marketplace-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
-[![Docs](https://img.shields.io/badge/docs-online-CB7D32)](https://eigenwise.github.io/eigenwise-toolshed/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](./LICENSE)
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+| Plugin | In one line |
+| --- | --- |
+| **quartermaster** | Sets up a workspace, notices what you keep doing by hand, proposes one fix at a time, applies it when you say yes, and checks later whether it helped. |
+| **sidequest** | A work board. Give it a problem and it reads the code, pushes back, asks what only you can answer, then splits the work across agents routed to the right model per kind of work. |
+| **codebase-mapper** | A map of your codebase as native path-scoped rules, so the right card loads when Claude touches that area. |
+| **live-rules** | Write and audit `.claude/rules/` files without guessing the format. |
+| **observability** | A local record of what each turn cost: one line per finished turn, per project, on your machine. Off until you switch it on. |
 
-Claude Code can use a project well and still make you re-teach it the repository, lose a side issue, or repeat the same setup work in every new session.
+Each one works alone. Install only Sidequest and you get the board, the planning and model routing with zero setup.
 
-The same thing happens around model choice and measurement. Expensive models get routine jobs, parallel changes need ownership and verification, and usage stays invisible until a bill or a slow week makes it obvious. Then a plugin install or update has its own friction: what scope did it change, which session needs a reload, and what is safe to turn on?
+There is no separate quality plugin. The review that runs on finished work checks it against what your project already wrote down (rules files, a contributing or style page, linter config). Where a project has nothing written down, `outfit` offers to write it from what the code already does.
 
-Toolshed packages those jobs as six independent Claude Code plugins. Use one, a few, or all six. Quartermaster is the guided starting path when you want help choosing, installing, and checking the pieces that fit a project, and it draws on whatever plugins are available on the machine, not only these six.
+## Install
 
-Sidequest makes it easy for every task recorded as a ticket to survive context compaction and new sessions. The task, instructions, status, and recorded discussion live on a local board, so Claude can pick the work up again after the chat context shrinks. Record decisions, progress, and next actions on the ticket to give the next session a useful starting point.
+You need Claude Code 2.1.325 or newer, git, and Node on the PATH (Node 22.5 or newer: the upgrade and the Live Rules audit need it).
 
-## The seven plugins
-
-| Problem | Plugin | What it does |
-| --- | --- | --- |
-| A fresh session keeps exploring the same repository | [Codebase Mapper](./plugins/codebase-mapper) | Builds a small project map, loads it at session start, and refreshes the parts touched by changes. |
-| Project rules get forgotten or fill every context | [Live Rules](./plugins/live-rules) | Re-injects matching rules when they apply, so conditional guidance stays out of unrelated work. |
-| Tasks get lost when context compacts or a new session starts | [Sidequest](./plugins/sidequest) | Keeps every recorded task on a local board across context compaction and sessions, assigns ownership, dispatches independent work, and gates results on verification before integration. |
-| You want the models and subscriptions you already have in Claude Code | [Model Gateway](./plugins/model-gateway) | Adds supported ChatGPT/Codex and Grok subscription models to Claude Code's `/model` picker through a local gateway. |
-| You want a number on the code Claude writes, not a vibe | [Quality Gate](./plugins/quality-gate) | Scores every new or complexity-raised function by cyclomatic complexity and measured coverage (CRAP) from LCOV any language can produce, and reports missing measurement as unverified instead of guessing. |
-| You cannot tell where time and tokens go | [Observability](./plugins/observability) | Records one metadata row per turn in a local JSONL ledger with per-project opt-in, and renders a self-contained local board. Nothing leaves the machine. |
-| Setup, updates, and missing capabilities keep pushing back | [Quartermaster](./plugins/quartermaster) | Recommends and installs plugins from any marketplace on the machine for setup, keeps active Toolshed installs current, checks health, and uses bounded session summaries to suggest one approved improvement at a time. |
-
-Each plugin has its own install path and guide. None requires the others. Sidequest can route across Claude models on its own; Model Gateway is only needed for its non-Claude routes. Observability is separate from the other plugins and remains opt-in per project.
-
-## Start with Quartermaster
-
-Use Quartermaster when you want Claude to look at a project and recommend what fits from the plugins available on the machine, Toolshed and otherwise, installing only what you approve. Before it names a plugin, it can check current sources for whether that plugin is still maintained, whether its cached description is stale, and whether something better fits, including from a marketplace you have not added yet. Searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. Install a plugin directly when you already know which job you want.
-
-From the project directory:
-
-1. Add the marketplace.
-   ```text
-   /plugin marketplace add Eigenwise/eigenwise-toolshed
-   ```
-2. Install Quartermaster for this project. Project scope is the default example because the choice stays with the repository.
-   ```text
-   /plugin install quartermaster@eigenwise-toolshed --scope project
-   ```
-3. Activate the installed plugin by reloading plugins or starting a new Claude Code session.
-   ```text
-   /reload-plugins
-   ```
-4. Run setup and approve the plan item by item.
-   ```text
-   /quartermaster:setup
-   ```
-5. Setup installs the selected plugins and writes the approved workspace files. When it pauses at the reload boundary, reload plugins or restart Claude Code if the change affects the process environment, then tell Claude `continue`.
-6. Let setup verify the installed plugins and workspace after that boundary. Try one real request in the project before adding more pieces.
-
-Quartermaster's setup uses project scope by default, but Claude Code also supports user and local scopes. Setup can recommend and install plugins from any marketplace. The updater is scoped to Toolshed only: it follows the recorded scope and project path for every active Toolshed install, so a request from one project can update Toolshed installs in other recorded projects too, and it never touches plugins from other marketplaces. Read the update and reload notes before running it.
-
-## Install a plugin directly
-
-Use the same marketplace with the scope you want:
-
-```text
-/plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install <plugin-name>@eigenwise-toolshed --scope project
+```bash
+claude plugin marketplace add Eigenwise/eigenwise-toolshed
 ```
 
-Replace `<plugin-name>` with `sidequest`, `model-gateway`, `observability`, `codebase-mapper`, `live-rules`, or `quartermaster`. Use `--scope user` for a plugin you want in every project, or `--scope local` when it should stay out of shared settings. Reload plugins or start a new session after an install. The [plugin guides](https://eigenwise.github.io/eigenwise-toolshed/getting-started/) cover the first workflow for each one.
+```bash
+claude plugin install quartermaster@eigenwise-toolshed
+```
 
-## Updates and reloads
+You can also install only `sidequest@eigenwise-toolshed`. Nothing needs Quartermaster.
 
-`/quartermaster:update-toolshed` is the requested updater. It refreshes the Eigenwise Toolshed marketplace and updates all active Toolshed registry installs at their recorded user, project, or local scope and project path. It leaves third-party marketplaces alone. Freshness hooks only report cached availability or loaded-version mismatches and point you to the updater; they do not install or restart anything.
+## First thing to try
 
-Marketplace auto-update is optional. Enable it for the Eigenwise Toolshed marketplace in Claude Code if you want marketplace checks after session start. An open session still needs `/reload-plugins` after plugin code changes. Changes to process-level gateway wiring or model discovery may need a new Claude Code process instead of a reload.
+Run `/quartermaster:outfit` in a project, new or existing.
 
-## Docs and source
+- It looks at what's already there first: the code, your `.claude/` folder, the plugins you have, your session history.
+- It proposes only what's missing, one item at a time, and writes nothing without your yes. If you don't have Sidequest, it says it will install it, then asks you to reload plugins once.
+- In an empty folder it carries on into Sidequest's `plan` skill, which takes you to a running skeleton of what you want to build.
 
-- [Getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/)
-- [Quartermaster setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/)
-- [Plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/)
-- [Contributing](https://eigenwise.github.io/eigenwise-toolshed/contributing/)
-- [Release process](https://eigenwise.github.io/eigenwise-toolshed/release-process/)
-- [Support](https://eigenwise.github.io/eigenwise-toolshed/support/)
-- [GitHub repository](https://github.com/Eigenwise/eigenwise-toolshed)
+After that, describe a problem. Sidequest sizes it. Small and exact, it just does it. Bigger or fuzzy, it reproduces the bug or reads the code first and comes back with findings, options, pushback and a short round of questions. `/board` shows the board beside the chat. When the work is done in a repository with a remote, the session pushes a branch and opens a pull request, and where other people commit too, it leaves the merge to you.
 
-## Compatibility
+`/quartermaster` opens Quartermaster's inbox of proposals, each with Approve, Reject, Already handled and Later.
 
-Toolshed plugins run inside Claude Code and use its plugin marketplace, plugin scopes, and reload commands. Quartermaster's local scripts use Node.js and the Node standard library. Model Gateway also needs the supported provider subscription and local process setup described in its guide. The plugin does not include that subscription. No plugin activation opts a project into telemetry, a gateway, or Sidequest routing by itself.
+## How it works
 
-## Support
+- **Files are the truth.** The board is `.sidequest/` in your project, one markdown file per ticket. Panes and the band above the prompt only show those files.
+- **No servers.** Each plugin is one in-process hooks module. No port, no process per tool call.
+- **Routing is one hook and a table.** A spawn whose prompt starts with a ticket id or carries a tag like `[route:hard]` runs on the model and effort its category maps to. Untagged fan-out runs on the `build` category. A spawn that names its own model, a fork, and an agent type that names its own model keep theirs. `/sidequest:setup` changes the table with a preset.
+- **You decide what gets built**, once, after the agent has done its homework. Nobody asks you for a go-ahead after that.
 
-Toolshed's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use a plugin.
+## Coming from v1
+
+This is the rewrite that replaced v1 on `main`. It kept the marketplace name, so a normal plugin update moves your `sidequest`, `quartermaster`, `codebase-mapper`, `live-rules` and `observability` to this version. The update changes nothing in your projects.
+
+This version does not read v1's board, rules or map. In each project, run `/quartermaster:upgrade`. It shows what it found and asks before every change. [UPGRADING.md](UPGRADING.md) has the whole path.
+
+- `observability` updates in place: a project that was recording keeps recording, and its history stays.
+- `quality-gate` and `model-gateway` are not in this version.
+- Still wired to `model-gateway`? Leave it installed and switched on until the upgrade has unwired it. Removing it first blocks every prompt in that project.
+- Want to stay on v1? It lives on the [`v1` branch](https://github.com/Eigenwise/eigenwise-toolshed/tree/v1) and is not maintained. Remove the marketplace, add it again as `Eigenwise/eigenwise-toolshed#v1`, and install your plugins again.
+
+## Status
+
+This is Toolshed 2. Each plugin keeps its own version number, and those continue from v1's (sidequest 7, quartermaster 2, codebase-mapper 3, live-rules 3, observability 2), so an install's first number says whether it is v1 or this.
+
+Found something wrong? Open an issue on [Eigenwise/eigenwise-toolshed](https://github.com/Eigenwise/eigenwise-toolshed/issues).
+
+## Longer pages
+
+- Each plugin's own README: [quartermaster](plugins/quartermaster/README.md), [sidequest](plugins/sidequest/README.md), [codebase-mapper](plugins/codebase-mapper/README.md), [live-rules](plugins/live-rules/README.md), [observability](plugins/observability/README.md).
+- [UPGRADING.md](UPGRADING.md): moving a project from v1.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the design contract.
+- [SCOPE.md](SCOPE.md): the bar a new mechanism has to clear. `.out-of-scope/` lists what was decided against, with reasons.
+
+## Developing
+
+```bash
+node scripts/check.mjs
+```
+
+That validates every plugin, runs every mod's tests and prints the budget table. To try a change live, add your checkout as a local marketplace:
+
+```bash
+claude plugin marketplace add <path to your checkout>
+```
+
+Plugins from a local folder load in place, so an edit shows up after `/reload-plugins`.
 
 ## License
 
-[MIT](./LICENSE)
+MIT.

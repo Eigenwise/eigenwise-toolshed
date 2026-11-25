@@ -1,0 +1,116 @@
+---
+title: 'Resupply: one change at a time'
+description: The resupply round. Quartermaster reads what it noticed, drafts at most three proposals, and you decide each one.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import Frame from '../../../../components/Frame.astro';
+
+<p class="lead">Resupply turns what Quartermaster noticed into proposals. It drafts. You decide. A separate step applies.</p>
+
+## Why it exists
+
+A setup drifts out of fit slowly, so nobody fixes it. Resupply makes the fix cheap: the evidence is already counted, the change is already written, and saying no costs one click.
+
+It is also kept small on purpose. Three proposals at most, and proposing nothing is a fine result.
+
+## Start it
+
+```text
+/quartermaster:resupply
+```
+
+Or do nothing. Quartermaster offers a round by itself after 15 sessions on 7 days and 30 snags since the last one, when a candidate has no proposal yet. It is one offer per session, at a real pause, it waits 3 days, then 6, then twice as long when ignored, and an offer starts nothing. When Quartermaster notices something worth naming, a short notice appears at a quiet moment and points at `/quartermaster`.
+
+## What happens
+
+<Steps>
+
+1. **It reads the evidence.**
+
+   The candidates, the skills that ran and the most common failures. Anything you rejected before is already left out. A failure that keeps coming back stays evidence for the round. It becomes a candidate only when it is an error of your setup.
+
+2. **It looks for what should already cover it.**
+
+   Before inventing something new, it searches your skills, rules, scripts and plugins. If a skill exists and never fires, the proposal fixes that skill. A second skill beside it would make things worse.
+
+3. **It orders the candidates.**
+
+   Work you do by hand that a script or skill should own comes first. Then things nothing measures yet. Then plain friction, like repeated permission prompts.
+
+4. **It drafts at most three proposals.**
+
+   Each one names one target, the evidence, a check that can be counted with today's number, the exact change and a one-step rollback.
+
+5. **You decide in the inbox.**
+
+   Type `/quartermaster`. A candidate you have not drafted yet sits under "Noticed in this project". There you can press **Draft a fix**, **Later** or **Ignore in this project**.
+
+</Steps>
+
+## The inbox
+
+The inbox is a pane, the panel beside the chat. Its list has up to three sections: **Waiting on you**, **Set aside with Later** once you have answered Later on one, and **Noticed in this project**. The pictures use the made-up project `photo-library` from the [walk-through](/start/walk-through/).
+
+<Frame name="24-quartermaster-inbox.png" />
+
+Open a proposal to see this screen:
+
+<Frame name="25-quartermaster-proposal.png" />
+
+| Your answer | What happens |
+| --- | --- |
+| **Approve** | `/quartermaster:apply` is queued for that proposal. You see the change being made. |
+| **Reject** | Recorded with your reason. That candidate is never proposed again. |
+| **Already handled** | Closed with your words. It is not remembered as never again: the same thing may be proposed again if it is still piling up after 30 days. |
+| **Later** | Hidden for a few days, then it comes back. |
+| No answer | Recorded as no answer. Silence is never read as a yes. |
+
+Reject, Already handled and Later are recorded at once, by code. If you typed a reason, one line with the proposal and your reason is sent to the open session so the agent hears why, and the agent answers it in a turn. With no reason typed, nothing is sent and no turn starts. Without a pane (a headless run, for instance) `/quartermaster` prints the same list as text, and you answer in words, like `approve P-0001`.
+
+## What a proposal looks like
+
+A proposal is one markdown file in `.claude/quartermaster/proposals/`.
+
+```markdown
+---
+id: P-0001
+kind: script
+target: npm run build:thumbs
+status: offered
+authority: ask
+evidence: [script:npm run build:thumbs]
+expect: hand runs of `npm run build:thumbs` per week
+baseline: 14
+created: 2026-11-16
+---
+
+## What
+Add a `thumbs` script that builds and checks thumbnails in one step.
+
+## Rollback
+Delete the `thumbs` line from package.json.
+```
+
+`expect` and `baseline` are what [review](/why/quartermaster/review/) counts against later.
+
+## Applying
+
+`/quartermaster:apply P-0001` makes exactly that one change.
+
+1. It saves the current bytes of every file it will touch.
+2. It makes the change.
+3. It runs the proposal's check.
+4. It tells you how to roll back.
+
+Only you or the inbox start it. Claude never starts it by itself.
+
+## What it never does
+
+<div class="never">
+
+- Resupply never writes to your project or your setup. Drafting is all it does.
+- It never pads a round. "Looked at 4 candidates, none worth a change" is a valid answer.
+- It never proposes a broad permission rule. The [same strict list](/why/quartermaster/outfit/#permission-rules-it-will-never-propose) as outfit applies.
+
+</div>

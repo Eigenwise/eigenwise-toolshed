@@ -1,0 +1,66 @@
+---
+/**
+ * Turns mock text into styled lines. The text lives in `src/mocks/*.txt`, so a
+ * mock is reviewed and diffed as text and is never a capture of a real screen.
+ *
+ * A line's first characters say what it is:
+ *   "$ "      a shell command
+ *   "> "      what the person typed in a Claude session
+ *   "● "      what Claude said
+ *   "# "      a note for the reader, not part of the screen
+ *   "┃ "      a row in a pane
+ *   "board "  a transcript row Sidequest draws for its own tool calls
+ *   ALL CAPS on its own line is a pane section label
+ *   "PAY-41 ... (branch ...)" on its own line is the heading of a piece of work
+ * Anything else is printed as the tool printed it.
+ */
+interface Props {
+  text: string;
+}
+
+type LineKind = 'shell' | 'typed' | 'said' | 'note' | 'row' | 'toolrow' | 'label' | 'heading' | 'ok' | 'plain';
+
+interface MockLine {
+  kind: LineKind;
+  lead: string;
+  body: string;
+}
+
+const LEADS: Array<{ start: string; kind: LineKind }> = [
+  { start: '$ ', kind: 'shell' },
+  { start: '> ', kind: 'typed' },
+  { start: '● ', kind: 'said' },
+  { start: '# ', kind: 'note' },
+  { start: '┃ ', kind: 'row' },
+  { start: '✔ ', kind: 'ok' },
+  { start: 'board ', kind: 'toolrow' },
+];
+
+const LABEL_TONES: Record<string, string> = { NOW: 'live', 'WAITS ON YOU': 'waiting' };
+
+const isLabel = (line: string): boolean => new RegExp('^[A-Z][A-Z ]{2,}$').test(line);
+
+const isPieceHeading = (line: string): boolean => new RegExp('^[A-Z][A-Z0-9]*-[0-9]+ .+ [(]branch .+[)]$').test(line);
+
+const unledKindOf = (line: string): LineKind => {
+  if (isLabel(line)) return 'label';
+  return isPieceHeading(line) ? 'heading' : 'plain';
+};
+
+const lineOf = (line: string): MockLine => {
+  const lead = LEADS.find((candidate) => line.startsWith(candidate.start));
+  if (lead) return { kind: lead.kind, lead: lead.start, body: line.slice(lead.start.length) };
+  return { kind: unledKindOf(line), lead: '', body: line };
+};
+
+const toneOf = (line: MockLine): string => (line.kind === 'label' ? (LABEL_TONES[line.body] ?? '') : '');
+
+const classesOf = (line: MockLine): string => ['mock-line', `mock-${line.kind}`, toneOf(line)].filter(Boolean).join(' ');
+
+const textLines = Astro.props.text.split(String.fromCharCode(10)).map((line) => line.trimEnd());
+while (textLines.length > 0 && textLines[textLines.length - 1] === '') textLines.pop();
+
+const lines = textLines.map(lineOf).map((line) => ({ classes: classesOf(line), lead: line.lead, body: line.body === '' ? ' ' : line.body }));
+---
+
+{lines.map((line) => <span class={line.classes}>{line.lead ? <span class="mock-lead">{line.lead}</span> : null}{line.body}</span>)}
