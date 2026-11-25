@@ -7,7 +7,11 @@ import {
   TOOLSHED_SOURCE,
   installWords,
   installWordsWithId,
+  isEarlierNameCopyThatRuns,
+  isNoCopyRunning,
   isOlderVersionOfThisVersionsPlugin,
+  doubledCopiesIn,
+  doubledWords,
   splitPluginId,
 } from "./toolshed-installs.mjs";
 
@@ -321,12 +325,25 @@ const OLDER_INSTALL_WHY =
 const EARLIER_NAME_INSTALL_WHY = (entry) =>
   `this version under its earlier name: the move, on one yes, reinstalls it as ${entry.name}@${TOOLSHED_MARKETPLACE} at the same scope, with its commands in order under The earlier name`;
 
+const DOUBLED_EARLIER_NAME_INSTALL_WHY = (entry) =>
+  `this version under its earlier name, and ${entry.name}@${TOOLSHED_MARKETPLACE} is installed too: the move, on one yes, only uninstalls this copy`;
+
+// The files in the order the host reads them for a key: local, then committed, then user.
+const doubledCopiesOf = (facts) => doubledCopiesIn(facts.installs ?? [], [facts.local, facts.committed, facts.user ?? {}]);
+
 function installLeftovers(facts) {
   const installs = facts.installs ?? [];
+  const doubledNames = doubledCopiesOf(facts).map((doubled) => doubled.name);
   const older = installs.filter(isOlderVersionOfThisVersionsPlugin).map((entry) => ({ kind: "older-install", where: installWordsWithId(entry), verdict: CONVERT, why: OLDER_INSTALL_WHY }));
   const earlier = installs
     .filter((entry) => entry.state === EARLIER_NAME)
-    .map((entry) => ({ kind: "earlier-name-install", where: installWordsWithId(entry), verdict: ASK, why: EARLIER_NAME_INSTALL_WHY(entry), isPartOfTheMove: true }));
+    .map((entry) => ({
+      kind: "earlier-name-install",
+      where: installWordsWithId(entry),
+      verdict: ASK,
+      why: doubledNames.includes(entry.name) ? DOUBLED_EARLIER_NAME_INSTALL_WHY(entry) : EARLIER_NAME_INSTALL_WHY(entry),
+      isPartOfTheMove: true,
+    }));
   return [...older, ...earlier];
 }
 
@@ -754,8 +771,15 @@ export function isEverythingLeftWaitingForThePerson(leftovers) {
   return stillToDo.length > 0 && stillToDo.every(waitsForAYes);
 }
 
+function runsUnderEarlierName(facts) {
+  const earlierNameCopies = (facts.installs ?? []).filter((entry) => entry.state === EARLIER_NAME);
+  const doubledList = doubledCopiesOf(facts);
+  return earlierNameCopies.length === 0 || earlierNameCopies.some((entry) => isEarlierNameCopyThatRuns(entry, doubledList));
+}
+
 export function classifyProject(facts) {
   const leftovers = projectLeftovers(facts);
+  const installs = facts.installs ?? [];
   const shape = shapeOf(facts, leftovers);
   return {
     isWaitingForThePerson: shape !== "update-first" && isEverythingLeftWaitingForThePerson(leftovers),
@@ -765,7 +789,10 @@ export function classifyProject(facts) {
     authorCount: facts.authorCount,
     isSettingsCommitted: facts.isSettingsCommitted,
     olderPluginsOn: olderPluginsOnHere(facts),
-    olderInstalls: (facts.installs ?? []).filter(isOlderVersionOfThisVersionsPlugin).map(installWords),
+    olderInstalls: installs.filter(isOlderVersionOfThisVersionsPlugin).map(installWords),
+    installedUnderBothNames: doubledCopiesOf(facts).map(doubledWords),
+    runsUnderEarlierName: runsUnderEarlierName(facts),
+    isNoCopyRunning: isNoCopyRunning(doubledCopiesOf(facts)),
     leftovers,
     routing: oldRoutingOf(facts.board),
     openTickets: facts.board.openTickets ?? [],

@@ -61,6 +61,7 @@ This version does not read v1's board, rules or map. In each project, run `/quar
 - `quality-gate` and `model-gateway` are not in this version.
 - Still wired to `model-gateway`? Leave it installed and switched on until the upgrade has unwired it. Removing it first blocks every prompt in that project.
 - Want to stay on v1? It lives on the [`v1` branch](https://github.com/Eigenwise/eigenwise-toolshed/tree/v1) and is not maintained. Remove the marketplace, add it again as `Eigenwise/eigenwise-toolshed#v1`, and install your plugins again.
+- Installed a plugin from `toolshed-next` as well? Claude Code runs only one copy of a plugin name, with no warning, and lists the skills of both. Uninstall the `toolshed-next` one: `claude plugin uninstall <name>@toolshed-next`.
 
 ## Status
 

@@ -306,6 +306,6 @@ npm test -- upload-retry fails today and passes.
 - 2026-11-16T10:27Z note review pass: retry happens once, second failure is reported, tests ran.
 ```
 
-`mode: afk` means an agent can finish it alone. `mode: hitl` means it needs you, so it is never handed to an agent.
+`mode: afk` means an agent can finish it alone. `mode: hitl` means it is yours to do, so it is never handed to an agent. It counts as waiting on you once what it waits for is built.
 
 In the file the statuses are `inbox`, `ready`, `doing`, `review`, `needs-you`, `done`, `parked` and `dropped`. On screen you read words: `review` is "built, being checked", `parked` is "set aside", `inbox` is "not ready yet".

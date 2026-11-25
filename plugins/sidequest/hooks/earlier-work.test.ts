@@ -48,15 +48,15 @@ test('done tickets this session never touched draw no Done section, and one it f
   expect(text).not.toContain('Older 3')
 })
 
-test('a waiting ticket untouched here for four days is counted quietly, and a touched or newer one still warns', () => {
+test('a waiting ticket untouched here for four days is named as from earlier sessions and still counted when the band is short, and a touched or newer one warns as its own', () => {
   const summary = summarize([OLD_QUESTION], new Set(), NOW)
   const wide = bandLine(summary, noActivity, 120)
 
   expect(summary.needsYou).toBe(1)
   expect(summary.needsYouFromEarlierWork).toBe(1)
-  expect(wide).toEqual({ warnings: '', counts: '1 waiting on you from earlier sessions' })
-  expect(bandLine(summarize([OLD_QUESTION, ticketOf('SQ-11', 'Another', 'needs-you', 6 * DAY)], new Set(), NOW), noActivity, 120).counts).toBe('2 waiting on you from earlier sessions')
-  expect(bandLine(summary, noActivity, 10)).toEqual({ warnings: '', counts: '' })
+  expect(wide).toEqual({ warnings: '1 waiting on you from earlier sessions', counts: '' })
+  expect(bandLine(summarize([OLD_QUESTION, ticketOf('SQ-11', 'Another', 'needs-you', 6 * DAY)], new Set(), NOW), noActivity, 120).warnings).toBe('2 waiting on you from earlier sessions')
+  expect(bandLine(summary, noActivity, 10)).toEqual({ warnings: '1 needs you', counts: '' })
 
   const touched = summarize([OLD_QUESTION], new Set(['SQ-9']), NOW)
   const anHourOld = summarize([NEW_QUESTION], new Set(), NOW)
@@ -71,8 +71,8 @@ test('the waiting days in the band are about the tickets that warn, not the ones
 
   expect(oldestWaitingOf(cards, NOW, new Set())).toBeLessThan(DAY)
   expect(oldestWaitingOf(cards, NOW, new Set(['SQ-9']))).toBe(4 * DAY)
-  expect(bandWarnings(summarize([OLD_QUESTION, NEW_QUESTION], new Set(), NOW), noActivity)).toBe('1 ticket needs you')
-  expect(bandCounts(summarize([OLD_QUESTION, NEW_QUESTION], new Set(), NOW), noActivity)).toBe('1 waiting on you from earlier sessions')
+  expect(bandWarnings(summarize([OLD_QUESTION, NEW_QUESTION], new Set(), NOW), noActivity)).toBe('1 ticket needs you, 1 waiting on you from earlier sessions')
+  expect(bandCounts(summarize([OLD_QUESTION, NEW_QUESTION], new Set(), NOW), noActivity)).toBe('')
 })
 
 test('the pane lists a four-day-old waiting ticket under From earlier work, after what waits on you', () => {

@@ -1955,3 +1955,179 @@ describe("the last use of a project", () => {
     }
   });
 });
+
+describe("this version installed under both names", () => {
+  let scratch;
+  let project;
+
+  before(() => {
+    scratch = mkdtempSync(join(tmpdir(), "quartermaster-upgrade-both-names-"));
+    project = makeRepository(join(scratch, "project"), ["one-author"]);
+  });
+
+  after(() => rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+
+  const copy = (marketplace, scope, version = "7.0.0") => ({ marketplace, scope, version });
+
+  // The install record's key order is the order of installing; each layout is one the host was run against.
+  const LAYOUTS = [
+    { name: "both at user scope, the earlier name first", copies: [copy(EARLIER, "user"), copy(TOOLSHED, "user")], runs: EARLIER },
+    { name: "both at user scope, the shared name first", copies: [copy(TOOLSHED, "user"), copy(EARLIER, "user")], runs: TOOLSHED },
+    { name: "earlier name at project scope, shared name at user scope", copies: [copy(EARLIER, "project"), copy(TOOLSHED, "user")], runs: TOOLSHED },
+    { name: "earlier name at user scope, shared name at project scope", copies: [copy(EARLIER, "user"), copy(TOOLSHED, "project")], runs: EARLIER },
+    { name: "earlier name at local scope, shared name at project scope", copies: [copy(EARLIER, "local"), copy(TOOLSHED, "project")], runs: TOOLSHED },
+    { name: "earlier name at project scope, shared name at local scope", copies: [copy(TOOLSHED, "local"), copy(EARLIER, "project")], runs: EARLIER },
+    { name: "the older version of the shared name at project scope beside the earlier name at local scope", copies: [copy(EARLIER, "local", "0.15.2"), copy(TOOLSHED, "project", "1.1.3")], runs: TOOLSHED },
+    { name: "the earlier name at project scope beside the older version at local scope", copies: [copy(EARLIER, "project", "0.15.2"), copy(TOOLSHED, "local", "1.1.3")], runs: EARLIER },
+  ];
+
+  let homeCount = 0;
+
+  const recordOfCopies = (copies) =>
+    Object.fromEntries(
+      [...new Set(copies.map((one) => one.marketplace))].map((marketplace) => [
+        `sidequest@${marketplace}`,
+        copies.filter((one) => one.marketplace === marketplace).map((one) => installEntry(one.scope, one.scope === "user" ? undefined : project, one.version)),
+      ]),
+    );
+
+  // The files go in the order the host reads them for a key; each is written only for the scan and removed after it.
+  const scanWithSettings = (copies, settings = {}) => {
+    homeCount += 1;
+    const home = join(scratch, `home-${homeCount}`);
+    writeRecordAndMarketplaces(join(home, ".claude"), recordOfCopies(copies), { [TOOLSHED]: {}, [EARLIER]: {} });
+    const files = { local: join(project, ".claude", "settings.local.json"), committed: join(project, ".claude", "settings.json"), user: join(home, ".claude", "settings.json") };
+    for (const [place, enabledPlugins] of Object.entries(settings)) writeJson(files[place], { enabledPlugins });
+    try {
+      return scanJson(home, project);
+    } finally {
+      rmSync(files.local, { force: true });
+      rmSync(files.committed, { force: true });
+    }
+  };
+
+  const SETTINGS_FILE_OF_SCOPE = { user: "user", project: "committed", local: "local" };
+
+  // An install switches its own copy on in the settings file of its scope, and a copy no file names is off.
+  const keysTheInstallsWrote = (copies) =>
+    copies.reduce((settings, one) => {
+      const place = SETTINGS_FILE_OF_SCOPE[one.scope];
+      return { ...settings, [place]: { ...settings[place], [`sidequest@${one.marketplace}`]: true } };
+    }, {});
+
+  const scanOf = (copies) => scanWithSettings(copies, keysTheInstallsWrote(copies));
+
+  for (const layout of LAYOUTS) {
+    test(`names both copies and the one the host runs: ${layout.name}`, () => {
+      const report = scanOf(layout.copies);
+      const [words, ...others] = report.project.installedUnderBothNames;
+      assert.deepEqual(others, []);
+      assert.match(words, new RegExp(`sidequest@${TOOLSHED} .* scope.* and sidequest@${EARLIER} .* scope|sidequest@${EARLIER} .* scope.* and sidequest@${TOOLSHED} .* scope`));
+      assert.match(words, new RegExp(`The host runs sidequest@${layout.runs} \\(user scope before project, project before local, then the first installed\\)`));
+      assert.equal(report.project.runsUnderEarlierName, layout.runs === EARLIER);
+    });
+  }
+
+  test("never says the project runs under the earlier name when the other copy runs", () => {
+    const report = scanOf([copy(EARLIER, "project"), copy(TOOLSHED, "user")]);
+    assert.equal(report.project.shape, "half-moved");
+    assert.doesNotMatch(olderVersionLine(report), /runs this version under its earlier name/);
+    assert.match(olderVersionLine(report), /installed under both eigenwise-toolshed and toolshed-next, and the host runs the eigenwise-toolshed copy/);
+    assert.doesNotMatch(renderPlan(report), /this version runs here under its earlier name/);
+  });
+
+  test("still says the project runs under the earlier name when that copy runs", () => {
+    const report = scanOf([copy(EARLIER, "user"), copy(TOOLSHED, "project")]);
+    assert.match(olderVersionLine(report), /runs this version under its earlier name toolshed-next/);
+    assert.match(renderPlan(report), /Installed under both names: .*The host runs sidequest@toolshed-next/);
+  });
+
+  test("the move only removes the earlier-name copy of a plugin that is installed from the shared name too", () => {
+    const report = scanOf([copy(EARLIER, "project"), copy(TOOLSHED, "user")]);
+    assert.ok(report.machine.moveCommands.some((line) => line.includes(`claude plugin uninstall sidequest@${EARLIER} --scope project`)));
+    assert.ok(!report.machine.moveCommands.some((line) => line.includes(`claude plugin install sidequest@${TOOLSHED}`)));
+  });
+
+  test("different plugins under the two names are not installed under both", () => {
+    const home = join(scratch, "home-different");
+    writeRecordAndMarketplaces(
+      join(home, ".claude"),
+      { [`sidequest@${EARLIER}`]: [installEntry("user", undefined, "7.0.0")], [`quartermaster@${TOOLSHED}`]: [installEntry("user", undefined, "2.0.0")] },
+      { [TOOLSHED]: {}, [EARLIER]: {} },
+    );
+    const report = scanJson(home, project);
+    assert.deepEqual(report.project.installedUnderBothNames, []);
+    assert.equal(report.project.runsUnderEarlierName, true);
+  });
+
+  const switchedOn = (marketplace, value) => ({ [`sidequest@${marketplace}`]: value });
+
+  // What an earlier upgrade run wrote: this version at user scope switched off here, the earlier name at local scope switched on.
+  test("a copy switched off in the local file is not the one the host runs", () => {
+    const report = scanWithSettings([copy(TOOLSHED, "user"), copy(EARLIER, "local")], { local: { ...switchedOn(EARLIER, true), ...switchedOn(TOOLSHED, false) } });
+    assert.equal(report.project.runsUnderEarlierName, true);
+    assert.equal(report.project.isNoCopyRunning, false);
+    assert.match(report.project.installedUnderBothNames[0], new RegExp(`The host runs sidequest@${EARLIER} \\(user scope before project, project before local, then the first installed\\)`));
+    assert.match(report.project.installedUnderBothNames[0], new RegExp(`sidequest@${TOOLSHED} is switched off here, so left out of that choice`));
+    assert.match(olderVersionLine(report), /runs this version under its earlier name toolshed-next/);
+    assert.match(renderPlan(report), /this version runs here under its earlier name/);
+  });
+
+  test("the scope rule picks the shared name for a layout the earlier name wins, once the earlier name is switched off", () => {
+    const report = scanWithSettings([copy(EARLIER, "user"), copy(TOOLSHED, "project")], { committed: { ...switchedOn(EARLIER, false), ...switchedOn(TOOLSHED, true) } });
+    assert.equal(report.project.runsUnderEarlierName, false);
+    assert.match(report.project.installedUnderBothNames[0], new RegExp(`The host runs sidequest@${TOOLSHED} `));
+  });
+
+  test("a switch in the user settings counts, and the local file beats the committed one beats the user one", () => {
+    const copies = [copy(EARLIER, "user"), copy(TOOLSHED, "project")];
+    assert.equal(scanWithSettings(copies, { user: switchedOn(EARLIER, false) }).project.runsUnderEarlierName, false);
+    assert.equal(scanWithSettings(copies, { user: switchedOn(EARLIER, false), committed: switchedOn(EARLIER, true) }).project.runsUnderEarlierName, true);
+    assert.equal(scanWithSettings(copies, { local: switchedOn(EARLIER, true), committed: switchedOn(EARLIER, false), user: switchedOn(EARLIER, false) }).project.runsUnderEarlierName, true);
+  });
+
+  test("with every copy switched off the scan says none runs, and not that the host runs one", () => {
+    const report = scanWithSettings([copy(TOOLSHED, "user"), copy(EARLIER, "local")], { local: { ...switchedOn(EARLIER, false), ...switchedOn(TOOLSHED, false) } });
+    assert.equal(report.project.isNoCopyRunning, true);
+    assert.match(report.project.installedUnderBothNames[0], /Every copy is switched off here, so none runs/);
+    assert.doesNotMatch(report.project.installedUnderBothNames[0], /The host runs/);
+    assert.doesNotMatch(renderPlan(report), /runs here under its earlier name|the host runs the eigenwise-toolshed copy/);
+    assert.match(olderVersionLine(report), /no copy is switched on here/);
+  });
+
+  test("a key that is true leaves the scope rule as it was", () => {
+    const copies = [copy(EARLIER, "project"), copy(TOOLSHED, "user")];
+    assert.equal(scanWithSettings(copies, { local: { ...switchedOn(EARLIER, true), ...switchedOn(TOOLSHED, true) } }).project.runsUnderEarlierName, false);
+  });
+
+  // The host's own plugin list shows both copies as disabled in this layout.
+  test("a copy that no settings file names is off, so with no key anywhere none runs", () => {
+    const copies = [copy(TOOLSHED, "user"), copy(EARLIER, "local")];
+    const report = scanWithSettings(copies, { local: { "other@somewhere": false } });
+    assert.equal(report.project.isNoCopyRunning, true);
+    assert.doesNotMatch(report.project.installedUnderBothNames[0], /The host runs/);
+    const onlyEarlierNamed = scanWithSettings(copies, { local: switchedOn(EARLIER, true) });
+    assert.equal(onlyEarlierNamed.project.runsUnderEarlierName, true);
+    assert.match(onlyEarlierNamed.project.installedUnderBothNames[0], new RegExp(`The host runs sidequest@${EARLIER} `));
+  });
+
+  const installLinesOf = (report, name) => report.machine.moveCommands.filter((line) => line.includes(`claude plugin install ${name}@${TOOLSHED}`));
+
+  // A copy under the shared name reaches the projects it is installed for, so only an earlier-name copy it reaches goes without a new install.
+  const COVERAGE = [
+    { name: "earlier name local, shared name project", copies: [copy(EARLIER, "local"), copy(TOOLSHED, "project")], installedAt: [] },
+    { name: "earlier name project, shared name local", copies: [copy(EARLIER, "project"), copy(TOOLSHED, "local")], installedAt: [] },
+    { name: "earlier name project, shared name user", copies: [copy(EARLIER, "project"), copy(TOOLSHED, "user")], installedAt: [] },
+    { name: "earlier name user, shared name user", copies: [copy(EARLIER, "user"), copy(TOOLSHED, "user")], installedAt: [] },
+    { name: "earlier name user, shared name project", copies: [copy(EARLIER, "user"), copy(TOOLSHED, "project")], installedAt: ["user"] },
+    { name: "earlier name user and project, shared name local", copies: [copy(EARLIER, "user"), copy(EARLIER, "project"), copy(TOOLSHED, "local")], installedAt: ["user"] },
+  ];
+
+  for (const layout of COVERAGE) {
+    test(`the move installs the shared name only where no copy of it reaches: ${layout.name}`, () => {
+      const report = scanOf(layout.copies);
+      const scopes = installLinesOf(report, "sidequest").map((line) => /--scope (\w+)/.exec(line)?.[1]);
+      assert.deepEqual(scopes, layout.installedAt);
+    });
+  }
+});

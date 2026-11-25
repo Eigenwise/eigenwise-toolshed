@@ -4,7 +4,7 @@ import type { BoardConfig } from './board-config'
 import { ticketHandle } from './branch-and-issue'
 import { parseForYou } from './for-you'
 import { frontierOf } from './frontier'
-import { awaitsHumanAnswer, isCheckpoint, waitsOnHuman } from './human-answers'
+import { isCheckpoint, ticketsWaitingOnThePerson } from './human-answers'
 import { interruptedIn, interruptedLabel, NO_INTERRUPTED_WORK, NO_RUN_IN_THIS_SESSION } from './interrupted-work'
 import type { InterruptedWork } from './interrupted-work'
 import { headedTickets, NO_STORIES, piecesOfWork, spansSeveralPieces, ticketNameUnder } from './pieces-of-work'
@@ -39,7 +39,7 @@ const oldestWords = (questions: readonly Ticket[], now: number | undefined): str
 }
 
 const questionsLine = (tickets: readonly Ticket[], now?: number): string[] => {
-  const questions = mostBlockingFirst(tickets.filter(ticket => awaitsHumanAnswer(ticket) && !isCheckpoint(ticket)), tickets)
+  const questions = mostBlockingFirst(ticketsWaitingOnThePerson(tickets).filter(ticket => !isCheckpoint(ticket)), tickets)
   const [first] = questions
   if (first === undefined) return []
   const age = oldestWords(questions, now)
@@ -49,10 +49,12 @@ const questionsLine = (tickets: readonly Ticket[], now?: number): string[] => {
     : [`Answer ${questions.length} questions that wait on you${age}, first: ${questionOf(first)}`]
 }
 
-const isFinishedChange = (ticket: Ticket): boolean => ticket.status === 'review' || (isCheckpoint(ticket) && waitsOnHuman(ticket))
-
+// A checkpoint is something to look at only while it waits on the person: one behind work that is not built has
+// nothing to show yet, whatever its status, and one they already answered is with the session.
 const finishedChangesLine = (tickets: readonly Ticket[]): string[] => {
-  const changes = inIdOrder(tickets.filter(isFinishedChange))
+  const checkpointsDue = new Set(ticketsWaitingOnThePerson(tickets).filter(isCheckpoint).map(ticket => ticket.id))
+  const isBuiltChange = (ticket: Ticket): boolean => ticket.status === 'review' && !isCheckpoint(ticket)
+  const changes = inIdOrder(tickets.filter(ticket => isBuiltChange(ticket) || checkpointsDue.has(ticket.id)))
   const [first] = changes
   if (first === undefined) return []
 

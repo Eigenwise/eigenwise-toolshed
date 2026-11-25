@@ -2023,13 +2023,19 @@ test('proposed tickets are neither counted in the band nor listed under Next, an
 
   expect(await ui.find({ type: 'Button', key: 'SQ-4' })).toBeUndefined()
   expect(await ui.find({ type: 'Button', key: 'SQ-1' })).toBeDefined()
-  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const bandAt80 = { ...BAND, surface: 'terminal' } as const
+  const wideBand = { ...BAND, props: { ...BAND.props, bodyColumns: 120 }, surface: 'terminal' } as const
+  const narrow = await $.ui.mount(bandAt80)
+  expect((await narrow.find({ type: 'Text', text: /needs you/ }))?.text).toBe('1 ticket needs you, 1 plan needs you')
+  expect(await narrow.find({ type: 'Text', text: /ready/ })).toBeUndefined()
+  await narrow.unmount()
+  const band = await $.ui.mount(wideBand)
   expect((await band.find({ type: 'Text', text: /ready/ }))?.text).toBe('1 ticket ready to start, 1 stopped')
   await band.unmount()
 
   await $.tool.call({ tool: 'mcp__sidequest__ticket', operations: [{ op: 'patch', id: 'ST-1', awaitsYes: false }] })
   expect(await ui.find({ type: 'Button', key: 'SQ-4' })).toBeDefined()
-  const after = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const after = await $.ui.mount(wideBand)
   expect((await after.find({ type: 'Text', text: /ready/ }))?.text).toBe('3 tickets ready to start, 1 stopped')
   await after.unmount()
   await ui.unmount()
@@ -2680,5 +2686,80 @@ test('in what the person says about a plan Enter keeps the words, and after Send
   await enterKeepsAndSendSends(ui, standIn, 'say-about-story', 'send-story-remark')
   expect((await ui.find({ type: 'Input', key: 'say-about-story' }))?.props.value).toBe('')
   expect(await ui.find({ type: 'Text', text: 'Sent to the session, and kept on file: "half typed and"' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a ticket with a question shows what explains it before the field and the buttons', async ($, on) => {
+  const files = seededBoard()
+  files.set(`${TICKETS}/SQ-3.md`, waitingTicketFile(FOR_YOU_SECTION))
+  standInForEngine(on, files)
+  await startSession($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100 } })
+
+  await ui.press({ key: 'SQ-3' })
+  await ui.press({ key: 'option-A' })
+  await ui.press({ key: 'send-answer' })
+
+  const drawn = await ui.findAll({})
+  const explanation = drawn.findIndex(element => element.type === 'Markdown')
+  expect(drawn[explanation]?.text).toContain('## What')
+  expect(drawn.findIndex(element => element.text === QUESTION)).toBeLessThan(explanation)
+  expect(explanation).toBeLessThan(drawn.findIndex(element => element.type === 'Input'))
+  expect(explanation).toBeLessThan(drawn.findIndex(element => element.key === 'back'))
+  await ui.unmount()
+})
+
+test('a ticket with no question keeps its field and buttons above its text, as before', async ($, on) => {
+  standInForEngine(on, seededBoard())
+  await startSession($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  await ui.press({ key: 'SQ-1' })
+
+  const drawn = await ui.findAll({})
+  expect(drawn.findIndex(element => element.key === 'back')).toBeLessThan(drawn.findIndex(element => element.type === 'Markdown'))
+  expect(drawn.findIndex(element => element.type === 'Input')).toBeLessThan(drawn.findIndex(element => element.type === 'Markdown'))
+  await ui.unmount()
+})
+
+test('a finished ticket is a record: no field, no Send, and the question it once asked is not shown as open', async ($, on) => {
+  const files = seededBoard()
+  files.set(`${TICKETS}/SQ-4.md`, checkpointFile('SQ-4', 'Look at the upload flow').replace('## What', `${FOR_YOU_SECTION}\n## What`))
+  standInForEngine(on, files)
+  await startSession($)
+  await runBoardCommand($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  await ui.press({ key: 'SQ-4' })
+  expect(await ui.find({ type: 'Input' })).toBeDefined()
+  await ui.press({ key: 'show-whole' })
+  await ui.press({ key: 'approve' })
+
+  expect(files.get(`${TICKETS}/SQ-4.md`)).toContain('status: done')
+  const drawn = await ui.findAll({})
+  expect(drawn.some(element => element.type === 'Input')).toBe(false)
+  expect(drawn.some(element => element.key === 'send-answer' || element.key === 'send-remark' || element.key === 'option-A')).toBe(false)
+  expect(drawn.some(element => element.text === QUESTION)).toBe(false)
+  expect(drawn.some(element => element.key === 'back')).toBe(true)
+  expect(drawn.find(element => element.type === 'Markdown')?.text).toContain('## What')
+  await ui.unmount()
+})
+
+test('a ticket that carries a question it no longer waits on is read, not answered: its text comes before the field and the buttons', async ($, on) => {
+  const files = seededBoard()
+  files.set(`${TICKETS}/SQ-2.md`, ticketFile('SQ-2', 'Trace upload flow', 'doing').replace('## What', `${FOR_YOU_SECTION}\n## What`))
+  standInForEngine(on, files)
+  await startSession($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100 } })
+
+  await ui.press({ key: 'SQ-2' })
+
+  const drawn = await ui.findAll({})
+  const explanation = drawn.findIndex(element => element.type === 'Markdown')
+  expect(drawn.some(element => element.key === 'option-A' || element.key === 'send-answer' || element.key === 'show-whole')).toBe(false)
+  expect(drawn[explanation]?.text).toContain('## What')
+  expect(explanation).toBeLessThan(drawn.findIndex(element => element.type === 'Input'))
+  expect(explanation).toBeLessThan(drawn.findIndex(element => element.key === 'set-aside'))
+  expect(drawn.filter(element => element.key === 'back').length).toBe(1)
   await ui.unmount()
 })

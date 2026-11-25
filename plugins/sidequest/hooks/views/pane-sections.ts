@@ -5,7 +5,7 @@ import { finishedAgentAside, isJustFinished, newestReturnFirst } from './finishe
 import { sessionAside } from '../session-activity'
 import { spokenAgo } from '../interrupted-work'
 import { handleUnder, OTHER_TICKETS_HEADING, pieceHeading, shortPieceName, titleWithoutKey } from '../pieces-of-work'
-import { isCardFromEarlierWork, isWaitingCard } from './board-view'
+import { isCardFromEarlierWork, isStoryWaitingOnThePerson, isWaitingCard } from './board-view'
 import { idNumber, spokenMinutes } from '../tickets'
 import { hasManyWorktrees, worktreeRowText } from '../worktree-count'
 import { statusWords } from '../status-words'
@@ -90,7 +90,7 @@ const newestFirst = (left: BoardCard, right: BoardCard): number =>
   right.updated.localeCompare(left.updated) || byIdNumber(right, left)
 
 const withStatus = (cards: readonly BoardCard[], status: string): BoardCard[] =>
-  cards.filter(card => card.status === status).sort(byIdNumber)
+  cards.filter(card => card.status === status && !isWaitingCard(card)).sort(byIdNumber)
 
 const addWord = (lines: string[], word: string, width: number): string[] => {
   const last = lines.at(-1)
@@ -231,11 +231,12 @@ const sessionRows = (content: PaneContent): SectionRow[] =>
 const ticketsWithAnAgent = (running: readonly RunningAgentRow[]): Set<string> =>
   new Set(running.flatMap(agent => agent.ticket ?? []))
 
-// Shown under what runs so a person sees at a glance that it is not moving.
+// Shown under what runs so a person sees at a glance that it is not moving. A ticket that waits on the person is
+// listed with what waits and nowhere else: seen in a review, one left in progress drew twice, and one key twice.
 const interruptedCards = (content: PaneContent): BoardCard[] => {
   const withAgent = ticketsWithAnAgent(content.running)
 
-  return content.cards.filter(card => card.interrupted !== undefined && !withAgent.has(card.id)).sort(byIdNumber)
+  return content.cards.filter(card => card.interrupted !== undefined && !withAgent.has(card.id) && !isWaitingCard(card)).sort(byIdNumber)
 }
 
 const STOPPED = 'stopped, nothing runs it'
@@ -337,7 +338,14 @@ const startedCards = (content: PaneContent): BoardCard[] => {
   return withStatus(content.cards, 'doing').filter(card => !withAgent.has(card.id) && isNotInterrupted(card))
 }
 
-const reviewCards = (content: PaneContent): BoardCard[] => withStatus(content.cards, 'review').filter(isNotInterrupted)
+const reviewCards = (content: Pick<PaneContent, 'cards'>): BoardCard[] => withStatus(content.cards, 'review').filter(isNotInterrupted)
+
+// What the Being checked section lists and the band counts: built tickets that are not interrupted and not left for a week.
+export const cardsBeingChecked = (content: CardsAndWork): BoardCard[] => {
+  const older = new Set(olderCards(content).map(card => card.id))
+
+  return reviewCards({ cards: content.cards.filter(card => !older.has(card.id)) })
+}
 
 // Seen in a real run: a built ticket listed under Next as "finished, not merged yet", and the person asked what merged
 // means for work built in the main checkout. Built work that is being reviewed and proven has a section of its own.
@@ -400,11 +408,13 @@ const STATUSES_THAT_GROW_OLD = ['ready', 'doing', 'review']
 
 const isUntouchedForAWeek = (card: BoardCard, now: number): boolean => millisecondsSinceTouched(card, now) >= A_WEEK
 
-const olderCards = (content: PaneContent): BoardCard[] => {
+type CardsAndWork = Pick<PaneContent, 'cards' | 'running' | 'now'>
+
+const olderCards = (content: CardsAndWork): BoardCard[] => {
   const withAgent = ticketsWithAnAgent(content.running)
 
   return content.cards
-    .filter(card => STATUSES_THAT_GROW_OLD.includes(card.status) && !withAgent.has(card.id) && isUntouchedForAWeek(card, content.now))
+    .filter(card => STATUSES_THAT_GROW_OLD.includes(card.status) && !isWaitingCard(card) && !withAgent.has(card.id) && isUntouchedForAWeek(card, content.now))
     .sort(byIdNumber)
 }
 
@@ -479,9 +489,7 @@ const storyRow = (story: StoryToRead): SectionRow => ({
   press: storyPress(story.id),
 })
 
-const isWaitingOnThePerson = (story: StoryToRead): boolean => story.openQuestions > 0 || story.awaitsYes === true
-
-const storiesWaiting = (content: PaneContent): StoryToRead[] => (content.storiesToRead ?? []).filter(isWaitingOnThePerson)
+const storiesWaiting = (content: PaneContent): StoryToRead[] => (content.storiesToRead ?? []).filter(isStoryWaitingOnThePerson)
 
 const decisionsWords = (count: number): string => (count === 1 ? '1 decision on the plan' : `${count} decisions on the plan`)
 

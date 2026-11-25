@@ -70,6 +70,56 @@ export const installWords = (entry) => `${entry.name} ${versionAndScopeWords(ent
 
 export const installWordsWithId = (entry) => `${entry.id} ${versionAndScopeWords(entry)}`;
 
+const SCOPE_ORDER = ["user", "project", "local"];
+
+const scopeRankOf = (entry) => (SCOPE_ORDER.includes(entry.scope) ? SCOPE_ORDER.indexOf(entry.scope) : SCOPE_ORDER.length);
+
+const keyOf = (entry) => `${entry.name}@${entry.marketplace}`;
+
+// Settings come in the order the host reads them: local, then committed, then user. The first file that names the key decides.
+// A copy no file names is off, as the host lists it: an install writes its own key.
+const enabledValueIn = (settingsInOrder, key) => settingsInOrder.map((settings) => recordOf(recordOf(settings).enabledPlugins)[key]).find((value) => typeof value === "boolean");
+
+export const isSwitchedOff = (entry, settingsInOrder) => enabledValueIn(settingsInOrder, keyOf(entry)) !== true;
+
+const theCopyTheHostPrefers = (running, entry) => (scopeRankOf(entry) < scopeRankOf(running) ? entry : running);
+
+// The host runs one copy of a plugin name: user scope before project, project before local, then the first installed, which is the record's own order.
+// A copy switched off here is not in the running. Undefined when every copy is switched off.
+export function runningCopyOf(copies, settingsInOrder = []) {
+  const switchedOn = copies.filter((entry) => !isSwitchedOff(entry, settingsInOrder));
+  return switchedOn.length === 0 ? undefined : switchedOn.reduce(theCopyTheHostPrefers);
+}
+
+// Installs are the ones that apply to one project, in the record's order.
+export function doubledCopiesIn(installs, settingsInOrder = []) {
+  const names = [...new Set(installs.map((entry) => entry.name))];
+  return names.flatMap((name) => {
+    const copies = installs.filter((entry) => entry.name === name);
+    const isDoubled = copies.some((entry) => entry.state === EARLIER_NAME) && copies.some((entry) => entry.state !== EARLIER_NAME);
+    return isDoubled ? [{ name, copies, running: runningCopyOf(copies, settingsInOrder), switchedOff: copies.filter((entry) => isSwitchedOff(entry, settingsInOrder)) }] : [];
+  });
+}
+
+export const RUNNING_COPY_RULE = "user scope before project, project before local, then the first installed";
+
+const switchedOffWords = (doubled) =>
+  doubled.switchedOff.length === 0 ? "" : `. ${doubled.switchedOff.map((entry) => entry.id).join(" and ")} ${doubled.switchedOff.length === 1 ? "is" : "are"} switched off here, so left out of that choice`;
+
+const skillsOfBothWords = (doubled) => (doubled.switchedOff.length === 0 ? " and the skills of both are listed" : "");
+
+const runningWords = (doubled) =>
+  doubled.running === undefined
+    ? "Every copy is switched off here, so none runs"
+    : `The host runs ${doubled.running.id} (${RUNNING_COPY_RULE}), so only that copy's hooks and tools run${skillsOfBothWords(doubled)}`;
+
+export const doubledWords = (doubled) => `${doubled.copies.map(installWordsWithId).join(" and ")}. ${runningWords(doubled)}${switchedOffWords(doubled)}`;
+
+export const isEarlierNameCopyThatRuns = (entry, doubledList) =>
+  entry.state === EARLIER_NAME && doubledList.every((doubled) => doubled.name !== entry.name || doubled.running === entry);
+
+export const isNoCopyRunning = (doubledList) => doubledList.some((doubled) => doubled.running === undefined);
+
 const sameCommand = (first, second) => first.name === second.name && first.scope === second.scope && first.projectPath === second.projectPath;
 
 const withoutRepeats = (entries) => entries.filter((entry, index) => entries.findIndex((other) => sameCommand(entry, other)) === index);
@@ -84,15 +134,21 @@ export function updateCommands(olderEntries) {
   ];
 }
 
-// Adding the marketplace while the earlier name is still registered answers "already on disk", and every install after it fails.
-export function moveCommands(earlierNameEntries, isToolshedMarketplaceKnown) {
+// A copy at user scope reaches every project. One at project or local scope reaches the project it is installed for, so it covers a project or local copy there and never a user one.
+const isCoveredBy = (entry, other) =>
+  other.name === entry.name && (other.scope === "user" || (entry.scope !== "user" && other.projectPath === entry.projectPath));
+
+// A plugin that is installed under both names needs no second install: a copy under the toolshed name that reaches the same projects is there already.
+// The marketplace is added or updated after the removal: adding it while the earlier name is still registered answers "already on disk", and every install after it fails.
+export function moveCommands(earlierNameEntries, isToolshedMarketplaceKnown, copiesAlreadyUnderTheToolshedName = []) {
   const entries = withoutRepeats(earlierNameEntries);
+  const toInstall = entries.filter((entry) => !copiesAlreadyUnderTheToolshedName.some((other) => isCoveredBy(entry, other)));
   const register = isToolshedMarketplaceKnown ? `claude plugin marketplace update ${TOOLSHED_MARKETPLACE}` : `claude plugin marketplace add ${TOOLSHED_SOURCE}`;
   return [
     ...entries.flatMap((entry) => inItsFolder(entry, `claude plugin uninstall ${entry.name}@${EARLIER_NAME_OF_THIS_VERSION} --scope ${entry.scope}`)),
     "from the config folder, never inside a repository:",
     `  claude plugin marketplace remove ${EARLIER_NAME_OF_THIS_VERSION}`,
     register,
-    ...entries.flatMap((entry) => inItsFolder(entry, `claude plugin install ${entry.name}@${TOOLSHED_MARKETPLACE} --scope ${entry.scope}`)),
+    ...toInstall.flatMap((entry) => inItsFolder(entry, `claude plugin install ${entry.name}@${TOOLSHED_MARKETPLACE} --scope ${entry.scope}`)),
   ];
 }

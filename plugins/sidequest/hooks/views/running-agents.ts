@@ -13,6 +13,8 @@ export type BoardActivity = {
   runs: Record<string, SidequestRun>
   doingTickets: readonly string[]
   returnedTickets: readonly string[]
+  // The tickets the pane lists under Being checked, so the band counts the same ones.
+  beingCheckedTickets?: readonly string[]
   waits: PermissionWaits
   // How long the longest-waiting question has waited, in milliseconds, when the band was drawn.
   oldestWaitingMs?: number

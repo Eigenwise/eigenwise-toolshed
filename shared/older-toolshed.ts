@@ -104,6 +104,91 @@ export function pluginsInstalledFromThePrivateMarketplace(entries: readonly Inst
   return [...new Set(names)]
 }
 
+export type EarlierNameCopy = { scope: string; projectPath: string | undefined }
+
+export type InstalledUnderBothNames = {
+  plugin: string
+  earlierNameCopies: EarlierNameCopy[]
+  /** The copy from the shared name is switched off here, so removing the earlier-name copy would leave the plugin off. */
+  isOnlyEarlierNameCopySwitchedOn: boolean
+  /** The user settings switch on the earlier-name copy at user scope and no shared-name copy there, so removing it takes the plugin from every other project. */
+  isOnlyEarlierNameCopyOnInOtherProjects: boolean
+  /** The user settings switch on the earlier-name copy at user scope, so a project that switched the shared-name copy off itself runs the plugin from it. */
+  isEarlierNameCopyOnInOtherProjects: boolean
+}
+
+const isToolshedPlugin = (name: string): boolean => TOOLSHED_PLUGIN_NAMES.some(known => known === name)
+
+const enabledPluginsOf = (settingsText: string): Record<string, unknown> => {
+  const settings = parsedJson(settingsText)
+
+  return isRecord(settings) && isRecord(settings.enabledPlugins) ? settings.enabledPlugins : {}
+}
+
+/**
+ * Settings texts come in the order the host reads them: local, then committed, then user. The first file that names
+ * the key decides. A copy no file names is off, as the host lists it: an install writes its own key.
+ */
+function isSwitchedOn(copy: InstalledEntry, settingsTexts: readonly string[]): boolean {
+  const key = `${copy.plugin}@${copy.marketplace}`
+  const value = settingsTexts.map(text => enabledPluginsOf(text)[key]).find(candidate => typeof candidate === 'boolean')
+
+  return value === true
+}
+
+// Another project sees a copy at user scope, switched by the user settings, and whatever its own files say, which this project cannot read.
+const isOnInOtherProjects = (copy: InstalledEntry, userSettingsText: string): boolean => copy.scope === 'user' && isSwitchedOn(copy, [userSettingsText])
+
+const holdsOnlyForTheEarlierName = (earlierNameCopies: readonly InstalledEntry[], sharedNameCopies: readonly InstalledEntry[], holds: (copy: InstalledEntry) => boolean): boolean =>
+  earlierNameCopies.some(holds) && !sharedNameCopies.some(holds)
+
+const isEarlierNameCopy = (entry: InstalledEntry): boolean => entry.marketplace === MARKETPLACE_BEFORE_THE_SWITCH
+
+const isSharedNameCopy = (entry: InstalledEntry): boolean => entry.marketplace === MARKETPLACE_AFTER_THE_SWITCH
+
+const withoutRepeatedPlaces = (copies: readonly EarlierNameCopy[]): EarlierNameCopy[] =>
+  copies.filter((copy, index) => copies.findIndex(other => other.scope === copy.scope && other.projectPath === copy.projectPath) === index)
+
+function doubledFrom(plugin: string, copies: readonly InstalledEntry[], settingsTexts: readonly string[], userSettingsText: string): InstalledUnderBothNames[] {
+  const earlierNameCopies = copies.filter(isEarlierNameCopy)
+  const sharedNameCopies = copies.filter(isSharedNameCopy)
+  if (earlierNameCopies.length === 0 || sharedNameCopies.length === 0) return []
+  const places = earlierNameCopies.map(copy => ({ scope: copy.scope, projectPath: copy.projectPath }))
+
+  return [
+    {
+      plugin,
+      earlierNameCopies: withoutRepeatedPlaces(places),
+      isOnlyEarlierNameCopySwitchedOn: holdsOnlyForTheEarlierName(earlierNameCopies, sharedNameCopies, copy => isSwitchedOn(copy, settingsTexts)),
+      isOnlyEarlierNameCopyOnInOtherProjects: holdsOnlyForTheEarlierName(earlierNameCopies, sharedNameCopies, copy => isOnInOtherProjects(copy, userSettingsText)),
+      isEarlierNameCopyOnInOtherProjects: earlierNameCopies.some(copy => isOnInOtherProjects(copy, userSettingsText)),
+    },
+  ]
+}
+
+/**
+ * The plugins installed from both marketplace names where this project can see both copies. The user settings text is
+ * also given on its own, because it alone says what the person's other projects run.
+ */
+export function installedUnderBothNames(
+  entries: readonly InstalledEntry[],
+  projectFolder: string,
+  settingsTexts: readonly string[],
+  userSettingsText = '',
+): InstalledUnderBothNames[] {
+  const visible = entries.filter(entry => isToolshedPlugin(entry.plugin) && isInsideProject(entry, projectFolder))
+  const names = [...new Set(visible.map(entry => entry.plugin))]
+
+  return names.flatMap(plugin =>
+    doubledFrom(
+      plugin,
+      visible.filter(entry => entry.plugin === plugin),
+      settingsTexts,
+      userSettingsText,
+    ),
+  )
+}
+
 const listedInWords = (items: readonly string[]): string =>
   items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
@@ -188,6 +273,94 @@ export function quartermasterLines(leftovers: readonly LeftoverFound[], olderPlu
   const pronoun = pronounFor([...things, ...pluginsThing(plugins)])
 
   return [...gatewayLines(gateway, 'none'), `${sentences.join(' ')} /quartermaster:upgrade moves ${pronoun}.`]
+}
+
+const uninstallCommandsFor = (doubled: InstalledUnderBothNames): string[] =>
+  doubled.earlierNameCopies.map(
+    copy => `claude plugin uninstall ${doubled.plugin}@${MARKETPLACE_BEFORE_THE_SWITCH}${copy.scope === 'user' ? '' : ` --scope ${copy.scope}`}`,
+  )
+
+const foldersOfProjectCommands = (doubledPlugins: readonly InstalledUnderBothNames[]): string[] => {
+  const folders = doubledPlugins.flatMap(doubled => doubled.earlierNameCopies.filter(copy => copy.scope !== 'user').map(copy => copy.projectPath ?? 'the project folder'))
+
+  return [...new Set(folders)]
+}
+
+// A command at project or local scope only finds its copy from inside that project.
+const fromTheProjectFolder = (doubledPlugins: readonly InstalledUnderBothNames[]): string => {
+  const folders = foldersOfProjectCommands(doubledPlugins)
+
+  return folders.length === 0 ? '' : ` Run the ones with --scope from ${listedInWords(folders)}.`
+}
+
+const commandsToRemove = (doubledPlugins: readonly InstalledUnderBothNames[]): string =>
+  `${doubledPlugins.flatMap(uninstallCommandsFor).join('; ')}.${fromTheProjectFolder(doubledPlugins)}`
+
+const verbFor = (items: readonly unknown[]): string => (items.length === 1 ? 'is' : 'are')
+
+const namesOf = (doubledPlugins: readonly InstalledUnderBothNames[]): string => listedInWords(doubledPlugins.map(doubled => doubled.plugin))
+
+function bothCopiesAreOnSentence(doubledPlugins: readonly InstalledUnderBothNames[]): string {
+  return `${namesOf(doubledPlugins)} ${verbFor(doubledPlugins)} also installed from ${MARKETPLACE_BEFORE_THE_SWITCH}. Claude Code runs only one copy of a plugin name, with no warning, and lists the skills of both. To remove the ${MARKETPLACE_BEFORE_THE_SWITCH} copy, run: ${commandsToRemove(doubledPlugins)}`
+}
+
+const commandsToSwitchOn = (doubledPlugins: readonly InstalledUnderBothNames[]): string =>
+  doubledPlugins.map(doubled => `claude plugin enable ${doubled.plugin}@${MARKETPLACE_AFTER_THE_SWITCH} --scope local`).join('; ')
+
+function onlyEarlierNameIsOnSentence(doubledPlugins: readonly InstalledUnderBothNames[]): string {
+  return `${namesOf(doubledPlugins)} ${verbFor(doubledPlugins)} installed from ${MARKETPLACE_BEFORE_THE_SWITCH} and from ${MARKETPLACE_AFTER_THE_SWITCH}, and here only the ${MARKETPLACE_BEFORE_THE_SWITCH} copy is switched on. Switch the ${MARKETPLACE_AFTER_THE_SWITCH} copy on for this project first, from the project folder: ${commandsToSwitchOn(doubledPlugins)}. Then remove the ${MARKETPLACE_BEFORE_THE_SWITCH} copy: ${commandsToRemove(doubledPlugins)}`
+}
+
+// Removing the copy the user settings switch on takes the plugin from every project that has no copy of its own.
+function keepItInOtherProjectsSentence(doubledPlugins: readonly InstalledUnderBothNames[]): string[] {
+  const plugins = doubledPlugins.filter(doubled => doubled.isOnlyEarlierNameCopyOnInOtherProjects)
+  if (plugins.length === 0) return []
+  const commands = plugins.map(doubled => `claude plugin install ${doubled.plugin}@${MARKETPLACE_AFTER_THE_SWITCH}`).join('; ')
+
+  return [`Your other projects get ${namesOf(plugins)} from the ${MARKETPLACE_BEFORE_THE_SWITCH} copy. To keep ${plugins.length === 1 ? 'it' : 'them'} there, also run: ${commands}.`]
+}
+
+// Seen on a host: a second project had switched the shared-name copy off in its own settings and ran the plugin from
+// the earlier-name copy at user scope. Following the line from the first project left it with the plugin off and
+// no word. This project cannot read another project's settings, so the line can only say what to do there.
+function switchedOffInAnotherProjectSentence(doubledPlugins: readonly InstalledUnderBothNames[]): string[] {
+  const plugins = doubledPlugins.filter(doubled => doubled.isEarlierNameCopyOnInOtherProjects)
+  if (plugins.length === 0) return []
+  const commands = plugins.map(doubled => `claude plugin enable ${doubled.plugin}@${MARKETPLACE_AFTER_THE_SWITCH} --scope local`).join('; ')
+
+  return [`A project where you switched the ${MARKETPLACE_AFTER_THE_SWITCH} copy off itself stops running ${namesOf(plugins)} with this. Switch it on there, from that project's folder: ${commands}.`]
+}
+
+const sentencesOf = (doubledPlugins: readonly InstalledUnderBothNames[], sentenceFor: (group: readonly InstalledUnderBothNames[]) => string): string[] =>
+  doubledPlugins.length === 0 ? [] : [sentenceFor(doubledPlugins)]
+
+/** Said by whichever copy runs, or by Quartermaster for the others: the commands remove the copies under the earlier name. */
+export function installedTwiceLine(doubledPlugins: readonly InstalledUnderBothNames[]): string {
+  const onlyEarlierNameIsOn = doubledPlugins.filter(doubled => doubled.isOnlyEarlierNameCopySwitchedOn)
+  const bothAreOn = doubledPlugins.filter(doubled => !doubled.isOnlyEarlierNameCopySwitchedOn)
+
+  return [
+    ...sentencesOf(bothAreOn, bothCopiesAreOnSentence),
+    ...sentencesOf(onlyEarlierNameIsOn, onlyEarlierNameIsOnSentence),
+    ...keepItInOtherProjectsSentence(doubledPlugins),
+    ...switchedOffInAnotherProjectSentence(doubledPlugins),
+  ].join(' ')
+}
+
+export type CopyNotice = 'installed-twice' | 'move' | 'none'
+
+export type CopyNoticeFacts = {
+  isInstalledTwice: boolean
+  isRunningFromThePrivateMarketplace: boolean
+  wasInstalledTwiceTold: boolean
+  wasMoveTold: boolean
+}
+
+/** A plugin installed from both names has nothing to move: it is told once that two copies are there, never to install the one it has. */
+export function copyNoticeFor(facts: CopyNoticeFacts): CopyNotice {
+  if (facts.isInstalledTwice) return facts.wasInstalledTwiceTold ? 'none' : 'installed-twice'
+
+  return facts.isRunningFromThePrivateMarketplace && !facts.wasMoveTold ? 'move' : 'none'
 }
 
 export function moveMarketplaceLine(pluginNames: readonly string[]): string {

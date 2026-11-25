@@ -1,3 +1,4 @@
+import { withoutProposedTickets } from './proposed-tickets'
 import { appendLogLine, applyTicketPatch, oneLine, OTHER_PICK, RECOMMENDED_PICK } from './tickets'
 import type { Section, Story, Ticket } from './tickets'
 import type { OpenQuestion } from './decisions-for-you'
@@ -9,6 +10,8 @@ const SETTLED_STATUSES = ['done', 'parked', 'dropped']
 
 export const isCheckpoint = (ticket: Ticket): boolean => ticket.mode === 'hitl' && ticket.kind === 'review'
 
+// Asked of one ticket with no board at hand: can the person answer or act on it at all. What the board counts as
+// waiting on them is the narrower rule further down.
 export const waitsOnHuman = (ticket: Ticket): boolean =>
   ticket.status === 'needs-you' || (ticket.mode === 'hitl' && !SETTLED_STATUSES.includes(ticket.status))
 
@@ -18,7 +21,32 @@ export const isAnswerWithSession = (ticket: Pick<Ticket, 'answerSent'>): boolean
 
 export const awaitsHumanAnswer = (ticket: Ticket): boolean => waitsOnHuman(ticket) && !isAnswerWithSession(ticket)
 
-export const needsHumanAnswer = (ticket: Ticket): boolean => ticket.status === 'needs-you' && !isAnswerWithSession(ticket)
+const BUILT_STATUSES = ['done', 'review']
+const NOT_PLANNED_YET = 'inbox'
+
+// Seen in two reviews of this rule: counted by status alone, every checkpoint filed behind unbuilt work read as
+// needing the person, and the band warned about tickets nobody could act on. A ticket the person works with
+// themselves is theirs once what it waits for is built; until then it is ordinary work on the board.
+const isTurnOfThePerson = (ticket: Ticket, byId: ReadonlyMap<string, Ticket>): boolean =>
+  ticket.mode === 'hitl' &&
+  ticket.status !== NOT_PLANNED_YET &&
+  !SETTLED_STATUSES.includes(ticket.status) &&
+  ticket.blockedBy.every(id => BUILT_STATUSES.includes(byId.get(id)?.status ?? ''))
+
+/**
+ * The one rule for the band, the pane, the summary and the waiting view. A ticket is with the person when it is in
+ * needs-you, or when they work with it themselves and its turn has come. A plan's proposed tickets are with nobody
+ * until its yes.
+ */
+export const ticketsWithThePerson = (tickets: readonly Ticket[], stories: readonly Story[] = []): Ticket[] => {
+  const byId = new Map(tickets.map(ticket => [ticket.id, ticket]))
+
+  return withoutProposedTickets(tickets, stories).filter(ticket => ticket.status === 'needs-you' || isTurnOfThePerson(ticket, byId))
+}
+
+/** Those of them whose answer the person has not sent from the board: what the four places count as waiting. */
+export const ticketsWaitingOnThePerson = (tickets: readonly Ticket[], stories: readonly Story[] = []): Ticket[] =>
+  ticketsWithThePerson(tickets, stories).filter(ticket => !isAnswerWithSession(ticket))
 
 const STATUSES_THAT_ARE_OVER = ['done', 'dropped']
 

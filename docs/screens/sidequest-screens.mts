@@ -134,7 +134,8 @@ const formsOf = (opened: Opened, ticketId: string, storyId: string) => ({
   plan: { ...planFormFor(NO_PLAN_FORM, storyId), ...opened.planForm },
 })
 
-const summaryOf = (moment: BoardMoment) => summarize(openWorkOf(moment), touchedOf(moment), moment.now)
+// The summary reads every ticket and the plans, as the session's own does: a plan with open decisions is in the band.
+const summaryOf = (moment: BoardMoment) => summarize(moment.files.tickets, touchedOf(moment), moment.now, moment.files.stories)
 
 export const paneDrawing = (moment: BoardMoment, columns: number, opened: Opened = {}): string => {
   const detail = openedTicket(moment, opened.ticket)

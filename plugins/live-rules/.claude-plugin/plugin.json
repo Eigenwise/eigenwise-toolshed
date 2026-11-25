@@ -1,6 +1,6 @@
 {
   "name": "live-rules",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Write and audit native .claude/rules/ files. Says once if the older rules are still in a project. Runs no process.",
   "license": "MIT",
   "repository": "https://github.com/Eigenwise/eigenwise-toolshed",

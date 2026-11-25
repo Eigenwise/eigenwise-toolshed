@@ -123,6 +123,7 @@ test('the first ticket creates the board and excludes it from git', async ($, on
     ready: 2,
     doing: 0,
     review: 0,
+    plansWaiting: 0,
   })
 })
 

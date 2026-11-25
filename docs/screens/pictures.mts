@@ -50,7 +50,7 @@ type Frame = Omit<Picture, 'file'> & { name: string }
 const planningFrames = (story: PlayedStory): Frame[] => [
   {
     name: 'first-message',
-    alt: "A terminal session. The person typed Let's do PAY-41; the chat shows the board filing the plan, and the board pane beside it says three decisions on the plan wait on the person.",
+    alt: "A terminal session. The person typed Let's do PAY-41; the chat shows the board filing the plan, the band above the prompt says one plan needs you, and the board pane beside it says three decisions on the plan wait on the person.",
     caption: 'You name the task. The session reads the code, files a plan on the board, and the board opens beside the chat.',
     drawnBy: SESSION,
     html: sessionWithTheBoard(momentAt(story, 'planned')),
@@ -210,7 +210,7 @@ const finishFrames = (story: PlayedStory): Frame[] => [
   },
   {
     name: 'ticket-pull-request',
-    alt: 'The first ticket opened after the run: under its title, facts naming the branch, pull request #1 and done; a field to say something about it and Back; then What, Done when and Already decided.',
+    alt: 'The first ticket opened after the run: under its title, facts naming the branch, pull request #1 and done; Back; then What, Done when and Already decided.',
     caption: 'Where the work ended: the pull request, on the ticket. The merge itself happens on your code host.',
     drawnBy: PANE,
     html: ticketOpened(momentAt(story, 'done'), FIRST_TICKET),
