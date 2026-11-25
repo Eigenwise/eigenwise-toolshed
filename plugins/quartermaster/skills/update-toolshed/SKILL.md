@@ -7,6 +7,11 @@ description: >-
 
 # Update Toolshed
 
+Toolshed v1 is deprecated as of 25 November 2026: no more fixes and no new releases. Tell the user that
+first, in one line. To move this project to v2, read
+https://github.com/Eigenwise/eigenwise-toolshed/blob/v2/UPGRADING.md and follow it from the top: it says
+what to look for, what to change yourself and what to ask the person. Updating v1 does not get you v2.
+
 Run the portable updater from this plugin installation:
 
 ```sh

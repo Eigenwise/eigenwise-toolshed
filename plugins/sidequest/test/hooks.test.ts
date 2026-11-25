@@ -3622,12 +3622,18 @@ test('session-start: names the upstream-defect filing destination for the local 
     SIDEQUEST_HOME: nonMaintainerHome,
     SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
   });
-  assert.match(nonMaintainerContext, /Offer to file it as a GitHub issue on Eigenwise\/eigenwise-toolshed, not via the Anthropic feedback tool\./);
-  assert.match(nonMaintainerContext, /Any GitHub body, comment, reply, or closure note you author must stand alone/);
-  assert.match(nonMaintainerContext, /omit local SQ-\/US- IDs, board slugs, local-only paths, and board-only references/);
-  assert.match(nonMaintainerContext, /Preserve reporter text unless authorized to edit it/);
-  assert.match(nonMaintainerContext, /do not strip diagnostic error text or hand-edit historical changelogs or generated release history/);
+  assert.match(nonMaintainerContext, /Do not offer to file a GitHub issue for it: v1 defects are no longer fixed\./);
+  assert.doesNotMatch(nonMaintainerContext, /Offer to file it as a GitHub issue/);
   assert.match(nonMaintainerContext, commonClause);
+});
+
+test('session-start: says v1 is deprecated and where the move to v2 is described', () => {
+  for (const source of ['', 'compact', 'resume']) {
+    const context = runHookForBudget(SESSION, { session_id: `deprecation-${source || 'startup'}`, source });
+    assert.match(context, /Toolshed v1 is deprecated as of 25 November 2026: no more fixes or releases\./);
+    assert.match(context, /https:\/\/github\.com\/Eigenwise\/eigenwise-toolshed\/blob\/v2\/UPGRADING\.md/);
+    assert.match(context, /Updating v1 does not get you v2\./);
+  }
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
