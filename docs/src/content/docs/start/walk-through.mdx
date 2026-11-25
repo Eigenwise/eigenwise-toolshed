@@ -1,0 +1,177 @@
+---
+title: 'Walk-through: one task, start to merge'
+description: One made-up task in one made-up project, from the first message to the merged result, one picture per step.
+---
+
+import Terminal from '../../../components/Terminal.astro';
+import Frame from '../../../components/Frame.astro';
+import firstReply from '../../../mocks/first-reply.txt?raw';
+import pullRequestMerged from '../../../mocks/pull-request-merged.txt?raw';
+import settingsAllow from '../../../mocks/settings-allow.txt?raw';
+
+<p class="lead">This page follows one piece of work from the first message to the merged result. Compare each picture with your own screen as you go.</p>
+
+The project is called `photo-library`. The task is the tracker ticket `PAY-41`, "Upload retry": a photo whose upload fails should be tried once more, and the import summary should list the photos that still failed. Everything here is made up.
+
+The pictures are rendered from the plugins' own view code, with a made-up project. The words on the screen are the plugins' words. The window around them, the pane's border and the message box are drawn plainly by the docs, so your real screen will look a little different around the edges. A moment only the app draws, like the chat or the host's own rows, is a text drawing, and the line under it says so.
+
+Ticket ids here start with `PL`, because a board takes its prefix from the folder name: `photo-library` gives `PL`. The plan is `PL-S1` and its tickets are `PL-1` to `PL-3`. In a folder called `my-app` you would see `MA-1`.
+
+To set the plugins up first, follow the [quick start](/start/quick-start/). It uses the same pictures.
+
+## 1. You name the task
+
+<Terminal title="claude" text={firstReply} caption="A text drawing of the chat. The first reply is Claude's own wording and will differ. The last two lines are the board's." />
+
+You type `Let's do PAY-41` in a session in the project. A tracker ticket you name is planned with you before anything is built, however small it looks. Claude reads the ticket and the code first. Reading changes nothing, so it does not ask.
+
+Within a few minutes the plan is on the board, the pane beside the chat. The chat only points at it.
+
+<Frame name="01-first-message.png" />
+
+## 2. The board says what waits on you
+
+<Frame name="02-board-plan-waits.png" />
+
+**Waits on you** comes first, whenever something does. Press the row under **The plan** to open it.
+
+<Frame name="03-plan-open-decisions.png" />
+
+The plan view starts with the short version: what is asked, how it works today, what was found, and the options by letter. Then the decisions, each with the recommended answer and what the other answer costs. Below them are the path the change takes through the code, the analysis and the code that matters.
+
+## 3. You answer all three in one form
+
+<Frame name="04-plan-decisions-filled-in.png" />
+
+Pick per decision and add your own words if you have any. Here the first two take the recommended answer. The third takes the other one: the mockup has a "Try again" button the ticket never mentions, and the person wants it built. Press **Send**. Enter in a field only keeps what you typed.
+
+<Frame name="05-plan-decisions-answered.png" />
+
+After Send the plan shows what you sent in place of the form, and the board stops saying it waits on you.
+
+<Frame name="06-chat-decisions-sent.png" />
+
+The same picks and words went into the chat as your one message. You could also have typed the answers in the chat, by number, or typed `yes` to take every recommended answer.
+
+## 4. You read the plan back and say yes
+
+<Frame name="07-board-waits-for-the-yes.png" />
+
+The session wrote the plan back as three proposed tickets. The board now waits for **Your yes on the proposed tickets**. Nothing is built before it.
+
+<Frame name="08-plan-before-the-yes.png" />
+
+From the top: where the work ends, what was taken by default, a field for a correction, **Yes, build it**, then each proposed ticket in full with its check. A correction is not the yes. It is folded in, and you are asked again.
+
+## 5. The build starts
+
+<Frame name="09-build-started.png" />
+
+Your yes starts the build. The board starts the tickets that can start, and the session hands each one to an agent. The rows that begin with `board` and `agent` are Sidequest's own. The app draws its own rows around them, which the picture leaves out.
+
+<Frame name="10-plan-who-decided-what.png" />
+
+**Already decided** stays on the plan after the yes: your answers marked as yours, the rest as taken by default.
+
+<Frame name="11-ticket-opened.png" />
+
+Any ticket opens from its row: what to build, when it is done, and what it carries from the plan. A field on it lets you say something about it while it is built. That reaches the agent that runs it.
+
+## 6. Agents run side by side
+
+<Frame name="12-board-agents-running.png" />
+
+**Now** shows each running agent with its model and how long it has run. The third ticket waits under **Next** because it needs the second.
+
+<Frame name="13-board-agents-finished.png" />
+
+When agents come back, the app shows a toast, and the session wakes by itself. You do not have to watch. Their tickets move to **Being checked**, and the third ticket can start.
+
+<Frame name="14-finished-agent-opened.png" />
+
+A finished agent stays on the board for the session. Open the row of one that worked on a ticket and you get that ticket, now marked built and being checked. An agent that only looked something up opens a view of its own, with what it was asked and what it reported.
+
+## 7. The work is checked
+
+<Frame name="15-board-being-checked.png" />
+
+Each build gets a proof on the real thing, then one independent, read-only review. The board shows all three tickets under **Being checked**. See [how quality is checked](/guides/quality/).
+
+<Frame name="16-ticket-being-checked.png" />
+
+You do not wait for the review to read the change. Once the proof has run, the ticket holds what changed, how it was checked so far, and the hunks that carry the design.
+
+## 8. One question before anything leaves your machine
+
+<Frame name="17-board-waits-on-you.png" />
+
+The review passed, and this project's rules ask for your yes before a commit, a push and a pull request. Without such a rule there would be no question here. See [what lands without asking](/guides/task-to-pull-request/#from-tickets-to-a-pull-request).
+
+<Frame name="18-ticket-waits-on-you.png" />
+
+The ticket opens as the question alone, with the recommended answer named. Below it is what you are saying yes to: what changed, how it was checked, the diff, what the review found, and the commit message and pull request text word for word. Those words are sent as stored.
+
+<Frame name="19-ticket-answer-picked.png" />
+
+<Frame name="20-ticket-answer-sent.png" />
+
+Pick an answer and press **Send**. The ticket keeps your answer, and the session gets it as your message.
+
+## 9. Commit, push, pull request
+
+<Frame name="21-pull-request-recorded.png" />
+
+The session commits, pushes and opens the pull request. The host draws those steps as its own rows, which are not shown here. The board then records the pull request on the three tickets and moves them to done.
+
+## 10. The result
+
+<Frame name="22-board-done.png" />
+
+<Frame name="23-ticket-pull-request.png" />
+
+The ticket now names its branch and the pull request. What happens next on the code host depends on who commits to the project. Where other people commit too, the merge is yours. Where only you commit, landing merges the pull request once CI is green and it is not a draft, unless a merge deploys.
+
+<Terminal title="The pull request, merged" text={pullRequestMerged} caption="A text drawing of the code host's page for the merged pull request. The words are the ones the ticket carried. The host's layout is its own." />
+
+The board records the pull request. It never draws a merge.
+
+## After the run: Quartermaster
+
+Quartermaster watches how you work and offers one change at a time. While this task ran, it noticed two things: you ran the thumbnail build by hand many times before it, and the agents were blocked on the import proof.
+
+<Frame name="24-quartermaster-inbox.png" />
+
+`/quartermaster` opens its pane. It lists what waits on you and what it noticed.
+
+<Frame name="25-quartermaster-proposal.png" />
+
+Open a proposal to read what it changes, how to undo it and why it came up. **Approve** has the session make the change. **Reject** is remembered and not proposed again. **Already handled** closes it without that, so it may come back if the same thing keeps happening. **Later** hides it for a few days.
+
+<Frame name="26-quartermaster-applied.png" />
+
+After the change is made, the proposal leaves the list.
+
+<Frame name="27-standing-yes-noticed.png" />
+
+The other line is something it noticed: `npm run test:import` was blocked four times. **Draft a fix** turns that into a proposal.
+
+<Frame name="28-standing-yes-asked.png" />
+
+The proposal is a standing yes: let Claude run that one command without asking. Approve it and the session writes the rule.
+
+<Terminal title=".claude/settings.local.json" text={settingsAllow} caption="A text drawing of the file after Approve. The rule is written to your own settings file, which is not committed." />
+
+<Frame name="29-standing-yes-saved.png" />
+
+Nothing waits in the inbox now. [Resupply](/why/quartermaster/resupply/) explains the loop, and [Review](/why/quartermaster/review/) says how a change is judged later.
+
+## What only the app shows
+
+The pictures above cannot show these moments, because the app draws them and not the plugins: the chat itself and Claude's own words, the build's agent rows among the host's, the toast when an agent finishes, **View** into an agent's transcript, the commit, push and pull request rows, the pull request on the code host, and the session turns that apply a proposal. The desktop app draws the same board as a side panel with its own buttons.
+
+## Other pages with pictures of this task
+
+- [Quick start](/start/quick-start/): setup, then these steps.
+- [A task, start to pull request](/guides/task-to-pull-request/): the three paths a request can take.
+- [Working in a team](/guides/teams/): what is personal and what is shared.
+- [Observability](/why/observability/): the usage page for the same session.

@@ -1,17 +1,1 @@
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "Node16",
-    "moduleResolution": "Node16",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "useUnknownInCatchVariables": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "types": ["node"],
-    "lib": ["ES2022"],
-    "noEmit": true
-  },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
-}
+{"extends":"../../tsconfig.base.json","files":["../../.types/claude-code.d.ts"],"include":["hooks","types"]}

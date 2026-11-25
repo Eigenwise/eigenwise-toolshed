@@ -1,23 +1,10 @@
 {
   "name": "sidequest",
-  "version": "6.10.3",
-  "description": "A local work board and orchestration loop for Claude Code. Every task saved as a ticket survives context compaction and new sessions, with instructions, status, and recorded discussion kept on the board. Categories route tickets to a model and effort; token-gated executors return verified work for review and integration. A self-hosted Kanban dashboard spans your projects.",
-  "author": {
-    "name": "Eigenwise",
-    "email": "kenny@eigenwise.io"
-  },
-  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest",
-  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "version": "7.0.0",
+  "description": "A work board in plain files that plans the work with you and routes each category of work to its model.",
   "license": "MIT",
-  "keywords": [
-    "tickets",
-    "kanban",
-    "trello",
-    "board",
-    "issues",
-    "todo",
-    "dashboard",
-    "hooks",
-    "capture"
-  ]
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "author": { "name": "Eigenwise" },
+  "types": "./types/index.d.ts",
+  "engines": { "claude-code": ">=2.1.325" }
 }

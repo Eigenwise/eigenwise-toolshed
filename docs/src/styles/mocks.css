@@ -1,0 +1,241 @@
+/* Styles for the mocked terminal and app frames (Terminal.astro, AppFrame.astro, MockLines.astro).
+   Loaded on every page, so a frame looks the same whichever component a page imports. */
+
+/* Rendered pictures (Frame.astro) */
+.frame-figure {
+  margin: 1.5rem 0;
+}
+.frame-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 10px;
+}
+.frame-figure figcaption {
+  margin-top: 0.5rem;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-2);
+}
+.frame-figure details {
+  margin-top: 0.25rem;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+}
+.frame-figure summary {
+  cursor: pointer;
+}
+
+/* Terminal */
+.mock-figure {
+  margin: 1.5rem 0;
+}
+.mock-figure figcaption {
+  margin-top: 0.5rem;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+}
+.mock-window {
+  --mock-bg: #0f1419;
+  --mock-bar: #1a212a;
+  --mock-border: #2b3440;
+  --mock-text: #c5ced9;
+  --mock-strong: #f3f6f9;
+  --mock-dim: #7c8896;
+  --mock-accent: #2dd4bf;
+  --mock-warn: #fbbf24;
+  --mock-rail: #4b5766;
+  border: 1px solid var(--mock-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--mock-bg);
+  color: var(--mock-text);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+}
+.mock-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0.8rem;
+  background: var(--mock-bar);
+  border-bottom: 1px solid var(--mock-border);
+  font-size: var(--sl-text-xs);
+  color: var(--mock-dim);
+}
+.mock-dots {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+.mock-dots i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--mock-rail);
+}
+.mock-tag {
+  margin-left: auto;
+  padding: 0 0.45rem;
+  border: 1px solid var(--mock-border);
+  border-radius: 0.6rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mock-body {
+  overflow-x: auto;
+  margin: 0;
+  padding: 0.9rem 1rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+
+/* AppFrame */
+.mock-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 23.5rem);
+}
+.mock-pane-only .mock-split {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mock-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.mock-chat .mock-body {
+  flex: 1;
+}
+.mock-pane {
+  min-width: 0;
+  border-left: 1px solid var(--mock-border);
+  background: var(--mock-pane-bg, transparent);
+}
+.mock-pane .mock-body {
+  font-size: 0.74rem;
+}
+.mock-pane-only .mock-pane .mock-body {
+  font-size: 0.82rem;
+}
+.mock-pane-only .mock-pane {
+  border-left: 0;
+}
+.mock-pane-title {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.45rem 1rem 0;
+  font-size: var(--sl-text-xs);
+  color: var(--mock-dim);
+}
+.mock-band {
+  margin: 0;
+  padding: 0.35rem 1rem;
+  border-top: 1px solid var(--mock-border);
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  background: transparent;
+  color: var(--mock-dim);
+}
+.mock-prompt {
+  margin: 0 0.8rem 0.8rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--mock-border);
+  border-radius: 8px;
+  font-family: var(--sl-font-mono);
+  font-size: 0.82rem;
+  color: var(--mock-dim);
+}
+
+/* The desktop app follows the page theme; a terminal stays dark. */
+:root[data-theme='light'] .mock-desktop {
+  --mock-bg: #ffffff;
+  --mock-bar: #f3f5f7;
+  --mock-border: #d9dee5;
+  --mock-text: #36404c;
+  --mock-strong: #10151b;
+  --mock-dim: #6f7b89;
+  --mock-accent: #0f766e;
+  --mock-warn: #b45309;
+  --mock-rail: #b8c1cc;
+  --mock-pane-bg: #f8fafb;
+}
+.mock-desktop {
+  --mock-pane-bg: #141a21;
+}
+.mock-desktop .mock-body,
+.mock-desktop .mock-band {
+  font-family: var(--sl-font);
+  font-size: 0.86rem;
+}
+.mock-desktop .mock-row,
+.mock-desktop .mock-label,
+.mock-desktop .mock-heading,
+.mock-desktop .mock-toolrow {
+  font-family: var(--sl-font-mono);
+  font-size: 0.74rem;
+}
+
+@media (max-width: 50rem) {
+  .mock-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mock-pane {
+    border-left: 0;
+    border-top: 1px solid var(--mock-border);
+  }
+}
+
+/* MockLines */
+.mock-line {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-height: 1.5em;
+}
+.mock-shell,
+.mock-typed {
+  color: var(--mock-strong);
+}
+.mock-shell .mock-lead {
+  color: var(--mock-dim);
+}
+.mock-typed .mock-lead,
+.mock-said .mock-lead,
+.mock-ok .mock-lead {
+  color: var(--mock-accent);
+}
+.mock-note {
+  color: var(--mock-dim);
+  font-style: italic;
+}
+.mock-note .mock-lead {
+  display: none;
+}
+.mock-toolrow .mock-lead {
+  color: var(--mock-dim);
+}
+.mock-row {
+  white-space: pre;
+}
+.mock-row .mock-lead {
+  color: var(--mock-rail);
+}
+.mock-label {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--mock-strong);
+}
+.mock-heading {
+  white-space: pre;
+  font-weight: 700;
+  color: var(--mock-strong);
+}
+.mock-label.live {
+  color: var(--mock-accent);
+}
+.mock-label.waiting {
+  color: var(--mock-warn);
+}

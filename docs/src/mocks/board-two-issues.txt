@@ -1,0 +1,9 @@
+NOW
+┃ PAY-41: Retry a failed upload ...  sonnet, 19m
+
+PAY-41 Upload retry (branch PAY-41-retry)
+┃ next: Show which photos failed to upload  PL-2
+
+PAY-57 Thumbnail cache (branch PAY-57-cache)
+┃ waits on you: Should thumbnails be kept in ...
+┃ next: Keep thumbnails where a restart leave...

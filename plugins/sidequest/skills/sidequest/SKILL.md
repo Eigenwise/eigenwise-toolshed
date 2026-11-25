@@ -1,240 +1,93 @@
 ---
 name: sidequest
-description: >-
-  Use for delegated work and board lifecycle; small bounded fixes may stay inline without a ticket. Use for
-  tickets, board lifecycle, planning substantial or ambiguous work, and dispatch/integration/recovery.
+description: Plans a change, fix or investigation, then takes the lightest path that fits (inline, the board, or planning it with the person). Routes agents to the right model per kind of work.
+when_to_use: Load first for any request to change, fix, build or look into something, before doing the work.
 ---
 
-# sidequest
+# Sidequest
 
-A central ticket store (`~/.claude/sidequest`), live Kanban dashboard, CLI (`bin/sidequest.js`) and
-matching MCP tools. Read references only when needed:
+The person steers. Work with them the way you would with a senior developer who has opinions and wants a say: at every point they can step in, and it reaches you. An answer settles what was asked and nothing more, so nothing is a go-ahead they did not give. How much you do alone comes from their own words, stop by stop, and they can take it back. Every stop has to be worth their opinion and cheap to wave through with one word.
 
-- `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
-  execution, cost levers, agent teams.
-- `references/experiment-loop.md` — oracle rounds, branches, verdicts, promotion.
-- `references/publishing.md` — delivery modes, publish transaction.
-- `references/routing-details.md`, `references/routing-guide.md` — routes and wiring.
-- `references/high-stakes.md`
-- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`, `references/invocation-contracts.md`.
-- `references/readonly-guidance.md` — candidate reviews, repository audits, shortcut debt, and measurement claims.
-- `references/external-trackers.md` — ticket `refs`, `add --github`.
+## 1. Plan before you touch anything
 
-For a bounded catch-up list, use MCP `changes {since, view:"catchup"}` or CLI `changes --since <iso> --catchup`, which lists only changed tickets with their stage and next action.
+Every request starts with a short plan, said in a few lines:
 
-## Choose one owner before adding ceremony
+- **What has to happen**, and what done will look like to them.
+- **What you will use**: the tools, MCP servers, skills and agents this project really has (a browser, a database client, a codebase map).
+- **What is unknown** and has to be found out first.
+- **How it splits**: what you do, what goes to agents, what waits on the human.
+- **How it will be proven** on the real thing.
 
-Before dispatching substantial or ambiguous work, pin a contract; see `user-story`. The user agrees the approach first:
-`user-story` runs the conversation (investigate, reproduce a reported problem, options, discussion) and
-nothing is filed before its contract gets a yes. Check feasibility
-before expensive implementation or tests for substantial/safety-sensitive work
-(`references/ticket-authoring.md`). Small deterministic fixes keep one owner and a focused check;
-a plan advisor needs a named architectural risk or contested approach, no mandatory panel.
+Inline work in more than one place, or with a choice left, gets one line before the first edit: `Plan: <what changes and where>, checked by <how>.` A change in one place the person spelled out needs none. `sidequest:plan` work gets its analysis there.
 
-For substantial work:
+`references/flows.md` has sample flows.
 
-0. **One owner by default.** A bounded fix keeps one owner and a focused check; a small fix in a few known files may run inline without a ticket. Read-only investigations need no ticket: on a routed project spawn `route_recipe(category).research` so they run on the category route; native Explore only for unrouted projects.
-1. **Story or wave only with a reason.** Require 3+ independently checkable pieces and a stated reason for separate owners. Pin shared interfaces, file boundaries and per-piece verification, then file the complete backlog under a Sidequest story. One-ticket mode stays story-less. A review panel needs a named risk for each lens.
-2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
-   integrate so `ready` serializes the phases.
-3. **File the whole planned wave backlog before dispatching.** Give every ticket scope, dependencies, and
-   per-ticket verification; dispatch each ready wave concurrently. Do not drip-file a serial chain.
+Spot work the person did not ask for: put it in the inbox (a ticket with status `inbox`, `startedBy: session` and `mode: afk`, also when it will need a decision: the question for the person is written when it leaves the inbox) and tell them in one line what it is and that it is in the inbox. Never start it unasked.
 
-   Dispatch independent pieces together only after the story or wave meets that threshold.
-4. **Execute proportionally** — "Route execution down" below.
+A parked ticket waits for the person's typed word; the board writes their words on it. Never write that it picks up later, after something or next. After X means a `ready` ticket blocked by X.
 
-Trace the real flow, question necessity, then reuse local code, stdlib, native features or installed
-dependencies before fixing the shared root. Prefer measured deletion; avoid hypothetical guards,
-compulsory extractions and unrelated cleanup. Preserve trust-boundary validation, data-loss prevention,
-accessibility, permissions and immutable candidate/review authority.
+When they type stop, not now, or do this instead about work in flight, call `mcp__sidequest__ticket` with `stop` once (the story, or nothing for what this session created). Running agents finish and report; start nothing more of that plan. Say in one line what was parked and what still runs.
 
-Answer direct questions and operational requests inline. Small bounded fixes in a few known files may stay inline without tickets; read-only investigations use `route_recipe(category).research` as above.
+## 2. Take the lightest path that fits
 
-Isolated dispatches, read-only included, base at the recorded integration branch under the board's `worktreeBase` policy, and the dispatch result, spawn prompt and briefing name that base commit and branch. Read-only shared-checkout Git access and its write boundaries are in `references/readonly-guidance.md`.
+- **A tracker issue they name** (a key like `PAY-41`, a link to it), however small it looks: load the `sidequest:plan` skill, which reads the whole issue and the code before it says anything.
+- **Small and exact.** One place and a clear outcome. Ask first, in one message, only the choices that are the person's by the rule below (two sources that disagree count as one), each with your recommended answer, and change nothing before the answer. Take the rest and say so. One met while building follows the same rule. With no git, ask before deleting or overwriting a file, or keep a copy and say where. Then do it inline, no ticket. A fix that grows moves to `sidequest:plan`.
+- **More than one part**, sized on the whole request: a change with more than one part (more than one behaviour, or something another part of the system calls), a reproduction that takes many runs, a batch of items of the same kind. File one ticket for the whole piece before you start, `doing`, in a line or two, also when you do it all yourself, and note on its log what you find and where it stands as you go: a real four-commit change done inline left no trace on the board. Say in your plan whether you build it or route its parts as known pieces (below). Before a change with more than one part that you built is done, one `sidequest:scout` tries to break it, its prompt starting `[route:build]` for the mid tier (not `review`, not the ticket id), told what it should do and where the diff is: in measured runs that caught a crash 4 of 4 inline builds shipped. Fix what it finds or say why not, then move the ticket to `done` with how it was checked. A batch of independent small items gets no review.
+- **Tickets already on the board**, handed over by another session or a brief ("build PL-30"). Old tickets on the same subject with a new scope are not this: load `sidequest:plan`. Past this choice: say the plan line, call `mcp__sidequest__start` for each, and let the routed agents build. One that is small and exact may be done inline instead: do it, check it, note on its log what was done and how it was checked, and move it to `done`.
+- **A few known pieces.** Put them on the board with `mcp__sidequest__ticket`, each with a `Done when` check that fails today, then load the `run` skill.
+- **Something is broken.** One command you already know reproduces it: run it. One obvious cause in one place: fix it inline and show the check failing before and passing after. Anything more, or a fix that needs the person's decisions: load the `sidequest:plan` skill, which makes it fail before it asks anything.
+- **Vague, large or design-bearing, or a new project.** Load the `sidequest:plan` skill.
 
-### INLINE-SAFE direct work
+Unsure between two paths: take the lighter, say why.
 
-If inline-safe work was already ticketed, the orchestrator may claim `--direct` and edit inline after annotating the ticket, giving a 20+ character reason, and matching this allowlist:
+## 3. You orchestrate
 
-- A failing integration gate pinpoints an exact, known small diff: a strict-TS null guard, an
-  assertion string synced after a deliberate reword, byte-checked golden regeneration, or a
-  merge-conflict resolution that preserves both sides' intent.
-- Release bookkeeping: release fragments, the cut flow, or closing tickets with evidence.
-- A small bounded fix in a few files at known locations, with a focused check.
+Significant work goes on the board, so it stays visible:
 
-`direct-ok` is a user signal that gates nothing. Use routed execution when the work exceeds the small bounded path or needs an independent candidate review; dispatched executors keep their claim, scope, verification and submission lifecycle.
+- **Real digging** (a reproduction, a measurement, research that takes more than a few minutes): a ticket of `kind: research`, category `research` or `explore`, run with the `run` skill. Its log keeps what was found.
+- **A quick lookup**: a scout with a route tag and no ticket.
+- **Yourself**: what is cheaper than briefing an agent, like a command you know or a file you can name. A command you repeat over many things runs on one first: read that result before the rest.
 
-## MCP is the executor board interface
+Never narrate running agents. Never sleep or loop to wait for one, in any phase: its return comes to you as a new turn and cannot reach you while you wait in code, so end the turn, or do other work first. Show what agents found on return. Routing, categories and workflows: `references/routing.md`.
 
-Routed executors use **only** the `mcp__plugin_sidequest_board__*` tools for their lifecycle
-(`commit`/`submit` take the executor's absolute worktree path). Missing tools → report the
-blocker and release through an available board tool, never a command-line fallback.
+## 4. Prove it on the real thing
 
-MCP is the normal interface for board admin/config; the CLI is fallback for git-context operations.
-Apply board-only admin changes directly through an available MCP tool, never as a ticket or dispatch. Live
-category/profile edits affect only that board, not installation defaults unless the user asks. After a
-schema-bumping release, reload plugins before MCP writes. Commands default to the current project;
-`--project "<path-or-slug>"` (MCP: `project`) targets another board (creation rules: `references/board-features.md`).
+A unit test proves a function, not the thing. Check the result the way a person will meet it: open the page in a browser, call the endpoint, run the command, read the note as a reader would.
 
-`dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
-stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
-unchanged. Set `Agent.description` to `spawn.description` byte-for-byte, never derived from the
-prompt, route marker, title, model, or effort. The executor fetches its
-token-gated durable packet as the first action: full description, anchors, category route and contract, scope,
-state, comment metadata, and absolute attachment paths. It must inspect every readable
-attachment and report missing or unreadable ones, while the spawn keeps that content out of this
-transcript. Never trust a worker's self-report — the
-claim's token and exact executor name are the evidence.
+- For a bug, the steps that reproduced it must now pass.
+- Do it once per story after the work lands, and at every checkpoint. A scout does it when it takes more than one command.
+- Wait for a named thing once, with a bound, never in a polling loop written in code. A phase past about two minutes gets one line to the person.
+- Stop a process you started by its real process id, never by name or image. In Git Bash `$!` is the shell's id, not the server's: take the id listening on your port from `netstat -ano`, stop it with `taskkill //PID <id> //F`, and check the port is free. If you leave one running on purpose, say so with its address and how to stop it.
+- Outside code runs nowhere on this machine before `sidequest:outside-code-reviewer` passes its diff, and after a pass only in the throwaway container `${CLAUDE_PLUGIN_ROOT}/skills/sidequest/references/outside-code.md` describes. Outside by where it comes from: a bot, a fork, any commit by an author with no earlier commit in this repository (`git shortlog -sne <default branch>` lists who has), a pasted or fetched script. Outside by what it touches, whoever wrote it, that part only: dependencies, a lockfile, build, install or test-runner machinery, CI, and files a tool runs by itself (git hooks, editor tasks, `.envrc`, agent settings and instruction files). A colleague's change that touches none of those gets the normal review. Unsure is outside. A worktree is not isolation: it runs with your environment and your network.
+- When nothing can check it for real, say "tested, not seen working".
 
-**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent` in Agent: `model` and `subagentType` when set, `promptPrefix + prompt`. Never hand-translate route, gateway, marker or effort fields. For a ticketless read-only investigation spawn `recipe.research` (`references/routing-guide.md`). A user-named model for one ticket is that ticket's `route` override; never edit the category route (`references/routing-guide.md`).
+## Three kinds of decision
 
-**Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
-(`SIDEQUEST_HOME`). Never scan from root.
+A decision reaches the person only when it cannot be undone, spends money or reaches outside the project, or is taste or product direction only they have. Any other choice with a recommended answer is taken: say in one line what you chose and how to undo it, and move on.
 
-## Routing profiles
+Nothing goes out under their name unseen (a review reply, a tracker comment, a message), also when they asked for it: the question to send it shows the exact words, and those words are sent. A question about an action names what it is known to do to someone else (an approval dismissed, a reviewer notified). Their yes covers what was shown. A yes to a commit, a push or a pull request puts their name on code, so show the change first: what changed by area, the one or two hunks that carry the design, where the whole diff is, and that the question waits while they read it. That wait goes on the board: the ticket is `needs-you` with the question until they answer.
 
-A board selects one profile plus local ADD/OVERRIDE/DETACH/DISABLE rows. Mutations take one of
-`--profile`/`--project`; details: `references/routing-details.md`. Category `readonly` selects the
-restricted executor and `done` closeout. `--readonly` and `--no-shared-tree` override a prepared dispatch.
-Read-only files or changes warn before dispatch. Resolve or override.
+1. **What gets built.** The human decides, once, after you have investigated. Every question carries your recommended answer. On work that went to `sidequest:plan` and changes code, with a person here, that includes the design a reviewer would argue about.
+2. **How it gets done and shipped.** Never a question. Dispatch, merge, verify, retry and open the PR yourself. Never hand over a command to run.
+3. **Changes to the system itself** (settings, routing, rules, installs). Always offered, approved one item at a time, and each one reversible.
 
-## Open the dashboard
+## The board
 
-`sidequest dashboard` starts the local server and prints the URL. Verify server changes in an isolated
-`SIDEQUEST_HOME` on another port, never the shared board.
+- It opens by itself with the first work on it. `/board` reopens it.
+- An approval or answer given in the board arrives as one line, already on the ticket. Act on it. So does something they say about a ticket or the plan from its view: fold it in, say in a line what it changed, and record a decision it changes as decided by `human`.
+- `mcp__sidequest__board` reads it (`routing` shows the categories in force), `mcp__sidequest__ticket` writes tickets and stories, and `mcp__sidequest__start` and `mcp__sidequest__finish` run a ticket, as the `run` skill says.
 
-## File a ticket
+Tools listed as deferred are there: load them by name before calling them missing. Only when they are nowhere is the mod not loaded: say so and edit the files under `.sidequest/` in their format.
 
-`sidequest add -t "Contact form does not send" -d "..." --category <id>` — read the live taxonomy
-(`category_list` MCP / `sidequest category list --json`), choose by description and persist its ID.
-Use the fallback only when no category fits. `--complexity` is legacy ambiguity fallback;
-never set `--model`/`--effort`. Scope, anchors, stories and exact verify: `references/ticket-authoring.md`.
+## Keep the human oriented
 
-Descriptions/comments render markdown with real newlines, never literal `
-`. File a mid-task side issue
-with `mcp__plugin_sidequest_board__add` and keep going; filing a ticket is not a request to work it.
+Say it at a real pause only (something finished, something needs them, or they asked), one line per item with the ticket id:
 
-## List / update / close
+- **Done**: paste view `closing`, what a review found, and what is unverified.
+- **Running**: what, on which model. While something runs, what else can move comes from the `mcp__sidequest__board` view `now`.
+- **Needs you**: paste the `mcp__sidequest__board` view `waiting` as it is, most blocking first. A line that only names a ticket id is a failure. Keep the project and the place with every question: the view names the project at the top and ends each item with where to answer it, so never cut either. A question you word yourself names its project and says where it is answered (in this chat with the words to type, or in the board of that project).
+- **Next**: what you do without being asked.
 
-`sidequest list` (this project; `--status todo` for one column) · `projects` (every board) ·
-`update SQ-3 --status done` (move; also `-p -t -d -l`) · `rm SQ-3` (delete). `--json` reads data;
-`--brief` on `list`/`ready` implies `--json` and drops bodies. **Default to
-`--brief` for routine orchestration reads.** "Close / ship it" → `--status done`.
+## Next skills
 
-## Work a ticket (safe with other agents)
-
-The board may be shared: claim a ticket before touching it, atomically. **Never work a ticket you
-haven't successfully claimed**, even one you just filed.
-Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
-`next`/`claim SQ-3 --by <you> --direct --reason "why this is inline-safe"` (only for the
-INLINE-SAFE allowlist) → `commit` (declared ticket paths only) → run the briefing-supplied `verify-capture` wrapper after the final commit (it records the ticket, command, and checked candidate) → `submit --commit <hash> --verify
-"<declared cmd>"` (parks the verified LOCAL commit). Retyped commands or prose cannot replace that capture. Manual and attestation verifiers keep their evidence flow.
-or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
-optionally `--status todo`).
-
-- **`--by` must be genuinely unique to this session** — a random token generated once (e.g.
-  `claude-<8 hex>`); a generic label lets two sessions silently coexist as one worker.
-- **If a claim fails, do not work that ticket.** Retry a denied or unclaimed spawn only when `pulse <ref>`
-  shows a changed dispatch condition; otherwise record the refusal and surface it to the user. Never both
-  resume a prior executor and spawn a fresh one for the same ticket.
-- **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
-  metadata; pass `--full` only for needed elided bodies.
-- **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent. If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch.agentId` or its exact original Agent-returned identifier; never `claim.by` or a guessed/replacement address. Honor user Pause retries. Missing/mismatched identity stays continuation UNVERIFIED; preserve claim/work. A resume keeps claim, token-file path, and worktree binding. Queued/unknown/completed/absent/failed-send is not death. Never restart terminal executors; confirmed death requires salvage before replacement. Lost binding and died-before-claim recovery: `references/orchestration.md`.
-- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence**: an executor ends its own run at submit, done, or release. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for a terminal ticket whose executor the host still lists running (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
-
-**Publishing belongs to the orchestrator:** executors stop at terminal `submit`. Integration measures the exact delivery tree with the configured quality gate and refuses measured failures. UNVERIFIED rows record debt automatically. Executors need no capture import. See `references/publishing.md`. Read `completion <ref>` for the human account of a finished ticket.
-
-**BOOKEND SUPERVISION.** Avoid routine mid-flight reads and peeks; bounded live advice follows `references/readonly-guidance.md`, and integration uses the submit report and merged-tree gate, with independent review when needed.
-
-## Route execution; keep the loop tight
-
-Use read-only recon to pin the improvement, benefit, approach, and boundaries before routing;
-routes select execution capacity, not product decisions. Investigations return compressed findings
-(~1–2k tokens) as comments. Dispatch implementation fresh; executors own their tickets.
-Direct claims require an INLINE-SAFE reason (20+ characters); they cannot legitimize prior investigation.
-Native `Explore`, `claude-code-guide`, `Plan`, `statusline-setup`, and any general-purpose or custom
-agent whose prompt and description carry no write intent run without a ticket. Ticket refs, route
-markers, executor types, and resumed denied writes need a prepared dispatch.
-
-**Loop:** spawn a wave, read executor reports and verified submissions, run each ticket's scoped
-verification, then publish with one full-suite gate. Re-plan for the next wave.
-Don't accept a green suite as proof of coverage; review execution evidence.
-**The ticket is the spec:** include outcome, benefit, approach, boundaries, and implementation detail.
-Spawn prompts add logistics; carry the full ticket contract without narrowing it.
-**Keep useful work:** retain claims and checkpoints, await `SendMessage` steering for questions or
-failed checks, and release only on confirmed death or unsalvageable blockers.
-Batch small same-model tickets in one executor, never mix models. Parallel waves spawn one executor
-per ticket in a single message.
-
-**Ready** = unclaimed, unblocked, not done, not archived — `sidequest ready --json
---brief` lists exactly this set, partitioned into **parallel-safe waves** by declared file scope.
-Fan out one wave at a time; worktrees isolate files, not runtime resources (ports, servers,
-databases), so serialize those collisions even inside a wave. A claim under a `--by` you don't
-recognize means another session may be working the board; flag it first. With
-`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` on, executors ARE teammates — use the teammate
-affordances, don't ignore them: answer scope requests over the mailbox, steer and resume with
-`SendMessage`, and never stop→redispatch work a message can fix. Wave mechanics,
-liveness, salvage, cost levers, agent teams:
-`references/orchestration.md`.
-
-## Category-first routing (ENFORCED)
-
-Sidequest owns ticket routing. Do not recreate a standalone Switchboard (a split-out router could
-only ever be a shared library imported by Sidequest). The live taxonomy is the routing authority:
-classify from it, persist the ID, and the category route resolves model and effort — never
-hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–10 →
-`coding.easy`/`normal`/`hard`) without persisting a category.
-
-1. **Classify before claim.** A `category: null` ticket gets stamped via `update --category <id>`
-   **before** claim or spawn, then re-read. Reads never silently persist a classification.
-2. **Trust the category projection.** Inject the read's category contract verbatim into the spawn
-   prompt alongside the ticket contract; do not narrow, rewrite, or invent around it.
-3. **The ticket read tells you exactly what to spawn.** Print `SQ-n · category · Model · effort`,
-   then spawn the exact `agent` a fresh `dispatch <ref>` returned through native Agent,
-   pass returned fields unchanged. If Agent omits `name`/`mode`, dispatch `reducedAgentSchema: true`; don't
-   restore them. First claim: hook `agent_id` + `permission_mode: auto|bypassPermissions`. **Claude routes**:
-   `model: exec.model` (otherwise it inherits the pricey session model), including Haiku. Use the dispatched
-   executor/model, never generic Agent. **Codex routes** (`exec.model` null): omit `model`; the route marker
-   carries the real model and any value runs Anthropic. Effort is verbatim; mismatched claims are refused.
-   Details: `references/routing-details.md`.
-4. **Claim by resolved route:** `next --model X` / `ready --model X` filter by resolved route.
-
-## Comments
-
-`comment SQ-3 -m` (durable handoff, keep working) · `comments SQ-3` (read the thread).
-**Comments are cross-actor handoffs**: decisions, constraints, ruled-out approaches, risks, exact
-verification command/result, concise findings. **Write findings back after an investigation**: root
-cause with evidence (`file:line`), the fix, verification.
-
-## Link tickets
-
-`sidequest link SQ-4 depends-on SQ-3` (stored on both sides) · `blocks` · `related` (non-blocking) ·
-`unlink` removes. A blocked ticket is skipped by `next` and excluded from `ready`.
-
-## Guidelines
-
-**Act, then report** the result (ref, status, or URL). **Keep titles tight**; detail goes in `-d`.
-**Don't invent tickets**: only file what the user raised. Reminders, stories, human assignment:
-`references/board-features.md`.
-
-**At a pause, report** Done / Running / Needs you / Next.
-
-
-## Frozen work provenance
-
-Only the main thread can set MCP `dispatch.workProvenance` before preparation. Its `kind` is
-`new-behavior`, `behavior-preserving-refactor`, `inherited-read-only`, `docs`, `type-annotation-only`,
-`fixture-only` or `builds-on` (a follow-up carrying pending submitted candidates whole; see `publishing.md`). Each source names a native producer ref, its exact `preparedAt` (current dispatch
-or an archived attempt) and an immutable owned `commit`, optionally a `captureId`. Missing
-`baseCommit`/`sanctionedCommits` derive from its captures; ambiguity, other gaps or a
-submission naming another candidate refuse by name. The board freezes base, scope, byte
-and capture identity. The source stays unaccepted on its producer.
-
-Unchanged inherited work and a declared GREEN behavior-preserving refactor do not need invented
-new reds. New owned behavior keeps its own control requirements. Source/test byte drift, changed
-producer generations, incompatible captures, worker self-grants and late declarations refuse.
-The declaration is factual provenance only: execution, quality and admission remain UNVERIFIED.
-It cannot rebind an old receipt or exempt held authored code. While its sources match, the
-dispatch submits normally with the frozen record; integration runs the pinned verifier.
-
-For your own never-claimed dispatch, use `dispatch { ref, retireOnly: true, reason }` (reason 20+ characters), or CLI `release <ref> --retire-prepared --reason "..."`. This records `retired_by_preparer` without failure evidence. Foreign sessions retain evidence and deadline guards; claimed attempts retain claim-owner recovery. See the recovery section in `references/orchestration.md`.
+`sidequest:plan` when the human decides what gets built, `run` for the frontier, `land` to merge, verify once and prove it for real, `tidy` for unused worktrees, `setup` (human-run) for which model takes which category.

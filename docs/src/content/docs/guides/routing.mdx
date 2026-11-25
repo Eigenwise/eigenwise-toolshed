@@ -1,0 +1,129 @@
+---
+title: How routing picks a model
+description: Each kind of work maps to a tier, and each tier to a model and an effort. One hook reads the start of an agent's prompt and applies the table.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<p class="lead">Finding a file should not cost what redesigning a module costs. Routing sends each piece of work to a model that fits it.</p>
+
+## The idea in three words
+
+**Category, tier, model.**
+
+- A **category** is a kind of work: `explore`, `build`, `review`.
+- A **tier** is a model plus an effort level: `light`, `standard`, `deep`, `top`.
+- Each category points at one tier.
+- The **route** is the result: the model and effort one piece of work runs on.
+
+To change which model does all the cheap work, you change one tier. To move one kind of work, you point its category at another tier.
+
+## The default table
+
+| Category | Who does it | Tier | Model and effort |
+| --- | --- | --- | --- |
+| `explore` | a scout, read-only | light | sonnet, low |
+| `research` | a scout, read-only | deep | opus, high |
+| `quick` | a worker | light | sonnet, low |
+| `build` | a worker | standard | sonnet, medium |
+| `hard` | a worker | deep | opus, high |
+| `debug` | a worker | deep | opus, high |
+| `review` | a scout, read-only | deep | opus, high |
+| `outside-code` | a reviewer with no shell | deep | opus, high |
+
+The `top` tier (fable, high) has no category by default. It is there for a category you point at it.
+
+A fresh install routes with this table. No setup is needed. The [reference](/reference/routing-defaults/) has the same table, generated from the plugin.
+
+## How one agent gets its route
+
+An agent is a helper session the main session starts for one piece of work. When that happens, one hook looks at the start of the agent's prompt.
+
+A **ticket** is one piece of work on the board, Sidequest's list of work in a project. Its id looks like `PL-12`.
+
+Checked in this order. The first match wins.
+
+| The call that starts the agent | The agent runs on |
+| --- | --- |
+| names a model | that model. Naming a model always wins. |
+| has a prompt that carries a route tag | the category in the tag, also when a ticket id comes first |
+| has a prompt that starts with a ticket id | the category of that ticket |
+| has none of these | the unrouted category, `build` by default |
+
+**A ticket id at the start of the prompt** routes on that ticket's category:
+
+```text
+PL-12 Retry a failed upload once before giving up ...
+```
+
+**A route tag** routes without any ticket:
+
+```text
+[route:explore] Find where failed uploads are retried and what decides the delay.
+```
+
+A ticket id followed by a tag, like `PL-12 [route:review]`, runs on the tag's category and still logs the run on the ticket.
+
+**Neither** runs on the `build` category, so plain fan-out does not land on your expensive session model.
+
+Each routed start shows in the chat as plain rows. The board's start reads `board PL-12 started: worker agent on sonnet, medium effort`, and the agent call under it reads `<description>: worker on sonnet, medium effort`.
+
+## Which agents are routed
+
+Only these get a routed model:
+
+- Sidequest's own roles: `sidequest:scout`, `sidequest:worker`, `sidequest:outside-code-reviewer`
+- the built-in `general-purpose`, `Explore` and `Plan` agents
+- workflow agents and teammates with no type of their own
+
+Any other agent type keeps the model its own definition names. A fork is left alone too.
+
+## The main session is not routed
+
+Routing is about the agents the session starts. The session you type in runs on the model you picked.
+
+Pick a mid-size model or better for it. On the smallest model, about 2 in 7 feature requests with several decisions were built before any question was asked.
+
+## Changing the table
+
+```text
+/sidequest:setup
+```
+
+It explores the project, then offers a preset.
+
+| Preset | What it does |
+| --- | --- |
+| **Balanced** | The default table above. |
+| **Thrifty** | Light work on haiku. Deep and top on opus. |
+| **Max quality** | Standard work on opus. Deep and top on fable. |
+
+It writes `.sidequest/board.json`. You can also edit that file by hand: move a category, change a tier, or add a category of your own with a name, a tier, a role and one line of description. Deleting the file brings the default routing back. The board writes the file again, with the id counters and the prefix taken from the tickets on disk, and says so. Any settings it held are at their defaults.
+
+Only you start setup. Claude never starts it by itself.
+
+## Seeing what is in force
+
+Ask Claude to show the routing. It reads the board's `routing` view, which prints one line per category:
+
+```text
+explore: scout, tier light, sonnet/low. Find and explain how existing code works.
+build: worker, tier standard, sonnet/medium. Ordinary feature or fix. The default.
+review: scout, tier deep, opus/high. Independent review of finished work.
+```
+
+## When routing seems ignored
+
+Three settings silently defeat it.
+
+| Setting | Effect |
+| --- | --- |
+| `CLAUDE_CODE_EFFORT_LEVEL` | One effort for every agent. Routed effort is ignored. |
+| `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` | One model for every agent. |
+| `availableModels` | A model the table uses may be blocked, and the agent falls back. |
+
+`/quartermaster:inspect` checks all three and names where each is set.
+
+<Aside type="note" title="Models from other providers">
+Routing works with Claude models only. There is no gateway and no way to route to another provider's model.
+</Aside>

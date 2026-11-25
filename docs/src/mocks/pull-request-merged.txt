@@ -1,0 +1,9 @@
+PAY-41 Retry a failed upload and list what still failed          Merged
+
+- A failed upload is tried once more, for imports and the share
+  sheet.
+- The import summary lists the photos that still failed.
+- "Try again" uploads only those.
+
+Checked: 16 tests, and an import of 12 photos with the network cut
+for 3.

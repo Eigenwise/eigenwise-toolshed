@@ -1,0 +1,676 @@
+---
+/**
+ * Sexy sequence diagram component. Same visual language as <Diagram>.
+ *
+ *   <Sequence
+ *     caption="..."
+ *     actors={[
+ *       { id: 'sdk', label: 'SDK HANDLER', sub: 'ctx.confirm(...)', icon: 'window' },
+ *       { id: 'gw',  label: 'GATEWAY', icon: 'bridge', variant: 'accent' },
+ *       { id: 'ag',  label: 'AGENT', icon: 'agent' },
+ *       { id: 'u',   label: 'USER', icon: 'user' },
+ *     ]}
+ *     steps={[
+ *       { from: 'sdk', to: 'gw', label: 'elicitation/request { question, schema }' },
+ *       { from: 'gw',  to: 'ag', label: 'MCP elicitation/elicit' },
+ *       { note: 'ag',  label: 'shows Accept/Decline' },
+ *       { from: 'ag',  to: 'u',  label: 'prompt', style: 'dashed' },
+ *       { from: 'u',   to: 'ag', label: 'click', style: 'dashed' },
+ *       { from: 'ag',  to: 'gw', label: 'elicitation result' },
+ *       { from: 'gw',  to: 'sdk', label: '{ action, value? }' },
+ *     ]}
+ *   />
+ */
+
+type Variant = 'neutral' | 'accent' | 'danger';
+type IconName =
+  | 'user'
+  | 'window'
+  | 'bridge'
+  | 'agent'
+  | 'shield'
+  | 'lock'
+  | 'cube'
+  | 'packages'
+  | 'server'
+  | 'database'
+  | 'check'
+  | 'x'
+  | 'arrow';
+
+interface ActorSpec {
+  id: string;
+  label: string;
+  sub?: string;
+  icon?: IconName;
+  variant?: Variant;
+}
+
+interface MessageStep {
+  from: string;
+  to: string;
+  label: string;
+  style?: 'solid' | 'dashed';
+  accent?: boolean;
+  danger?: boolean;
+}
+
+interface NoteStep {
+  /** Id of a single actor, or array of actor ids to span. */
+  note: string | string[];
+  label: string;
+  variant?: Variant;
+}
+
+interface SelfStep {
+  /** Self-arrow on one actor: loops back. */
+  self: string;
+  label: string;
+  style?: 'solid' | 'dashed';
+}
+
+type Step = MessageStep | NoteStep | SelfStep;
+
+interface Props {
+  actors: ActorSpec[];
+  steps: Step[];
+  caption?: string;
+  actorWidth?: number;
+  actorHeight?: number;
+  actorGap?: number;
+  rowHeight?: number;
+  pad?: number;
+}
+
+const {
+  actors,
+  steps,
+  caption,
+  actorWidth = 210,
+  actorHeight = 96,
+  actorGap = 100,
+  rowHeight = 82,
+  pad = 56,
+} = Astro.props;
+
+// Helpers
+const isMessage = (s: Step): s is MessageStep => 'from' in s && 'to' in s;
+const isNote = (s: Step): s is NoteStep => 'note' in s;
+const isSelf = (s: Step): s is SelfStep => 'self' in s;
+
+// Icons (same set as Diagram)
+const icons: Record<IconName, string> = {
+  user: `<circle cx="10" cy="7" r="3.6"/><path d="M3 20 a7 7 0 0 1 14 0"/>`,
+  window: `<rect x="1" y="2" width="18" height="16" rx="2"/><path d="M1 6 H19"/><circle cx="4" cy="4" r="0.7" fill="currentColor" stroke="none"/><circle cx="7" cy="4" r="0.7" fill="currentColor" stroke="none"/>`,
+  bridge: `<path d="M3 7 H17"/><path d="M14 4 L18 7 L14 10"/><path d="M17 13 H3"/><path d="M6 10 L2 13 L6 16"/>`,
+  agent: `<path d="M10 1.5 L12 8 L18.5 10 L12 12 L10 18.5 L8 12 L1.5 10 L8 8 Z"/>`,
+  shield: `<path d="M10 2 L17 5 V10 C17 14 14 17 10 19 C6 17 3 14 3 10 V5 Z"/>`,
+  lock: `<rect x="3" y="9" width="14" height="10" rx="2"/><path d="M6 9 V6 a4 4 0 0 1 8 0 V9"/>`,
+  cube: `<path d="M10 2 L18 6 V14 L10 18 L2 14 V6 Z"/><path d="M2 6 L10 10 L18 6"/><path d="M10 10 V18"/>`,
+  packages: `<rect x="1.5" y="1.5" width="7" height="7" rx="1"/><rect x="11.5" y="1.5" width="7" height="7" rx="1"/><rect x="6.5" y="11.5" width="7" height="7" rx="1"/>`,
+  server: `<rect x="2" y="3" width="16" height="6" rx="1.5"/><rect x="2" y="11" width="16" height="6" rx="1.5"/><circle cx="6" cy="6" r="0.7" fill="currentColor" stroke="none"/><circle cx="6" cy="14" r="0.7" fill="currentColor" stroke="none"/>`,
+  database: `<ellipse cx="10" cy="4" rx="8" ry="2.2"/><path d="M2 4 V16 a8 2.2 0 0 0 16 0 V4"/><path d="M2 10 a8 2.2 0 0 0 16 0"/>`,
+  check: `<path d="M4 10 L8 14 L16 5"/>`,
+  x: `<path d="M5 5 L15 15 M15 5 L5 15"/>`,
+  arrow: `<path d="M4 10 H16 M11 5 L16 10 L11 15"/>`,
+};
+
+// --- Layout ---
+const actorIndexById = new Map(actors.map((a, i) => [a.id, i] as const));
+
+function actorCenterX(i: number) {
+  return pad + i * (actorWidth + actorGap) + actorWidth / 2;
+}
+
+const canvasW = pad * 2 + actors.length * actorWidth + (actors.length - 1) * actorGap;
+
+// Reserve vertical layout:
+//   pad (top)
+//   actorHeight  (actor cards)
+//   32 px        (gap + lifeline top)
+//   steps.length * rowHeight
+//   24 px        (pad bottom before figcaption)
+//   pad (bottom)
+const lifelineTop = pad + actorHeight + 18;
+const firstRowY = lifelineTop + 44;
+const canvasH = firstRowY + steps.length * rowHeight + 28 + pad;
+
+// Pre-compute step rows with auto-numbering (skip notes).
+let nextNumber = 1;
+const stepRows = steps.map((step, i) => {
+  const y = firstRowY + i * rowHeight;
+  const number = !isNote(step) ? nextNumber++ : null;
+  return { step, y, number };
+});
+
+const lifelineBottom = canvasH - pad - 8;
+
+// Wrap long labels into multiple lines so wide pills don't spill across
+// neighbouring lifelines. Break at word / punctuation boundaries.
+// ~7 px/char at 13px Inter; aim for maxChars characters per line.
+function wrapLabel(label: string, maxChars = 32): string[] {
+  if (label.length <= maxChars) return [label];
+  const tokens = label.split(/(\s+|(?<=[,{}]))/).filter((t) => t.length > 0);
+  const lines: string[] = [];
+  let current = '';
+  for (const token of tokens) {
+    if (!current) {
+      current = token.trimStart();
+    } else if ((current + token).length <= maxChars) {
+      current += token;
+    } else {
+      lines.push(current.trimEnd());
+      current = token.trimStart();
+    }
+  }
+  if (current) lines.push(current.trimEnd());
+  return lines.length > 0 ? lines : [label];
+}
+
+// Clamp helper for label pill width (longest wrapped line).
+// 6.2 px/char avg for 13 px Inter; 16 px total horizontal padding.
+const PILL_CHAR_W = 6.2;
+const PILL_PAD_X = 16;
+
+function pillWidth(lines: string[] | string, maxWidth = 360) {
+  const arr = Array.isArray(lines) ? lines : [lines];
+  const longest = arr.reduce((max, l) => (l.length > max ? l.length : max), 0);
+  return Math.min(maxWidth, Math.max(54, Math.round(longest * PILL_CHAR_W + PILL_PAD_X)));
+}
+
+// Build a clickable id for aria
+const rootId = `seq-${Math.random().toString(36).slice(2, 8)}`;
+---
+
+<figure class="sq-figure">
+  <div class="sq-scroll">
+    <svg
+      class="sq-svg"
+      width={canvasW}
+      height={canvasH}
+      viewBox={`0 0 ${canvasW} ${canvasH}`}
+      role="img"
+      aria-labelledby={`${rootId}-title`}
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <title id={`${rootId}-title`}>{caption ?? "sequence diagram"}</title>
+
+      <defs>
+        <pattern id={`${rootId}-dots`} width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1.2" cy="1.2" r="1.2" fill="var(--dgm-grid)"></circle>
+        </pattern>
+
+        <linearGradient id={`${rootId}-card-neutral`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-card-neutral-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-card-neutral-2)"></stop>
+        </linearGradient>
+        <linearGradient id={`${rootId}-card-accent`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-card-accent-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-card-accent-2)"></stop>
+        </linearGradient>
+        <linearGradient id={`${rootId}-card-danger`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-card-danger-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-card-danger-2)"></stop>
+        </linearGradient>
+
+        <linearGradient id={`${rootId}-border-accent`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-accent-border-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-accent-border-2)"></stop>
+        </linearGradient>
+        <linearGradient id={`${rootId}-border-danger`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-danger-border-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-danger-border-2)"></stop>
+        </linearGradient>
+
+        <filter id={`${rootId}-glow-accent`} x="-30%" y="-60%" width="160%" height="220%">
+          <feGaussianBlur stdDeviation="10" result="b"></feGaussianBlur>
+          <feColorMatrix
+            in="b"
+            type="matrix"
+            values="0 0 0 0 0.98  0 0 0 0 0.73  0 0 0 0 0.14  0 0 0 0.55 0"></feColorMatrix>
+        </filter>
+        <filter id={`${rootId}-glow-danger`} x="-30%" y="-60%" width="160%" height="220%">
+          <feGaussianBlur stdDeviation="10" result="b"></feGaussianBlur>
+          <feColorMatrix
+            in="b"
+            type="matrix"
+            values="0 0 0 0 0.86  0 0 0 0 0.15  0 0 0 0 0.15  0 0 0 0.50 0"></feColorMatrix>
+        </filter>
+
+        <filter id={`${rootId}-shadow`} x="-10%" y="-10%" width="120%" height="140%">
+          <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="var(--dgm-shadow-color)" flood-opacity="var(--dgm-shadow-opacity-1)"></feDropShadow>
+          <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="var(--dgm-shadow-color)" flood-opacity="var(--dgm-shadow-opacity-2)"></feDropShadow>
+        </filter>
+
+        {/* No <marker> defs: arrows are rendered as <line/path> + <polygon> pairs. */}
+      </defs>
+
+      {/* Dotted bg */}
+      <rect width="100%" height="100%" fill={`url(#${rootId}-dots)`}></rect>
+
+      {/* Accent glow behind accent actors */}
+      {
+        actors.map((a, i) => {
+          const v = a.variant ?? "neutral";
+          if (v === "neutral") return null;
+          const cx = actorCenterX(i);
+          const cy = pad + actorHeight / 2;
+          const filter = v === "accent" ? `url(#${rootId}-glow-accent)` : `url(#${rootId}-glow-danger)`;
+          const fill = v === "accent" ? "var(--dgm-accent)" : "var(--dgm-danger)";
+          return <ellipse cx={cx} cy={cy} rx={actorWidth * 0.5} ry={actorHeight * 0.55} fill={fill} filter={filter} opacity="0.45" />;
+        })
+      }
+
+      {/* Lifelines */}
+      {
+        actors.map((_, i) => {
+          const x = actorCenterX(i);
+          return (
+            <line
+              x1={x}
+              y1={lifelineTop}
+              x2={x}
+              y2={lifelineBottom}
+              stroke="var(--dgm-line)"
+              stroke-width="1.25"
+              stroke-dasharray="3 5"
+              opacity="0.6"
+            />
+          );
+        })
+      }
+
+      {/* Actor cards: content centred vertically for consistent spacing. */}
+      {
+        actors.map((a, i) => {
+          const v = a.variant ?? "neutral";
+          const x = pad + i * (actorWidth + actorGap);
+          const y = pad;
+          const fill = `url(#${rootId}-card-${v})`;
+          const stroke = v === "accent"
+            ? `url(#${rootId}-border-accent)`
+            : v === "danger"
+              ? `url(#${rootId}-border-danger)`
+              : "var(--dgm-border)";
+          const iconPath = a.icon ? icons[a.icon] : null;
+          const cls = `sq-actor sq-actor-${v}`;
+
+          const ICON_H = 20;
+          const TITLE_H = 16;
+          const GAP_ICON_TITLE = 8;
+          const GAP_TITLE_SUB = 8;
+          const SUB_H = 14;
+
+          const hasIcon = !!iconPath;
+          const hasSub = !!a.sub;
+          let stackH = 0;
+          if (hasIcon) stackH += ICON_H + GAP_ICON_TITLE;
+          stackH += TITLE_H;
+          if (hasSub) stackH += GAP_TITLE_SUB + SUB_H;
+
+          const stackTop = y + Math.max(8, (actorHeight - stackH) / 2);
+          let cursor = stackTop;
+          const iconY = hasIcon ? cursor : null;
+          if (hasIcon) cursor += ICON_H + GAP_ICON_TITLE;
+          const titleY = cursor + TITLE_H - 3;
+          cursor += TITLE_H;
+          const subY = hasSub ? cursor + GAP_TITLE_SUB + SUB_H - 3 : null;
+
+          return (
+            <g class={cls}>
+              <rect
+                x={x}
+                y={y}
+                width={actorWidth}
+                height={actorHeight}
+                rx="14"
+                fill={fill}
+                stroke={stroke}
+                stroke-width="1.25"
+                filter={`url(#${rootId}-shadow)`}
+              />
+              {
+                hasIcon && iconY !== null && (
+                  <g
+                    class="sq-icon"
+                    transform={`translate(${x + actorWidth / 2 - 10}, ${iconY})`}
+                    fill="none"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    set:html={iconPath!}
+                  />
+                )
+              }
+              <text x={x + actorWidth / 2} y={titleY} text-anchor="middle" class="sq-title">{a.label}</text>
+              {hasSub && subY !== null && <text x={x + actorWidth / 2} y={subY} text-anchor="middle" class="sq-sub">{a.sub}</text>}
+            </g>
+          );
+        })
+      }
+
+      {/* Steps */}
+      {
+        stepRows.map(({ step, y, number }) => {
+          // NOTE
+          if (isNote(step)) {
+            const overIds = Array.isArray(step.note) ? step.note : [step.note];
+            const idxs = overIds.map((id) => actorIndexById.get(id)).filter((i): i is number => i !== undefined);
+            if (idxs.length === 0) return null;
+            const minIdx = Math.min(...idxs);
+            const maxIdx = Math.max(...idxs);
+            // Note pill is centred on the span of the referenced actors but
+            // its width grows with the text (and the text wraps to multiple
+            // lines when too long for a reasonable width).
+            const spanLeft = actorCenterX(minIdx);
+            const spanRight = actorCenterX(maxIdx);
+            const spanCenter = (spanLeft + spanRight) / 2;
+            const minWidth = Math.max(120, spanRight - spanLeft + 60);
+            const NOTE_CHAR_W = 7;
+            const NOTE_PAD_X = 24;
+            // Max width: keep within the visible content area (canvas minus
+            // some breathing room). Prefer 1.8x actor width as a natural cap.
+            const maxWidth = Math.min(actorWidth * 1.9, canvasW - pad * 2);
+            const maxChars = Math.max(18, Math.floor((maxWidth - NOTE_PAD_X) / NOTE_CHAR_W));
+            const noteLines = wrapLabel(step.label, maxChars);
+            const longest = noteLines.reduce((m, l) => (l.length > m ? l.length : m), 0);
+            const width = Math.min(
+              maxWidth,
+              Math.max(minWidth, Math.round(longest * NOTE_CHAR_W + NOTE_PAD_X))
+            );
+            const LINE_H = 16;
+            const height = Math.max(30, noteLines.length * LINE_H + 14);
+            const left = spanCenter - width / 2;
+            const rectY = y - height / 2;
+            const firstLineY = rectY + (height - noteLines.length * LINE_H) / 2 + 12;
+            const v = step.variant ?? "neutral";
+            const fill = `url(#${rootId}-card-${v})`;
+            const stroke = v === "accent"
+              ? `url(#${rootId}-border-accent)`
+              : v === "danger"
+                ? `url(#${rootId}-border-danger)`
+                : "var(--dgm-border)";
+            return (
+              <g>
+                <rect
+                  x={left}
+                  y={rectY}
+                  width={width}
+                  height={height}
+                  rx="8"
+                  fill={fill}
+                  stroke={stroke}
+                  stroke-width="1.25"
+                  filter={`url(#${rootId}-shadow)`}
+                />
+                {
+                  noteLines.map((line, li) => (
+                    <text
+                      x={spanCenter}
+                      y={firstLineY + li * LINE_H}
+                      text-anchor="middle"
+                      class="sq-note-text"
+                    >
+                      {line}
+                    </text>
+                  ))
+                }
+              </g>
+            );
+          }
+
+          // SELF-MESSAGE (loop on one actor)
+          if (isSelf(step)) {
+            const idx = actorIndexById.get(step.self);
+            if (idx === undefined) return null;
+            const x = actorCenterX(idx);
+            // Curve from (x, y-8) out to (x+40, *) and back to (x+10, y+8);
+            // leave the last 10 px for the arrowhead triangle.
+            const d = `M ${x} ${y - 8} C ${x + 40} ${y - 8}, ${x + 40} ${y + 8}, ${x + 10} ${y + 8}`;
+            const dash = step.style === "dashed" ? "5 4" : undefined;
+            const tipPoly = `${x + 10},${y + 3} ${x},${y + 8} ${x + 10},${y + 13}`;
+            return (
+              <g>
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="var(--dgm-line-strong)"
+                  stroke-width="1.75"
+                  stroke-linecap="butt"
+                  stroke-dasharray={dash}
+                />
+                <polygon points={tipPoly} fill="var(--dgm-line-strong)" />
+                <g>
+                  <rect
+                    x={x + 52}
+                    y={y - 11}
+                    width={pillWidth(step.label)}
+                    height="22"
+                    rx="7"
+                    fill="var(--dgm-pill-bg)"
+                    stroke="var(--dgm-pill-border)"
+                    stroke-width="1"
+                  />
+                  <text x={x + 52 + pillWidth(step.label) / 2} y={y + 4} text-anchor="middle" class="sq-lbl">{step.label}</text>
+                </g>
+              </g>
+            );
+          }
+
+          // MESSAGE
+          if (isMessage(step)) {
+            const fi = actorIndexById.get(step.from);
+            const ti = actorIndexById.get(step.to);
+            if (fi === undefined || ti === undefined) return null;
+            const fromX = actorCenterX(fi);
+            const toX = actorCenterX(ti);
+            const reverse = fromX > toX;
+            const arrowY = y + 8;
+            const dash = step.style === "dashed" ? "5 4" : undefined;
+            const stroke = step.danger
+              ? "var(--dgm-danger)"
+              : step.accent
+                ? "var(--dgm-accent)"
+                : "var(--dgm-line-strong)";
+            const midX = (fromX + toX) / 2;
+            // Wrap label: long messages break into multi-line pills so the
+            // pill stays inside the from/to lane. Reserve ~32 px on the
+            // source side (10 px number circle radius + 6 px gap + 16 px
+            // safety) and ~24 px on the target side (10 px arrowhead + 14 px
+            // safety) so the pill can't overlap either glyph.
+            const arrowSpan = Math.abs(toX - fromX);
+            const RESERVED = 72;
+            const maxChars = Math.max(14, Math.floor((arrowSpan - RESERVED - PILL_PAD_X) / PILL_CHAR_W));
+            const lines = wrapLabel(step.label, maxChars);
+            const pw = pillWidth(lines);
+            const lineHeight = 15;
+            const ph = Math.max(24, lines.length * lineHeight + 10);
+            const pillTop = arrowY - ph / 2;
+            const borderColor = step.danger
+              ? "var(--dgm-danger)"
+              : step.accent
+                ? "var(--dgm-accent)"
+                : "var(--dgm-pill-border)";
+            const textColor = step.danger
+              ? "var(--dgm-danger-text)"
+              : step.accent
+                ? "var(--dgm-accent-text)"
+                : "var(--dgm-pill-text)";
+            // Number circle: anchored on the source end of the arrow.
+            const nx = reverse ? fromX - 16 : fromX + 16;
+            const srcX = reverse ? fromX - 6 : fromX + 6;
+            const dstX = reverse ? toX + 6 : toX - 6;
+            const tipX = dstX;
+            const baseX = reverse ? tipX + 10 : tipX - 10;
+            const lineEndX = baseX;
+            const tipPoly = `${baseX},${arrowY - 5} ${tipX},${arrowY} ${baseX},${arrowY + 5}`;
+            const firstLineY = pillTop + (ph - lines.length * lineHeight) / 2 + 11;
+            return (
+              <g>
+                <line
+                  x1={srcX}
+                  y1={arrowY}
+                  x2={lineEndX}
+                  y2={arrowY}
+                  stroke={stroke}
+                  stroke-width="1.75"
+                  stroke-linecap="butt"
+                  stroke-dasharray={dash}
+                />
+                <polygon points={tipPoly} fill={stroke} />
+                {
+                  number !== null && (
+                    <g class="sq-num">
+                      <circle cx={nx} cy={arrowY} r="10" fill="var(--dgm-pill-bg)" stroke={stroke} stroke-width="1.5" />
+                      <text x={nx} y={arrowY + 3.5} text-anchor="middle" class="sq-num-text">{number}</text>
+                    </g>
+                  )
+                }
+                {/* Label pill: multi-line, centered ON the arrow line. */}
+                <g>
+                  <rect
+                    x={midX - pw / 2}
+                    y={pillTop}
+                    width={pw}
+                    height={ph}
+                    rx="7"
+                    fill="var(--dgm-pill-bg)"
+                    stroke={borderColor}
+                    stroke-width="1"
+                  />
+                  {
+                    lines.map((line, li) => (
+                      <text
+                        x={midX}
+                        y={firstLineY + li * lineHeight}
+                        text-anchor="middle"
+                        class="sq-lbl"
+                        style={`fill: ${textColor};`}
+                      >
+                        {line}
+                      </text>
+                    ))
+                  }
+                </g>
+              </g>
+            );
+          }
+
+          return null;
+        })
+      }
+    </svg>
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style is:global>
+  figure.sq-figure {
+    /* Inherit tokens from Diagram if present; else define locally. */
+    --dgm-grid: rgba(148, 163, 184, 0.35);
+    --dgm-border: #cbd5e1;
+    --dgm-shadow-color: #0f172a;
+    --dgm-shadow-opacity-1: 0.06;
+    --dgm-shadow-opacity-2: 0.04;
+
+    --dgm-card-neutral-1: #ffffff;
+    --dgm-card-neutral-2: #f1f5f9;
+    --dgm-card-accent-1: #f6fffd;
+    --dgm-card-accent-2: #ccfbf1;
+    --dgm-card-danger-1: #fef2f2;
+    --dgm-card-danger-2: #fee2e2;
+
+    --dgm-accent-border-1: #2dd4bf;
+    --dgm-accent-border-2: #0d9488;
+    --dgm-danger-border-1: #f87171;
+    --dgm-danger-border-2: #b91c1c;
+
+    --dgm-accent: #14b8a6;
+    --dgm-accent-text: #0f766e;
+    --dgm-danger: #dc2626;
+    --dgm-danger-text: #b91c1c;
+
+    --dgm-line: #94a3b8;
+    --dgm-line-strong: #64748b;
+    --dgm-text: #0f172a;
+    --dgm-text-muted: #475569;
+    --dgm-icon: #64748b;
+    --dgm-icon-accent: #0d9488;
+    --dgm-icon-danger: #dc2626;
+
+    --dgm-pill-bg: #ffffff;
+    --dgm-pill-border: #e2e8f0;
+    --dgm-pill-text: #334155;
+
+    margin: 1.75rem 0;
+    padding: 1.25rem 1.5rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 16px;
+    background: var(--sl-color-bg-sidebar);
+  }
+
+  :root[data-theme="dark"] figure.sq-figure {
+    --dgm-grid: rgba(51, 65, 85, 0.55);
+    --dgm-border: #334155;
+    --dgm-shadow-color: #000000;
+    --dgm-shadow-opacity-1: 0.45;
+    --dgm-shadow-opacity-2: 0.35;
+
+    --dgm-card-neutral-1: #172033;
+    --dgm-card-neutral-2: #0f172a;
+    --dgm-card-accent-1: #0a2a26;
+    --dgm-card-accent-2: #071c1a;
+    --dgm-card-danger-1: #2a0f0f;
+    --dgm-card-danger-2: #1c0a0a;
+
+    --dgm-accent-border-1: #5eead4;
+    --dgm-accent-border-2: #0d9488;
+    --dgm-danger-border-1: #fca5a5;
+    --dgm-danger-border-2: #b91c1c;
+
+    --dgm-accent-text: #5eead4;
+    --dgm-danger-text: #fca5a5;
+
+    --dgm-line: #64748b;
+    --dgm-line-strong: #cbd5e1;
+    --dgm-text: #e2e8f0;
+    --dgm-text-muted: #94a3b8;
+    --dgm-icon: #94a3b8;
+    --dgm-icon-accent: #5eead4;
+    --dgm-icon-danger: #fca5a5;
+
+    --dgm-pill-bg: #0f172a;
+    --dgm-pill-border: #334155;
+    --dgm-pill-text: #cbd5e1;
+  }
+
+  figure.sq-figure .sq-scroll {
+    overflow-x: auto;
+    margin: 0 -0.25rem;
+    padding: 0 0.25rem 0.25rem;
+  }
+  figure.sq-figure svg.sq-svg {
+    display: block;
+    margin-inline: auto;
+    max-width: none;
+    height: auto;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  figure.sq-figure figcaption { margin-top: 0.9rem; font-size: 0.85rem; color: var(--sl-color-gray-3); text-align: center; }
+
+  figure.sq-figure .sq-title { font: 600 15px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.08em; fill: var(--dgm-text); }
+  figure.sq-figure .sq-actor-accent .sq-title { fill: var(--dgm-accent-text); }
+  figure.sq-figure .sq-actor-danger .sq-title { fill: var(--dgm-danger-text); }
+
+  figure.sq-figure .sq-sub { font: 400 12.5px/1 "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; fill: var(--dgm-text-muted); }
+  figure.sq-figure .sq-actor-accent .sq-sub { fill: var(--dgm-accent-text); opacity: 0.9; }
+  figure.sq-figure .sq-actor-danger .sq-sub { fill: var(--dgm-danger-text); opacity: 0.9; }
+
+  figure.sq-figure .sq-lbl { font: 500 13px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.01em; fill: var(--dgm-pill-text); }
+  figure.sq-figure .sq-note-text { font: 500 14px/1 Inter, ui-sans-serif, system-ui, sans-serif; fill: var(--dgm-text); font-style: italic; }
+  figure.sq-figure .sq-num-text { font: 600 11.5px/1 Inter, ui-sans-serif, system-ui, sans-serif; fill: var(--dgm-text-muted); }
+
+  figure.sq-figure .sq-icon { color: var(--dgm-icon); stroke: var(--dgm-icon); }
+  figure.sq-figure .sq-actor-accent .sq-icon { color: var(--dgm-icon-accent); stroke: var(--dgm-icon-accent); }
+  figure.sq-figure .sq-actor-danger .sq-icon { color: var(--dgm-icon-danger); stroke: var(--dgm-icon-danger); }
+</style>

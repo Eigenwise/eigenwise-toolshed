@@ -1,0 +1,32 @@
+---
+/**
+ * A terminal window drawn from text.
+ *
+ *   import install from '../../../mocks/install.txt?raw';
+ *   <Terminal title="Terminal" text={install} />
+ *
+ * See MockLines.astro for what the first characters of a line mean.
+ */
+import MockLines from './MockLines.astro';
+
+interface Props {
+  text: string;
+  title?: string;
+  caption?: string;
+}
+
+const { text, title = 'Terminal', caption = 'A text drawing of what the tool prints.' } = Astro.props;
+if (caption && !/text drawing/i.test(caption)) throw new Error(`A text frame's caption must say it is a text drawing: ${caption}`);
+---
+
+<figure class="mock-figure not-content">
+  <div class="mock-window mock-terminal" role="img" aria-label={`${title}, shown as text`}>
+    <div class="mock-bar" aria-hidden="true">
+      <span class="mock-dots"><i></i><i></i><i></i></span>
+      <span class="mock-title">{title}</span>
+      <span class="mock-tag">text drawing</span>
+    </div>
+    <pre class="mock-body"><MockLines text={text} /></pre>
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

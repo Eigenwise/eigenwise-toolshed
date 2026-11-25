@@ -1,0 +1,240 @@
+---
+/**
+ * <Mermaid code={`<diagram source>`} caption="optional" />
+ *
+ * Renders Mermaid client-side so the component can re-render on Starlight's
+ * dark/light toggle with a tuned palette per mode. The source is passed as
+ * a prop (not a slot) because MDX otherwise mangles `<`, `>`, `&`.
+ *
+ * Engine config:
+ *   - ELK layout (orthogonal edge routing, no diagonals)
+ *   - look: "classic" with heavy themeCSS overrides for modern shapes
+ *   - "basis" curve fallback for non-ELK diagrams
+ */
+interface Props {
+  code: string;
+  caption?: string;
+  label?: string;
+}
+
+const { code, caption, label } = Astro.props;
+
+// Stable-ish id so multiple diagrams on one page don't collide.
+const rand = Math.random().toString(36).slice(2, 9);
+const id = `m-${rand}`;
+---
+
+<figure class="mermaid-figure" data-mermaid-figure>
+  <div class="mermaid-body">
+    <pre class="mermaid" id={id} aria-label={label ?? caption ?? "diagram"}>{code.trim()}</pre>
+  </div>
+  {caption ? <figcaption>{caption}</figcaption> : null}
+</figure>
+
+<script>
+  import mermaid from "mermaid";
+  import elkLayouts from "@mermaid-js/layout-elk";
+
+  mermaid.registerLayoutLoaders(elkLayouts);
+
+  // Palette pulled from docs/src/styles/theme.css: keep synced.
+  const LIGHT = {
+    background: "transparent",
+    primaryColor: "#ccfbf1",
+    primaryTextColor: "#1b1f27",
+    primaryBorderColor: "#0d9488",
+    secondaryColor: "#dbeafe",
+    secondaryTextColor: "#1e3a8a",
+    secondaryBorderColor: "#3b6bb3",
+    tertiaryColor: "#ede9fe",
+    tertiaryTextColor: "#4c1d95",
+    tertiaryBorderColor: "#6b46c1",
+    lineColor: "#334155",
+    textColor: "#1b1f27",
+    mainBkg: "#ccfbf1",
+    nodeBorder: "#0d9488",
+    clusterBkg: "#fafafa",
+    clusterBorder: "#cbd5e1",
+    defaultLinkColor: "#334155",
+    edgeLabelBackground: "#ffffff",
+    actorBkg: "#ccfbf1",
+    actorBorder: "#0d9488",
+    actorTextColor: "#1b1f27",
+    actorLineColor: "#94a3b8",
+    labelBoxBkgColor: "#ccfbf1",
+    labelBoxBorderColor: "#0f766e",
+    labelTextColor: "#134e4a",
+    noteBkgColor: "#f0fdfa",
+    noteBorderColor: "#0d9488",
+    noteTextColor: "#134e4a",
+    signalColor: "#334155",
+    signalTextColor: "#1b1f27",
+    activationBkgColor: "#99f6e4",
+    activationBorderColor: "#0d9488",
+    sequenceNumberColor: "#ffffff",
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+    fontSize: "14px",
+  };
+
+  const DARK = {
+    background: "transparent",
+    primaryColor: "#0a2a26",
+    primaryTextColor: "#99f6e4",
+    primaryBorderColor: "#14b8a6",
+    secondaryColor: "#0f1f3d",
+    secondaryTextColor: "#bfdbfe",
+    secondaryBorderColor: "#60a5fa",
+    tertiaryColor: "#241538",
+    tertiaryTextColor: "#ddd6fe",
+    tertiaryBorderColor: "#a78bfa",
+    lineColor: "#cbd5e1",
+    textColor: "#e2e8f0",
+    mainBkg: "#0a2a26",
+    nodeBorder: "#14b8a6",
+    clusterBkg: "#0c1424",
+    clusterBorder: "#334155",
+    defaultLinkColor: "#cbd5e1",
+    edgeLabelBackground: "#111a2c",
+    actorBkg: "#0a2a26",
+    actorBorder: "#14b8a6",
+    actorTextColor: "#99f6e4",
+    actorLineColor: "#475569",
+    labelBoxBkgColor: "#0a2a26",
+    labelBoxBorderColor: "#14b8a6",
+    labelTextColor: "#99f6e4",
+    noteBkgColor: "#071c1a",
+    noteBorderColor: "#0d9488",
+    noteTextColor: "#99f6e4",
+    signalColor: "#cbd5e1",
+    signalTextColor: "#e2e8f0",
+    activationBkgColor: "#0f3f3a",
+    activationBorderColor: "#14b8a6",
+    sequenceNumberColor: "#0d1017",
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+    fontSize: "14px",
+  };
+
+  // Heavy CSS overrides: rounded corners, thicker strokes, subtle shadow,
+  // drop the boxy look.
+  const THEME_CSS = `
+    .root > g > .nodes .node rect,
+    .root > g > .nodes .node polygon,
+    .root > g > .nodes .node path {
+      stroke-width: 1.75px;
+      rx: 12; ry: 12;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.08));
+    }
+    .node .label { font-weight: 500; }
+    .cluster rect { rx: 16; ry: 16; stroke-width: 1.25px; stroke-dasharray: 0; }
+    .cluster .cluster-label { font-weight: 600; letter-spacing: 0.01em; }
+    .edgePath .path { stroke-width: 1.75px; stroke-linecap: round; stroke-linejoin: round; }
+    .edgeLabel { font-weight: 500; padding: 0 4px; border-radius: 6px; }
+    .actor { rx: 10; ry: 10; stroke-width: 1.75px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.08)); }
+    .messageText { font-weight: 500; }
+    .note { rx: 10; ry: 10; }
+    text { letter-spacing: 0.005em; }
+  `;
+
+  function isDark() {
+    return document.documentElement.dataset.theme === "dark";
+  }
+
+  async function renderAll() {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "base",
+      themeVariables: isDark() ? DARK : LIGHT,
+      themeCSS: THEME_CSS,
+      securityLevel: "loose",
+      look: "classic",
+      layout: "elk",
+      flowchart: {
+        htmlLabels: true,
+        padding: 18,
+        nodeSpacing: 50,
+        rankSpacing: 70,
+        curve: "basis",
+        useMaxWidth: true,
+      },
+      sequence: {
+        diagramMarginX: 24,
+        diagramMarginY: 12,
+        actorMargin: 55,
+        boxMargin: 10,
+        messageMargin: 32,
+        mirrorActors: false,
+        showSequenceNumbers: false,
+        useMaxWidth: true,
+      },
+      state: { useMaxWidth: true },
+      class: { useMaxWidth: true },
+    });
+
+    for (const node of document.querySelectorAll<HTMLElement>("pre.mermaid")) {
+      // Stash the original source once so we can re-render on theme toggle.
+      if (!node.dataset.source) node.dataset.source = node.textContent ?? "";
+      node.innerHTML = node.dataset.source;
+      node.removeAttribute("data-processed");
+    }
+
+    const nodes = document.querySelectorAll<HTMLElement>("pre.mermaid");
+    if (nodes.length > 0) {
+      try {
+        await mermaid.run({ nodes: Array.from(nodes) });
+      } catch (err) {
+        console.error("[mermaid] render failed", err);
+      }
+    }
+  }
+
+  // Initial render.
+  renderAll();
+
+  // Re-render whenever Starlight flips data-theme on <html>.
+  new MutationObserver(() => renderAll()).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+
+  // Re-render on Starlight view transitions.
+  document.addEventListener("astro:page-load", renderAll);
+</script>
+
+<style is:global>
+  figure.mermaid-figure {
+    margin: 1.75rem 0;
+    padding: 1.25rem 1.25rem 0.85rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 16px;
+    background: var(--sl-color-bg-sidebar);
+  }
+
+  figure.mermaid-figure .mermaid-body {
+    overflow-x: auto;
+  }
+
+  figure.mermaid-figure pre.mermaid {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-family: inherit;
+    text-align: center;
+    min-height: 60px;
+  }
+
+  figure.mermaid-figure pre.mermaid svg {
+    display: block;
+    margin-inline: auto;
+    max-width: 100%;
+    height: auto;
+  }
+
+  figure.mermaid-figure figcaption {
+    margin-top: 0.9rem;
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+    text-align: center;
+  }
+</style>

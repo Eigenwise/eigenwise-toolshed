@@ -1,0 +1,2 @@
+$ claude plugin marketplace add Eigenwise/eigenwise-toolshed
+✔ Successfully added marketplace: eigenwise-toolshed (declared in user settings)

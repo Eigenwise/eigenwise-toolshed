@@ -1,0 +1,8 @@
+{
+  "recordedOn": "2026-11-19",
+  "runs": 7,
+  "fix": {
+    "toolCalls": 4.57,
+    "inputTokens": 218937
+  }
+}

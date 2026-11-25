@@ -1,0 +1,311 @@
+---
+title: A task, start to pull request
+description: The three paths a request can take with Sidequest (inline, the board, or planning it with you) and how finished work becomes one pull request.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+import Sequence from '../../../components/Sequence.astro';
+import Terminal from '../../../components/Terminal.astro';
+import Frame from '../../../components/Frame.astro';
+import closingView from '../../../mocks/closing-view.txt?raw';
+
+<p class="lead">You describe what you want. Sidequest sizes it and takes the lightest path that fits. This page follows each path to the end.</p>
+
+## First, it sizes the request
+
+A request starts with a short plan, said in a few lines: what has to happen, what is unknown, and how it will be checked. Then one of three paths. Work that needs your decisions gets its plan in path 3 instead.
+
+Two words first. A **ticket** is one piece of work, kept as a file. The **board** is the list of tickets in a project. It shows in a pane, a panel beside the chat.
+
+<Mermaid
+  code={`flowchart TD
+  R([Your request]) --> S{How big, how clear?}
+  S -- "one place, clear outcome" --> I[Inline: just do it]
+  S -- "clear, several parts" --> B[The board: tickets]
+  S -- "vague, large, a new project, or a tracker issue you name" --> N[Plan it with you: read, say what it found, ask]
+  N --> B
+  B --> L[Review, land, pull request]`}
+  caption="When unsure between two paths, it takes the lighter one and says why."
+/>
+
+## Path 1: inline
+
+**For:** a small, exact change. One place and a clear outcome.
+
+```text
+The footer says "Copyrigth". Fix the typo.
+```
+
+What happens:
+
+1. When the change is in more than one place, or a choice is left, Claude says the plan in one line before the first edit. A change in one place that you spelled out needs none.
+
+   ```text
+   Plan: fix the typo in the footer, checked by opening the page.
+   ```
+
+2. It makes the change and runs the check.
+3. It tells you what it did.
+
+No ticket, no agent, no board. That is correct. A board row for a typo would only be noise.
+
+It asks first only when a choice is truly yours, and it asks everything in one message, each question with a recommended answer.
+
+## Path 2: the board
+
+**For:** clear work with more than one part. A new field plus two endpoints. Three small fixes you listed.
+
+There are two shapes.
+
+**One piece, built in this session.** Claude files one ticket for the whole piece before the first edit, and notes on it as it goes. Before it calls the work done, one read-only reviewer on a mid-size model tries to break it. Then the ticket moves to done, with how it was checked.
+
+**A few known pieces.** Each piece becomes a ticket with a check that fails today. Then they run:
+
+<Frame name="12-board-agents-running.png" />
+
+These pictures follow one made-up task, `PAY-41` in a project called `photo-library`. The [walk-through](/start/walk-through/) has all of them in order.
+
+Each ticket runs on its own agent, in its own git worktree, on the model its category maps to. A **category** is a kind of work, like `build` or `review`. A **worktree** is a second working folder on its own branch, so agents don't disturb your files or each other.
+
+For every ticket the same four things happen. The agent never writes the board. It hands back one result, and the main session writes it down.
+
+<Sequence
+  actorWidth={150}
+  actorGap={46}
+  pad={24}
+  rowHeight={70}
+  actors={[
+    { id: 'board', label: 'BOARD FILES', sub: '.sidequest/', icon: 'database' },
+    { id: 'main', label: 'MAIN SESSION', sub: 'the one you type in', icon: 'window', variant: 'accent' },
+    { id: 'agent', label: 'AGENT', sub: 'worker or scout', icon: 'agent' },
+  ]}
+  steps={[
+    { from: 'main', to: 'board', label: 'start: PL-1 is doing' },
+    { from: 'main', to: 'agent', label: 'the brief', accent: true },
+    { from: 'agent', to: 'main', label: 'one result', style: 'dashed' },
+    { from: 'main', to: 'board', label: 'finish: log it, move it' },
+  ]}
+  caption="One ticket, from start to finish."
+/>
+
+## Path 3: plan it with you
+
+**For:** a feature that needs decisions, a bug with no obvious cause, a new project, or a tracker issue you name.
+
+A tracker issue you name, by a key like `PAY-41` or a link, goes this way however small it looks. The [quick start](/start/quick-start/) walks one through from start to finish, and the [walk-through](/start/walk-through/) shows every screen.
+
+<Steps>
+
+1. **It reads first.**
+
+   Reading changes nothing, so it does not ask. It says in one line what it is reading, then reads:
+
+   - **The whole request.** For a tracker issue that is the description, the comments, the issues it links and every attachment. Images are opened. One it cannot open is named, with the question what it shows.
+   - **The code** the request touches, and what your project wrote down about it.
+
+   A reported bug is made to fail first. When something is in real doubt, like a library nobody has tried, it proves it cheaply before anyone commits.
+
+2. **It puts what it found on the board.**
+
+   For a change that looks like one ticket, this is due in about three minutes. The plan view opens in the pane, and the chat says two sentences and a line that points there: what is asked, the way it recommends, and how many decisions wait. The analysis, the options and the decisions are in one place, the board.
+
+   The plan view reads from the top:
+
+   <Frame name="03-plan-open-decisions.png" />
+
+   - **A short version**: what is asked, how it works today, what it found, the options by letter.
+   - **Decisions for you**, each with a pick, then one field for your own words and one **Send**.
+   - **The path** the change takes through the code, drawn as boxes, with the stops it touches marked.
+   - **The analysis**: what is asked and what each image shows, how it works today, what surprised it, and each option with where it lands and what it costs.
+   - **The code that matters**, with file and line.
+
+3. **It asks, a few questions at a time.**
+
+   Each decision has the question, the recommended answer written the way the code will read, and what the other answer costs. With no board pane, like in a very narrow terminal, the chat carries the short version and the decisions instead, in this shape:
+
+   ```text
+   Two decisions for you
+
+   1. How does a caller say how often an upload is retried?
+      - Recommended:
+        - `retries: number`
+        - default `1`
+      - Otherwise: A boolean `retry` is shorter, but a second retry
+        later changes the signature.
+   2. Where does the retry live?
+      - Recommended: Inside `uploadPhoto()`, so the share sheet
+        retries too.
+      - Otherwise: In the import loop, only imports retry.
+
+   Answer by number, or yes takes both recommended answers. The
+   reasoning for each is in the plan on the board (/board opens it).
+   ```
+
+   On work that changes code, the design is yours too. These are the choices a reviewer would argue about on the pull request:
+
+   - **The interface**: new names, types and shapes other code will see.
+   - **Where the behaviour lives**, when more than one place makes sense.
+   - **What is left out** on purpose.
+   - **The seam it is tested at**, and the tests by name.
+
+   They are never all asked in one list. It starts with what the others hang off, usually the interface. What the code leaves only one answer for is not asked.
+
+   Answer on the board: pick per decision, add your own words, press **Send**. Enter only keeps your words in the field, and after the send the plan shows what you sent in place of the form. Or answer in the chat, by number or with "yes", which takes every recommended answer. "You decide" ends the questions. When an answer opens a new decision, the plan is updated, the board shows the next group, and the chat again only points there.
+
+   An answer settles the questions and nothing else. "Go on and build it" here is not the go-ahead, because you have not seen the tickets yet.
+
+4. **It agrees how you want it delivered.**
+
+   In checkpoints, where you look at each thin slice as it lands. Or all at once. For one ticket this is skipped.
+
+5. **It plays the plan back.**
+
+   The tickets are filed as proposed, and the plan view shows the playback: the goal, what it took by default, a field for a correction with **Send the correction**, the button **Yes, build it**, then **Proposed tickets**. Each block is the ticket's own text, technical plan included: the signatures or shapes that change, the files or areas, the tests by name, and a check you can read and judge. The chat says where it ends (a branch or a pull request) and points at the board. With no board pane, the chat carries the playback in full.
+
+   <Frame name="08-plan-before-the-yes.png" />
+
+   You can retitle, drop, add or reword any of them. A check you word yourself is kept exactly as you said it. Work you added in passing, like "and clean up while you are there", comes back as a ticket block of its own, for you to cut or widen.
+
+   You say yes once, with the button or typed in the chat. A correction is not that yes: Claude folds it in, marks the ticket that changed, and asks again. No ticket of the plan starts before the yes.
+
+</Steps>
+
+After that yes, you are not asked for a go-ahead again. Starting agents, retrying, merging and opening the pull request are Claude's job. The one planned stop is one you chose: a checkpoint, or a step before building.
+
+<Aside type="tip" title="What counts as yours to decide">
+A choice reaches you only when it cannot be undone, spends money, reaches outside the project, or is a matter of taste or product direction. Anything else with a recommended answer is taken, and you are told in one line what was chosen and how to undo it.
+</Aside>
+
+## A written step before building
+
+Building starts on your yes to the plan. What was agreed is in the story file on your board, `.sidequest/stories/<id>.md`.
+
+Some teams do a step of their own between agreeing work and building it. Say your project writes a design note in the repository and has it read before work starts. Name that step once, under `settings` in `.sidequest/board.json`:
+
+```json
+"beforeBuilding": {
+  "label": "design note",
+  "how": "Write docs/design/<topic>.md from the agreed plan.",
+  "readBack": "Read the note again and say what changed."
+}
+```
+
+`label` is your word for the step. `how` is a line of instruction, or a skill your project has. `readBack` is optional.
+
+With a step named, the playback has one more line: whether Claude would do it for work of this size. You can also ask for such a step in your own words. When the plan has it:
+
+1. The agreed plan is handed over in the story file: the goal, what is needed first, the risks, the slices, the open questions.
+2. Claude does what `how` says, with you, in the conversation. It is never sent to a background agent.
+3. Nothing is built. One ticket holds the build back and waits on you. It says where the note is.
+4. You say go. With a `readBack`, Claude reads the note again first. What the note says now wins over the tickets, and you are told what differs before any ticket changes.
+
+## When checks can't run in a worktree
+
+A fresh worktree has none of your ignored files, like a local `.env`. If your checks need one, or a database that exists once, two settings in `.sidequest/board.json` cover it.
+
+- **`checks`** is a few lines of plain text: what the checks need, where they can run, the command that works. Every agent gets it in its brief, so no agent has to find it out again.
+- **`worktrees: false`** makes agents work in your main checkout, one writer at a time. A ticket can then start as soon as the one it waits for has passed review. The review only reads and runs nothing there, because the next agent already holds the checkout. The agent's own check and the one check at landing are the tests.
+
+`/sidequest:setup` writes these when it finds the reason. A run adds to `checks` what an agent had to find out.
+
+## From tickets to a pull request
+
+Paths 2 and 3 end the same way.
+
+<Steps>
+
+1. **Run.**
+
+   Every ticket that can start, starts. In parallel, each on its routed agent. A ticket blocked by another waits until that one has landed.
+
+2. **Review.**
+
+   Each finished ticket gets one independent, read-only review, except a small one filed as a quick fix. It fails on behaviour: the change misses what the ticket says, breaks something, or claims a check that never ran. It also fails on a clear break of a guideline your repository wrote down. Nothing else fails it. A fix after a failed review is read again by one fresh reviewer before the commit question. See [how quality is checked](/guides/quality/).
+
+   A first failure sends the ticket back once. A second failure of any kind stops it. Claude then fixes it itself or asks you, once.
+
+3. **Land.**
+
+   The reviewed branches are merged into one branch. Your project's check runs once on the combined result, because branches that were each fine can break together.
+
+4. **Prove it for real.**
+
+   A passing test proves a function. So Claude also checks the result the way a person would meet it: it opens the page, calls the endpoint or runs the command. When nothing can check it for real, it says "tested, not seen working".
+
+5. **Pull request.**
+
+   With a git remote, the branch is pushed and one pull request is opened. You are not asked first. It says what changed, behaviour by behaviour, the decisions behind it and the check result.
+
+   The board is yours alone. So nothing that leaves your machine names the board, a ticket id or this tool: branch names, commit messages and pull request text speak of the work in your project's terms.
+
+   Then it reads the CI result for that exact commit. Where other people commit to the repository too, it stops at the open pull request and the merge is yours. Where only you commit, it merges once CI is green, unless a merge deploys.
+
+   Without a remote there is no pull request, and the same rule holds. Where other people commit too, it stops at the landed branch. Where only you commit, it merges into the branch the work started from and records that commit on each ticket.
+
+</Steps>
+
+If your project has its own rules for branches, commits or pull requests, the work is delivered through those, and their approval steps are kept. You can also say how you want it delivered in the request, like "open the pull request and stop".
+
+Where a commit, a push or a pull request waits on your yes, you are asked after the build, never with the plan. You read the change while it is still being reviewed:
+
+1. Once the proof has run, the ticket on the board holds what changed, a line per area, with one command that shows the whole diff, how it was checked so far, and the hunks that carry the design. The chat says one line.
+2. When the review has passed, the change comes to your checkout, uncommitted on the ticket's branch. The ticket's view then starts with the question, its answers, the extras and **Send**. Below is what you are saying yes to, with what the review found and the commit message and the pull request text. Those words are stored on the ticket and sent as stored.
+
+The first lines of that view say where the review stands: it passed, it passed on a second read after a fix, it failed with its finding (cut to one line, ending in three dots when it is long), it was skipped, or the work was fixed after a failed review and not reviewed again.
+
+The question has lettered answers. What Claude did not act on, like a review note, is listed under **Also yours** with numbers. On the board you pick an answer, tick the extras and press **Send**. In the chat you type `A`, or `A, plus 1 and 2`. The ticket **waits on you** until you answer. After a send from the board it shows what you sent, and its row says your answer is with the session. With no board pane, both steps come as chat messages, the question last.
+
+A pull request can carry a diagram of the change. It is offered once, as an extra on the first pull request question in a project, and your answer is kept as `pullRequestDiagram` under `settings` in `.sidequest/board.json`. The diagram is text in the description that the code host draws. Nothing is uploaded.
+
+## The closing report
+
+At the end, Claude pastes what the session changed on the board:
+
+<Terminal title="Closing report" text={closingView} caption="A text drawing of the closing report, for the made-up task PAY-41." />
+
+## While it runs
+
+- **You can leave.** A finished agent wakes the session by itself.
+- **You can ask "what can I do meanwhile?"** It answers with what runs, what waits, and what you could look at now.
+- **You can correct it.** Type the correction in the chat, or open the ticket in the pane and say it there. It is noted on the ticket and reaches the agent, or is applied when the agent returns. You are told in one line which.
+- **You can stop it.** Type "stop" or "not now". Running agents finish and report. Nothing new starts.
+- **Something may wait on you.** The board marks it **waits on you**, written so you can answer without having followed along.
+
+## What a ticket looks like
+
+A ticket is a markdown file you can open and edit.
+
+```markdown
+---
+id: PL-1
+title: Retry a failed upload once before giving up
+status: review
+kind: build
+mode: afk
+category: build
+story: PL-S1
+branch: main
+issue: PAY-41
+blockedBy: []
+decisions: []
+uses: []
+created: 2026-11-16
+updated: 2026-11-16
+---
+
+## What
+A photo whose upload fails is tried once more before it is reported as failed.
+
+## Done when
+npm test -- upload-retry fails today and passes.
+
+## Log
+- 2026-11-16T10:08Z started worker sonnet/medium
+- 2026-11-16T10:26Z finished done branch worktree-agent-pl-1 commits 2 checked "npm test -- upload-retry exit 0, 6 tests"
+- 2026-11-16T10:27Z note review pass: retry happens once, second failure is reported, tests ran.
+```
+
+`mode: afk` means an agent can finish it alone. `mode: hitl` means it needs you, so it is never handed to an agent.
+
+In the file the statuses are `inbox`, `ready`, `doing`, `review`, `needs-you`, `done`, `parked` and `dropped`. On screen you read words: `review` is "built, being checked", `parked` is "set aside", `inbox` is "not ready yet".

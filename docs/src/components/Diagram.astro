@@ -1,0 +1,845 @@
+---
+/**
+ * Declarative-input diagram component.
+ *
+ *   <Diagram
+ *     direction="RIGHT"
+ *     nodes={[
+ *       { id: 'u',  label: 'USER', sub: 'human at the keyboard', icon: 'user' },
+ *       { id: 'a',  label: 'YOUR APP', sub: 'browser or node', icon: 'window' },
+ *       { id: 'gw', label: 'GATEWAY', sub: 'WebSocket + MCP bridge', icon: 'bridge', variant: 'accent' },
+ *       { id: 'ag', label: 'AGENT', sub: 'Claude Code, Cursor, Desktop', icon: 'agent' },
+ *     ]}
+ *     edges={[
+ *       { from: 'u',  to: 'a' },
+ *       { from: 'a',  to: 'gw', label: 'WebSocket', bidirectional: true, accent: true },
+ *       { from: 'gw', to: 'ag', label: 'MCP stdio', bidirectional: true, accent: true },
+ *     ]}
+ *     caption="..."
+ *   />
+ *
+ * Layout is done by elkjs (layered + orthogonal edge routing).
+ * Rendering is inline themed SVG: gradients, filters, icons: driven by CSS
+ * custom properties so dark/light swaps automatically via Starlight.
+ */
+import ELK from 'elkjs/lib/elk.bundled.js';
+
+type Variant = 'neutral' | 'accent' | 'danger';
+type IconName =
+  | 'user'
+  | 'window'
+  | 'bridge'
+  | 'agent'
+  | 'shield'
+  | 'lock'
+  | 'cube'
+  | 'packages'
+  | 'server'
+  | 'database'
+  | 'check'
+  | 'x'
+  | 'arrow';
+
+interface NodeSpec {
+  id: string;
+  label: string;
+  /** String for one line, array for multi-line. */
+  sub?: string | string[];
+  code?: string;
+  icon?: IconName;
+  variant?: Variant;
+  width?: number;
+  height?: number;
+  /**
+   * ELK-level per-node options. Used for per-edge spacing overrides :
+   * `{ 'elk.margins': '[left=70,...]' }` effectively lengthens the gap
+   * on this node's incoming edge, so the gap on preceding edges can be
+   * kept short globally while other edges stay comfortable.
+   */
+  layoutOptions?: Record<string, string>;
+}
+
+interface EdgeSpec {
+  from: string;
+  to: string;
+  label?: string;
+  style?: 'solid' | 'dashed';
+  bidirectional?: boolean;
+  accent?: boolean;
+  danger?: boolean;
+}
+
+interface Props {
+  nodes: NodeSpec[];
+  edges: EdgeSpec[];
+  direction?: 'RIGHT' | 'DOWN' | 'LEFT' | 'UP';
+  caption?: string;
+  nodeWidth?: number;
+  nodeHeight?: number;
+  spacing?: number;
+  pad?: number;
+}
+
+const {
+  nodes,
+  edges,
+  direction = 'RIGHT',
+  caption,
+  nodeWidth = 200,
+  nodeHeight = 128,
+  // Gap between adjacent nodes. Each arrow needs room for a label pill and
+  // visible segments on each side. Keep this tight enough that 4 cards in a
+  // row fit within Starlight's content column.
+  spacing = 90,
+  // Extra canvas padding so the accent glow doesn't clip at top/bottom.
+  pad = 72,
+} = Astro.props;
+
+// --- Icons (Lucide-ish, 20x20 viewBox, stroked) --------------------------
+const icons: Record<IconName, string> = {
+  user: `<circle cx="10" cy="7" r="3.6"/><path d="M3 20 a7 7 0 0 1 14 0"/>`,
+  window: `<rect x="1" y="2" width="18" height="16" rx="2"/><path d="M1 6 H19"/><circle cx="4" cy="4" r="0.7" fill="currentColor" stroke="none"/><circle cx="7" cy="4" r="0.7" fill="currentColor" stroke="none"/>`,
+  bridge: `<path d="M3 7 H17"/><path d="M14 4 L18 7 L14 10"/><path d="M17 13 H3"/><path d="M6 10 L2 13 L6 16"/>`,
+  agent: `<path d="M10 1.5 L12 8 L18.5 10 L12 12 L10 18.5 L8 12 L1.5 10 L8 8 Z"/>`,
+  shield: `<path d="M10 2 L17 5 V10 C17 14 14 17 10 19 C6 17 3 14 3 10 V5 Z"/>`,
+  lock: `<rect x="3" y="9" width="14" height="10" rx="2"/><path d="M6 9 V6 a4 4 0 0 1 8 0 V9"/>`,
+  cube: `<path d="M10 2 L18 6 V14 L10 18 L2 14 V6 Z"/><path d="M2 6 L10 10 L18 6"/><path d="M10 10 V18"/>`,
+  packages: `<rect x="1.5" y="1.5" width="7" height="7" rx="1"/><rect x="11.5" y="1.5" width="7" height="7" rx="1"/><rect x="6.5" y="11.5" width="7" height="7" rx="1"/>`,
+  server: `<rect x="2" y="3" width="16" height="6" rx="1.5"/><rect x="2" y="11" width="16" height="6" rx="1.5"/><circle cx="6" cy="6" r="0.7" fill="currentColor" stroke="none"/><circle cx="6" cy="14" r="0.7" fill="currentColor" stroke="none"/>`,
+  database: `<ellipse cx="10" cy="4" rx="8" ry="2.2"/><path d="M2 4 V16 a8 2.2 0 0 0 16 0 V4"/><path d="M2 10 a8 2.2 0 0 0 16 0"/>`,
+  check: `<path d="M4 10 L8 14 L16 5"/>`,
+  x: `<path d="M5 5 L15 15 M15 5 L5 15"/>`,
+  arrow: `<path d="M4 10 H16 M11 5 L16 10 L11 15"/>`,
+};
+
+// --- Layout --------------------------------------------------------------
+const elk = new ELK();
+
+// ELK's typed return omits the runtime-computed width/height/x/y and
+// edge `sections`, even though it always populates them for a laid-out
+// graph. Describe the shape we actually consume.
+interface LaidOutPoint {
+  x: number;
+  y: number;
+}
+interface LaidOutEdgeSection {
+  startPoint: LaidOutPoint;
+  endPoint: LaidOutPoint;
+  bendPoints?: LaidOutPoint[];
+}
+interface LaidOutEdge {
+  id: string;
+  sections?: LaidOutEdgeSection[];
+}
+interface LaidOutNode {
+  id: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+interface LaidOutGraph {
+  width?: number;
+  height?: number;
+  children?: LaidOutNode[];
+  edges?: LaidOutEdge[];
+}
+
+const layout = (await elk.layout({
+  id: 'root',
+  layoutOptions: {
+    'elk.algorithm': 'layered',
+    'elk.direction': direction,
+    'elk.spacing.nodeNode': String(spacing),
+    'elk.layered.spacing.nodeNodeBetweenLayers': String(spacing),
+    'elk.edgeRouting': 'ORTHOGONAL',
+    'elk.layered.unnecessaryBendpoints': 'true',
+    'elk.spacing.edgeNode': String(Math.floor(spacing / 2)),
+    'elk.spacing.edgeEdge': '20',
+    'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+  },
+  children: nodes.map((n) => ({
+    id: n.id,
+    width: n.width ?? nodeWidth,
+    height: n.height ?? nodeHeight,
+    ...(n.layoutOptions ? { layoutOptions: n.layoutOptions } : {}),
+  })),
+  edges: edges.map((e, i) => ({
+    id: `e-${i}`,
+    sources: [e.from],
+    targets: [e.to],
+  })),
+})) as LaidOutGraph;
+
+const canvasW = Math.ceil((layout.width ?? 0) + pad * 2);
+const canvasH = Math.ceil((layout.height ?? 0) + pad * 2);
+
+const nodeById = new Map(nodes.map((n) => [n.id, n]));
+
+// --- Helpers -------------------------------------------------------------
+// Arrow geometry: line + polygon (no SVG markers: those have refX / linecap
+// alignment bugs).
+const ARROW_W = 10;
+const ARROW_H = 10;
+
+interface Pt {
+  x: number;
+  y: number;
+}
+
+// Build the arrow body as an SVG path, stopping short of the endpoints by
+// ARROW_W along each final segment so the triangles can carry the tip.
+function edgeGeometry(
+  section: {
+    startPoint: Pt;
+    endPoint: Pt;
+    bendPoints?: Array<Pt>;
+  },
+  bidirectional: boolean,
+) {
+  const raw = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint];
+  const pts: Pt[] = raw.map((p) => ({ x: p.x + pad, y: p.y + pad }));
+  if (pts.length < 2) return null;
+
+  // Unit direction of the last segment (toward endpoint) and first segment
+  // (away from startpoint, reversed for start-tip).
+  const last = pts[pts.length - 1]!;
+  const beforeLast = pts[pts.length - 2]!;
+  const lastLen = Math.hypot(last.x - beforeLast.x, last.y - beforeLast.y) || 1;
+  const lastDx = (last.x - beforeLast.x) / lastLen;
+  const lastDy = (last.y - beforeLast.y) / lastLen;
+
+  const first = pts[0]!;
+  const second = pts[1]!;
+  const firstLen = Math.hypot(second.x - first.x, second.y - first.y) || 1;
+  const firstDx = (second.x - first.x) / firstLen;
+  const firstDy = (second.y - first.y) / firstLen;
+
+  // Line endpoints shifted back by ARROW_W along the segment direction.
+  const endBase = { x: last.x - lastDx * ARROW_W, y: last.y - lastDy * ARROW_W };
+  const startBase = bidirectional
+    ? { x: first.x + firstDx * ARROW_W, y: first.y + firstDy * ARROW_W }
+    : first;
+
+  // Build path through bends, but shorten first and last segments to land
+  // on startBase / endBase instead of the raw points.
+  const bodyPts: Pt[] = [startBase, ...pts.slice(1, -1), endBase];
+  let d = `M ${bodyPts[0]?.x} ${bodyPts[0]?.y}`;
+  const r = 6;
+  for (let i = 1; i < bodyPts.length - 1; i += 1) {
+    const prev = bodyPts[i - 1]!;
+    const curr = bodyPts[i]!;
+    const next = bodyPts[i + 1]!;
+    const ea = Math.sign(curr.x - prev.x);
+    const eb = Math.sign(curr.y - prev.y);
+    const la = Math.sign(next.x - curr.x);
+    const lb = Math.sign(next.y - curr.y);
+    const enterLen = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+    const leaveLen = Math.hypot(next.x - curr.x, next.y - curr.y);
+    const rr = Math.max(0, Math.min(r, enterLen / 2, leaveLen / 2));
+    const cin = { x: curr.x - ea * rr, y: curr.y - eb * rr };
+    const cout = { x: curr.x + la * rr, y: curr.y + lb * rr };
+    d += ` L ${cin.x} ${cin.y} Q ${curr.x} ${curr.y} ${cout.x} ${cout.y}`;
+  }
+  d += ` L ${bodyPts[bodyPts.length - 1]?.x} ${bodyPts[bodyPts.length - 1]?.y}`;
+
+  // End triangle: tip at `last`, base at `endBase`, spread perpendicular
+  // to the last-segment direction by ARROW_H / 2.
+  const endPerp = { x: -lastDy, y: lastDx };
+  const endBaseA = {
+    x: endBase.x + endPerp.x * (ARROW_H / 2),
+    y: endBase.y + endPerp.y * (ARROW_H / 2),
+  };
+  const endBaseB = {
+    x: endBase.x - endPerp.x * (ARROW_H / 2),
+    y: endBase.y - endPerp.y * (ARROW_H / 2),
+  };
+  const endPoly = `${endBaseA.x},${endBaseA.y} ${last.x},${last.y} ${endBaseB.x},${endBaseB.y}`;
+
+  // Start triangle (if bidirectional): tip at `first`, base at `startBase`,
+  // perpendicular to the first-segment direction (pointing away).
+  let startPoly: string | null = null;
+  if (bidirectional) {
+    const startPerp = { x: -firstDy, y: firstDx };
+    const startBaseA = {
+      x: startBase.x + startPerp.x * (ARROW_H / 2),
+      y: startBase.y + startPerp.y * (ARROW_H / 2),
+    };
+    const startBaseB = {
+      x: startBase.x - startPerp.x * (ARROW_H / 2),
+      y: startBase.y - startPerp.y * (ARROW_H / 2),
+    };
+    startPoly = `${startBaseA.x},${startBaseA.y} ${first.x},${first.y} ${startBaseB.x},${startBaseB.y}`;
+  }
+
+  return { lineD: d, endPoly, startPoly };
+}
+
+// Midpoint of the polyline (for label placement).
+function midpoint(section: {
+  startPoint: { x: number; y: number };
+  endPoint: { x: number; y: number };
+  bendPoints?: Array<{ x: number; y: number }>;
+}) {
+  const pts = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint];
+  // Total length, then find halfway point.
+  let total = 0;
+  const segLens: number[] = [];
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const l = Math.hypot(pts[i + 1]?.x - pts[i]?.x, pts[i + 1]?.y - pts[i]?.y);
+    segLens.push(l);
+    total += l;
+  }
+  let target = total / 2;
+  for (let i = 0; i < segLens.length; i += 1) {
+    if (target <= segLens[i]!) {
+      const t = target / segLens[i]!;
+      return {
+        x: pts[i]?.x + (pts[i + 1]?.x - pts[i]?.x) * t + pad,
+        y: pts[i]?.y + (pts[i + 1]?.y - pts[i]?.y) * t + pad,
+      };
+    }
+    target -= segLens[i]!;
+  }
+  return { x: pts[0]?.x + pad, y: pts[0]?.y + pad };
+}
+
+// Wrap label across multiple lines so it fits the available arrow gap.
+// Breaks at word / punctuation boundaries.
+function wrapLabel(label: string, maxChars: number): string[] {
+  if (label.length <= maxChars) return [label];
+  const tokens = label.split(/(\s+|(?<=[,{}]))/).filter((t) => t.length > 0);
+  const lines: string[] = [];
+  let current = '';
+  for (const token of tokens) {
+    if (!current) {
+      current = token.trimStart();
+    } else if ((current + token).length <= maxChars) {
+      current += token;
+    } else {
+      lines.push(current.trimEnd());
+      current = token.trimStart();
+    }
+  }
+  if (current) lines.push(current.trimEnd());
+  return lines.length > 0 ? lines : [label];
+}
+
+// Approximate pill width from longest line. Font is ~13 px Inter.
+// 6.2 px per char is a conservative average; pill has 14 px horizontal
+// padding on each side (16 total).
+const PILL_CHAR_W = 6.2;
+const PILL_PAD_X = 16;
+
+function pillWidth(lines: string[] | string) {
+  const arr = Array.isArray(lines) ? lines : [lines];
+  const longest = arr.reduce((m, l) => (l.length > m ? l.length : m), 0);
+  return Math.max(54, Math.round(longest * PILL_CHAR_W + PILL_PAD_X));
+}
+
+// Auto max-chars based on the horizontal gap between nodes. Leaves ~12 px
+// of clear space between the pill edge and each card edge so labels never
+// touch adjacent cards.
+const maxLabelChars = Math.max(12, Math.floor((spacing - 24 - PILL_PAD_X) / PILL_CHAR_W));
+
+// --- Precompute renders --------------------------------------------------
+interface RenderedEdge {
+  idx: number;
+  edge: EdgeSpec;
+  lineD: string;
+  endPoly: string;
+  startPoly: string | null;
+  mid: { x: number; y: number };
+}
+
+const renderedEdges: RenderedEdge[] = (layout.edges ?? [])
+  .map((le, idx) => {
+    const section = le.sections?.[0];
+    if (!section) return null;
+    const edge = edges[idx]!;
+    const geom = edgeGeometry(section, Boolean(edge.bidirectional));
+    if (!geom) return null;
+    return {
+      idx,
+      edge,
+      lineD: geom.lineD,
+      endPoly: geom.endPoly,
+      startPoly: geom.startPoly,
+      mid: midpoint(section),
+    };
+  })
+  .filter((x): x is RenderedEdge => x !== null);
+
+interface RenderedNode {
+  node: NodeSpec;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const renderedNodes: RenderedNode[] = (layout.children ?? [])
+  .map((ln) => {
+    const node = nodeById.get(ln.id);
+    if (!node) return null;
+    return {
+      node,
+      x: (ln.x ?? 0) + pad,
+      y: (ln.y ?? 0) + pad,
+      w: ln.width ?? nodeWidth,
+      h: ln.height ?? nodeHeight,
+    };
+  })
+  .filter((x): x is RenderedNode => x !== null);
+---
+
+<figure class="dgm-figure">
+  <div class="dgm-scroll">
+    <svg
+      class="dgm-svg"
+      width={canvasW}
+      height={canvasH}
+      viewBox={`0 0 ${canvasW} ${canvasH}`}
+      role="img"
+      aria-label={caption ?? "diagram"}
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <defs>
+        <pattern id="dgm-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1.2" cy="1.2" r="1.2" fill="var(--dgm-grid)"></circle>
+        </pattern>
+
+        <linearGradient id="dgm-card-neutral" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-card-neutral-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-card-neutral-2)"></stop>
+        </linearGradient>
+        <linearGradient id="dgm-card-accent" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-card-accent-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-card-accent-2)"></stop>
+        </linearGradient>
+        <linearGradient id="dgm-card-danger" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-card-danger-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-card-danger-2)"></stop>
+        </linearGradient>
+
+        <linearGradient id="dgm-border-accent" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-accent-border-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-accent-border-2)"></stop>
+        </linearGradient>
+        <linearGradient id="dgm-border-danger" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--dgm-danger-border-1)"></stop>
+          <stop offset="1" stop-color="var(--dgm-danger-border-2)"></stop>
+        </linearGradient>
+
+        <filter id="dgm-glow-accent" x="-30%" y="-60%" width="160%" height="220%">
+          <feGaussianBlur stdDeviation="10" result="b"></feGaussianBlur>
+          <feColorMatrix
+            in="b"
+            type="matrix"
+            values="0 0 0 0 0.98   0 0 0 0 0.73   0 0 0 0 0.14   0 0 0 0.55 0"></feColorMatrix>
+        </filter>
+        <filter id="dgm-glow-danger" x="-30%" y="-60%" width="160%" height="220%">
+          <feGaussianBlur stdDeviation="10" result="b"></feGaussianBlur>
+          <feColorMatrix
+            in="b"
+            type="matrix"
+            values="0 0 0 0 0.86   0 0 0 0 0.15   0 0 0 0 0.15   0 0 0 0.50 0"></feColorMatrix>
+        </filter>
+
+        <filter id="dgm-shadow" x="-10%" y="-10%" width="120%" height="130%">
+          <feDropShadow
+            dx="0"
+            dy="4"
+            stdDeviation="6"
+            flood-color="var(--dgm-shadow-color)"
+            flood-opacity="var(--dgm-shadow-opacity-1)"></feDropShadow>
+          <feDropShadow
+            dx="0"
+            dy="1"
+            stdDeviation="1.5"
+            flood-color="var(--dgm-shadow-color)"
+            flood-opacity="var(--dgm-shadow-opacity-2)"></feDropShadow>
+        </filter>
+
+        {/* No <marker> defs: arrows are rendered as <line/path> + <polygon> pairs. */}
+      </defs>
+
+      {/* Dotted grid bg */}
+      <rect width="100%" height="100%" fill="url(#dgm-dots)"></rect>
+
+      {/* Glow layer under accent / danger nodes */}
+      {
+        renderedNodes.map(({ node, x, y, w, h }) => {
+          const v = node.variant ?? "neutral";
+          if (v === "neutral") return null;
+          const filter = v === "accent" ? "url(#dgm-glow-accent)" : "url(#dgm-glow-danger)";
+          const fill = v === "accent" ? "var(--dgm-accent)" : "var(--dgm-danger)";
+          return (
+            <ellipse
+              cx={x + w / 2}
+              cy={y + h / 2}
+              rx={w * 0.5}
+              ry={h * 0.5}
+              fill={fill}
+              filter={filter}
+              opacity="0.45"
+            />
+          );
+        })
+      }
+
+      {/* Edges: <path> body + <polygon> tips. No markers. */}
+      <g class="dgm-edges">
+        {
+          renderedEdges.map(({ edge, lineD, endPoly, startPoly }) => {
+            const dash = edge.style === "dashed" ? "5 4" : undefined;
+            const stroke = edge.danger
+              ? "var(--dgm-danger)"
+              : edge.accent
+                ? "var(--dgm-accent)"
+                : "var(--dgm-line-strong, var(--dgm-line))";
+            return (
+              <g>
+                <path
+                  d={lineD}
+                  fill="none"
+                  stroke={stroke}
+                  stroke-width="1.75"
+                  stroke-linecap="butt"
+                  stroke-linejoin="round"
+                  stroke-dasharray={dash}
+                />
+                <polygon points={endPoly} fill={stroke} />
+                {startPoly && <polygon points={startPoly} fill={stroke} />}
+              </g>
+            );
+          })
+        }
+      </g>
+
+      {/* Edge labels: drawn BEFORE nodes so cards cover any overflow. */}
+      {
+        renderedEdges.map(({ edge, mid }) => {
+          if (!edge.label) return null;
+          const lines = wrapLabel(edge.label, maxLabelChars);
+          const pw = pillWidth(lines);
+          const lineHeight = 15;
+          const ph = Math.max(22, lines.length * lineHeight + 8);
+          const pillTop = mid.y - ph / 2;
+          const firstLineY = pillTop + (ph - lines.length * lineHeight) / 2 + 11;
+          const borderColor = edge.danger
+            ? "var(--dgm-danger)"
+            : edge.accent
+              ? "var(--dgm-accent)"
+              : "var(--dgm-pill-border)";
+          const textColor = edge.danger
+            ? "var(--dgm-danger-text)"
+            : edge.accent
+              ? "var(--dgm-accent-text)"
+              : "var(--dgm-pill-text)";
+          return (
+            <g>
+              <rect
+                x={mid.x - pw / 2}
+                y={pillTop}
+                width={pw}
+                height={ph}
+                rx="7"
+                fill="var(--dgm-pill-bg)"
+                stroke={borderColor}
+                stroke-width="1"
+              />
+              {
+                lines.map((line, li) => (
+                  <text
+                    x={mid.x}
+                    y={firstLineY + li * lineHeight}
+                    text-anchor="middle"
+                    class="dgm-lbl"
+                    style={`fill: ${textColor};`}
+                  >
+                    {line}
+                  </text>
+                ))
+              }
+            </g>
+          );
+        })
+      }
+
+      {/* Nodes: content stack is centred vertically so spacing looks
+          consistent whether or not the card has sub lines / code. */}
+      {
+        renderedNodes.map(({ node, x, y, w, h }) => {
+          const v = node.variant ?? "neutral";
+          const fill = v === "accent"
+            ? "url(#dgm-card-accent)"
+            : v === "danger"
+              ? "url(#dgm-card-danger)"
+              : "url(#dgm-card-neutral)";
+          const stroke = v === "accent"
+            ? "url(#dgm-border-accent)"
+            : v === "danger"
+              ? "url(#dgm-border-danger)"
+              : "var(--dgm-border)";
+          const iconPath = node.icon ? icons[node.icon] : null;
+          const cls = ["dgm-node", `dgm-node-${v}`].join(" ");
+
+          // Vertical rhythm: constants tuned to the card's type scale.
+          const ICON_H = 20;
+          const TITLE_H = 18;
+          const SUB_LH = 16;
+          const CODE_H = 14;
+          const GAP_ICON_TITLE = 10;
+          const GAP_TITLE_SUB = 10;
+          const GAP_SUB_CODE = 8;
+
+          const subLines = node.sub
+            ? Array.isArray(node.sub) ? node.sub : [node.sub]
+            : [];
+          const hasIcon = !!iconPath;
+          const hasCode = !!node.code;
+
+          let stackH = 0;
+          if (hasIcon) stackH += ICON_H + GAP_ICON_TITLE;
+          stackH += TITLE_H;
+          if (subLines.length > 0) stackH += GAP_TITLE_SUB + subLines.length * SUB_LH - (SUB_LH - 13);
+          if (hasCode) stackH += GAP_SUB_CODE + CODE_H;
+
+          const stackTop = y + Math.max(10, (h - stackH) / 2);
+          let cursor = stackTop;
+          const iconY = hasIcon ? cursor : null;
+          if (hasIcon) cursor += ICON_H + GAP_ICON_TITLE;
+          const titleY = cursor + TITLE_H - 4;
+          cursor += TITLE_H;
+          let subYStart = null as number | null;
+          if (subLines.length > 0) {
+            cursor += GAP_TITLE_SUB;
+            subYStart = cursor + 4;
+            cursor += subLines.length * SUB_LH;
+          }
+          let codeY = null as number | null;
+          if (hasCode) {
+            cursor += GAP_SUB_CODE;
+            codeY = cursor + CODE_H - 3;
+          }
+
+          return (
+            <g class={cls}>
+              <rect
+                x={x}
+                y={y}
+                width={w}
+                height={h}
+                rx="14"
+                fill={fill}
+                stroke={stroke}
+                stroke-width="1.25"
+                filter="url(#dgm-shadow)"
+              />
+              {
+                hasIcon && iconY !== null && (
+                  <g
+                    class="dgm-icon"
+                    transform={`translate(${x + w / 2 - 10}, ${iconY})`}
+                    fill="none"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    set:html={iconPath!}
+                  />
+                )
+              }
+              <text x={x + w / 2} y={titleY} text-anchor="middle" class="dgm-title">{node.label}</text>
+              {
+                subYStart !== null &&
+                  subLines.map((line, i) => (
+                    <text
+                      x={x + w / 2}
+                      y={subYStart! + i * SUB_LH}
+                      text-anchor="middle"
+                      class="dgm-sub"
+                    >
+                      {line}
+                    </text>
+                  ))
+              }
+              {
+                hasCode && codeY !== null && (
+                  <text
+                    x={x + w / 2}
+                    y={codeY}
+                    text-anchor="middle"
+                    class="dgm-code"
+                  >
+                    {node.code}
+                  </text>
+                )
+              }
+            </g>
+          );
+        })
+      }
+
+    </svg>
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style is:global>
+  figure.dgm-figure {
+    /* ============ LIGHT PALETTE (default) ============ */
+    --dgm-grid: rgba(148, 163, 184, 0.35);
+    --dgm-border: #cbd5e1;
+    --dgm-shadow-color: #0f172a;
+    --dgm-shadow-opacity-1: 0.06;
+    --dgm-shadow-opacity-2: 0.04;
+
+    --dgm-card-neutral-1: #ffffff;
+    --dgm-card-neutral-2: #f1f5f9;
+    --dgm-card-accent-1: #f6fffd;
+    --dgm-card-accent-2: #ccfbf1;
+    --dgm-card-danger-1: #fef2f2;
+    --dgm-card-danger-2: #fee2e2;
+
+    --dgm-accent-border-1: #2dd4bf;
+    --dgm-accent-border-2: #0d9488;
+    --dgm-danger-border-1: #f87171;
+    --dgm-danger-border-2: #b91c1c;
+
+    --dgm-accent: #14b8a6;
+    --dgm-accent-text: #0f766e;
+    --dgm-danger: #dc2626;
+    --dgm-danger-text: #b91c1c;
+
+    --dgm-line: #94a3b8;
+    --dgm-line-strong: #64748b;
+    --dgm-text: #0f172a;
+    --dgm-text-muted: #475569;
+    --dgm-icon: #64748b;
+    --dgm-icon-accent: #0d9488;
+    --dgm-icon-danger: #dc2626;
+
+    --dgm-pill-bg: #ffffff;
+    --dgm-pill-border: #e2e8f0;
+    --dgm-pill-text: #334155;
+
+    margin: 1.75rem 0;
+    padding: 1.25rem 1.5rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 16px;
+    background: var(--sl-color-bg-sidebar);
+  }
+
+  :root[data-theme="dark"] figure.dgm-figure {
+    --dgm-grid: rgba(51, 65, 85, 0.55);
+    --dgm-border: #334155;
+    --dgm-shadow-color: #000000;
+    --dgm-shadow-opacity-1: 0.45;
+    --dgm-shadow-opacity-2: 0.35;
+
+    --dgm-card-neutral-1: #172033;
+    --dgm-card-neutral-2: #0f172a;
+    --dgm-card-accent-1: #0a2a26;
+    --dgm-card-accent-2: #071c1a;
+    --dgm-card-danger-1: #2a0f0f;
+    --dgm-card-danger-2: #1c0a0a;
+
+    --dgm-accent-border-1: #5eead4;
+    --dgm-accent-border-2: #0d9488;
+    --dgm-danger-border-1: #fca5a5;
+    --dgm-danger-border-2: #b91c1c;
+
+    --dgm-accent-text: #5eead4;
+    --dgm-danger-text: #fca5a5;
+
+    --dgm-line: #64748b;
+    --dgm-line-strong: #cbd5e1;
+    --dgm-text: #e2e8f0;
+    --dgm-text-muted: #94a3b8;
+    --dgm-icon: #94a3b8;
+    --dgm-icon-accent: #5eead4;
+    --dgm-icon-danger: #fca5a5;
+
+    --dgm-pill-bg: #0f172a;
+    --dgm-pill-border: #334155;
+    --dgm-pill-text: #cbd5e1;
+  }
+
+  figure.dgm-figure .dgm-scroll {
+    overflow-x: auto;
+    /* a little breathing room so the scrollbar never overlaps the figure frame */
+    margin: 0 -0.25rem;
+    padding: 0 0.25rem 0.25rem;
+  }
+  figure.dgm-figure svg.dgm-svg {
+    /* Render at intrinsic (viewBox) size: do NOT scale down to 100% or
+       the text becomes unreadable. Narrower viewports scroll horizontally. */
+    display: block;
+    margin-inline: auto;
+    max-width: none;
+    height: auto;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  figure.dgm-figure figcaption {
+    margin-top: 0.9rem;
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+    text-align: center;
+  }
+
+  figure.dgm-figure .dgm-title {
+    font: 600 13.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.08em;
+    fill: var(--dgm-text);
+  }
+  figure.dgm-figure .dgm-node-accent .dgm-title {
+    fill: var(--dgm-accent-text);
+  }
+  figure.dgm-figure .dgm-node-danger .dgm-title {
+    fill: var(--dgm-danger-text);
+  }
+
+  figure.dgm-figure .dgm-sub {
+    font: 400 12.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+    fill: var(--dgm-text-muted);
+  }
+  figure.dgm-figure .dgm-node-accent .dgm-sub {
+    fill: var(--dgm-accent-text);
+    opacity: 0.85;
+  }
+  figure.dgm-figure .dgm-node-danger .dgm-sub {
+    fill: var(--dgm-danger-text);
+    opacity: 0.85;
+  }
+
+  figure.dgm-figure .dgm-code {
+    font: 400 11.5px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    fill: var(--dgm-text-muted);
+  }
+  figure.dgm-figure .dgm-node-accent .dgm-code {
+    fill: var(--dgm-accent-text);
+  }
+  figure.dgm-figure .dgm-node-danger .dgm-code {
+    fill: var(--dgm-danger-text);
+  }
+
+  figure.dgm-figure .dgm-lbl {
+    font: 500 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.02em;
+    fill: var(--dgm-pill-text);
+  }
+
+  figure.dgm-figure .dgm-icon {
+    color: var(--dgm-icon);
+    stroke: var(--dgm-icon);
+  }
+  figure.dgm-figure .dgm-node-accent .dgm-icon {
+    color: var(--dgm-icon-accent);
+    stroke: var(--dgm-icon-accent);
+  }
+  figure.dgm-figure .dgm-node-danger .dgm-icon {
+    color: var(--dgm-icon-danger);
+    stroke: var(--dgm-icon-danger);
+  }
+</style>

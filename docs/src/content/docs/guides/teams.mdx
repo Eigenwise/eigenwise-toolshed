@@ -1,0 +1,170 @@
+---
+title: Working in a team
+description: What is committed and what is personal, how to try the Toolshed without changing anything for teammates, and why a committed codebase map moves for everyone or not at all.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Flow from '../../../components/Flow.astro';
+import AppFrame from '../../../components/AppFrame.astro';
+import Frame from '../../../components/Frame.astro';
+import boardTwoIssues from '../../../mocks/board-two-issues.txt?raw';
+
+<p class="lead">One person can try the Toolshed in a shared repository without changing anything for anyone else. This page says what stays yours and what the team shares.</p>
+
+## Personal or shared
+
+The **board** is Sidequest's list of work in a project. Each piece of work on it is a **ticket**, one file.
+
+| What | By default | To change it |
+| --- | --- | --- |
+| The board, `.sidequest/` | **Personal.** Kept out of git by a line in `.git/info/exclude`. | Leave it personal. See below. |
+| Quartermaster's records, `.claude/quartermaster/` | **Personal.** The folder has its own `.gitignore`. | Delete that file to share what was tried, kept and rejected. |
+| Quartermaster's evidence, in your home folder | **Personal.** Never in the repository. | Nothing to change. |
+| Rules and the codebase map, `.claude/rules/` | **Shared.** Committed like code. | They work for teammates with no plugin installed. |
+| Your plugin choices, `.claude/settings.local.json` | **Personal.** Not committed. | See below. |
+| The team's plugin choices, `.claude/settings.json` | **Shared.** Committed. | A team decision. |
+
+The first ticket adds the exclude line itself and tells you once. If git already tracks or ignores `.sidequest/`, nothing is added.
+
+### The board is personal
+
+Do not commit `.sidequest/`. A committed board breaks for a team: a colleague's pull replaces their own board, and two branches hand out the same ticket id.
+
+A team shares work the way it already does, through its tracker and its pull requests. A ticket carries the tracker key from your branch name, so the two stay linked.
+
+## It pushes and opens pull requests by itself
+
+Know this before the first task in a shared repository. Work that goes through the board ends with a landing step, and that step does not ask.
+
+| With a git remote, it | Without asking? |
+| --- | --- |
+| pushes the branch | Yes |
+| opens one pull request that says what changed and the check result | Yes |
+| merges the pull request | **No**, when other people commit to the repository too. It stops at the open pull request and says the merge is yours. |
+
+It counts the authors on your default branch. More than one means other people commit here.
+
+It merges by itself in two cases only, and then only when CI is green and the pull request is not a draft:
+
+- Only you commit to the repository, and a merge does not deploy.
+- You said so: in the request, or in the project's own instructions.
+
+Without a remote there is no pull request, and the same rule holds. Where other people commit too, it stops at the landed branch. Where only you commit, it merges into the branch the work started from.
+
+Afterwards it removes the worktrees of the tickets it landed. A worktree is a second working folder on its own branch. Other people's and other sessions' worktrees are left alone.
+
+A small fix done inline has no landing step.
+
+## Trying it alone first
+
+Install with `--scope local`. That writes only your own settings file, so nothing changes for anyone else.
+
+```bash
+claude plugin install sidequest@eigenwise-toolshed --scope local
+```
+
+[Outfit](/why/quartermaster/outfit/) does this by itself in a team project. It treats a repository as a team project when it has other git authors or a committed `.claude/settings.json`.
+
+## When the team adopts it
+
+Installing at project scope is a team decision. It switches the plugin on for everyone who clones the repository.
+
+```bash
+claude plugin marketplace add Eigenwise/eigenwise-toolshed --scope project
+```
+
+```bash
+claude plugin install sidequest@eigenwise-toolshed --scope project
+```
+
+Declare the marketplace in the same change, as above. Without it, teammates get a plugin that is switched on and cannot be found.
+
+## Your team's own workflow stays
+
+Most teams already have a way to name branches, open pull requests and update a tracker. Sidequest delivers through it.
+
+- A ticket remembers the branch it was filed on and the tracker key from your branch name, like `PAY-41`. The board names the ticket by that key first, then its own id: `PAY-41 PL-2`.
+- Nothing a colleague reads names the board, a ticket id or this tool. Branch names, commit messages, pull request text and tracker comments speak of the work in your project's terms, with the tracker key where there is one.
+- Name a tracker issue, like `Let's do PAY-41.`, and Claude reads the whole issue and the code, then [plans it with you](/guides/task-to-pull-request/#path-3-plan-it-with-you), however small the issue looks.
+- A review reply, a tracker comment or a message never goes out under your name unseen, also when you asked for it. The question that asks to send it shows the exact words, and those words are sent. When the action is known to do something to someone else, like dismissing an approval or notifying a reviewer, the question says that too.
+- A step your team does between agreeing work and building it, like a design note, can be named once. Building then waits for your go. See [a written step before building](/guides/task-to-pull-request/#a-written-step-before-building).
+- The board says so when your checkout is on another branch.
+- When your project's own instructions cover commits, pull requests or release notes, those are followed, and their approval steps are kept. A yes to a commit, a push or a pull request is asked after the build, with [the change shown first](/guides/task-to-pull-request/#from-tickets-to-a-pull-request).
+- With a remote, the board knows where each ticket's pull request stands, and brings back work that got changes requested or failing checks. That lookup goes through the GitHub CLI, `gh`. On another host, or without `gh`, the view leaves that line out.
+
+## Two issues at once
+
+With one piece of work on the board, the pane lists by status: Waits on you, Now, The plan, Waiting on you from earlier sessions, You could, Being checked, Next, Done and Finished agents. A section with nothing in it is not drawn. This is the board for the made-up task PAY-41 once it is built and being checked:
+
+<Frame name="15-board-being-checked.png" />
+
+With two or more in flight, the pane lists by piece of work instead. So they don't mix, each piece gets its own heading. PAY-41 is the task from the [walk-through](/start/walk-through/). PAY-57 is a second made-up one.
+
+<AppFrame surface="terminal" pane={boardTwoIssues} caption="A text drawing of the board with two pieces of work in flight." />
+
+- A **piece of work** is a story, or tickets that share a tracker key. A story is a group of tickets with one goal.
+- The heading has the tracker key, the story's title, and the branch when all its tickets share one. Without a key, the title heads it.
+- The work this session is on comes first, then the work your checkout is on.
+- Each row starts with what the ticket is: `waits on you`, `from an earlier session`, `answered`, `stopped, nothing runs it`, `next` or `done`. Built work that is being checked sits under its own **Being checked** label after **Now**.
+- When more than one piece needs you, the band names them: `2 tickets need you: PAY-41, PAY-57`.
+
+What Claude pastes to you is grouped the same way: what waits on you, what can move, and the closing report.
+
+## Things that exist once
+
+A running app, a database or a port can only serve one piece of work at a time. Name it under `settings` in `.sidequest/board.json` and the board hands it to one ticket at a time.
+
+```json
+"shared": {
+  "app": { "what": "the running app on port 3000", "refresh": "ask" }
+}
+```
+
+Tickets that need it wait their turn. Editing still runs in parallel. Only the proof takes turns. `/sidequest:setup` asks about this when it finds a hint of such a thing.
+
+## Code from outside the team
+
+A change from a fork, a bot or a first-time contributor gets a read-only security pass before any of it runs on your machine. So does anyone's change to dependencies, build scripts or CI, for that part only.
+
+The reviewer can only read. It answers pass or hold. A pass runs the check in a throwaway container with no network and no credentials. A colleague's ordinary change gets the normal review and pays nothing extra.
+
+## The codebase map
+
+The map is plain files under `.claude/rules/`. Commit it and everyone gets it, with or without the plugin.
+
+**Who keeps a card up?** Whoever changes an area updates that area's card in the same change, the way they would update a test. The card is loaded while they work there, so it is right next to the code.
+
+**What forces it?** Nothing. No hook holds up a commit over a stale card. A card nobody kept up stays a few commits behind until someone works there again.
+
+**Review and conflicts.** A card change shows in the diff beside the code it describes. One file per area keeps conflicts small.
+
+### A committed map moves for everyone or not at all
+
+This matters when a team already commits a map in the older format, in `.claude/.codebase-info/`.
+
+The tempting move is to convert it for yourself and carry on. Don't. Your copy and the team's would drift apart. And a teammate who updated their plugins already has this version, which does not read the older folder, so they have no map until the team's one commit lands.
+
+So a map that git tracks is the team's, and it moves in one commit:
+
+<Flow
+  steps={[
+    { label: 'The older map sits unread' },
+    { label: 'One commit moves it', accent: true },
+    { label: 'Everyone loads the new map' },
+  ]}
+  caption="The repository never holds two maps, and nobody converts a private copy."
+/>
+
+That one commit holds three things:
+
+1. The new index and cards under `.claude/rules/`. `/codebase-mapper:map` builds them from the older folder.
+2. The older `.claude/.codebase-info/` folder, removed.
+3. The mapper's place in the committed settings: taken out, or kept on purpose so someone can run `/codebase-mapper:refresh`. The key `codebase-mapper@eigenwise-toolshed` needs no other edit, because after the update it names this version's mapper.
+
+The converted map is plain rule files. Claude Code loads them with the plugin off or never installed, so a teammate who installs nothing gets the map once the commit merges.
+
+A branch that still edits a file in the older folder gets a conflict when it merges the move. The fix is to put that fact on the new card.
+
+Older rules that git tracks follow the same rule. They move with the team, in that same commit, or they stay.
+
+The [upgrade](/guides/upgrading/) run knows this. It never moves a map or rules that git tracks for one person, and offers the move only as one committed change for the team.

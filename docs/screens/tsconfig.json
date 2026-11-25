@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "allowJs": true
+  },
+  "files": ["../../.types/claude-code.d.ts"],
+  "include": ["*.mts"]
+}

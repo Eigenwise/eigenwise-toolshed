@@ -1,22 +1,10 @@
 {
   "name": "observability",
-  "version": "1.1.1",
-  "description": "Local usage board for Claude Code. A hooks module records one metadata row per turn (exact engine cost, tokens by model, tool calls, agent spawns, context fill, rate-limit windows) into a per-project JSONL ledger under your Claude config directory, and /observability:board opens a self-contained HTML board. Recording is off until /observability:track on in a project. No server, no network, nothing leaves the machine.",
-  "author": {
-    "name": "Eigenwise",
-    "email": "kenny@eigenwise.io"
-  },
-  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/observability",
-  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "version": "2.0.0",
+  "description": "A local usage ledger and usage page. One JSON line per turn with the engine's own cost, tokens by model, tool calls and agent spawns. Off until /track on in a project. Nothing leaves the machine.",
   "license": "MIT",
-  "suiteTimeout": 300000,
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "author": { "name": "Eigenwise" },
   "types": "./types/index.d.ts",
-  "keywords": [
-    "observability",
-    "usage",
-    "board",
-    "tokens",
-    "cost",
-    "hooks-module"
-  ]
+  "engines": { "claude-code": ">=2.1.325" }
 }

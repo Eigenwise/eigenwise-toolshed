@@ -1,60 +1,91 @@
-# Codebase Mapper
+# codebase-mapper
 
-Codebase Mapper gives Claude a current map of your project, so future sessions can find the right files and understand the main flows without starting from zero.
+A map of your codebase that Claude Code loads by itself. The map is plain rules files in your project, so a teammate who never installed this plugin still gets it.
 
-[Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/codebase-mapper/) · [Toolshed marketplace](../../README.md)
-
-## Install
-
-Run these in Claude Code:
-
-```text
-/plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install codebase-mapper@eigenwise-toolshed --scope project
+```bash
+claude plugin marketplace add Eigenwise/eigenwise-toolshed
 ```
 
-Then ask Claude:
+```bash
+claude plugin install codebase-mapper@eigenwise-toolshed
+```
 
-> Map this codebase for future sessions.
+## What you get
 
-Claude reads the project and creates the useful map documents under `.claude/.codebase-info/`. It leaves `CLAUDE.md` alone. Outside an explicit no-commit instruction, the mapping skill commits the generated documents and `.map-state.json` so the map is available to future sessions.
+```
+.claude/rules/codebase-map.md     the index: what the system is, the areas, the key flows
+.claude/rules/map/<area>.md       one card per area
+.claude/rules/guides/<name>.md    only when an older map held hand-written guidance: copied, never rewritten
+```
 
-## Keep it current
+The index has no `paths` frontmatter, so it is always loaded, and it comes back after a compaction. It stays under 40 lines.
 
-The plugin checks after code changes. It assesses whether documented behavior, structure, interfaces, dependencies, or conventions changed, then acts without waiting for a separate approval:
+A card has `paths` frontmatter with the globs of its area. Claude Code loads it the first time a file in that area is touched. Cards stay around 2 KB. Each one records `verified-at: <commit sha>`, the commit it was last checked against.
 
-- A genuine no-op leaves the map and state alone.
-- A warranted incremental update edits only affected documents, refreshes `.map-state.json`, and commits the map outside shared-tree artifact mode.
-- A larger remap or structural drift can use an optional Sidequest artifact handoff when the live `codebase-exploration` contract is available. The artifact writer leaves `.claude/.codebase-info/` in the working tree for the invoking session to verify and commit.
-- Without Sidequest, Codebase Mapper runs the same work inline. Standalone Mapper does not require Sidequest.
+Nothing is injected by a hook and nothing is asked of the model every turn. No process runs per tool call; one background process runs at session start, and only where the card folder `.claude/rules/map` exists. `CLAUDE.md` is never touched.
 
-If you explicitly say not to commit, the skill leaves the verified map changes in the working tree and tells you what still needs review or committing. The map is available automatically when a session starts, and dispatched Sidequest executors and general-purpose subagents get it too.
+## Skills
 
-You can also ask directly:
+**`map`** creates the map. It investigates first, reading the repo itself or, for a large one, sending read-only scouts in parallel (routed to the cheap tier when Sidequest is installed, plain Explore agents otherwise). Then it proposes the areas and key flows in one message, with a recommended answer, and you confirm or correct. Only then does it write the index and cards and show you the diff. For a new project it asks two or three questions and writes a lean starting map.
 
-> Update the codebase map for the changes in this session.
+**`refresh`** keeps it honest. It runs the status script, re-derives only the stale cards from the code (a small card is rewritten from source, never patched from a diff), updates `verified-at` and shows the diff. Both skills leave the files in your working tree and never commit. Subagents never write the map.
 
-## If something looks wrong
+## Staleness
 
-- **No map exists:** Ask Claude to map the codebase.
-- **The map is stale:** Ask Claude to update it after the latest changes, or let the post-change assessment handle it.
-- **A section is missing:** Name the area you want checked and ask Claude to update the map.
-- **The map is missing for teammates:** Check whether an explicit no-commit instruction left it uncommitted, then review and commit `.claude/.codebase-info/`.
+`scripts/map-status.mjs` needs only Node and git. For each card it counts the commits under that card's globs since a starting commit:
 
-Codebase Mapper works with existing and greenfield projects. It leaves `CLAUDE.md` alone.
+```
+git rev-list --count <starting commit>..HEAD -- <globs>
+```
 
-## Privacy and local execution
+A card is stale by every commit under its globs since its stamp that did not also change the card file, so a card changed together with its area stays fresh however it lands, by merge, squash or rebase. A refresh moves `verified-at` to HEAD, and the stamp vouches for everything before it, even before the stamp is committed. Fixing a card's wording or renaming it vouches for nothing. When the stamp is not a commit on this history (no stamp, or a branch commit that was squashed or rebased away), the check counts from the last commit that moved the stamp, so two clones agree, and a card git does not hold with no usable stamp is reported with a reason. Each card in the JSON says which applied in `countedFrom` (`verified-at` or `card-commit`). One case stays hidden: a stamp from a branch commit that was squashed away, plus a teammate's change to the area made while that branch was open, reads fresh.
 
-[Privacy statement](PRIVACY.md)
+Zero means fresh. Anything else means stale, with the count. Because each card has its own commit and its own globs, refreshing one card never vouches for another.
 
-The bundled Node.js hooks read the local project map and hook metadata, inject map context into Claude Code, and coordinate map maintenance through local state files. The map-state script writes document hashes and records the local Git commit. Map skills read relevant project files and can create local commits; they do not instruct Claude to push them.
+The check runs from the folder that holds `.claude`, found by walking up from the working directory (or `--root`) to the git top level, so a project in a subfolder of a larger repository is judged by its own commits.
 
-The hooks and scripts make no network requests to an Eigenwise service. Your assistant still processes map and project content through the model provider and tools you configure. Optional Sidequest dispatch follows that separate plugin's executor configuration. The privacy statement describes local storage, retention, and these boundaries.
+It also reports cards whose globs match no file, cards with a `./` pattern (the host never loads it, so the status line says so and nothing is counted for it), cards over about 2.5 KB, and cards with no `verified-at`.
 
-## Support
+```
+node plugins/codebase-mapper/scripts/map-status.mjs            # JSON
+node plugins/codebase-mapper/scripts/map-status.mjs --line     # Codebase map: 2 of 7 areas out of date. /codebase-mapper:refresh updates them.
+node plugins/codebase-mapper/scripts/map-status.mjs --root <dir>
+```
 
-Codebase Mapper's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
+Globs are git glob pathspecs, so no braces and no negation: list each pattern on its own line instead of `src/**/*.{ts,tsx}`. `src/billing/**` and `src/**/*.ts` work. Claude Code reads a card's paths from the folder that holds its `.claude` folder, and the status check reads them the same way: a name with no slash (`README.md`, `*.md`) loads at any depth, and a leading slash (`/README.md`) means that top folder only. A `./README.md` pattern loads for nothing.
 
-## License
+## The session line
 
-MIT
+The plugin's one hook runs at session start. Where the card folder exists, it starts the status script in the background, never waiting for it, so the session opens at normal speed. If any card is stale it pins one line under the prompt, for example `Codebase map: 2 of 7 areas out of date. /codebase-mapper:refresh updates them.` A fresh map, no map, no `node` on the PATH or any failure shows nothing. It never blocks, never asks the model anything and never writes a file. The line is a snapshot from session start. It does not change after a refresh; the next session shows the new state.
+
+## In a team
+
+The map is committed like code. Everyone who clones the repository gets it, with or without this plugin, because Claude Code loads rules files by itself.
+
+- **Who keeps a card up.** Whoever changes an area updates that area's card in the same change, the way they would update a test. With the plugin `refresh` does it. Without it, edit the card by hand. The card is loaded while they work there, so an agent sees it next to the code: in six test sessions that changed code in an area with no map plugin to tell them, all six updated the card in the same change.
+- **When.** In the change that makes the card untrue. A card changed in the same commit as its area reads fresh once that commit lands, by merge, squash or rebase.
+- **Nothing forces it.** No hook holds up a commit or a turn over a stale card. The session line only says how many cards are stale, and only to people who have the plugin. A card nobody kept up stays a few commits behind until someone works in that area again.
+- **Review.** A card change shows in the diff beside the code it describes, so a reviewer sees both.
+- **Conflicts.** Different areas never conflict: each card is its own file. Two people who refresh the same card do, at least on its `verified-at` line. The way out is to take either side and refresh that card. There is no shared manifest to clash on.
+
+## What it does not do
+
+No acknowledgment line, no Stop hook, no per-turn documentation check, no hash manifest, no automatic refresh. The map changes only when you ask for a refresh and say yes to the diff.
+
+## Moving from an older map
+
+Where `.claude/.codebase-info/` exists and this map does not, the first session in that project says once that the older map is not used and that `/codebase-mapper:map` builds a new one from it. Later sessions say nothing. When Quartermaster is installed it says it instead.
+
+Older versions kept the map in `.claude/.codebase-info/` and injected it with hooks. Run `map` in that project. It reads the old documents as source material, checks what it uses against the code, and writes the new index and cards. It then asks whether to delete `.claude/.codebase-info/`, and removes it only on a yes. Not everything in an old map describes code. A style guide, a how-to or an evaluation guide that someone wrote by hand never goes on a card, because `refresh` rewrites a card from the code and would erase it. `map` copies each such document to `.claude/rules/guides/<name>.md`, in its own words, with `paths` for the files it is about, and `refresh` never touches that folder. Lessons and incident notes go to your memory when the map is your own, and into a guide when git tracks the map, so the team keeps them. `map` ends by listing every old document and where it went.
+
+Where git tracks the old folder, the map is the team's, so move it for everyone in one commit: the new index and cards and the old folder removed. The plugin key in the committed settings needs no edit: keep it for `map` and `refresh`, or take it out. The cards are plain rules files, so they load with the plugin off or never installed. Until that commit merges, a teammate on this version has no map, and one person's own copy drifts from the team's. After the merge a teammate needs to install nothing. A branch that still edits a file in the old folder gets a conflict when it merges the move, and puts that fact on the card instead.
+
+## Check it
+
+From a checkout of this repository. An installed copy has the same script in its install folder, and the skills run it for you.
+
+```
+claude plugin validate plugins/codebase-mapper
+claude plugin test plugins/codebase-mapper
+node --test plugins/codebase-mapper/scripts/map-status.test.mjs
+```

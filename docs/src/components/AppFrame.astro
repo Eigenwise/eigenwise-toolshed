@@ -1,0 +1,66 @@
+---
+/**
+ * A Claude session with a pane beside the chat, drawn from text.
+ *
+ *   <AppFrame surface="desktop" chat={chatText} pane={paneText} band={bandText} />
+ *
+ * `surface` picks the look: "terminal" is the CLI, "desktop" is the desktop app.
+ * The pane stacks under the chat on a narrow screen.
+ * See MockLines.astro for what the first characters of a line mean.
+ */
+import MockLines from './MockLines.astro';
+
+interface Props {
+  pane: string;
+  chat?: string;
+  band?: string;
+  surface?: 'terminal' | 'desktop';
+  title?: string;
+  paneTitle?: string;
+  caption?: string;
+}
+
+const {
+  pane,
+  chat,
+  band,
+  surface = 'terminal',
+  title = surface === 'desktop' ? 'Claude, Code tab' : 'claude',
+  paneTitle = 'Board',
+  caption = 'A text drawing of what the app shows here.',
+} = Astro.props;
+if (caption && !/text drawing/i.test(caption)) throw new Error(`A text frame's caption must say it is a text drawing: ${caption}`);
+---
+
+<figure class="mock-figure not-content">
+  <div class:list={['mock-window', 'mock-app', `mock-${surface}`, !chat && 'mock-pane-only']} role="img" aria-label={`${title} with the ${paneTitle} pane, shown as text`}>
+    <div class="mock-bar" aria-hidden="true">
+      <span class="mock-dots"><i></i><i></i><i></i></span>
+      <span class="mock-title">{title}</span>
+      <span class="mock-tag">text drawing</span>
+    </div>
+    <div class="mock-split">
+      {
+        chat && (
+          <div class="mock-chat">
+            <pre class="mock-body"><MockLines text={chat} /></pre>
+            {band && (
+              <pre class="mock-band"><MockLines text={band} /></pre>
+            )}
+            <div class="mock-prompt" aria-hidden="true">
+              <span>&gt;</span>
+            </div>
+          </div>
+        )
+      }
+      <div class="mock-pane">
+        <div class="mock-pane-title" aria-hidden="true">
+          <span>{paneTitle}</span>
+          <span>✕</span>
+        </div>
+        <pre class="mock-body"><MockLines text={pane} /></pre>
+      </div>
+    </div>
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

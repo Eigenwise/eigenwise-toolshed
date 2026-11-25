@@ -1,0 +1,107 @@
+---
+title: 'Outfit: set up a project'
+description: Outfit turns a project into a working Claude Code workspace. It checks what is there first and writes nothing without your yes.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import Terminal from '../../../../components/Terminal.astro';
+import installQuartermaster from '../../../../mocks/install-quartermaster.txt?raw';
+
+<p class="lead">Run it once in a project, new or years old. It looks first, then proposes only what is missing.</p>
+
+## Why it exists
+
+Setting up Claude Code well means choosing plugins, rules and permissions that fit this project. A template gets that wrong, because every project differs. Outfit reads the project and your history before it suggests anything.
+
+## Start it
+
+Install Quartermaster from your project folder, then run the skill in a session there. The [quick start](/start/quick-start/) says how to add the marketplace and what to do if you still have the older Toolshed.
+
+```bash
+claude plugin install quartermaster@eigenwise-toolshed --scope local
+```
+
+<Terminal text={installQuartermaster} />
+
+```text
+/quartermaster:outfit
+```
+
+## What happens
+
+<Steps>
+
+1. **It explores, without asking you anything.**
+
+   It reads the project: the code, your `.claude/` folder, the test and build commands, the plugins you have. It also reads counts from your past sessions in this project, so it knows which commands you run a lot.
+
+2. **It tells you what it found.**
+
+   A few lines: what the project is, what it already has, and what that settled.
+
+3. **It goes through the sections, one at a time.**
+
+   Each section comes with a recommended answer. It skips a section when the exploring already settled it.
+
+   | Section | What it proposes |
+   | --- | --- |
+   | Plugins | Only the Toolshed plugins that fit: Sidequest, Codebase Mapper and Live Rules. Installed ones are left alone. In a solo project it installs them at project scope (`--scope project`, which writes the committed `.claude/settings.json`). In a team project it installs for you only (`--scope local`). Sidequest's model routing works as it ships; `/sidequest:setup` changes it. It never offers Observability: you switch that on yourself. |
+   | Rules | A rule only for a convention the code or your history shows. |
+   | Permissions | An allow rule only for a command you approved by hand many times and never denied. |
+   | Codebase map | For a real codebase, an offer to build the map. |
+   | Guidelines | Where no coding guidelines are written down, an offer to write them from what the code already does. See [how quality is checked](/guides/quality/). |
+
+4. **One stop: reload.**
+
+   If it installed a plugin, it asks you to type `/reload-plugins` and say when it is done. That works in the terminal and in the desktop app. The next sections use those plugins.
+
+5. **It writes, one approved item at a time.**
+
+   Every item is recorded as a proposal and a change, with the old bytes saved first. So everything outfit did can be undone later.
+
+6. **It checks its own work.**
+
+   It confirms each plugin is enabled and each file is there, and tells you what it could not confirm.
+
+</Steps>
+
+## In an empty folder
+
+There is no code to read, so outfit asks what the project is for. Rules, permissions and the map wait until code exists.
+
+Then it carries on into Sidequest's planning, which takes you to a first running version of what you want to build.
+
+<Aside type="note" title="No git repository yet?">
+Outfit runs `git init` first. After that the one stop is a restart instead of a reload: leave with `/exit`, then come back with `claude --continue` in the same folder.
+</Aside>
+
+## In a team project
+
+A team project is one with other git authors or a committed `.claude/settings.json`. There, outfit changes as little as it can.
+
+- It installs for you only (`--scope local`), until you say the team adopts it.
+- A map or rules the team already committed are left alone.
+- The project's own way of naming branches and opening pull requests is kept. Sidequest delivers through it.
+
+More in [Working in a team](/guides/teams/).
+
+## Permission rules it will never propose
+
+An allow rule is a standing yes, so outfit is strict. It never proposes a rule that:
+
+- runs arbitrary code, like `node`, `python`, `bash` or `npx`
+- allows a whole tool, like all of `git` or all of `docker`
+- covers something destructive, like `git push` or `rm`
+- contains a variable, a pipe or a wildcard
+
+When no command passes, it says so and proposes nothing.
+
+## What it never does
+
+<div class="never">
+
+- It never overwrites an existing `.claude/` folder. It adds to it.
+- It never installs our plugin next to a plugin of the same name from another marketplace. Both would load.
+- It never upgrades an older Toolshed by itself. It says the project is on the older version, once, and points at [upgrade](/guides/upgrading/).
+
+</div>

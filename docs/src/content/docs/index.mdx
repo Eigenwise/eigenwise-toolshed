@@ -1,0 +1,58 @@
+---
+title: Toolshed
+description: Five Claude Code plugins that make a project easier to work in, with you deciding every change.
+template: splash
+hero:
+  title: Toolshed
+  tagline: Five Claude Code plugins that make a project easier to work in. You stay the one who decides.
+  image:
+    file: ../../assets/toolshed-mark.svg
+    alt: ""
+  actions:
+    - text: Quick start
+      link: /eigenwise-toolshed/start/quick-start/
+      icon: right-arrow
+    - text: Why the Toolshed
+      link: /eigenwise-toolshed/why/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## What it is
+
+The Toolshed is a set of plugins for Claude Code. A plugin adds skills, tools and screens to Claude Code. This release is called Toolshed 2.
+
+You describe what you want. The plugins plan the work, keep track of it on a board (a list of the work), send each piece to a model that fits it, and show you what happened. When bigger work is done, it is pushed as a branch and opened as a pull request for you. In a repository other people commit to, the merge stays yours.
+
+Everything they keep is a plain file in your project. You can open it, edit it and delete it.
+
+## Why it exists
+
+Claude Code does good work in one sitting. Over weeks, three things go wrong.
+
+- **Work gets lost.** A long task lives in one chat. When the chat ends, so does the plan.
+- **Every task costs the same.** A one-line lookup runs on the same model as a hard design change.
+- **The setup never improves.** You type the same command for the fortieth time and nothing notices.
+
+The Toolshed fixes those three, and it never changes your setup without asking.
+
+## The five plugins
+
+Each one works alone. Install one, or all five.
+
+<CardGrid>
+  <LinkCard title="Sidequest" description="A work board in plain files. Plans a task, splits it, and runs each piece on the model that fits." href="/why/sidequest/" />
+  <LinkCard title="Quartermaster" description="Sets up a project, then proposes one improvement at a time. Nothing changes without your yes." href="/why/quartermaster/" />
+  <LinkCard title="Codebase Mapper" description="A map of your code that Claude loads by itself when it works in an area." href="/why/codebase-mapper/" />
+  <LinkCard title="Live Rules" description="Turns 'from now on, do it this way' into a rule file in the right format." href="/why/live-rules/" />
+  <LinkCard title="Observability" description="A local record of what each turn cost, with a usage page and a plain report. Off until you switch it on." href="/why/observability/" />
+</CardGrid>
+
+## Where to go
+
+- New here: the [quick start](/start/quick-start/). Setup takes about five minutes. Then the [walk-through](/start/walk-through/) follows one task from the first message to the merged result.
+- Deciding whether it fits: [why the Toolshed](/why/).
+- Wondering what keeps the code good: [how quality is checked](/guides/quality/).
+- Looking for an exact name: the [reference](/reference/).
+- Coming from the older Toolshed: [what the update did and how to move a project](/guides/upgrading/). The older Toolshed's docs are in the `docs/` folder of the `v1` branch.

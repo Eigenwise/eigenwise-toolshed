@@ -1,0 +1,95 @@
+---
+title: Why Quartermaster
+description: Quartermaster sets up a project and then improves the setup with you, one approved change at a time.
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Flow from '../../../../components/Flow.astro';
+
+<p class="lead">Quartermaster sets up a workspace and keeps improving it with you. It notices what you keep doing by hand, proposes one change with the evidence behind it, and applies it only when you say yes.</p>
+
+## The problem
+
+A Claude Code setup is a pile of small choices: which plugins, which rules, which commands are allowed without asking. Two things go wrong with it.
+
+- **Day one.** A new project starts with none of it, and setting it up by hand takes an afternoon you don't have.
+- **Every day after.** The setup stops fitting. You approve the same command by hand again and again. A rule nobody follows stays loaded. Nothing notices, so nothing changes.
+
+Tools that fix this by themselves are worse. A setup that changes without asking is one you no longer understand.
+
+## What you get
+
+One loop, with you in the middle of it.
+
+<Flow
+  steps={[
+    { label: 'Evidence' },
+    { label: 'Candidate' },
+    { label: 'Proposal' },
+    { label: 'Your decision', accent: true },
+    { label: 'Change' },
+    { label: 'Verdict' },
+  ]}
+  caption="Everything before your decision is noticing. Nothing after it happens without a yes."
+/>
+
+| Step | What it is |
+| --- | --- |
+| **Evidence** | Counts of what happened while you worked: commands you typed, tool failures, permission denials. Never your prompts or your code. |
+| **Candidate** | Something that crossed a named line, like "ran `npm run build:x` by hand 14 times". There is no score. |
+| **Proposal** | One file: what to change, why, the exact change, a check that can be counted, and the rollback. |
+| **Decision** | Approve, reject, already handled or later. A rejection is remembered with your reason and never proposed again. Already handled closes the proposal with your words and is not remembered. |
+| **Change** | The bytes of every touched file are saved first. Undo is a file restore. |
+| **Verdict** | Later: was the change used, and did its check move? Keep, improve or roll back. |
+
+## What it writes while you work
+
+With Quartermaster installed, every session writes event records into your home folder:
+
+```text
+~/.claude/quartermaster/events/<project>/<date>.<session>.jsonl
+```
+
+They are what the candidates are counted from. One line per event: a permission denial, a tool failure with the plain words of its error, the first two words of a shell command you typed yourself, a skill that ran, how long a turn took. No prompts, no code, no command arguments, no file paths.
+
+A failed shell call is named after the command that failed. A call you rejected, and a search that found nothing, are not failures. A fix is offered only for an error of your setup that comes back, like a command not found. A failing test, lint or build is never offered a fix.
+
+The records are yours. They are never committed and never sent anywhere, and Claude does not see them unless a skill asks for the counts. Each time an offer is shown, one line goes into `impressions.jsonl` beside them, so an ignored offer backs off.
+
+## The five jobs
+
+Each job is a skill you start with a slash command.
+
+<CardGrid>
+  <LinkCard title="Outfit" description="Set up a project, new or existing. Checks what is there and proposes only what is missing." href="/why/quartermaster/outfit/" />
+  <LinkCard title="Resupply" description="The resupply round. At most three proposals, each with its evidence." href="/why/quartermaster/resupply/" />
+  <LinkCard title="Review" description="Did an applied change get used? Keep it, improve it or roll it back." href="/why/quartermaster/review/" />
+  <LinkCard title="Upgrade" description="Move a project from the older Toolshed. It has its own guide." href="/guides/upgrading/" />
+  <LinkCard title="Inspect" description="A read-only health check. Is each plugin installed, loaded and used?" href="/why/quartermaster/inspect/" />
+  <LinkCard title="Where it stops" description="What Quartermaster owns, and what belongs to another plugin." href="/why/quartermaster/boundaries/" />
+</CardGrid>
+
+Outfit also offers to write your coding guidelines down where a project has none. Quartermaster only sets that up. The review that checks against them is Sidequest's: see [how quality is checked](/guides/quality/).
+
+Two more skills support these. `/quartermaster:apply` makes one approved change. `/quartermaster:report` drafts an issue when the trouble comes from a plugin itself. You send it.
+
+## What it never does
+
+<div class="never">
+
+- It never blocks a tool call, a prompt or a stop. If it breaks, your work carries on.
+- It never scores you. Candidates are counts you can read.
+- It never applies a change by itself. Asking it to apply is not an approval. Only an approved proposal gets applied.
+- It never runs your work. That is Sidequest's job.
+
+</div>
+
+## One real example
+
+You run `npm run build:thumbs` by hand, day after day. At a quiet moment a small notice appears:
+
+```text
+Quartermaster: ran `npm run build:thumbs` by hand 14 times over 3 days. Type /quartermaster to see a fix.
+```
+
+You type `/quartermaster`. The inbox lists it under "Noticed in this project". You open it and press **Draft a fix**. A proposal appears with the exact script to add and how to remove it. You press **Approve**. A few sessions later Quartermaster offers a [review](/why/quartermaster/review/), and it tells you whether you stopped typing the command.

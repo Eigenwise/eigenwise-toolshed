@@ -1,0 +1,40 @@
+---
+/**
+ * A picture the pipeline in `screens/` rendered from a plugin's own view code, with a made-up project.
+ *
+ *   <Frame name="09-build-started.png" />
+ *
+ * The alt text, the caption and what drew it come from `src/assets/screens/captions.json`, which
+ * `npm run screens` writes beside the pictures. A name with no entry there fails the build.
+ * The picture is served as the pipeline wrote it: no resizing and no re-encoding.
+ */
+import type { ImageMetadata } from 'astro';
+import captions from '../assets/screens/captions.json';
+
+interface Props {
+  name: string;
+}
+
+interface Caption {
+  alt: string;
+  caption: string;
+  drawnBy: string;
+}
+
+const pictures = import.meta.glob<{ default: ImageMetadata }>('../assets/screens/*.png', { eager: true });
+const { name } = Astro.props;
+const picture = pictures[`../assets/screens/${name}`]?.default;
+const entry = (captions as Record<string, Caption>)[name];
+if (!picture || !entry) throw new Error(`No rendered picture or caption for ${name}. Run npm run screens in docs/.`);
+---
+
+<figure class="frame-figure not-content">
+  <img src={picture.src} width={picture.width} height={picture.height} alt={entry.alt} loading="lazy" />
+  <figcaption>
+    {entry.caption}
+    <details>
+      <summary>How this picture is made</summary>
+      <p>{entry.drawnBy}</p>
+    </details>
+  </figcaption>
+</figure>

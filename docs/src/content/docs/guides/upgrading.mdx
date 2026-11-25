@@ -1,0 +1,145 @@
+---
+title: Coming from the older version
+description: What a plugin update did to your older Toolshed, what the Toolshed tells you once, and the one command that moves a project.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import Frame from '../../../components/Frame.astro';
+
+<p class="lead">If you had the older Toolshed installed, a normal plugin update already gave you this version. Nothing in your projects changed. This version does not read what the older one left there, so each project needs one command: <code>/quartermaster:upgrade</code>.</p>
+
+## What happened at the update
+
+The older Toolshed and this one share one marketplace, `eigenwise-toolshed`. Your `sidequest`, `quartermaster`, `codebase-mapper`, `live-rules` and `observability` kept their names and became this version when they updated.
+
+- **Your projects were not touched.** The update only replaces plugin code.
+- **`observability` updates in place.** A project that was recording keeps recording, and its history stays. The upgrade leaves it alone.
+- **The older board, rules and map are not used.** This version does not read them. Until a project moves, they sit there unread. The board was a database, the rules lived in `.claude/live-rules/`, and the map in `.claude/.codebase-info/`. Here the board is markdown files in `.sidequest/`, and rules and map are native files in `.claude/rules/`.
+- **`quality-gate` and `model-gateway` are not in this version.** They show as "not found in marketplace" until you uninstall them. Nothing takes the place of `quality-gate`. This version has no gateway and runs Claude models only.
+- **Leave `model-gateway` installed and switched on until the upgrade has unwired it.** Uninstalling it while a project is still wired blocks every prompt there.
+
+This version is called Toolshed 2. Each plugin keeps its own version number, and those continue from the older ones (sidequest 7, quartermaster 2, codebase-mapper 3, live-rules 3, observability 2), so an install's first number says which version it is. The older version's releases were tagged v3.x on the same repository, and those tags stay.
+
+## What you are told, once
+
+The first session in a project that holds something the older version left says so, once per project, in one notice. Each plugin speaks about its own leftover. When Quartermaster is installed, it speaks for all of them in one sentence:
+
+```text
+The older Toolshed left the older map in this project and the older rules in this project, and nothing uses them now. /quartermaster:upgrade moves them.
+```
+
+<Frame name="older-toolshed-notice.png" />
+
+Without Quartermaster, each plugin says its own line. Sidequest and Live Rules add how to get Quartermaster (`claude plugin install quartermaster@eigenwise-toolshed`, or switch it back on for the project when it is switched off). Codebase Mapper's line points at its own command, `/codebase-mapper:map`. A project still wired to the older gateway gets a line about that first, because it can stop a session reaching a model.
+
+## Moving a project
+
+Run the upgrade in each project, from a session opened there. It takes a few minutes of your time.
+
+<Steps>
+
+1. **Make sure Quartermaster is there.**
+
+   If it is missing:
+
+   ```bash
+   claude plugin install quartermaster@eigenwise-toolshed --scope local
+   ```
+
+   Then type `/reload-plugins`.
+
+2. **Start the upgrade.**
+
+   ```text
+   /quartermaster:upgrade
+   ```
+
+   Without Quartermaster, an agent can read `plugins/quartermaster/skills/upgrade/SKILL.md` in the repository and follow it from the top. Its first step installs Quartermaster.
+
+3. **It scans.**
+
+   The scan only reads. It prints every leftover with a verdict. When a plugin is still on its older version, the run stops first: it shows the update commands, runs them on your yes, and asks for a reload or a new session before anything else moves.
+
+   <Frame name="upgrade-scan.png" />
+
+   | Verdict | Meaning |
+   | --- | --- |
+   | **keep** | Leave it. |
+   | **convert** | The agent turns it into its new form. Can be undone. |
+   | **remove** | Waits for your one yes to the deletion list. |
+   | **ask** | Yours, or your team's, to decide. |
+
+4. **It tells you what it found and asks its questions, once.**
+
+   - **Deletions.** One yes for the list shown.
+   - **Open tickets on the older board.** Leave them there as a read-only archive (recommended), or name the ones to redraft as tickets on this board. It never carries them all over.
+   - **The committed change.** Only when git tracks older settings, rules, a map or an instruction file that names older tools.
+   - **The older gateway.** Asked once per machine, whenever the gateway plugin is switched on: keep it for models from other providers (it can no longer be updated or installed again from this marketplace), or unwire it everywhere and then uninstall it.
+
+5. **It takes the reversible steps, then stops once.**
+
+   It does what can be undone itself and says how to undo each step. If a plugin changed in this run (an uninstall, the move below), there is one stop before the converters: type `/reload-plugins`, or open a new session in the folder and say `continue the upgrade`. Over a remote connection the new session is the way. A run that changed no plugin has no stop.
+
+6. **It converts and cleans up.**
+
+   Your older rules become files in `.claude/rules/` and `.claude/skills/`, with the plan shown first. A map goes through `/codebase-mapper:map`, and a map of more than 400 lines waits for the next time you work in the project. Then it deletes exactly the list you said yes to.
+
+7. **It checks and reports.**
+
+   The scan runs again. The run is done when it says the project moved, or that everything left waits for you. You get a list of what changed, the name of every copy, and how to undo each step.
+
+</Steps>
+
+## What you can count on
+
+- **Nothing leaves your machine.** It never pushes, never creates a repository and never opens a pull request.
+- **Nothing is deleted without a yes to a list.** You see the exact list in the same message that asks. "Go on" is not a yes to a deletion.
+- **One message of questions**, each with a recommended answer, so one "yes" accepts them all.
+- **Every step can be undone.** Each settings file is copied before its first edit, and the run names every copy.
+- **It never switches off this version.** It does not remove the marketplace or the plugins you are running now.
+
+## In a team repository
+
+When the committed settings enable `codebase-mapper@eigenwise-toolshed` and git tracks `.claude/.codebase-info/`, the map is the team's, so it moves for everyone in one pull request: the map converted to rule files, the older folder removed, and the mapper kept or taken out of the committed settings as the team chooses. A teammate who installs nothing still gets the converted map once it merges. [Working in a team](/guides/teams/#a-committed-map-moves-for-everyone-or-not-at-all) explains why.
+
+The run itself changes nothing for your teammates. A file git tracks is never edited on the plain run. Everything tracked sits under one question, the committed change. For a team the answer is either "keep it personal for now" (recommended) or "draft it as a local branch". The branch is never pushed.
+
+## The home folder, once
+
+Shared leftovers in your home folder are cleaned in a separate run, after the last project has moved. It asks a yes per group and never runs as part of a project's upgrade.
+
+## When something is kept on purpose
+
+What you choose to keep is recorded in `.claude/quartermaster/upgrade-kept.md`, with the date and your reason. The next scan lists it as kept, so it does not nag.
+
+## If you installed it as toolshed-next
+
+Before it took over the name `eigenwise-toolshed`, this version was published as the marketplace `toolshed-next`. An install under that name keeps working, and the scan offers the move when you say so. The scan prints the exact list for your machine, with each plugin's scope, and the folder to run each command from. The commands, in this order, once per plugin where it says so:
+
+```bash
+claude plugin uninstall <plugin>@toolshed-next --scope <scope>
+```
+
+```bash
+claude plugin marketplace remove toolshed-next
+```
+
+```bash
+claude plugin marketplace add Eigenwise/eigenwise-toolshed
+```
+
+```bash
+claude plugin install <plugin>@eigenwise-toolshed --scope <scope>
+```
+
+Run the first and last once for each plugin you had. When `eigenwise-toolshed` is already registered on the machine, the third step is `claude plugin marketplace update eigenwise-toolshed` instead of the add. Keep the order: adding the marketplace while the earlier name is still registered fails with "already on disk", and every install after it fails too.
+
+## Staying on the older version
+
+<Aside type="note" title="Staying on v1">
+The older version lives on a branch of its own and is not maintained. To stay on it, remove the marketplace, add it again as `Eigenwise/eigenwise-toolshed#v1`, and install your plugins again. Its own docs are in the `docs/` folder of that branch.
+</Aside>
+
+## When the upgrade goes wrong
+
+Open an issue on [Eigenwise/eigenwise-toolshed](https://github.com/Eigenwise/eigenwise-toolshed/issues). The report at the end of the run lists what changed and how to undo each step. The whole path is also in [UPGRADING.md](https://github.com/Eigenwise/eigenwise-toolshed/blob/main/UPGRADING.md).
